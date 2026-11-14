@@ -1,8 +1,9 @@
 // Launches the built app against the OrbStack cluster and walks the wave-1 path:
 // pick a cluster → pods appear live → filter → open a pod → its YAML; plus the renderer's security posture.
 // LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e  (screenshots go to $LANDLENS_SHOTS)
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -10,6 +11,14 @@ const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
 /** Runs your own Claude Code (your login and usage) against deploy/scenarios/crashloop.yaml in landlens-dev. */
 const claude = flags.includes("claude");
+/**
+ * Graphs from a running Clickland with metric filters (LANDLENS_CLICKLAND_URL, default http://127.0.0.1:4710). The test
+ * makes a read-scoped key with Clickland's development bootstrap key, types it into Connect Clickland, and revokes it.
+ * Needs deploy/scenarios/metrics.yaml running for a few minutes.
+ */
+const clickland = flags.includes("clickland");
+const CLICKLAND_URL = process.env.LANDLENS_CLICKLAND_URL ?? "http://127.0.0.1:4710";
+const CLICKLAND_ADMIN = process.env.CLICKLAND_BOOTSTRAP_KEY ?? "ck_dev_bootstrap_key_000000000000000";
 const shots = process.env.LANDLENS_SHOTS;
 /** Dark is Landlens's default, so screenshots are dark unless asked, whatever this machine's appearance. */
 const shot = async (page: Page, name: string, colorScheme: "dark" | "light" = "dark") => {
@@ -29,7 +38,8 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     app = await electron.launch({
       executablePath: require("electron") as unknown as string,
       args: [resolve(__dirname, "..")],
-      env: { ...process.env, ELECTRON_RENDERER_URL: "" },
+      // A fresh profile: no Clickland key from your own use, and nothing written to it.
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: mkdtempSync(join(tmpdir(), "landlens-e2e-")) },
     });
     page = await app.firstWindow();
     await page.setViewportSize({ width: 1440, height: 880 });
@@ -175,6 +185,87 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await page.keyboard.press("Escape");
     }
   }, 120_000);
+
+  it("says why there are no graphs, and how to fix it, when neither Clickland nor metrics-server is there", async () => {
+    await page.getByRole("button", { name: "Overview", exact: true }).click();
+    const usage = page.getByRole("region", { name: "Usage" });
+    await usage.getByRole("status", { name: "Metrics unavailable" }).waitFor({ timeout: 30_000 });
+    const text = (await usage.textContent()) ?? "";
+    expect(text).toContain("Clickland isn't connected");
+    expect(text).toContain("metrics-server");
+    await expect(usage.getByRole("button", { name: "Connect Clickland" }).isVisible()).resolves.toBe(true);
+    await usage.scrollIntoViewIfNeeded();
+    await shot(page, "20-usage-unavailable");
+  }, 60_000);
+
+  it.runIf(clickland)("connects Clickland, then draws the cluster's usage and a pod's metrics, in dark and light", async () => {
+    const made = await fetch(`${CLICKLAND_URL}/api/keys`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${CLICKLAND_ADMIN}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "landlens-e2e", scopes: ["read"] }),
+    });
+    expect(made.status).toBe(201);
+    const { id, key } = (await made.json()) as { id: string; key: string };
+    try {
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.getByRole("region", { name: "Usage" }).getByRole("button", { name: "Connect Clickland" }).click();
+      const dialog = page.getByRole("dialog", { name: "Connect Clickland" });
+      await dialog.getByLabel("Clickland address").fill(CLICKLAND_URL);
+      await dialog.getByLabel("Clickland API key").fill(key);
+      await dialog.getByRole("button", { name: "Test" }).click();
+      const result = dialog.getByRole("list", { name: "Test result" });
+      await result.waitFor({ timeout: 20_000 });
+      expect(await result.textContent()).toMatch(/Health.*Filters.*Query/s);
+      await expect(dialog.locator(".test-steps .tone-bad").count()).resolves.toBe(0);
+      await shot(page, "21-connect-clickland");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      // The key never comes back to the page.
+      expect(await page.evaluate(() => (globalThis as any).landlens.invoke("metrics:settings", {}))).toEqual(expect.objectContaining({ hasKey: true }));
+      expect(JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("metrics:settings", {})))).not.toContain(key);
+
+      const usage = page.getByRole("region", { name: "Usage" });
+      await usage.locator(".metrics-src", { hasText: "Clickland" }).waitFor({ timeout: 30_000 });
+      await usage.locator(".chart-plot svg path.edge").first().waitFor();
+      await usage.scrollIntoViewIfNeeded();
+      const plot = usage.locator(".chart-plot").first();
+      const box = (await plot.boundingBox())!;
+      await page.mouse.move(box.x + box.width * 0.62, box.y + box.height * 0.5);
+      await expect(plot.locator(".chart-tip").textContent()).resolves.toContain("allocatable");
+      await shot(page, "22-overview-usage");
+      await shot(page, "23-light-overview-usage", "light");
+      await page.mouse.move(0, 0);
+
+      await page.getByRole("button", { name: "Pods", exact: true }).click();
+      await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+      await page.locator(".tr", { hasText: "catalog-api" }).first().click();
+      await page.getByRole("tab", { name: "Metrics" }).click();
+      const tab = page.locator(".mtab");
+      await tab.locator(".chart-plot svg path.edge").first().waitFor({ timeout: 30_000 });
+      expect(await tab.locator(".chart-legend").first().textContent()).toMatch(/api.*proxy/s);
+      expect(await tab.textContent()).toMatch(/limit 250m.*request 60m/s);
+      const pbox = (await tab.locator(".chart-plot").first().boundingBox())!;
+      await page.mouse.move(pbox.x + pbox.width * 0.8, pbox.y + pbox.height * 0.5);
+      await tab.locator(".chart-tip").waitFor();
+      await shot(page, "24-pod-metrics");
+      await shot(page, "25-light-pod-metrics", "light");
+      await page.mouse.move(0, 0);
+
+      await page.locator(".tr", { hasText: "orders-api" }).first().click();
+      await page.getByRole("tab", { name: "Metrics" }).click();
+      await tab.getByRole("status").filter({ hasText: "No usage samples" }).waitFor({ timeout: 30_000 });
+      expect(await tab.textContent()).toMatch(/its status is (CrashLoopBackOff|Error)/);
+      await shot(page, "26-pod-metrics-no-samples");
+
+      await page.getByRole("button", { name: "Deployments" }).click();
+      await page.locator(".tr", { hasText: "catalog-api" }).first().click();
+      await page.getByRole("tab", { name: "Metrics" }).click();
+      await tab.locator(".chart-plot svg path.line").first().waitFor({ timeout: 30_000 });
+      await shot(page, "27-deployment-metrics");
+    } finally {
+      await page.keyboard.press("Escape");
+      await fetch(`${CLICKLAND_URL}/api/keys/${id}`, { method: "DELETE", headers: { authorization: `Bearer ${CLICKLAND_ADMIN}` } });
+    }
+  }, 180_000);
 
   it.runIf(claude)("asks Claude why the crash-looping pod fails, and shows the evidence it read", async () => {
     await page.getByRole("button", { name: "Pods", exact: true }).click();
