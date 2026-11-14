@@ -1,10 +1,11 @@
 // Your Claude Code skills, for agent sessions. Sessions load nothing of your ~/.claude (fence.ts), so the skills you
 // choose are copied into a plugin Landlens builds in the session's own folder: skills only (no hooks, no MCP
-// servers, no commands), regular files only, size-capped. Their scripts run where the session's shell runs: inside
+// servers, no commands; each SKILL.md's frontmatter cut to its name and description), regular files only,
+// size-capped. The sandbox denies the agent writing to the plugin. Their scripts run where the session's shell runs: inside
 // the sandbox, with the session's read-only cluster access.
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 
 export type SkillInfo = { name: string; description: string; dir: string };
 
@@ -47,6 +48,7 @@ export function buildSkillsPlugin(cwd: string, chosen: SkillInfo[], log?: (l: st
   });
   if (!usable.length) return undefined;
   const root = join(cwd, ".landlens", SKILLS_PLUGIN);
+  rmSync(root, { recursive: true, force: true }); // only what Landlens writes now, never what was there
   mkdirSync(join(root, ".claude-plugin"), { recursive: true, mode: 0o700 });
   writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({
     name: SKILLS_PLUGIN,
@@ -54,9 +56,21 @@ export function buildSkillsPlugin(cwd: string, chosen: SkillInfo[], log?: (l: st
     version: "0.0.0",
   }, null, 2));
   for (const s of usable) {
-    cpSync(s.dir, join(root, "skills", s.name), { recursive: true, dereference: false, errorOnExist: false, verbatimSymlinks: true });
+    const to = join(root, "skills", s.name);
+    cpSync(s.dir, to, { recursive: true, dereference: false, errorOnExist: false, verbatimSymlinks: true });
+    writeFileSync(join(to, "SKILL.md"), plainSkill(readFileSync(join(to, "SKILL.md"), "utf8"), s));
   }
   return root;
+}
+
+/**
+ * SKILL.md with only its name and description in the frontmatter: no hooks, allowed-tools, model or other settings a
+ * skill could carry. The instructions below it are kept as they are.
+ */
+export function plainSkill(md: string, s: Pick<SkillInfo, "name" | "description">): string {
+  const m = /^---\n[\s\S]*?\n---\n?/.exec(md);
+  const body = m ? md.slice(m[0].length) : md;
+  return `---\n${stringify({ name: s.name, description: s.description }, { lineWidth: 0 })}---\n${body}`;
 }
 
 /** Why a skill folder can't be copied: a link, too many files, or too big. */

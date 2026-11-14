@@ -8,7 +8,7 @@ import { AgentHistory, AgentSettings } from "./agent-history";
 import { apiPath, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { getJson, redactObject, redactText } from "@landlens/kube-mcp";
 import type { ContentBlock, NewSessionResponse, RequestPermissionOutcome, RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { delimiter } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +73,7 @@ export class AgentService {
     this.starting ??= (async () => {
       this.deps.push("agent:status", { state: "starting" });
       mkdirSync(this.deps.sessionsDir, { recursive: true, mode: 0o700 });
+      this.sweep();
       this.path = await loginPath();
       const node = which("node", this.path);
       if (!node) throw Object.assign(new Error("Landlens needs Node.js to run Claude Code; none was found on your login shell's PATH."), { status: 424 });
@@ -126,14 +127,23 @@ export class AgentService {
     return this.open({ handle, ...(namespaces?.length ? { namespaces } : {}) });
   }
 
+  /** Session folders left by a crash: no session is open in them, and a resumed one starts from an empty folder. */
+  private sweep() {
+    const open = new Set([...this.sessions.values()].map((s) => s.cwd));
+    for (const name of readdirSync(this.deps.sessionsDir)) {
+      const dir = join(this.deps.sessionsDir, name);
+      if (/^\d{10,16}-[0-9a-f]{8}$/.test(name) && !open.has(dir)) rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
   /** Resume a session from the history on a connected cluster with the same context. */
   async resume(handle: string, session: string): Promise<AgentSessionInfo> {
     const e = this.deps.history?.get(session);
     if (!e) throw Object.assign(new Error("Landlens has no such session in its history"), { status: 404 });
     if (this.sessions.has(session)) throw Object.assign(new Error("that session is already open"), { status: 409 });
     const c = this.deps.clusters.get(handle);
-    if (c.info.context !== e.context) {
-      throw Object.assign(new Error(`that session was on ${e.context}; connect to it to resume`), { status: 409 });
+    if (c.info.context !== e.context || (e.server && c.info.server !== e.server)) {
+      throw Object.assign(new Error(`that session was on ${e.context}${e.server ? ` (${e.server})` : ""}; connect to it to resume`), { status: 409 });
     }
     return this.open({ handle, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), resume: { sessionId: session, cwd: e.cwd } });
   }
@@ -156,7 +166,7 @@ export class AgentService {
       ...(this.deps.log ? { log: this.deps.log } : {}),
     }, req);
     this.sessions.set(s.id, s);
-    this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
+    this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, server: this.deps.clusters.get(s.handle).info.server, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
     return info(s, s.response);
   }
 

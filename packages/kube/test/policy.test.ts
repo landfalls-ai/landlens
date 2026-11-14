@@ -147,4 +147,23 @@ describe("the approval broker's write policy", () => {
     expect(allowed(approved, "POST", "/version")).toBe(false);
     expect(allowed(approved, "GET", "/metrics")).toBe(false);
   });
+
+  it("allows only what the broker sends: no subresources, collections, watches or updates, nothing cluster-scoped", () => {
+    expect(allowed(approved, "GET", "/apis/apps/v1/namespaces/landlens-dev/replicasets?labelSelector=app%3Dx")).toBe(true);
+    for (const [m, p] of [
+      ["POST", "/api/v1/namespaces/landlens-dev/serviceaccounts/default/token"],
+      ["PATCH", "/api/v1/namespaces/landlens-dev/pods/p1/ephemeralcontainers"],
+      ["PATCH", "/apis/apps/v1/namespaces/landlens-dev/deployments/d/status"],
+      ["PATCH", "/apis/apps/v1/namespaces/landlens-dev/deployments/d/scale"],
+      ["DELETE", "/api/v1/namespaces/landlens-dev/configmaps"],
+      ["PUT", "/api/v1/namespaces/landlens-dev/configmaps/c"],
+      ["GET", "/api/v1/namespaces/landlens-dev/configmaps"],
+      ["GET", "/api/v1/namespaces/landlens-dev/configmaps?watch=true"],
+      ["DELETE", "/api/v1/namespaces/landlens-dev"],
+      ["PATCH", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/x"],
+      ["GET", "/api/v1/nodes/n1"],
+    ] as const) expect(allowed(approved, m, p), `${m} ${p}`).toBe(false);
+    // Without a namespace limit, a cluster-scoped object can be changed (the broker marks it danger).
+    expect(allowed(agentApprovedPolicy(), "PATCH", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/x")).toBe(true);
+  });
 });

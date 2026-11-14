@@ -12,7 +12,7 @@ export function StatusBar(props: { server: string; watching: string; claude?: st
       <button className="sb-item metrics" onClick={props.onMetrics} title={props.clickland ? "Metrics from Clickland: settings" : "Connect Clickland for metrics history"}>
         <Ic icon={props.clickland ? Database : PlugZap} size={11} />{props.clickland ? "Clickland" : "Connect Clickland"}
       </button>
-      {props.claude ? <span className="sb-item claude" aria-live="polite"><Ic icon={Sparkles} size={11} />{props.claude}</span> : null}
+      {props.claude ? <span className="sb-item claude" aria-live="polite" title={props.claude}><Ic icon={Sparkles} size={11} /><span className="sb-text">{props.claude}</span></span> : null}
       {props.bad ? (
         <button className="sb-item bad" onClick={props.onProblems} title={`${props.bad} failing: open Overview`} aria-label={`${props.bad} failing, open Overview`}>
           <Ic icon={CircleX} size={11} />{props.bad}

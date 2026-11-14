@@ -508,7 +508,9 @@ export type AgentPermissionRequest = {
 /** What a change does to one object. */
 export type ChangeVerb = "create" | "update" | "patch" | "delete";
 /** Why a change deserves a second look; the dock shows these as tags, the loud ones first. */
-export type ChangeRisk = "deletes" | "rbac" | "namespace" | "cluster-scoped" | "scales-to-zero" | "changes-image" | "restarts-pods";
+export type ChangeRisk =
+  | "deletes" | "rbac" | "namespace" | "cluster-scoped" | "reads-secret" | "privileged" | "host-access"
+  | "service-account" | "new-workload" | "scales-to-zero" | "changes-image" | "restarts-pods";
 /** One line of a unified diff; "…" stands for a run of unchanged lines (its text says how many). */
 export type DiffLine = { t: " " | "+" | "-" | "…"; text: string; oldNo?: number; newNo?: number };
 export type ChangeOperation = {

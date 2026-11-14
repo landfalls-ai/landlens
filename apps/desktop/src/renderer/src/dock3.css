@@ -41,8 +41,8 @@
 .diff.capped { max-height: 320px; overflow-y: hidden; }
 .diff-in { display: inline-flex; flex-direction: column; min-width: 100%; } /* flex drops the newlines between lines; textContent stays the diff */
 .diff .dl { display: block; position: relative; padding: 0 12px 0 52px; }
-.diff .dl::before { content: attr(data-n); position: absolute; left: 0; width: 30px; text-align: right; color: var(--ink-4); user-select: none; }
-.diff .dl::after { content: attr(data-t); position: absolute; left: 38px; width: 8px; user-select: none; }
+.diff .dl::before { content: attr(data-n); position: absolute; top: 0; left: 0; width: 30px; text-align: right; color: var(--ink-4); user-select: none; }
+.diff .dl::after { content: attr(data-t); position: absolute; top: 0; left: 38px; width: 8px; user-select: none; }
 .diff .dl.add { background: var(--diff-add); color: var(--ink); box-shadow: inset 2px 0 0 var(--ok); }
 .diff .dl.add::after { color: var(--ok-text); }
 .diff.create .dl.add { background: none; } /* a create is all "+": keep the edge, drop the tint */

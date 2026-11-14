@@ -5,7 +5,7 @@
 //
 // The agent's own token stays read-only, so these tools are the only way its changes reach a cluster.
 import type { ResourceType } from "@landlens/contracts";
-import type { ChangeOp, Outcome, PatchType, ProposedChange } from "@landlens/kube";
+import { CHANGE_TTL_MS, type ChangeOp, type Outcome, type PatchType, type ProposedChange } from "@landlens/kube";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { parseAllDocuments } from "yaml";
 import { z } from "zod";
@@ -27,6 +27,11 @@ const WRITE = { readOnlyHint: false, openWorldHint: false } as const;
 const say = (text: string, isError = false): Result => ({ content: [{ type: "text", text: redactText(text) }], ...(isError ? { isError } : {}) });
 
 /** What the agent reads back, phrased so it doesn't claim more than happened. */
+/** The tools that propose changes. Each call waits for the person, up to the broker's time limit. */
+export const WRITE_TOOLS: readonly string[] = ["apply_manifest", "patch", "scale", "rollout_restart", "rollout_undo", "delete"];
+/** How long a write tool's call may take: the time you have to answer, and a minute to apply. */
+export const WRITE_CALL_TIMEOUT_MS = CHANGE_TTL_MS + 60_000;
+
 export function outcomeText(o: Outcome): Result {
   switch (o.state) {
     case "applied":
@@ -93,8 +98,10 @@ export function registerWriteTools(server: McpServer, cluster: AgentCluster) {
       if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("each document must be one object");
       if (o.kind === "List") throw new Error("send the items as separate documents, not a List");
       const [group, version] = String(o.apiVersion ?? "").includes("/") ? String(o.apiVersion).split("/") : ["", String(o.apiVersion ?? "")];
-      const t = types.find((x) => x.group === group && x.kind === o.kind) ;
+      const t = types.find((x) => x.group === group && x.kind === o.kind);
       if (!t) throw new Error(`this cluster doesn't serve ${o.apiVersion} ${o.kind}`);
+      // The version discovery prefers, so the object read for the diff and the one written are the same shape.
+      if (t.version !== version) throw new Error(`use apiVersion ${t.group ? `${t.group}/` : ""}${t.version} for ${o.kind}`);
       const name = o.metadata?.name;
       if (typeof name !== "string" || !name) throw new Error(`a ${o.kind} needs metadata.name`);
       const namespace = t.namespaced ? (o.metadata?.namespace ?? a.namespace) : undefined;

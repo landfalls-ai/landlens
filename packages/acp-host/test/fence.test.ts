@@ -27,7 +27,7 @@ describe("the session fence", () => {
     expect(opts.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(["/Users/me", "/Users/me/.kube", "/Users/me/.orbstack", "/Volumes/work/prod.yaml"]));
     expect(opts.sandbox.filesystem.allowRead).toEqual(["/tmp/s1", "/Users/me/.nvm/versions/node/v22/bin"]);
     expect(opts.sandbox.filesystem.allowWrite).toEqual(["/tmp/s1"]);
-    expect(opts.sandbox.filesystem.denyWrite).toEqual(["/tmp/s1/kubeconfig"]);
+    expect(opts.sandbox.filesystem.denyWrite).toEqual(["/tmp/s1/kubeconfig", "/tmp/s1/.landlens"]);
     expect(opts.sandbox.network).toEqual({ httpProxyPort: 51234, socksProxyPort: 51234, allowLocalBinding: false, strictAllowlist: true });
     expect(opts.sandbox.credentials.envVars.map((v) => v.name)).toContain("ANTHROPIC_API_KEY");
   });
@@ -93,6 +93,7 @@ describe("chosen skills", () => {
     expect(o.tools).toContain("Skill");
     expect(o.plugins).toEqual([{ type: "local", path: "/tmp/s1/.landlens/landlens-skills" }]);
     expect(o.settingSources).toEqual([]);
+    expect(o.sandbox.filesystem.denyWrite).toContain("/tmp/s1/.landlens");
   });
 
   it("are ignored when the plugin isn't inside the session folder", () => {

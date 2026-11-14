@@ -46,11 +46,34 @@ async function viewWith(page: Page, selector: string, timeout = 30_000): Promise
   }
 }
 
+/** Wait until the dock's composer takes a message; if it never does, fail with what the dock says. */
+async function ready(page: Page) {
+  const dock = page.getByRole("complementary", { name: "Claude Code" });
+  const box = dock.getByRole("combobox", { name: "Message Claude Code" });
+  try {
+    await expect.poll(() => box.isEnabled({ timeout: 2_000 }).catch(() => false), { timeout: 90_000 }).toBe(true);
+  } catch (err) {
+    await shot(page, "agent-not-ready");
+    const text = (await dock.innerText().catch(() => "(no dock)")).slice(0, 3000);
+    throw new Error(`the dock never took a message; it says:\n${text}`, { cause: err });
+  }
+  return box;
+}
+
 describe.runIf(run)("Landlens app on OrbStack", () => {
   let app: ElectronApplication;
   let page: Page;
 
   beforeAll(async () => {
+    // The scenario's pod must have crashed at least once (a run that just re-created it leaves a fresh pod).
+    const restarts = () => {
+      try {
+        return Number(execFileSync("kubectl", ["--context", "orbstack", "-n", "landlens-dev", "get", "pods", "-l", "app=orders-api", "-o", "jsonpath={.items[0].status.containerStatuses[0].restartCount}"], { encoding: "utf8" }) || 0);
+      } catch {
+        return 0;
+      }
+    };
+    for (let i = 0; i < 60 && restarts() < 1; i++) await new Promise((r) => setTimeout(r, 2_000));
     app = await electron.launch({
       executablePath: require("electron") as unknown as string,
       args: [resolve(__dirname, "..")],
@@ -59,7 +82,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     });
     page = await app.firstWindow();
     await page.setViewportSize({ width: 1440, height: 880 });
-  }, 60_000);
+  }, 180_000);
 
   afterAll(async () => {
     await app?.close();
@@ -533,8 +556,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await page.locator(".drawer").getByRole("button", { name: /Ask Claude/ }).click();
     const dock = page.getByRole("complementary", { name: "Claude Code" });
     await dock.locator(".ctx-chip", { hasText: "orders-api" }).waitFor();
-    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
-    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    const box = await ready(page);
     await shot(page, "07-agent-dock-ready");
     await box.fill("Why is this pod crashlooping? Keep the answer short.");
     await box.press("Enter");
@@ -563,7 +585,9 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     const tools = await dock.locator(".tool").count();
     // What it read beyond the attached pod (its YAML and events go with "Ask Claude") is on screen as cards.
     expect(tools).toBeGreaterThanOrEqual(1);
-    const failed = await dock.locator(".tool-failed").evaluateAll((els) => els.map((e) => (e as unknown as { innerText: string }).innerText));
+    // A failed card is a bug, unless it's Landlens refusing Secrets: the agent sometimes looks, and is told no.
+    const failed = (await dock.locator(".tool-failed").evaluateAll((els) => els.map((e) => (e as unknown as { innerText: string }).innerText)))
+      .filter((t) => !/\bsecrets\b/.test(t));
     expect(failed, failed.join("\n---\n")).toEqual([]);
     await dock.locator(".tool summary").first().click();
     await shot(page, "11-agent-tool-card");
@@ -578,8 +602,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
 
   it.runIf(claude)("shows cluster_overview's health card and describe's object card inline in the dock, dark and light", async () => {
     const dock = page.getByRole("complementary", { name: "Claude Code" });
-    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
-    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    const box = await ready(page);
     await box.fill("Call the cluster_overview tool, then the describe tool for pod orders-api in namespace landlens-dev (use list_resources first if you need its full name). Answer in one sentence.");
     await box.press("Enter");
     const stop = dock.getByRole("button", { name: "Stop" });
@@ -616,7 +639,13 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await shot(page, "43-light-dock-object-card", "light");
     expect(await health.evaluate(() => (globalThis as any).document.documentElement.getAttribute("data-theme"))).toBe("light");
     await page.emulateMedia({ colorScheme: "dark" });
-    // "Open in Landlens" takes the main view to the pod.
+    // "Open in Landlens" takes the main view to the pod. The dock caps a tall view until "Show all".
+    const expanded = await (await object.frameElement()).evaluate((el: any) => {
+      const more = el.closest(".app-frame")?.querySelector(".app-fade button");
+      more?.click();
+      return !!more;
+    });
+    if (expanded) await page.waitForTimeout(300);
     await object.locator("button", { hasText: "Open in Landlens" }).click();
     await expect.poll(async () => (await page.locator(".drawer").textContent().catch(() => "")) ?? "", { timeout: 30_000 }).toContain("orders-api");
     await shot(page, "44-open-in-landlens");
@@ -638,8 +667,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     kubectl("apply", "-f", scenario);
     const env = () => kubectl("get", "deployment", "orders-api", "-o", "jsonpath={.spec.template.spec.containers[0].env}");
     const dock = page.getByRole("complementary", { name: "Claude Code" });
-    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
-    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    const box = await ready(page);
     const stop = dock.getByRole("button", { name: "Stop" });
     /** Send a message and answer the agent until it finishes; `onChange` decides each change card that appears. */
     const turn = async (text: string, onChange: (card: ReturnType<typeof dock.locator>) => Promise<void>) => {
@@ -687,6 +715,9 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await turn("Propose that same fix again now; I'll approve it.", async (card) => {
       if (approved) return;
       await card.locator(".diff").first().waitFor();
+      // Nothing is approved unseen: a capped diff or closed operation is shown first.
+      const reveal = card.getByRole("button", { name: "Show all of it to approve" });
+      if (await reveal.count()) await reveal.click();
       await card.getByRole("button", { name: /^Approve/ }).click();
       approved++;
     });

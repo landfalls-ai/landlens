@@ -5,8 +5,8 @@
 // words are its reason, shown as quoted plain text (D13, D20).
 import type { AgentChange, ChangeOperation, ChangeRisk, DiffLine } from "@landlens/contracts";
 import {
-  ArrowUpRight, Ban, Check, ChevronRight, CircleDashed, Clock, FolderTree, Globe, Maximize2, Package, Power, RotateCw,
-  ShieldAlert, ShieldCheck, Sparkles, Trash2, TriangleAlert, X, type LucideIcon,
+  ArrowUpRight, Ban, Check, ChevronRight, CircleDashed, Clock, Eye, FolderTree, Globe, HardDrive, KeyRound, Maximize2,
+  Package, Play, Power, RotateCw, ShieldAlert, ShieldCheck, Sparkles, Trash2, TriangleAlert, UserCog, X, type LucideIcon,
 } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { ObjectTarget } from "./app-host";
@@ -17,12 +17,20 @@ const RISK: Record<ChangeRisk, { icon: LucideIcon; words: string; level: "danger
   deletes: { icon: Trash2, words: "Deletes", level: "danger", title: "Applying this removes the object. Landlens can't bring it back." },
   rbac: { icon: ShieldAlert, words: "Changes access", level: "danger", title: "This changes who can do what in the cluster (RBAC)." },
   "cluster-scoped": { icon: Globe, words: "Cluster-wide", level: "danger", title: "This object isn't in a namespace: the change reaches the whole cluster." },
+  "reads-secret": { icon: KeyRound, words: "Uses a Secret", level: "danger", title: "Its pods get a Secret's values (env or volume). What they print or send can carry them, and the agent can read pod logs." },
+  privileged: { icon: ShieldAlert, words: "Privileged", level: "danger", title: "A container runs privileged, may escalate, or gets added Linux capabilities." },
+  "host-access": { icon: HardDrive, words: "Host access", level: "danger", title: "Its pods reach the node: a host path, the host's network, PIDs or IPC, or a host port." },
+  "service-account": { icon: UserCog, words: "Service account", level: "caution", title: "Its pods run as a different service account, with that account's permissions." },
+  "new-workload": { icon: Play, words: "Runs new pods", level: "caution", title: "This creates something that runs pods." },
   namespace: { icon: FolderTree, words: "Whole namespace", level: "caution", title: "This changes a namespace, and with it everything in it." },
   "scales-to-zero": { icon: Power, words: "Scales to zero", level: "caution", title: "Applying this stops every pod of the workload." },
   "restarts-pods": { icon: RotateCw, words: "Restarts pods", level: "caution", title: "Applying this replaces the workload's pods." },
   "changes-image": { icon: Package, words: "Changes image", level: "caution", title: "Applying this runs a different container image." },
 };
-const ORDER: ChangeRisk[] = ["deletes", "rbac", "cluster-scoped", "namespace", "scales-to-zero", "restarts-pods", "changes-image"];
+const ORDER: ChangeRisk[] = [
+  "deletes", "rbac", "cluster-scoped", "reads-secret", "privileged", "host-access", "namespace", "service-account",
+  "new-workload", "scales-to-zero", "restarts-pods", "changes-image",
+];
 /** A diff this short is never capped (D25). */
 const SHORT_DIFF = 17;
 /** Keys are ignored this long after a card appears or reveals more (D37). */
@@ -79,6 +87,13 @@ export const ChangeCard = forwardRef<CardKeys, Props>(function ChangeCard({ chan
     return undefined;
   };
   const next = hidden();
+  /** Open every operation and lift every cap: what a click on Approve does first while anything is hidden. */
+  const revealAll = () => {
+    setOpen(new Set(ops.map((o, i) => (o.verb === "delete" ? -1 : i)).filter((i) => i >= 0)));
+    setUncapped(new Set(ops.map((_, i) => i)));
+    shownAt.current = Date.now();
+  };
+  const nothing = ops.every((o) => o.verb !== "delete" && o.diff.added === 0 && o.diff.removed === 0);
 
   useImperativeHandle(ref, () => ({
     reveal() {
@@ -145,7 +160,9 @@ export const ChangeCard = forwardRef<CardKeys, Props>(function ChangeCard({ chan
       />
       <Warnings ops={ops} />
       <div className="change-foot">
-        <div className="change-fact"><Ic icon={ShieldCheck} size={12} />Dry run passed. Nothing has changed yet.</div>
+        <div className="change-fact"><Ic icon={ShieldCheck} size={12} />{nothing
+          ? "Dry run passed: this would change nothing. Rejecting it is safe."
+          : "Dry run passed. Nothing has changed yet."}</div>
         {applying ? (
           <div className="change-applying" role="status"><span className="spinner" />Applying…</div>
         ) : confirm ? (
@@ -155,14 +172,19 @@ export const ChangeCard = forwardRef<CardKeys, Props>(function ChangeCard({ chan
           }} onGo={() => onDecide("approve")} />
         ) : (
           <div className="change-actions">
-            {danger ? null : (
+            {next ? (
+              // Nothing is approved unseen: while an operation is closed or a diff capped, the first click shows it all.
+              <button className="primary" onClick={revealAll}>
+                <Ic icon={Eye} size={13} />Show all of it to approve
+              </button>
+            ) : danger ? null : (
               <button className="primary" onClick={() => onDecide("approve")}>
-                <Ic icon={Check} size={13} />Approve{enterHint && !next ? <kbd aria-hidden="true">↵</kbd> : null}
+                <Ic icon={Check} size={13} />Approve{enterHint ? <kbd aria-hidden="true">↵</kbd> : null}
               </button>
             )}
             <button className="secondary" onClick={() => onDecide("reject")}>Reject{keysLive && !confirm ? <kbd aria-hidden="true">esc</kbd> : null}</button>
             <button className="link-btn small" onClick={onNote}>Reject with a note</button>
-            {danger ? (
+            {danger && !next ? (
               <button ref={dangerBtn} className="danger push" onClick={() => setConfirm(true)}>
                 <Ic icon={ops.some((o) => o.verb === "delete") ? Trash2 : TriangleAlert} size={13} />
                 {ops.some((o) => o.verb === "delete") ? "Delete…" : "Approve…"}

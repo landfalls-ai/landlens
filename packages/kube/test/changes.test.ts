@@ -1,6 +1,6 @@
 import type { AgentChange } from "@landlens/contracts";
 import { describe, expect, it } from "vitest";
-import { ChangeBroker, diffLines, risks, type ChangeDecision, type ChangeOp, type Send } from "../src/index.js";
+import { agentSafe, ChangeBroker, diffLines, MAX_REFUSED, risks, type ChangeDecision, type ChangeOp, type Send } from "../src/index.js";
 
 const deployments = { group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespaced: true };
 const secrets = { group: "", version: "v1", resource: "secrets", kind: "Secret", namespaced: true };
@@ -129,14 +129,65 @@ describe("the approval broker", () => {
     expect(seen).toEqual([]);
   });
 
-  it("doesn't ask about a change the dry run says does nothing, or one the dry run refuses", async () => {
+  it("asks you even about a change that would change nothing: answering the agent at once would confirm a hidden value", async () => {
+    const k = fakeCluster();
+    const { b, seen } = broker(k.send, () => ({ decision: "reject" }));
+    expect(await b.propose({ tool: "scale", title: "", reason: "", operations: [scale(1)] })).toEqual({ state: "rejected" });
+    expect(seen[0]!.operations[0]!.diff).toMatchObject({ added: 0, removed: 0 });
+  });
+
+  it("doesn't ask about one the dry run refuses, and tells the agent why without the values the API server quoted", async () => {
+    const k = fakeCluster();
+    const refusing: Send = async (r) => (r.method === "GET" ? k.send(r) : { status: 422, text: '{"kind":"Status","message":"spec.template.spec.containers[0].imagePullPolicy: Unsupported value: \\"postgres://u:hunter2@db\\": supported values: \\"Always\\", spec.replicas: Invalid value: -1: must be greater than or equal to 0"}', warnings: [] });
+    const { b, seen } = broker(refusing, () => ({ decision: "approve" }));
+    const out = await b.propose({ tool: "scale", title: "", reason: "", operations: [scale(-1)] });
+    expect(out).toMatchObject({ state: "failed", stage: "dry-run", error: expect.stringContaining("422: spec.template.spec.containers[0].imagePullPolicy: Unsupported value: \"…\"") });
+    expect(JSON.stringify(out)).not.toContain("hunter2");
+    expect(JSON.stringify(out)).toContain("spec.replicas: Invalid value: …: must be");
+    expect(seen).toEqual([]);
+  });
+
+  it("refuses JSON patch operations that read values (copy, move, test), unnamed objects and whole-object updates", async () => {
     const k = fakeCluster();
     const { b, seen } = broker(k.send, () => ({ decision: "approve" }));
-    expect(await b.propose({ tool: "scale", title: "", reason: "", operations: [scale(1)] })).toMatchObject({ state: "failed", stage: "dry-run", error: expect.stringContaining("change nothing") });
-    const refusing: Send = async (r) => (r.method === "GET" ? k.send(r) : { status: 422, text: '{"kind":"Status","message":"spec.replicas: Invalid value: -1"}', warnings: [] });
-    const { b: b2 } = broker(refusing, () => ({ decision: "approve" }));
-    expect(await b2.propose({ tool: "scale", title: "", reason: "", operations: [scale(-1)] })).toMatchObject({ state: "failed", stage: "dry-run", error: expect.stringContaining("422: spec.replicas: Invalid value") });
+    const json = (body: unknown[]): ChangeOp => ({ verb: "patch", type: deployments, namespace: "landlens-dev", name: "orders-api", patchType: "json", body });
+    for (const body of [
+      [{ op: "copy", from: "/spec/template/spec/containers/0/env/0/value", path: "/metadata/annotations/x" }],
+      [{ op: "move", from: "/spec/replicas", path: "/spec/x" }],
+      [{ op: "test", path: "/spec/template/spec/containers/0/env/0/value", value: "guess" }],
+      [{ op: "add", path: "/metadata/annotations/x", value: "1", from: "/spec" }],
+    ]) expect(await b.propose({ tool: "patch", title: "", reason: "", operations: [json(body)] })).toMatchObject({ state: "failed", stage: "check", error: expect.stringContaining("only add, replace and remove") });
+    expect(await b.propose({ tool: "delete", title: "", reason: "", operations: [{ verb: "delete", type: deployments, namespace: "landlens-dev", name: "" }] })).toMatchObject({ state: "failed", error: expect.stringContaining("names one object") });
+    expect(await b.propose({ tool: "x", title: "", reason: "", operations: [{ verb: "update", type: deployments, namespace: "landlens-dev", name: "orders-api", body: deployment() }] })).toMatchObject({ state: "failed", error: expect.stringContaining("whole-object updates") });
     expect(seen).toEqual([]);
+    expect(k.log).toEqual([]);
+  });
+
+  it("stops taking proposals from a session after too many refusals", async () => {
+    const k = fakeCluster();
+    const { b } = broker(k.send, () => ({ decision: "approve" }));
+    const bad: ChangeOp = { verb: "patch", type: secrets, namespace: "landlens-dev", name: "s", patchType: "merge", body: {} };
+    for (let i = 0; i < MAX_REFUSED; i++) await b.propose({ tool: "patch", title: "", reason: "", operations: [bad] });
+    expect(await b.propose({ tool: "scale", title: "", reason: "", operations: [scale(3)] })).toMatchObject({ state: "failed", error: expect.stringContaining("takes no more") });
+  });
+
+  it("sends nothing for a create by apply if the object appeared after the dry run", async () => {
+    let exists = false;
+    const log: string[] = [];
+    const cm = { apiVersion: "v1", kind: "ConfigMap", metadata: { name: "c", namespace: "landlens-dev" }, data: { a: "1" } };
+    const send: Send = async (r) => {
+      log.push(`${r.method} ${r.path}`);
+      if (r.method === "GET") return exists ? { status: 200, text: JSON.stringify(cm), warnings: [] } : { status: 404, text: '{"kind":"Status","message":"not found"}', warnings: [] };
+      return { status: 200, text: JSON.stringify(cm), warnings: [] };
+    };
+    const { b } = broker(send, () => {
+      exists = true; // someone creates it while you look
+      return { decision: "approve" };
+    });
+    const configmaps = { group: "", version: "v1", resource: "configmaps", kind: "ConfigMap", namespaced: true };
+    const out = await b.propose({ tool: "apply_manifest", title: "", reason: "", operations: [{ verb: "patch", type: configmaps, namespace: "landlens-dev", name: "c", patchType: "apply", body: cm }] });
+    expect(out).toMatchObject({ state: "failed", stage: "apply", error: expect.stringContaining("created by someone else") });
+    expect(log.filter((l) => l.startsWith("PATCH") && !l.includes("dryRun"))).toEqual([]);
   });
 
   it("expires after its time, and is withdrawn when the turn ends; neither applies anything", async () => {
@@ -171,6 +222,35 @@ describe("risk tags", () => {
     const b = deployment();
     expect(risks(scale(0), b, deployment("1", 0))).toEqual(["scales-to-zero"]);
     expect(risks(scale(1), b, deployment("1", 1, "orders:2"))).toEqual(["changes-image", "restarts-pods"]);
+  });
+
+  it("flag what a pod spec could reach, in any kind, and a new workload", () => {
+    const jobs = { group: "batch", version: "v1", resource: "jobs", kind: "Job", namespaced: true };
+    const job = (spec: object) => ({ kind: "Job", spec: { template: { spec: { containers: [{ name: "x", image: "busybox" }], ...spec } } } });
+    const create: ChangeOp = { verb: "patch", type: jobs, namespace: "landlens-dev", name: "j", patchType: "apply" };
+    expect(risks(create, null, job({ volumes: [{ name: "s", secret: { secretName: "db" } }] }))).toEqual(["reads-secret", "new-workload"]);
+    expect(risks(create, null, job({ hostNetwork: true, serviceAccountName: "admin" }))).toEqual(["host-access", "service-account", "new-workload"]);
+    const priv = { kind: "Job", spec: { template: { spec: { containers: [{ name: "x", image: "busybox", securityContext: { privileged: true }, env: [{ name: "P", valueFrom: { secretKeyRef: { name: "db", key: "p" } } }] }] } } } };
+    expect(risks(create, job({}), priv)).toEqual(["reads-secret", "privileged", "restarts-pods"]);
+    // A custom resource that wraps a pod template is read the same way.
+    const rollouts = { group: "argoproj.io", version: "v1alpha1", resource: "rollouts", kind: "Rollout", namespaced: true };
+    const ro = (image: string) => ({ kind: "Rollout", spec: { template: { spec: { containers: [{ name: "a", image }] } } } });
+    expect(risks({ verb: "patch", type: rollouts, namespace: "n", name: "r", patchType: "merge" }, ro("a:1"), ro("a:2"))).toEqual(["changes-image", "restarts-pods"]);
+    // A restart stamps the template's annotations only.
+    const d = deployment();
+    const restarted = structuredClone(d) as any;
+    restarted.spec.template.metadata = { annotations: { "kubectl.kubernetes.io/restartedAt": "now" } };
+    expect(risks(scale(1), d, restarted)).toEqual(["restarts-pods"]);
+    // What was already there isn't flagged again.
+    expect(risks({ ...create, verb: "patch" }, priv, priv)).toEqual([]);
+  });
+});
+
+describe("what the agent hears of an API server's error", () => {
+  it("has no quoted values and no Invalid value", () => {
+    expect(agentSafe('metadata.annotations: Invalid value: "s3cr3t-value": must be no more than 63 characters')).toBe('metadata.annotations: Invalid value: "…": must be no more than 63 characters');
+    expect(agentSafe("spec.x: Invalid value: 12345678: must be small")).toBe("spec.x: Invalid value: …: must be small");
+    expect(agentSafe('a "quoted \\"escaped\\" value" here')).toBe('a "…" here');
   });
 });
 

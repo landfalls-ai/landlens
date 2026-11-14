@@ -7,7 +7,8 @@ import type { AgentHistoryEntry } from "@landlens/contracts";
 
 const MAX_ENTRIES = 200;
 
-type Stored = AgentHistoryEntry & { cwd: string };
+/** Kept in main only: the session's folder, and the API server it ran against (a context name alone can repeat). */
+type Stored = AgentHistoryEntry & { cwd: string; server?: string };
 
 function readJson<T>(file: string, fallback: T): T {
   try {
@@ -37,7 +38,7 @@ export class AgentHistory {
     return this.entries
       .filter((e) => !context || e.context === context)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map(({ cwd: _cwd, ...e }) => e);
+      .map(({ cwd: _cwd, server: _server, ...e }) => e);
   }
 
   get(session: string): Stored | undefined {
@@ -45,7 +46,7 @@ export class AgentHistory {
   }
 
   /** A session started or resumed. */
-  started(e: { session: string; agent: string; context: string; namespaces?: string[]; cwd: string }) {
+  started(e: { session: string; agent: string; context: string; server?: string; namespaces?: string[]; cwd: string }) {
     const at = new Date(this.now()).toISOString();
     const prev = this.get(e.session);
     if (prev) {

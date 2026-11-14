@@ -9,6 +9,11 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **Changes aren't kept.** A resumed session shows a write tool call as its row and result, not as a change card, and
   a change waiting when Landlens quits is gone (nothing was applied). The audit trail and History's count of applied
   changes stay.
+- **The approval card is the renderer's.** A compromised renderer could approve a change it was shown; the renderer
+  is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. A native confirmation
+  for danger changes is not built.
+- **Dry runs trust the API server.** An aggregated API server that ignored `dryRun` would apply at the dry run. The
+  agent's commands in the "/" menu are Claude Code's own (with no settings loaded, its built-ins), sent as messages.
 - **Claude Code is the only agent.** Its sandbox fences only Claude Code; another ACP agent (Codex, Gemini CLI) would
   need Landlens's own sandbox for its process, with network to its model provider, so cluster data could leave by a
   path Landlens doesn't control. Deferred until that sandbox exists.

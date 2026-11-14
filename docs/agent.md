@@ -96,15 +96,19 @@ The approval broker (`packages/kube/src/changes.ts`), in main, for each proposal
 
 1. **Refuses** what can never be approved: Secrets; anything carrying a value the agent saw as `<redacted>` or cut
    short (it would write the marker over the real value); objects outside the session's namespaces; more than 10
-   operations; a manifest whose kind, name or namespace don't match the call.
+   operations; a manifest whose kind, name or namespace don't match the call; JSON patch `copy`, `move` and `test`,
+   which read values the agent can't see. After 20 refusals a session gets no more.
 2. **Reads** each object as it is now and builds the exact request, pinned to that version: `resourceVersion` in a
    patch or apply, a `test` operation in a JSON patch, `uid` and `resourceVersion` preconditions on a delete.
 3. **Dry-runs** it on the API server (`dryRun=All`; for a delete, in the DeleteOptions body, because the API server
    ignores the query when a DELETE has one) and diffs the object before and after. A change that would change nothing
-   is refused.
-4. **Asks you** in the dock: the change card shows the reason, each operation with its diff, risk tags (deletes, RBAC,
-   namespaces, cluster-scoped objects, scaling to zero, a new image, restarting pods) and the dry run's warnings.
-   Danger (deletes, RBAC, cluster-scoped) takes a second click, and Enter never approves it.
+   still comes to you, marked so. A dry run the API server refuses goes back to the agent, with the values it quoted
+   cut out.
+4. **Asks you** in the dock: the change card shows the reason, each operation with its diff, risk tags and the dry
+   run's warnings. Danger takes a second click, and Enter never approves it: deletes, RBAC, cluster-scoped objects,
+   and pods that gain a Secret (env or volume), privilege or host access. Caution: a namespace, another service
+   account, new pods, scaling to zero, a new image, restarted pods. Pod specs are found in any kind, custom resources
+   included. While an operation is closed or a diff capped, Approve first shows the rest.
 5. **On Approve**, sends exactly the requests it dry-ran. If the object changed since, the API server answers 409 and
    nothing is applied; the agent is told to look again. **On Reject**, nothing is sent; your note, if any, goes to the
    agent. A change waits 15 minutes, then expires; Stop, closing the dock or ending the session withdraws it.

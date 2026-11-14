@@ -9,7 +9,7 @@ describe("the agent session history", () => {
     const file = join(mkdtempSync(join(tmpdir(), "landlens-h-")), "agent-history.json");
     let t = Date.parse("2026-11-15T00:00:00Z");
     const h = new AgentHistory(file, () => t);
-    h.started({ session: "s1", agent: "Claude Code", context: "orbstack", cwd: "/x/1-aaaaaaaa" });
+    h.started({ session: "s1", agent: "Claude Code", context: "orbstack", server: "https://127.0.0.1:26443", cwd: "/x/1-aaaaaaaa" });
     t += 1000;
     h.started({ session: "s2", agent: "Claude Code", context: "other", cwd: "/x/2-bbbbbbbb" });
     t += 1000;
@@ -21,6 +21,8 @@ describe("the agent session history", () => {
     expect(again.list("orbstack")).toEqual([expect.objectContaining({ session: "s1", title: "Why is this pod crashlooping?", prompts: 2, applied: 1, rejected: 1 })]);
     expect(again.list()[0]!.session).toBe("s1"); // newest activity first
     expect(JSON.stringify(again.list())).not.toContain("/x/");
+    expect(JSON.stringify(again.list())).not.toContain("26443");
+    expect(again.get("s1")!.server).toBe("https://127.0.0.1:26443"); // resume checks it's the same API server
     expect(again.get("s2")!.cwd).toBe("/x/2-bbbbbbbb");
     again.forget("s2");
     expect(new AgentHistory(file).list().map((e) => e.session)).toEqual(["s1"]);

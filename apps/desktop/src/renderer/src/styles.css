@@ -290,7 +290,9 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
 button.sb-item:hover { color: var(--ink-2); }
 .sb-item.bad { color: var(--bad-text); } .sb-item.warn { color: var(--warn-text); }
 .sb-item.bad + .sb-item.warn { margin-left: -6px; }
-.sb-item.claude { color: var(--ink-2); }
+.sb-item.claude { color: var(--ink-2); flex: 0 1 auto; overflow: hidden; }
+.statusbar > :not(.claude):not(.grow) { flex-shrink: 0; } /* the agent's line gives way, so it never runs over the counts */
+.sb-item .sb-text { overflow: hidden; text-overflow: ellipsis; }
 .sb-item.claude .ic { color: var(--accent); }
 @container main (max-width: 1100px) { .sb-url { display: none; } }
 .with-dock .sb-url { display: none; }

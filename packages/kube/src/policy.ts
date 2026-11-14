@@ -20,8 +20,8 @@ export type ParsedRequest =
 
 export type Policy = {
   /**
-   * "full": anything the user's RBAC allows. "read": get/list/watch only. "write": reads and object changes, but no
-   * exec/attach/port-forward/proxy and no non-resource writes (the approval broker's token).
+   * "full": anything the user's RBAC allows. "read": get/list/watch only. "write": exactly what the approval broker
+   * sends (one object's get, patch and delete, creates, ReplicaSet lists): no subresources, no non-resource writes.
    */
   access: "full" | "read" | "write";
   /** Resources this token may never touch, as `resource` or `resource.group` (e.g. "secrets"). */
@@ -166,8 +166,20 @@ export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf =
   if (policy.deniedResources?.some((d) => d === k || d === req.resource && !req.group)) {
     return { allow: false, reason: `this token may not access ${k}` };
   }
-  if (policy.access === "write" && top && CONNECT_SUBRESOURCES.has(top)) {
-    return { allow: false, reason: `this token may not open ${top} into ${k}` };
+  if (policy.access === "write") {
+    // Only the requests the approval broker makes: read one object, list ReplicaSets (rollbacks), create into a
+    // collection, patch or delete one object. No subresource (status, scale, token, ephemeral containers, exec…), no
+    // watch, update or deletecollection; with namespaces, nothing cluster-scoped.
+    const one = req.name !== undefined && !req.subresource;
+    const ok =
+      (req.verb === "get" && one) ||
+      (req.verb === "list" && k === "replicasets.apps" && req.namespace !== undefined) ||
+      (req.verb === "create" && req.name === undefined && !req.subresource) ||
+      ((req.verb === "patch" || req.verb === "delete") && one);
+    if (!ok) return { allow: false, reason: `this token may not ${req.verb} ${k}${req.subresource ? `/${req.subresource}` : ""}` };
+    if (policy.namespaces && req.namespace === undefined) {
+      return { allow: false, reason: `this token is limited to namespaces ${policy.namespaces.join(", ")}` };
+    }
   }
   if (policy.access === "read") {
     if (req.verb === "create" && REVIEW_RESOURCES.has(k)) return { allow: true };

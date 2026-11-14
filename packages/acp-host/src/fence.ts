@@ -101,7 +101,8 @@ export function sessionOptions(i: FenceInput) {
         denyRead: [home, ...credentials, ...kubeconfigs],
         allowRead: [i.cwd, ...toolDirs],
         allowWrite: [i.cwd],
-        denyWrite: [i.kubeconfig],
+        // The skills plugin is Landlens's, built before the session starts: the agent can read it, not change it.
+        denyWrite: [i.kubeconfig, `${i.cwd}/.landlens`],
       },
       network: { httpProxyPort: i.frontDoorPort, socksProxyPort: i.frontDoorPort, allowLocalBinding: false, strictAllowlist: true },
       credentials: { envVars: HIDDEN_ENV.map((name) => ({ name, mode: "deny" as const })) },
@@ -115,6 +116,7 @@ export function sessionOptions(i: FenceInput) {
           ...CREDENTIAL_PATHS.flatMap((p) => [`Read(~/${p})`, `Read(~/${p}/**)`, `Edit(~/${p}/**)`]),
           ...kubeconfigs.map((k) => `Read(/${k})`),
           `Edit(/${i.kubeconfig})`,
+          `Edit(/${i.cwd}/.landlens/**)`,
           ...KUBECTL_WRITES.map((v) => `Bash(kubectl ${v}:*)`),
           "Bash(kubectl --kubeconfig:*)", "Bash(kubectl --context:*)", "Bash(kubectl --token:*)", "Bash(kubectl --as:*)",
           "Bash(helm install:*)", "Bash(helm upgrade:*)", "Bash(helm uninstall:*)", "Bash(helm rollback:*)",

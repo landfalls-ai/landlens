@@ -14,6 +14,7 @@ import type { AgentChange, ChangeOperation, ChangeRisk, ChangeState, ChangeVerb 
 import { stringify } from "yaml";
 import { apiPath, toKubeError } from "./client.js";
 import { diffLines } from "./diff.js";
+import { redactText } from "./redact.js";
 
 export type ChangeTarget = { group: string; version: string; resource: string; kind: string; namespaced: boolean };
 export type PatchType = "strategic" | "merge" | "json" | "apply";
@@ -74,10 +75,11 @@ const HIDDEN = /<redacted[^>]*>|… \(\d+ more characters\)/;
 
 /** Kinds the agent may never change, whatever you'd approve: it can't read them, so it can't show you a true diff. */
 const NEVER = new Set(["secrets"]);
-const WORKLOADS = new Set(["deployments.apps", "statefulsets.apps", "daemonsets.apps", "replicasets.apps", "jobs.batch", "cronjobs.batch", "pods"]);
 
 type Prepared = {
   op: ChangeOp;
+  /** It didn't exist at the dry run (a create by apply): if it exists when you approve, nothing is sent. */
+  absent?: boolean;
   method: string;
   path: string;
   contentType?: string;
@@ -87,9 +89,27 @@ type Prepared = {
 
 export class ChangeError extends Error {}
 
+/** JSON patch operations the agent may send. copy, move and test read values the agent can't see (the broker adds its own test). */
+const JSON_PATCH_OPS = new Set(["add", "replace", "remove"]);
+/** Proposals that fail their checks or dry run, per session, before the broker stops trying them. */
+export const MAX_REFUSED = 20;
+
+/**
+ * An API server's error, as the agent may hear it. The broker reads and dry-runs unscrubbed, and a validation error
+ * quotes the value it refused, so quoted values and "Invalid value: …" are cut, then credential-shaped text.
+ */
+export function agentSafe(text: string): string {
+  return redactText(
+    text
+      .replace(/"(?:[^"\\]|\\.)*"/g, '"…"')
+      .replace(/\b((?:Invalid|Unsupported|Duplicate|Forbidden|Required) value): (?!"…")[^:\n]*:/g, "$1: …:"),
+  ).slice(0, 2000);
+}
+
 export class ChangeBroker {
   private readonly now: () => number;
   private readonly ttl: number;
+  private refused = 0;
 
   constructor(private readonly opts: {
     /** Claude Code's session id, for the dock. */
@@ -114,9 +134,14 @@ export class ChangeBroker {
    * closed).
    */
   async propose(p: ProposedChange, signal?: AbortSignal): Promise<Outcome> {
+    // Each refusal answers the agent without asking you, so it could be used to probe: there's a limit per session.
+    if (this.refused >= MAX_REFUSED) {
+      return { state: "failed", stage: "check", error: `${MAX_REFUSED} proposals in this session were refused; Landlens takes no more from it. Tell the person what you'd change` };
+    }
     try {
       this.check(p);
     } catch (err) {
+      this.refused++;
       return { state: "failed", stage: "check", error: message(err) };
     }
     const prepared: Prepared[] = [];
@@ -124,7 +149,8 @@ export class ChangeBroker {
       try {
         prepared.push(await this.prepare(op));
       } catch (err) {
-        return { state: "failed", stage: "dry-run", error: `${describe(op)}: ${message(err)}` };
+        this.refused++;
+        return { state: "failed", stage: "dry-run", error: agentSafe(`${describe(op)}: ${message(err)}`) };
       }
     }
 
@@ -174,13 +200,18 @@ export class ChangeBroker {
     const results: string[] = [];
     for (const x of prepared) {
       try {
+        if (x.absent) {
+          const now = await this.opts.send({ method: "GET", path: apiPath(x.op.type, x.op.namespace, x.op.name) });
+          if (now.status === 200) throw Object.assign(new ChangeError("it was created by someone else after the dry run"), { status: 409 });
+          if (now.status !== 404) throw toKubeError(now.status, now.text);
+        }
         const r = await this.opts.send({ method: x.method, path: x.path, ...(x.contentType ? { contentType: x.contentType } : {}), ...(x.body !== undefined ? { body: x.body } : {}) });
         if (r.status < 200 || r.status >= 300) throw toKubeError(r.status, r.text);
         results.push(appliedLine(x, r.text));
       } catch (err) {
         const error = `${describe(x.op)}: ${message(err)}${conflictHint(err)}`;
         set("failed", results.length ? `${results.join("; ")}; then ${error}` : error);
-        return { state: "failed", stage: "apply", error, ...(results.length ? { applied: results } : {}) };
+        return { state: "failed", stage: "apply", error: agentSafe(error), ...(results.length ? { applied: results } : {}) };
       }
     }
     set("applied", results.join("; "));
@@ -191,6 +222,8 @@ export class ChangeBroker {
     if (!p.operations.length) throw new ChangeError("a change needs at least one operation");
     if (p.operations.length > MAX_OPERATIONS) throw new ChangeError(`a change may have at most ${MAX_OPERATIONS} operations`);
     for (const op of p.operations) {
+      if (!op.name || op.name.includes("/")) throw new ChangeError("each operation names one object");
+      if (op.verb === "update") throw new ChangeError("Landlens doesn't take whole-object updates; use apply_manifest or patch");
       const k = op.type.group ? `${op.type.resource}.${op.type.group}` : op.type.resource;
       if (NEVER.has(k)) throw new ChangeError(`Landlens never lets the agent change ${op.type.resource}; propose the change for the person to make`);
       if (op.type.namespaced && !op.namespace) throw new ChangeError(`${describe(op)} needs a namespace`);
@@ -206,8 +239,13 @@ export class ChangeBroker {
       }
       if (op.verb === "patch" && !op.patchType) throw new ChangeError("a patch needs a patch type");
       if (op.verb !== "patch" && op.patchType) throw new ChangeError("only a patch has a patch type");
-      if (op.verb === "create" || op.verb === "update" || op.patchType === "apply") checkObject(op);
-      if (op.patchType === "json" && !Array.isArray(op.body)) throw new ChangeError("a JSON patch is a list of operations");
+      if (op.verb === "create" || op.patchType === "apply") checkObject(op);
+      if (op.patchType === "json" && op.undo === undefined) {
+        if (!Array.isArray(op.body)) throw new ChangeError("a JSON patch is a list of operations");
+        for (const o of op.body) {
+          if (!isObject(o) || !JSON_PATCH_OPS.has(o.op) || "from" in o) throw new ChangeError("a JSON patch may only add, replace and remove (copy, move and test read values hidden from you)");
+        }
+      }
       if ((op.patchType === "strategic" || op.patchType === "merge") && !isObject(op.body)) throw new ChangeError("a merge patch is an object");
     }
   }
@@ -296,12 +334,12 @@ export class ChangeBroker {
     const before = clean(current);
     const afterClean = clean(after);
     const diff = diffLines(before ? stringify(before, { lineWidth: 0 }) : "", afterClean ? stringify(afterClean, { lineWidth: 0 }) : "");
-    if (op.verb !== "delete" && current && diff.added === 0 && diff.removed === 0) {
-      throw new ChangeError("the dry run shows it would change nothing");
-    }
+    // A change that would change nothing still goes to you: answering the agent at once would tell it that a value
+    // it can't see equals the one it guessed.
     const qs = q.toString();
     return {
       op,
+      ...(op.verb === "patch" && op.patchType === "apply" && !current ? { absent: true } : {}),
       method,
       path: qs ? `${path}?${qs}` : path,
       ...(contentType ? { contentType } : {}),
@@ -357,40 +395,89 @@ function withResourceVersion(patch: unknown, rv: string | undefined): Record<str
 
 const BOOKKEEPING = ["managedFields", "resourceVersion", "generation", "uid", "creationTimestamp", "selfLink"];
 
-/** The object without status and server bookkeeping: what you'd write, not what the server tracks. */
+/**
+ * The object without server bookkeeping. Status and every annotation stay: a kind without a status subresource takes
+ * status from a write, so a change to it is shown like any other (unchanged runs fold away).
+ */
 export function clean(o: any): any {
   if (!o) return null;
   const c = structuredClone(o);
-  delete c.status;
-  if (c.metadata) {
-    for (const k of BOOKKEEPING) delete c.metadata[k];
-    if (c.metadata.annotations) {
-      delete c.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"];
-      if (!Object.keys(c.metadata.annotations).length) delete c.metadata.annotations;
-    }
-  }
+  if (c.metadata) for (const k of BOOKKEEPING) delete c.metadata[k];
   return c;
 }
 
-function images(o: any): string[] {
-  const spec = o?.kind === "Pod" ? o?.spec : o?.kind === "CronJob" ? o?.spec?.jobTemplate?.spec?.template?.spec : o?.spec?.template?.spec;
-  return [...(spec?.initContainers ?? []), ...(spec?.containers ?? [])].map((c: any) => `${c.name}=${c.image}`);
+/** Every pod spec in an object, wherever its kind keeps it (a Pod, a template, a CronJob's, a custom resource's). */
+export function podSpecs(o: any): any[] {
+  const out: any[] = [];
+  const walk = (v: any, depth: number) => {
+    if (!v || typeof v !== "object" || depth > 12) return;
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));
+    if (Array.isArray(v.containers) && v.containers.some((c: any) => c && typeof c === "object" && "image" in c)) out.push(v);
+    for (const [k, x] of Object.entries(v)) if (k !== "status" && k !== "metadata") walk(x, depth + 1);
+  };
+  walk(o?.spec, 0);
+  return out;
 }
+
+const containersOf = (s: any): any[] => [...(s.initContainers ?? []), ...(s.containers ?? []), ...(s.ephemeralContainers ?? [])];
+
+/** What a pod spec could do beyond its own container, as sets of strings so before and after can be compared. */
+function powers(o: any) {
+  const secrets = new Set<string>();
+  const privileged = new Set<string>();
+  const host = new Set<string>();
+  const accounts = new Set<string>();
+  for (const s of podSpecs(o)) {
+    for (const c of containersOf(s)) {
+      for (const e of c.env ?? []) if (e?.valueFrom?.secretKeyRef) secrets.add(`env ${e.valueFrom.secretKeyRef.name}`);
+      for (const e of c.envFrom ?? []) if (e?.secretRef) secrets.add(`envFrom ${e.secretRef.name}`);
+      const sc = c.securityContext ?? {};
+      if (sc.privileged) privileged.add(`${c.name} privileged`);
+      if (sc.allowPrivilegeEscalation) privileged.add(`${c.name} escalation`);
+      for (const cap of sc.capabilities?.add ?? []) privileged.add(`${c.name} ${cap}`);
+      for (const port of c.ports ?? []) if (port?.hostPort) host.add(`hostPort ${port.hostPort}`);
+    }
+    for (const v of s.volumes ?? []) {
+      if (v?.secret) secrets.add(`volume ${v.secret.secretName}`);
+      for (const src of v?.projected?.sources ?? []) if (src?.secret) secrets.add(`projected ${src.secret.name}`);
+      if (v?.hostPath) host.add(`hostPath ${v.hostPath.path}`);
+    }
+    for (const k of ["hostNetwork", "hostPID", "hostIPC"]) if (s[k]) host.add(k);
+    if (s.serviceAccountName || s.serviceAccount) accounts.add(s.serviceAccountName ?? s.serviceAccount);
+  }
+  return { secrets, privileged, host, accounts };
+}
+
+const grows = (before: Set<string>, after: Set<string>) => [...after].some((x) => !before.has(x));
 
 export function risks(op: ChangeOp, before: any, after: any): ChangeRisk[] {
   const out = new Set<ChangeRisk>();
-  const k = op.type.group ? `${op.type.resource}.${op.type.group}` : op.type.resource;
   if (op.verb === "delete") out.add("deletes");
   if (op.type.group === "rbac.authorization.k8s.io") out.add("rbac");
   if (op.type.resource === "namespaces" && !op.type.group) out.add("namespace");
   if (!op.type.namespaced) out.add("cluster-scoped");
-  if (before && after && WORKLOADS.has(k)) {
-    if (JSON.stringify(images(before)) !== JSON.stringify(images(after))) out.add("changes-image");
-    const tmpl = (o: any) => JSON.stringify(o?.spec?.template ?? o?.spec?.jobTemplate ?? null);
-    if (k !== "pods" && tmpl(before) !== tmpl(after)) out.add("restarts-pods");
-    if ((after.spec?.replicas ?? 1) === 0 && (before.spec?.replicas ?? 1) !== 0) out.add("scales-to-zero");
+  if (after) {
+    const b = powers(before);
+    const a = powers(after);
+    if (grows(b.secrets, a.secrets)) out.add("reads-secret");
+    if (grows(b.privileged, a.privileged)) out.add("privileged");
+    if (grows(b.host, a.host)) out.add("host-access");
+    if (grows(b.accounts, a.accounts)) out.add("service-account");
+    const specsAfter = podSpecs(after);
+    if (!before && specsAfter.length) out.add("new-workload");
+    if (before && specsAfter.length) {
+      const images = (o: any) => JSON.stringify(podSpecs(o).flatMap(containersOf).map((c: any) => `${c.name}=${c.image}`));
+      if (images(before) !== images(after)) out.add("changes-image");
+      // A template's metadata (kubectl rollout restart's annotation) restarts pods as much as its spec does.
+      const tmpl = (o: any) => JSON.stringify([o?.spec?.template ?? o?.spec?.jobTemplate ?? null, podSpecs(o)]);
+      if (op.type.resource !== "pods" && tmpl(before) !== tmpl(after)) out.add("restarts-pods");
+    }
+    if (typeof after.spec?.replicas === "number" && after.spec.replicas === 0 && (before?.spec?.replicas ?? 1) !== 0) out.add("scales-to-zero");
   }
-  const order: ChangeRisk[] = ["deletes", "rbac", "namespace", "cluster-scoped", "scales-to-zero", "changes-image", "restarts-pods"];
+  const order: ChangeRisk[] = [
+    "deletes", "rbac", "namespace", "cluster-scoped", "reads-secret", "privileged", "host-access", "service-account",
+    "new-workload", "scales-to-zero", "changes-image", "restarts-pods",
+  ];
   return order.filter((r) => out.has(r));
 }
 

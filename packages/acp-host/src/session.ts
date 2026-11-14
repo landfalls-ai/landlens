@@ -82,8 +82,22 @@ export async function startClusterSession(deps: {
   const types = await deps.clusters.discovery(req.handle); // also gives the front door the kinds' scope
   const label = `agent ${++counter} · ${c.info.context}`;
   const cwd = req.resume ? resumeDir(deps.sessionsDir, req.resume.cwd) : join(deps.sessionsDir, `${Date.now()}-${randomBytes(4).toString("hex")}`);
+  // A resumed session starts from an empty folder (Claude Code keeps the transcript elsewhere): nothing the agent left
+  // in it after a crash is loaded again. The folder holds no token, so it is made before any is issued.
+  if (req.resume) rmSync(cwd, { recursive: true, force: true });
   mkdirSync(cwd, { recursive: true, mode: 0o700 });
-  const skillsPlugin = deps.skills?.length ? buildSkillsPlugin(cwd, deps.skills, deps.log) : undefined;
+  const kubeconfig = join(cwd, "kubeconfig");
+  let skillsPlugin: string | undefined;
+  try {
+    skillsPlugin = deps.skills?.length ? buildSkillsPlugin(cwd, deps.skills, deps.log) : undefined;
+    writeFileSync(kubeconfig, toolKubeconfig(
+      { url: deps.frontDoor.url, certificate: deps.frontDoor.certificate },
+      [{ handle: req.handle, context: c.info.context, ...(req.namespaces?.[0] ? { namespace: req.namespaces[0] } : {}) }],
+    ), { mode: 0o400 }); // read-only: kubectl only reads it, and the sandbox denies writing it too
+  } catch (err) {
+    rmSync(cwd, { recursive: true, force: true });
+    throw err;
+  }
 
   const token = deps.frontDoor.issueToken({ label, policy: agentReadOnlyPolicy(req.namespaces), clusters: [req.handle] });
   // The approval broker's own token: never handed to Claude Code; it sends dry runs and the changes you approve.
@@ -107,11 +121,6 @@ export async function startClusterSession(deps: {
     deps.frontDoor.revokeToken(token);
     if (approved) deps.frontDoor.revokeToken(approved);
   };
-  const kubeconfig = join(cwd, "kubeconfig");
-  writeFileSync(kubeconfig, toolKubeconfig(
-    { url: deps.frontDoor.url, certificate: deps.frontDoor.certificate },
-    [{ handle: req.handle, context: c.info.context, ...(req.namespaces?.[0] ? { namespace: req.namespaces[0] } : {}) }],
-  ), { mode: 0o400 }); // read-only: kubectl only reads it, and the sandbox denies writing it too
   const cluster = frontDoorCluster({
     url: deps.frontDoor.clusterUrl(req.handle),
     certificate: deps.frontDoor.certificate,
