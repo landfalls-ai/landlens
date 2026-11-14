@@ -1,6 +1,6 @@
 // The landing page: is this cluster healthy? One verdict, four tiles, the problems worst first, the recent warnings,
 // and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
-import type { ClusterHealth, HealthEvent, HealthProblem } from "@landlens/contracts";
+import type { ClusterHealth, HealthEvent, HealthProblem, MetricsRange, MetricsSeries } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -8,8 +8,15 @@ import { Ic, iconOfKind, kindIcon } from "./icons";
 import { plural } from "./health";
 import { shortName, splitByShape } from "./present";
 import type { ApiError } from "./api";
+import { Sparkline } from "./charts/Sparkline";
+import { useMetrics } from "./metrics";
+import { Usage } from "./Usage";
 
 export function Overview(props: {
+  handle: string;
+  /** Changes when the Clickland settings do. */
+  metricsVersion: number;
+  onSettings: () => void;
   health?: ClusterHealth;
   error?: ApiError;
   now: number;
@@ -19,6 +26,8 @@ export function Overview(props: {
   onAskAll: () => void;
 }) {
   const { health: h, now } = props;
+  const [range, setRange] = useState<MetricsRange>("1h");
+  const usage = useMetrics({ handle: props.handle, scope: "cluster" }, range, props.metricsVersion);
   if (!h && props.error) {
     return (
       <div className="ov">
@@ -102,7 +111,8 @@ export function Overview(props: {
           )}
         </section>
       </div>
-      {h.nodes ? <Nodes nodes={h.nodes.items} /> : null}
+      <Usage state={usage} range={range} onRange={setRange} onSettings={props.onSettings} />
+      {h.nodes ? <Nodes nodes={h.nodes.items} usage={usage.data?.source === "none" ? undefined : usage.data} /> : null}
     </div>
   );
 }
@@ -187,7 +197,7 @@ function WarningRow({ e, now }: { e: HealthEvent; now: number }) {
   );
 }
 
-function Nodes({ nodes }: { nodes: NonNullable<ClusterHealth["nodes"]>["items"] }) {
+function Nodes({ nodes, usage }: { nodes: NonNullable<ClusterHealth["nodes"]>["items"]; usage?: MetricsSeries }) {
   const [all, setAll] = useState(false);
   const shown = nodes.length > 6 && !all ? nodes.filter((n) => !n.ready).slice(0, 6) : nodes;
   return (
@@ -200,11 +210,24 @@ function Nodes({ nodes }: { nodes: NonNullable<ClusterHealth["nodes"]>["items"] 
           {n.roles.map((r) => <span key={r} className="chip">{r}</span>)}
           <span className="mono ver">{n.version}</span>
           <span className="grow" />
+          {usage ? <NodeSparks name={n.name} usage={usage} one={nodes.length === 1} /> : null}
           {n.ready ? <span className="st tone-ok"><i className="dot" />Ready</span> : <span className="badge bad"><Ic icon={CircleX} size={13} />NotReady</span>}
         </div>
       ))}
       {shown.length < nodes.length ? <button className="show-all" onClick={() => setAll(true)}>Show all {nodes.length}</button> : null}
     </section>
+  );
+}
+
+/** CPU and memory for one node over the Usage card's range; against allocatable when it is the only node. */
+function NodeSparks({ name, usage, one }: { name: string; usage: MetricsSeries; one: boolean }) {
+  const line = (k: "cpu" | "memory") => usage[k].series.find((s) => s.key === name);
+  const common = { from: usage.from, to: usage.to, step: usage.step };
+  return (
+    <span className="sparks">
+      <Sparkline label="CPU" unit="cpu" line={line("cpu")} {...common} {...(one && usage.cpu.allocatable ? { of: usage.cpu.allocatable } : {})} />
+      <Sparkline label="Mem" unit="memory" line={line("memory")} {...common} {...(one && usage.memory.allocatable ? { of: usage.memory.allocatable } : {})} />
+    </span>
   );
 }
 

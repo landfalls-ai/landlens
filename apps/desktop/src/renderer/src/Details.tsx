@@ -9,9 +9,9 @@ import { Ic, iconOfKind, kindIcon } from "./icons";
 import { copyText, duration, splitName, statusTone } from "./present";
 import { Status } from "./ResourceTable";
 import { Yaml } from "./Yaml";
+import { MetricsTab, metricsScope } from "./MetricsTab";
 
-type Tab = "overview" | "events" | "yaml";
-const TABS: Tab[] = ["overview", "events", "yaml"];
+type Tab = "overview" | "events" | "yaml" | "metrics";
 export type NavTarget = { kind: string; name: string; namespace?: string };
 
 /** Waiting reasons that mean a container can't run (kept in step with packages/kube/src/health.ts). */
@@ -28,8 +28,12 @@ export function Details(props: {
   onClose: () => void;
   onAsk: (c: AskContext) => void;
   onNavigate: (t: NavTarget) => void;
+  /** Changes when the Clickland settings do. */
+  metricsVersion: number;
+  onSettings: () => void;
 }) {
   const { object: o, type, now } = props;
+  const TABS: Tab[] = metricsScope(type) ? ["overview", "events", "yaml", "metrics"] : ["overview", "events", "yaml"];
   const [tab, setTab] = useState<Tab>("overview");
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();
   const [copied, setCopied] = useState(false);
@@ -51,7 +55,10 @@ export function Details(props: {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [TABS.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (tab === "metrics" && !metricsScope(type)) setTab("overview");
+  }, [tab, type]);
 
   const pod = type.resource === "pods" && type.group === "";
   const view = isSecret(type) ? redactSecret(o) : o;
@@ -107,14 +114,13 @@ export function Details(props: {
             {t === "events" && Array.isArray(events) && events.length ? <span className={"count" + (warnings ? " warn" : "")} aria-hidden="true">{events.length}</span> : null}
           </button>
         ))}
-        {["Logs", "Metrics"].map((t) => (
-          <button key={t} role="tab" aria-selected={false} aria-disabled="true" tabIndex={-1} title={`${t} arrive in wave 4`}>{t}</button>
-        ))}
+        <button role="tab" aria-selected={false} aria-disabled="true" tabIndex={-1} title="Logs arrive in wave 4">Logs</button>
       </nav>
       <div className="drawer-body">
         {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} />}
         {tab === "events" && <Events events={events} now={now} />}
         {tab === "yaml" && <Yaml text={stringify(view, { lineWidth: 0 })} />}
+        {tab === "metrics" && metricsScope(type) && <MetricsTab handle={props.handle} type={type} object={o} version={props.metricsVersion} onSettings={props.onSettings} />}
       </div>
     </aside>
   );

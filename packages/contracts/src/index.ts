@@ -133,16 +133,11 @@ export type MetricsRequest = z.infer<typeof MetricsRequest>;
 export const ClicklandUrl = z
   .string()
   .max(500)
-  .url()
   .refine((u) => {
-    try {
-      const url = new URL(u);
-      if (url.username || url.password || url.search || url.hash) return false;
-      if (url.protocol === "https:") return true;
-      return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-    } catch {
-      return false;
-    }
+    // scheme://host[:port][/path]: no user info, query or fragment (the contracts build has no URL global).
+    const m = /^(https?):\/\/([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.exec(u);
+    if (!m) return false;
+    return m[1] === "https" || ["127.0.0.1", "localhost", "[::1]"].includes(m[2]!.toLowerCase());
   }, "https, or http to this machine (127.0.0.1, localhost)");
 export const ClicklandKey = z.string().max(200).regex(/^ck_[A-Za-z0-9_-]{16,128}$/, "not a Clickland API key (ck_…)");
 /** The cluster's name in Clickland's data (`k8s.cluster.name`); a label value. */

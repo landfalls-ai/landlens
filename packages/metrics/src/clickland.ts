@@ -81,3 +81,23 @@ export class ClicklandClient {
 }
 
 const scrub = (s: string, key: string) => (key ? s.split(key).join("ck_…") : s);
+
+/**
+ * Whether this Clickland honours `where` (Clickland specs/001-metrics-filters). One that predates it drops the field
+ * and answers for every pod, so a query for a cluster name nothing has must come back empty.
+ */
+export async function honoursFilters(client: ClicklandClient, now = Date.now()): Promise<boolean> {
+  const res = await client.query({
+    metric: "k8s.node.cpu.usage",
+    type: "gauge",
+    aggregation: "avg",
+    from: new Date(now - 3_600_000).toISOString(),
+    to: new Date(now).toISOString(),
+    service: "kubernetes",
+    where: { "k8s.cluster.name": "landlens-filter-probe.invalid" },
+  });
+  return res.series.length === 0;
+}
+
+export const FILTERS_MISSING = (url: string) =>
+  `Clickland at ${url} ignores metric filters, so it would mix every pod's data: it predates \`where\` (Clickland specs/001-metrics-filters). Update it.`;

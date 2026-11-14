@@ -35,7 +35,7 @@ describe("choosing the source", () => {
     const f = fakeClickland({ series: { "k8s.node.cpu.usage": [node] } });
     const s = await service({ key: true, fetchImpl: f.fetchImpl, names: { orbstack: "dev-cluster" } }).series(req);
     expect(s).toMatchObject({ source: "clickland", reasons: [], cluster: "dev-cluster" });
-    expect(f.calls[0]!.body.where["k8s.cluster.name"]).toBe("dev-cluster");
+    expect(f.calls[1]!.body.where["k8s.cluster.name"]).toBe("dev-cluster"); // after the filter probe
   });
 
   it("falls back to metrics-server when Clickland isn't connected, is down, refuses the key, or has no such cluster", async () => {
@@ -52,6 +52,16 @@ describe("choosing the source", () => {
     }
   });
 
+  it("refuses a Clickland that ignores filters (it would mix every pod's data), in a series and in the test", async () => {
+    const f = fakeClickland({ ignoresWhere: true, series: { "k8s.node.cpu.usage": [node] } });
+    const s = await service({ key: true, served: true, fetchImpl: f.fetchImpl }).series(req);
+    expect(s.source).toBe("metrics-server");
+    expect(s.reasons[0]).toMatchObject({ code: "clickland-failed", message: expect.stringContaining("ignores metric filters") });
+    const t = await service({ fetchImpl: f.fetchImpl }).test({ url: "http://127.0.0.1:4710", key: KEY });
+    expect(t.ok).toBe(false);
+    expect(t.steps.find((x) => x.name === "Filters")!.ok).toBe(false);
+  });
+
   it("answers none, with both reasons, when neither is there", async () => {
     const s = await service({ served: false }).series(req);
     expect(s).toMatchObject({ source: "none", cpu: { series: [] }, memory: { series: [] } });
@@ -65,8 +75,8 @@ describe("the Settings test", () => {
     const f = fakeClickland({ series: { "k8s.node.cpu.usage": [node] } });
     const t = await service({ fetchImpl: f.fetchImpl }).test({ url: "http://127.0.0.1:4710", key: KEY, handle: "hhhhhhhhhhhh" });
     expect(t.ok).toBe(true);
-    expect(t.steps.map((s) => s.name)).toEqual(["Health", "Query"]);
-    expect(f.calls[1]!.body.where).toEqual({ "k8s.cluster.name": "orbstack" });
+    expect(t.steps.map((s) => s.name)).toEqual(["Health", "Filters", "Query"]);
+    expect(f.calls[2]!.body.where).toEqual({ "k8s.cluster.name": "orbstack" });
   });
 
   it("fails on a refused key or no data, saying which", async () => {

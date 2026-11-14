@@ -1,14 +1,17 @@
 // The status bar: connection, what is being watched, what Claude is doing, and the problem counts (to Overview).
-import { Activity, CircleX, Sparkles, TriangleAlert } from "lucide-react";
+import { Activity, CircleX, Database, PlugZap, Sparkles, TriangleAlert } from "lucide-react";
 import { Ic } from "./icons";
 
-export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: () => void }) {
+export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: () => void; clickland?: boolean; onMetrics: () => void }) {
   return (
     <footer className="statusbar">
       <span className="sb-item"><i className="dot tone-ok" aria-hidden="true" />Connected</span>
       <span className="sb-item mono sb-url">{props.server}</span>
       <span className="sb-item"><Ic icon={Activity} size={11} />{props.watching}</span>
       <span className="grow" />
+      <button className="sb-item metrics" onClick={props.onMetrics} title={props.clickland ? "Metrics from Clickland: settings" : "Connect Clickland for metrics history"}>
+        <Ic icon={props.clickland ? Database : PlugZap} size={11} />{props.clickland ? "Clickland" : "Connect Clickland"}
+      </button>
       {props.claude ? <span className="sb-item claude" aria-live="polite"><Ic icon={Sparkles} size={11} />{props.claude}</span> : null}
       {props.bad ? (
         <button className="sb-item bad" onClick={props.onProblems} title={`${props.bad} failing: open Overview`} aria-label={`${props.bad} failing, open Overview`}>

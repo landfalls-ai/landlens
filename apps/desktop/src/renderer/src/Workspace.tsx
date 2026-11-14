@@ -1,10 +1,11 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
-import type { ClusterInfo, HealthProblem, KubeContext, KubeObject } from "@landlens/contracts";
+import type { ClicklandSettings as ClicklandView, ClusterInfo, HealthProblem, KubeContext, KubeObject } from "@landlens/contracts";
 import { CircleX, Lock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
 import { api, useNow, useWatch, type ApiError } from "./api";
+import { ClicklandSettings } from "./ClicklandSettings";
 import { Details, type NavTarget } from "./Details";
 import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
@@ -40,6 +41,11 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const main = useRef<HTMLElement>(null);
   const filterBox = useRef<HTMLInputElement>(null);
   const health = useHealth(cluster.handle, namespace);
+  // Graphs: the Clickland dialog, and a version every chart refetches on when its settings change.
+  const [clickland, setClickland] = useState<ClicklandView>();
+  const [settings, setSettings] = useState(false);
+  const [metricsVersion, setMetricsVersion] = useState(0);
+  useEffect(() => void api.invoke("metrics:settings", { context: cluster.context }).then(setClickland, () => undefined), [cluster.context]);
 
   useEffect(() => {
     api.invoke("cluster:discovery", { handle: cluster.handle }).then(({ types }) => setNav(buildNav(types)), (e: ApiError) => setNavError(e.message));
@@ -177,6 +183,9 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
         />
         {!list ? (
           <Overview
+            handle={cluster.handle}
+            metricsVersion={metricsVersion}
+            onSettings={() => setSettings(true)}
             health={h}
             error={health.error}
             now={now}
@@ -225,6 +234,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           bad={bad}
           warn={warn}
           onProblems={() => pick("overview")}
+          clickland={!!clickland?.hasKey}
+          onMetrics={() => setSettings(true)}
         />
       </main>
       {selected && list ? (
@@ -237,6 +248,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onClose={() => setSelected(undefined)}
           onAsk={ask}
           onNavigate={go}
+          metricsVersion={metricsVersion}
+          onSettings={() => setSettings(true)}
         />
       ) : null}
       {dock ? (
@@ -249,6 +262,9 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           {...(suggestion ? { suggestion } : {})}
           onActivity={setClaude}
         />
+      ) : null}
+      {settings ? (
+        <ClicklandSettings handle={cluster.handle} context={cluster.context} onClose={() => setSettings(false)} onSaved={(v) => (setClickland(v), setMetricsVersion((n) => n + 1))} />
       ) : null}
       {jump ? (
         <JumpPalette nav={nav} current={current} items={watch.items} onPick={pick} onSelect={setSelected} onClose={() => setJump(false)} />

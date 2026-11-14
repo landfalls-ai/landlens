@@ -1,7 +1,7 @@
 // Which source answers: Clickland when a key is stored and it answers for this cluster; else metrics-server sampled
 // while Landlens is open; else nothing, with every reason and what fixes it.
 import type { ClicklandTest, MetricsReason, MetricsRequest, MetricsSeries } from "@landlens/contracts";
-import { ClicklandClient, ClicklandError, type ClicklandConfig } from "./clickland.js";
+import { ClicklandClient, ClicklandError, FILTERS_MISSING, honoursFilters, type ClicklandConfig } from "./clickland.js";
 import { clicklandSeries, RANGE_MS } from "./clickland-series.js";
 import { liveSeries } from "./live-series.js";
 import { MetricsServerSampler, type Get, type SamplerOptions } from "./sampler.js";
@@ -25,6 +25,8 @@ const REASON: Record<ClicklandError["kind"], MetricsReason["code"]> = {
 
 export class MetricsService {
   private readonly samplers = new Map<string, MetricsServerSampler>();
+  /** Per Clickland URL: whether it honours `where`, checked at most every five minutes. */
+  private readonly filters = new Map<string, { at: number; ok: boolean }>();
   constructor(private readonly deps: MetricsDeps) {}
 
   private now() {
@@ -37,7 +39,9 @@ export class MetricsService {
     const reasons: MetricsReason[] = [];
     if (config) {
       try {
-        return await clicklandSeries(new ClicklandClient(config, this.deps.fetch), clusterName(cluster.context), req, this.now());
+        const client = new ClicklandClient(config, this.deps.fetch);
+        if (!(await this.filtersOk(client, config.url))) throw new ClicklandError("failed", FILTERS_MISSING(config.url));
+        return await clicklandSeries(client, clusterName(cluster.context), req, this.now());
       } catch (err) {
         if (!(err instanceof ClicklandError)) throw err;
         reasons.push({ code: REASON[err.kind], message: err.message });
@@ -72,6 +76,13 @@ export class MetricsService {
     } catch (err) {
       return { ok: false, steps: [{ name: "Health", ok: false, detail: (err as Error).message }] };
     }
+    try {
+      const ok = await honoursFilters(client, this.now());
+      steps.push({ name: "Filters", ok, detail: ok ? "metric filters (where) supported" : FILTERS_MISSING(url) });
+      this.filters.set(url, { at: this.now(), ok });
+    } catch (err) {
+      return { ok: false, steps: [...steps, { name: "Filters", ok: false, detail: (err as Error).message }] };
+    }
     let cluster = input.cluster;
     if (!cluster && input.handle) {
       try {
@@ -102,6 +113,14 @@ export class MetricsService {
       steps.push({ name: "Query", ok: false, detail: (err as Error).message });
     }
     return { ok: steps.every((s) => s.ok), steps };
+  }
+
+  private async filtersOk(client: ClicklandClient, url: string): Promise<boolean> {
+    const known = this.filters.get(url);
+    if (known && this.now() - known.at < 300_000) return known.ok;
+    const ok = await honoursFilters(client, this.now());
+    this.filters.set(url, { at: this.now(), ok });
+    return ok;
   }
 
   private sampler(handle: string, get: Get) {
