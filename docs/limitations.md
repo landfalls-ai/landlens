@@ -21,12 +21,12 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **macOS only for the fence**: it relies on Claude Code's Seatbelt sandbox. On Linux it would need bubblewrap; the
   session fails rather than run unsandboxed (`failIfUnavailable`).
 - **No `explain` tool yet** (OpenAPI schemas); the agent can run `kubectl explain` instead.
-- **Views are lists and details.** No logs, terminals, port-forward, YAML editing, metrics or Helm yet (wave 4).
+- **Views are lists and details.** No logs, terminals, port-forward, YAML editing or Helm yet (wave 4). Graphs are
+  built ([metrics.md](metrics.md)).
   Kinds without their own columns get name, namespace and age; CRDs don't use printer columns yet (wave 4).
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
-- **Logs and Metrics tabs are placeholders**: shown disabled on the drawer until wave 4 builds them. For the same
-  reason a failing pod's diagnosis shows its last output line only when the container left a termination message
+- **The Logs tab is a placeholder**: shown disabled on the drawer until wave 4 builds it. For the same reason a failing pod's diagnosis shows its last output line only when the container left a termination message
   (`terminationMessagePolicy: FallbackToLogsOnError`); otherwise that line waits for the logs call.
 - **The Overview polls** `cluster:health` every 10s while the window is visible, rather than following the watches.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
@@ -43,3 +43,14 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   connections allows but doesn't defend against a compromised user account ([security.md](security.md)).
 - **Integrated terminals** (wave 4) will put a front-door token in the shell's environment, readable by anything that
   shell runs; each terminal gets its own revocable token for that reason.
+- **Graphs are CPU and memory only**, for the cluster, nodes, pods and Deployments, StatefulSets and DaemonSets: no
+  network, disk, GPU, or Prometheus. Namespaces are a Top namespaces list, not a chart of their own.
+- **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is
+  refused. Without it, metrics-server gives live samples from when a view first asks, at most an hour, and only while
+  Landlens is open. OrbStack ships no metrics-server, so there it is Clickland or nothing.
+- **Requests and limits are drawn at their latest value**, not as they changed over the range (a rollout that changed
+  them shows the new values across the whole chart).
+- **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten
+  pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
+- **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
+  Clickland (wave 6).

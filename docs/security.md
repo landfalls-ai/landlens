@@ -21,6 +21,19 @@ was studied from. Each item says how it is checked.
 Freelens 2.0 for comparison: `nodeIntegration` on, `contextIsolation` off, no sandbox, no preload, CSP with
 `unsafe-eval` (`study/freelens-app/app-map-windows.json`).
 
+## Metrics and the Clickland key
+
+| Rule | How it's checked |
+|---|---|
+| The Clickland API key is stored only encrypted, with Electron's `safeStorage` (the macOS Keychain holds the encryption key), in `userData/clickland.json` with mode 0600; if `safeStorage` can't encrypt, Landlens refuses to store it | `ClicklandSettingsStore`; unit test reads the file and its mode |
+| The key never reaches the renderer: the page sends it once (Save or Test) and no channel returns it; `metrics:settings` says only whether one is stored | unit test on the view; e2e test reads `metrics:settings` after saving and finds no key |
+| Only main talks to Clickland, and only to the configured address: the renderer's CSP (`connect-src 'self'`) is unchanged; redirects are refused, so the key can't be carried to another host; error messages never repeat it | `ClicklandClient`; unit tests (key only on the query route, `redirect: "error"`, scrubbed errors) |
+| The address is https, or plain http only to this machine (`127.0.0.1`, `localhost`, `[::1]`), with no user info, query or fragment, so a key never crosses a network in the clear | `ClicklandUrl` in the contract; unit test |
+| The key needs only Clickland's `read` scope; the dev key is made with Clickland's bootstrap admin key outside Landlens ([metrics.md](metrics.md)) | docs; the integration and e2e tests make and revoke their own read key |
+| Clickland filter values (cluster, namespace, pod, workload names) go as JSON to Clickland, which passes them to ClickHouse as query parameters (Clickland `specs/001-metrics-filters`); a Clickland that ignores filters is refused, not trusted | Clickland's own tests; `honoursFilters` unit test |
+| The metrics-server sampler reads only `metrics.k8s.io` and, for requests and limits, the objects the scope names, through the cluster's sidecar like any IDE read | `liveSeries`, unit tests |
+| Development and tests may point `userData` elsewhere (`LANDLENS_USER_DATA`), never a packaged app | `index.ts` checks `app.isPackaged` |
+
 ## The packaged app's fuses
 
 `apps/desktop/scripts/fuses.mjs`: `RunAsNode`, `NODE_OPTIONS` and `--inspect` off; cookie encryption, embedded ASAR

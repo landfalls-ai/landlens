@@ -34,8 +34,18 @@ session's updates and the front door's audit. Tests against a cluster skip unles
 `orbstack` for the cluster, `claude` as well for tests that run Claude Code. They read every namespace and write
 nothing: the only writes they try (deleting a pod in `landlens-dev`) must be refused.
 
+Graphs: `LANDLENS_INTEGRATION=orbstack,clickland` adds the live Clickland tests: `pnpm --filter @landlens/metrics
+test:integration` reads real series for `landlens-dev`, and the e2e test connects Clickland through its dialog and
+screenshots the Usage card and a pod's Metrics tab in dark and light. They need Clickland's API with metric filters at
+`LANDLENS_CLICKLAND_URL` (default `http://127.0.0.1:4710`) and its development bootstrap key (`CLICKLAND_BOOTSTRAP_KEY`,
+default the dev one), which they use only to make a read-scoped key and revoke it afterwards; and
+`deploy/scenarios/metrics.yaml` running for a few minutes, so `catalog-api` has samples. For the app itself, make a
+read key once and paste it into Connect Clickland ([metrics.md](metrics.md), "Setup"). The e2e test runs the app with
+its own profile (`LANDLENS_USER_DATA`, development only), so it never touches your settings.
+
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`
-(namespace `landlens-dev`; delete the namespace to remove it).
+(namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
+healthy two-replica `catalog-api` with requests, limits and an uneven load.
 
 ## Where things start
 

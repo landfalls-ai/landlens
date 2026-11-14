@@ -12,6 +12,7 @@ How Landlens is built today (waves 1 and 2). The plan and the waves are in [plan
 | Preload | The bridge: `invoke(channel, request)` and `on(pushChannel)` for the listed channels only | `apps/desktop/src/preload/index.ts` |
 | `landlens-kube-proxy` (Go), one per connected cluster | Holds that cluster's credentials (client-go reads your kubeconfig, so exec plugins, OIDC and client certificates work as in kubectl) and forwards requests to the API server | `sidecar/kube-proxy/` |
 | `claude-agent-acp` (Node), one per window, started when the dock first opens | Runs your Claude Code; Landlens speaks ACP v1 to it over stdio. Its shell commands run in Claude Code's sandbox | `packages/acp-host/` |
+| Clickland (another project, optional) | Metrics history; main alone calls it over HTTP at the configured address with a read-scoped key ([metrics.md](metrics.md)) | `packages/metrics/` |
 | The `landlens-kube` MCP server (in main) | The agent's read-only cluster tools on a loopback port, one bearer token per session | `packages/kube-mcp/` |
 
 ## A request, end to end
@@ -75,6 +76,10 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/renderer/src/icons.tsx`, `Mark.tsx`, `present.ts`, `styles.css` | Icons per kind, the brand mark, name splitting and tones, the tokens and styles ([design.md](design.md)) |
 | `packages/kube/src/health.ts` | `clusterHealth`: one health computation for the Overview and the agent's `cluster_overview` |
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
+| `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
+| `apps/desktop/src/main/clickland-settings.ts` | Clickland's address, cluster names and the key encrypted with safeStorage |
+| `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars` and the pure `scale.ts` helpers |
+| `apps/desktop/src/renderer/src/Usage.tsx`, `MetricsTab.tsx`, `MetricsNotice.tsx`, `ClicklandSettings.tsx`, `metrics.ts` | The Overview's Usage card, the drawer's Metrics tab, source and empty-state notices, Connect Clickland, the polling hook |
 | `apps/desktop/scripts/fuses.mjs` | The Electron fuses the packaged app ships with |
 | `apps/desktop/src/renderer/src/kinds.ts` | Sidebar sections and table columns per kind; everything else gets a generic table |
 | `packages/kube/src/status.ts` (`@landlens/kube/status`) | kubectl-style pod and node status, ages; shared by the UI and the agent's tools |
