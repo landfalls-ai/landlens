@@ -4,6 +4,7 @@
 |---|---|
 | [agent.md](agent.md) | Claude Code in the dock: what you see, the cluster tools, the fence and how it was checked |
 | [architecture.md](architecture.md) | The processes, a request end to end, the front door, the code map |
+| [design.md](design.md) | Iris, the look: direction, tokens, layout and width rules, screens, components, what the tests rely on |
 | [security.md](security.md) | Every security rule and how it is checked |
 | [development.md](development.md) | Setup, running, every test command |
 | [limitations.md](limitations.md) and [roadmap.md](roadmap.md) | What's missing, and the waves |

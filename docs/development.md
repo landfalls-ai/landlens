@@ -29,7 +29,7 @@ LANDLENS_INTEGRATION=orbstack,claude pnpm --filter @landlens/desktop test:e2e   
 pnpm --filter @landlens/desktop check:fuses   # the packaged app's Electron fuses take
 ```
 
-`LANDLENS_SHOTS=<folder>` makes the e2e test save screenshots; `LANDLENS_LOGS=<folder>` makes the fence test save the
+`LANDLENS_SHOTS=<folder>` makes the e2e test save screenshots (every screen in dark, the Overview and a failing pod in light, and at 1024×700); `LANDLENS_LOGS=<folder>` makes the fence test save the
 session's updates and the front door's audit. Tests against a cluster skip unless `LANDLENS_INTEGRATION` names it:
 `orbstack` for the cluster, `claude` as well for tests that run Claude Code. They read every namespace and write
 nothing: the only writes they try (deleting a pod in `landlens-dev`) must be refused.

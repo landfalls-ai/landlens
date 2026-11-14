@@ -1,7 +1,7 @@
 # The agent
 
-Landlens runs **your own Claude Code** beside the cluster you are looking at. Open the dock with **✦ Ask Claude** in
-the toolbar, or on any object's details (which attaches that object), and ask. Claude Code reads the cluster, shows
+Landlens runs **your own Claude Code** beside the cluster you are looking at. Open the dock with **Ask Claude** (⌘J) in
+the toolbar, on any object's details or on a problem in the Overview (both attach that object), and ask. Claude Code reads the cluster, shows
 each thing it read as a card, and answers with the cause, the evidence and a proposed fix. In this wave it can only
 read: no changes, no Secrets, no exec. Writes behind your approval are wave 3.
 
@@ -11,10 +11,10 @@ read: no changes, no Secrets, no exec. Writes behind your approval are wave 3.
 |---|---|
 | The answer, streaming, in Markdown | `agent_message_chunk` |
 | "Thinking", folded | `agent_thought_chunk` |
-| A card per tool call: what it is (for example `describe pod landlens-dev/orders-api-…` or `shell kubectl logs …`), its status, and, opened, what it ran and what came back | `tool_call`, `tool_call_update` |
+| A row per tool call, consecutive calls grouped in one list: what it is (for example `describe pod landlens-dev/orders-api-…` or `shell kubectl logs …`), its status as an icon, and, opened, what it ran and what came back with line numbers and error lines marked | `tool_call`, `tool_call_update` |
 | The plan, as a checklist | `plan` |
-| "Claude Code asks to run …" with Claude Code's own choices (Yes / Yes, and don't ask again for … / No) | `session/request_permission` |
-| Mode (Manual or Plan) and model pickers | the session's modes and config options |
+| "Run a shell command?" with the command and Claude Code's own choices (Yes / Yes, and don't ask again for … / No); Enter picks the first, Esc rejects, when the composer is empty | `session/request_permission` |
+| Mode (Manual or Plan) and model pickers, in the composer's foot | the session's modes and config options |
 | Stop | `session/cancel` |
 
 "Ask Claude" on an object attaches its YAML and its last 15 events to your message as an embedded resource
@@ -111,7 +111,7 @@ Checked live (`packages/acp-host/test/fence.integration.test.ts`, a real Claude 
 
 ```bash
 kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml   # orders-api in landlens-dev crash-loops
-pnpm dev                                                              # connect to orbstack, open the pod, ✦ Ask Claude
+pnpm dev                                                              # connect to orbstack, open the problem, Ask Claude
 ```
 
 On 14 November 2026, asked "Why is this pod crashlooping?" on that pod, Claude Code (Opus 5.5) read the pod's logs and

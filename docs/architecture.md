@@ -63,7 +63,17 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/acp-host/src/` | The ACP host, a cluster session, the fence, the standing rules ([agent.md](agent.md)) |
 | `packages/kube-mcp/src/` | The MCP server, its tools, the front-door client (redaction lives in `packages/kube/src/redact.ts`, applied by the front door) |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |
-| `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock |
+| `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock: session, transcript, composer |
+| `apps/desktop/src/renderer/src/DockParts.tsx` | The dock's tool groups, wells, plan and permission ask |
+| `apps/desktop/src/renderer/src/App.tsx` | The catalog and connecting; Welcome or Workspace |
+| `apps/desktop/src/renderer/src/Workspace.tsx` | A connected window: what is open, the width rules, the health poll, keyboard |
+| `apps/desktop/src/renderer/src/Sidebar.tsx`, `Toolbar.tsx`, `StatusBar.tsx` | The cluster switcher and nav (or rail), the main toolbar, the status bar |
+| `apps/desktop/src/renderer/src/Overview.tsx` | The landing page: verdict, tiles, problems, warnings, nodes |
+| `apps/desktop/src/renderer/src/health.ts` | `useHealth`: `cluster:health` every 10s while visible; sidebar badges |
+| `apps/desktop/src/renderer/src/ResourceTable.tsx`, `Details.tsx`, `Yaml.tsx` | Lists, the drawer with its diagnosis, the YAML well |
+| `apps/desktop/src/renderer/src/Welcome.tsx`, `JumpPalette.tsx` | Pick a cluster; ⌘K Jump to |
+| `apps/desktop/src/renderer/src/icons.tsx`, `Mark.tsx`, `present.ts`, `styles.css` | Icons per kind, the brand mark, name splitting and tones, the tokens and styles ([design.md](design.md)) |
+| `packages/kube/src/health.ts` | `clusterHealth`: one health computation for the Overview and the agent's `cluster_overview` |
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
 | `apps/desktop/scripts/fuses.mjs` | The Electron fuses the packaged app ships with |
 | `apps/desktop/src/renderer/src/kinds.ts` | Sidebar sections and table columns per kind; everything else gets a generic table |

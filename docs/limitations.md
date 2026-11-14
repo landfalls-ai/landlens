@@ -23,6 +23,14 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **No `explain` tool yet** (OpenAPI schemas); the agent can run `kubectl explain` instead.
 - **Views are lists and details.** No logs, terminals, port-forward, YAML editing, metrics or Helm yet (wave 4).
   Kinds without their own columns get name, namespace and age; CRDs don't use printer columns yet (wave 4).
+- **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
+  every kind come with wave 4's command palette.
+- **Logs and Metrics tabs are placeholders**: shown disabled on the drawer until wave 4 builds them. For the same
+  reason a failing pod's diagnosis shows its last output line only when the container left a termination message
+  (`terminationMessagePolicy: FallbackToLogsOnError`); otherwise that line waits for the logs call.
+- **The Overview polls** `cluster:health` every 10s while the window is visible, rather than following the watches.
+- **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
+  carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 7).
 - **Upgraded connections** (exec, attach, port-forward) pass through the front door and the sidecar but have no UI and
