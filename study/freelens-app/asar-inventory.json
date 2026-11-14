@@ -1,0 +1,43 @@
+{
+ "id": "ev_3001153156ea661a5bece5188656d1219470fdf9c4886a5eebae53b3e126e1df",
+ "operation": "core_archive_show",
+ "subject": {
+  "kind": "asar",
+  "name": "app.asar",
+  "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+ },
+ "coverage": {
+  "examined": 1,
+  "next_offset": 1,
+  "status": "partial",
+  "total": 15932
+ },
+ "by_kind": {
+  "binary": 18,
+  "css": 3,
+  "directory": 1499,
+  "elf": 18,
+  "gif": 1,
+  "html": 12,
+  "javascript": 10017,
+  "json": 530,
+  "macho": 16,
+  "native-addon": 1,
+  "pe": 6,
+  "png": 29,
+  "svg": 1,
+  "text": 711,
+  "typescript": 2973,
+  "unpacked": 97
+ },
+ "containers": [
+  {
+   "entries": 15835,
+   "header_bytes": 3730010,
+   "kind": "asar",
+   "path": "",
+   "rejected_names": [],
+   "truncated": false
+  }
+ ]
+}

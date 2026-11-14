@@ -1,0 +1,15 @@
+# Upstream sources we study: re-fetch with scripts/fetch-upstream.sh
+/upstream/
+# Downloaded tool binaries and apps under study: re-fetch with scripts/fetch-tools.sh and scripts/study-freelens.sh
+/tools/craft-anything/craft-anything-cli-*/
+/tools/craft-anything/*.zip
+/tools/craft-anything/SHA256SUMS.txt
+/study/downloads/
+# Source graphs copy string literals out of upstream: regenerate with scripts/study-source-graph.sh
+/study/source-graph/
+.DS_Store
+node_modules/
+dist/
+out/
+.env
+.env.local

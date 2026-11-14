@@ -1,0 +1,95 @@
+{
+ "authority": "original-files",
+ "confidence": "derived",
+ "coverage": {
+  "examined": 2,
+  "status": "complete",
+  "total": 2
+ },
+ "environment": {
+  "clean_room": false,
+  "engine": "builtin",
+  "engine_version": "0.6.1",
+  "host": "macos-aarch64"
+ },
+ "id": "ev_3e85b12c94b0f45fb3357da8b579cc8750f37286d057c115cff0f005e34125d0",
+ "limitations": [],
+ "links": [
+  "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1"
+ ],
+ "locations": [],
+ "operation": "core_evidence_browse",
+ "params": {
+  "show": {
+   "kind": "rows",
+   "limit": 1000,
+   "list": "windows"
+  },
+  "source": {
+   "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+   "kind": "saved"
+  }
+ },
+ "result": {
+  "coverage": {
+   "at_end": true,
+   "examined": 2,
+   "next_offset": null,
+   "status": "page",
+   "total": 2
+  },
+  "from_evidence": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "from_tool": "js_app_map",
+  "shown": {
+   "items": [
+    {
+     "binding": "browserWindow",
+     "class": "BrowserWindow",
+     "findings": [
+      "contextIsolation is turned off: page scripts share the preload's JavaScript world",
+      "nodeIntegration is on: page scripts can use Node.js directly",
+      "sandbox is not set; the Electron version's default applies"
+     ],
+     "line": 12478,
+     "loads": [],
+     "module": "static/build/main.js",
+     "options_from": null,
+     "preload": null,
+     "preload_as_written": null,
+     "web_preferences": {
+      "contextIsolation": false,
+      "nodeIntegration": true,
+      "nodeIntegrationInSubFrames": true
+     }
+    },
+    {
+     "binding": "window",
+     "class": "BrowserWindow",
+     "findings": [
+      "contextIsolation is not set; the Electron version's default applies",
+      "nodeIntegration is not set; the Electron version's default applies",
+      "sandbox is not set; the Electron version's default applies"
+     ],
+     "line": 61254,
+     "loads": [
+      "licenses.html"
+     ],
+     "module": "static/build/main.js",
+     "options_from": null,
+     "preload": null,
+     "preload_as_written": null,
+     "web_preferences": {}
+    }
+   ],
+   "list": "windows",
+   "offset": 0,
+   "total": 2
+  }
+ },
+ "subject": {
+  "kind": "asar",
+  "name": "app.asar",
+  "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+ },
+ "summary": "Part of js_app_map evidence (page)."
+}

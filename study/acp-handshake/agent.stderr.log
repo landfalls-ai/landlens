@@ -1,0 +1,12 @@
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=validate-cwd durationMs=0 totalMs=0
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=settings durationMs=20 totalMs=21
+[session/query] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 resume=none apiType=native baseUrl=native
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=prepare-query durationMs=7 totalMs=27
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=sdk-initialize durationMs=3563 totalMs=3590
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=models durationMs=18 totalMs=3609
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=modes durationMs=1 totalMs=3610
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=agents durationMs=1 totalMs=3610
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=ultracode durationMs=29 totalMs=3639
+[session/create] sessionId=435929a4-de35-44d1-9889-654dcf17fc84 phase=register durationMs=5 totalMs=3644
+Unexpected case: {"type":"system","subtype":"ui_status","plugin":"landfall","text":null,"uuid":"f1b5c52d-f2e2-473f-8c4f-44a7fbdeee6b","session_id":"435929a4-de35-44d1-9889-654dcf17fc84"}
+Unexpected case: {"type":"system","subtype":"ui_invalidate","event":"ui.render","prompts_screened":true,"uuid":"aa1f9423-8a0f-4ee1-8f2f-2be1dd64a1b9","session_id":"435929a4-de35-44d1-9889-654dcf17fc84"}

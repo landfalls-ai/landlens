@@ -1,0 +1,130 @@
+{
+ "authority": "original-files",
+ "confidence": "observed",
+ "coverage": {
+  "examined": 1,
+  "status": "complete",
+  "total": 1
+ },
+ "environment": {
+  "clean_room": false,
+  "engine": "builtin",
+  "engine_version": "0.6.1",
+  "host": "macos-aarch64"
+ },
+ "id": "ev_7b6badcd691980c5f01588242b8b8663586d8d213d0d641729154f3a4b2634e5",
+ "limitations": [
+  {
+   "code": "build_time_state",
+   "message": "Fuses are read from the file on disk; they show what the build allows, not what a running copy is doing."
+  }
+ ],
+ "links": [],
+ "locations": [
+  {
+   "kind": "file_offset",
+   "label": "./study/downloads/freelens/mnt/Freelens.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
+   "value": "0x9750024"
+  }
+ ],
+ "operation": "js_electron_fuses_show",
+ "params": {
+  "path": "./study/downloads/freelens/mnt/Freelens.app"
+ },
+ "result": {
+  "examined_files": [
+   "./study/downloads/freelens/mnt/Freelens.app/Contents/Frameworks/Electron Framework.framework/Electron Framework"
+  ],
+  "selected_path": "./study/downloads/freelens/mnt/Freelens.app",
+  "sentinel_count": 1,
+  "wires": [
+   {
+    "declared_length": 9,
+    "file": "./study/downloads/freelens/mnt/Freelens.app/Contents/Frameworks/Electron Framework.framework/Electron Framework",
+    "fuses": [
+     {
+      "hardened": false,
+      "index": 0,
+      "meaning": "ELECTRON_RUN_AS_NODE is honoured: anyone who can start the app can make it run arbitrary JavaScript as plain Node.js under the app's identity.",
+      "name": "RunAsNode",
+      "raw_byte": 49,
+      "state": "enabled"
+     },
+     {
+      "hardened": false,
+      "index": 1,
+      "meaning": "Cookies are stored on disk without Electron's OS-key encryption.",
+      "name": "EnableCookieEncryption",
+      "raw_byte": 48,
+      "state": "disabled"
+     },
+     {
+      "hardened": false,
+      "index": 2,
+      "meaning": "NODE_OPTIONS and NODE_EXTRA_CA_CERTS are honoured: the environment can preload code or add trusted certificate authorities.",
+      "name": "EnableNodeOptionsEnvironmentVariable",
+      "raw_byte": 49,
+      "state": "enabled"
+     },
+     {
+      "hardened": false,
+      "index": 3,
+      "meaning": "--inspect / --inspect-brk and SIGUSR1 are honoured: a debugger can attach to the main process.",
+      "name": "EnableNodeCliInspectArguments",
+      "raw_byte": 49,
+      "state": "enabled"
+     },
+     {
+      "hardened": false,
+      "index": 4,
+      "meaning": "app.asar is loaded without integrity validation; edits to it are not detected.",
+      "name": "EnableEmbeddedAsarIntegrityValidation",
+      "raw_byte": 48,
+      "state": "disabled"
+     },
+     {
+      "hardened": false,
+      "index": 5,
+      "meaning": "Electron also looks for an app/ folder and default_app.asar, so code placed there can be loaded instead.",
+      "name": "OnlyLoadAppFromAsar",
+      "raw_byte": 48,
+      "state": "disabled"
+     },
+     {
+      "hardened": null,
+      "index": 6,
+      "meaning": "The main process uses the shared V8 snapshot.",
+      "name": "LoadBrowserProcessSpecificV8Snapshot",
+      "raw_byte": 48,
+      "state": "disabled"
+     },
+     {
+      "hardened": false,
+      "index": 7,
+      "meaning": "Pages loaded from file:// get privileges beyond what a normal browser gives them.",
+      "name": "GrantFileProtocolExtraPrivileges",
+      "raw_byte": 49,
+      "state": "enabled"
+     },
+     {
+      "hardened": null,
+      "index": 8,
+      "meaning": "V8 may use signal handlers to catch out-of-bounds WebAssembly memory access (64-bit systems).",
+      "name": "WasmTrapHandlers",
+      "raw_byte": 49,
+      "state": "enabled"
+     }
+    ],
+    "sentinel_offset": 158662692,
+    "sentinel_offset_hex": "0x9750024",
+    "truncated": false,
+    "wire_version": 1
+   }
+  ]
+ },
+ "subject": {
+  "kind": "electron",
+  "name": "Freelens.app"
+ },
+ "summary": "Fuse wire v1 in Electron Framework: RunAsNode enabled, EnableCookieEncryption disabled, EnableNodeOptionsEnvironmentVariable enabled, EnableNodeCliInspectArguments enabled, EnableEmbeddedAsarIntegrityValidation disabled, OnlyLoadAppFromAsar disabled, LoadBrowserProcessSpecificV8Snapshot disabled, GrantFileProtocolExtraPrivileges enabled, WasmTrapHandlers enabled. 0 of 7 security-relevant fuses are in the hardened state."
+}

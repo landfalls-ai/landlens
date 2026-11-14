@@ -1,0 +1,62 @@
+{
+ "authority": "original-files",
+ "confidence": "derived",
+ "coverage": {
+  "examined": 5,
+  "status": "complete",
+  "total": 5
+ },
+ "environment": {
+  "clean_room": false,
+  "engine": "builtin",
+  "engine_version": "0.6.1",
+  "host": "macos-aarch64"
+ },
+ "id": "ev_1a2403d44fc6d59288e1000f4f58955e8654ba44664513321956a4cb95026ea2",
+ "limitations": [],
+ "links": [
+  "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1"
+ ],
+ "locations": [],
+ "operation": "core_evidence_browse",
+ "params": {
+  "show": {
+   "kind": "rows",
+   "limit": 1000,
+   "list": "bundlers"
+  },
+  "source": {
+   "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+   "kind": "saved"
+  }
+ },
+ "result": {
+  "coverage": {
+   "at_end": true,
+   "examined": 5,
+   "next_offset": null,
+   "status": "page",
+   "total": 5
+  },
+  "from_evidence": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "from_tool": "js_app_map",
+  "shown": {
+   "items": [
+    "babel",
+    "esbuild",
+    "tsc",
+    "vite",
+    "webpack"
+   ],
+   "list": "bundlers",
+   "offset": 0,
+   "total": 5
+  }
+ },
+ "subject": {
+  "kind": "asar",
+  "name": "app.asar",
+  "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+ },
+ "summary": "Part of js_app_map evidence (page)."
+}

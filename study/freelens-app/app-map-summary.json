@@ -1,0 +1,66 @@
+{
+ "continue_with": "core_evidence_browse",
+ "detail": "summary",
+ "limit_bytes": 8388608,
+ "reason": "the complete result is over this connection's response budget; the full record is retained",
+ "record": {
+  "carries_target_content": false,
+  "confidence": "derived",
+  "coverage": {
+   "examined": 1,
+   "next_offset": 1,
+   "status": "partial",
+   "total": 97
+  },
+  "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "limitations": [
+   {
+    "code": "dynamic_ipc_channels",
+    "message": "24 IPC call(s) use a channel name computed at run time; they are not in the channel map."
+   },
+   {
+    "code": "static_only",
+    "message": "Static reading only: code built at run time (eval, computed requires, remote content) is invisible; IPC pairs need literal channel names."
+   },
+   {
+    "code": "paged_modules",
+    "message": "Only one page of module summaries is included; tools that take this evidence need every module, so pass the input path to them or use offset=0 with a limit above modules_total."
+   }
+  ],
+  "lists": {
+   "api_operations": 0,
+   "bundlers": 5,
+   "edges": 99567,
+   "effects": 368,
+   "endpoints": 950,
+   "exposed": 0,
+   "ipc": 18,
+   "limitations": 1,
+   "modules": 1,
+   "native_modules": 2,
+   "nodes": 48405,
+   "pages": 0,
+   "preloads": 0,
+   "renderers": 0,
+   "routes": 120,
+   "source_maps": 95,
+   "storage": 0,
+   "vendors": 362,
+   "windows": 2,
+   "workers": 0
+  },
+  "operation": "js_app_map",
+  "subject": {
+   "kind": "asar",
+   "name": "app.asar",
+   "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+  },
+  "summary": "Electron app Freelens 2.0.0: 97 source files, 18 IPC channel(s) (3 paired), 2 window(s), 9 endpoint(s), 120 route(s), bundled with babel/esbuild/tsc/vite/webpack."
+ },
+ "saved_evidence": {
+  "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "kind": "saved",
+  "uri": "evidence://ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1"
+ },
+ "summary": "Electron app Freelens 2.0.0: 97 source files, 18 IPC channel(s) (3 paired), 2 window(s), 9 endpoint(s), 120 route(s), bundled with babel/esbuild/tsc/vite/webpack."
+}

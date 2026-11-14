@@ -1,0 +1,3001 @@
+{
+ "authority": "original-files",
+ "confidence": "derived",
+ "coverage": {
+  "examined": 368,
+  "status": "complete",
+  "total": 368
+ },
+ "environment": {
+  "clean_room": false,
+  "engine": "builtin",
+  "engine_version": "0.6.1",
+  "host": "macos-aarch64"
+ },
+ "id": "ev_887ffdd7f2149ed29e9e941f2c345e5a576fbba25e53ec466a4801055f3d9103",
+ "limitations": [],
+ "links": [
+  "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1"
+ ],
+ "locations": [],
+ "operation": "core_evidence_browse",
+ "params": {
+  "show": {
+   "kind": "rows",
+   "limit": 1000,
+   "list": "effects"
+  },
+  "source": {
+   "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+   "kind": "saved"
+  }
+ },
+ "result": {
+  "coverage": {
+   "at_end": true,
+   "examined": 368,
+   "next_offset": null,
+   "status": "page",
+   "total": 368
+  },
+  "from_evidence": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "from_tool": "js_app_map",
+  "shown": {
+   "items": [
+    {
+     "api": "Function",
+     "arg": null,
+     "function": "walk",
+     "line": 14038,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "eval_recurse",
+     "line": 14168,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "passable",
+     "line": 14260,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "passable",
+     "line": 14267,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "eval_recurse",
+     "arg": null,
+     "function": "subscript-child-script_expression",
+     "line": 14272,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "eval_recurse",
+     "arg": null,
+     "function": "member-child-script_expression",
+     "line": 14275,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "eval_recurse",
+     "arg": null,
+     "function": "member-descendant-script_expression",
+     "line": 14278,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "Function",
+     "arg": "return this",
+     "function": "<anonymous@21259>",
+     "line": 21537,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "Function",
+     "arg": "return this",
+     "function": "<anonymous@25145>",
+     "line": 25423,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "Function",
+     "arg": "return this",
+     "function": "<anonymous@30098>",
+     "line": 30376,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.getRandomValues",
+     "arg": null,
+     "function": "rng",
+     "line": 33333,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.randomUUID",
+     "arg": null,
+     "function": "v4",
+     "line": 33338,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.randomUUID.bind",
+     "arg": null,
+     "function": "<anonymous@80015>",
+     "line": 80016,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.getRandomValues",
+     "arg": null,
+     "function": "generateUuid",
+     "line": 80021,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.mouseDeltaAfterThreshold.read",
+     "arg": null,
+     "function": null,
+     "line": 187728,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.mouseDeltaAfterThreshold.read",
+     "arg": null,
+     "function": null,
+     "line": 187736,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "clipboard.write().catch",
+     "arg": null,
+     "function": null,
+     "line": 200001,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "clipboard.write",
+     "arg": null,
+     "function": null,
+     "line": 200001,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "os.release().split",
+     "arg": ".",
+     "function": null,
+     "line": 218534,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "os.release",
+     "arg": null,
+     "function": null,
+     "line": 218534,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.open",
+     "arg": null,
+     "function": null,
+     "line": 224806,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.close",
+     "arg": null,
+     "function": null,
+     "line": 224815,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.read",
+     "arg": null,
+     "function": null,
+     "line": 224818,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createReadStream",
+     "arg": null,
+     "function": null,
+     "line": 225140,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 225250,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createWriteStream().on(error).on(close).on",
+     "arg": "open",
+     "function": null,
+     "line": 225337,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createWriteStream().on(error).on",
+     "arg": "close",
+     "function": null,
+     "line": 225337,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createWriteStream().on",
+     "arg": "error",
+     "function": null,
+     "line": 225337,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createWriteStream",
+     "arg": null,
+     "function": null,
+     "line": 225337,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.unlink",
+     "arg": null,
+     "function": null,
+     "line": 225396,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.exists",
+     "arg": null,
+     "function": null,
+     "line": 225410,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.rename",
+     "arg": null,
+     "function": null,
+     "line": 225413,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.rename",
+     "arg": null,
+     "function": null,
+     "line": 225417,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.access",
+     "arg": null,
+     "function": null,
+     "line": 225424,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "zlib.createGzip",
+     "arg": null,
+     "function": null,
+     "line": 225426,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createReadStream",
+     "arg": null,
+     "function": null,
+     "line": 225427,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.createWriteStream",
+     "arg": null,
+     "function": null,
+     "line": 225428,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.unlink",
+     "arg": null,
+     "function": null,
+     "line": 225430,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 225439,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.mkdirSync",
+     "arg": null,
+     "function": null,
+     "line": 225439,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "os.loadavg",
+     "arg": null,
+     "function": null,
+     "line": 226670,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "os.uptime",
+     "arg": null,
+     "function": null,
+     "line": 226671,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "process.exit",
+     "arg": "1",
+     "function": null,
+     "line": 226718,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "os.loadavg",
+     "arg": null,
+     "function": null,
+     "line": 227011,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "os.uptime",
+     "arg": null,
+     "function": null,
+     "line": 227012,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "process.exit",
+     "arg": "1",
+     "function": null,
+     "line": 227059,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": "0",
+     "function": null,
+     "line": 242505,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.open",
+     "arg": "",
+     "function": null,
+     "line": 242553,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.fchmod",
+     "arg": null,
+     "function": null,
+     "line": 242558,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.close",
+     "arg": null,
+     "function": null,
+     "line": 242559,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.openSync",
+     "arg": "",
+     "function": null,
+     "line": 242566,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.fchmodSync",
+     "arg": null,
+     "function": null,
+     "line": 242570,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": null,
+     "function": null,
+     "line": 242574,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": null,
+     "function": null,
+     "line": 242576,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.open",
+     "arg": "",
+     "function": null,
+     "line": 242584,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.futimes",
+     "arg": null,
+     "function": null,
+     "line": 242589,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.close",
+     "arg": null,
+     "function": null,
+     "line": 242590,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.openSync",
+     "arg": "",
+     "function": null,
+     "line": 242597,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.futimesSync",
+     "arg": null,
+     "function": null,
+     "line": 242601,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": null,
+     "function": null,
+     "line": 242605,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": null,
+     "function": null,
+     "line": 242607,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.open",
+     "arg": null,
+     "function": null,
+     "line": 242740,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.exists",
+     "arg": null,
+     "function": null,
+     "line": 243213,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.exists",
+     "arg": null,
+     "function": null,
+     "line": 243215,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.read",
+     "arg": null,
+     "function": null,
+     "line": 243219,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.read",
+     "arg": null,
+     "function": null,
+     "line": 243221,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.write",
+     "arg": null,
+     "function": null,
+     "line": 243231,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.write",
+     "arg": null,
+     "function": null,
+     "line": 243233,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readv",
+     "arg": null,
+     "function": null,
+     "line": 243243,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readv",
+     "arg": null,
+     "function": null,
+     "line": 243245,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writev",
+     "arg": null,
+     "function": null,
+     "line": 243255,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writev",
+     "arg": null,
+     "function": null,
+     "line": 243257,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.mkdir",
+     "arg": null,
+     "function": null,
+     "line": 243298,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.mkdirSync",
+     "arg": null,
+     "function": null,
+     "line": 243305,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.access().then().catch",
+     "arg": null,
+     "function": null,
+     "line": 243332,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.access().then",
+     "arg": null,
+     "function": null,
+     "line": 243332,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.access",
+     "arg": "",
+     "function": null,
+     "line": 243332,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.open",
+     "arg": "",
+     "function": null,
+     "line": 243345,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.futimes",
+     "arg": null,
+     "function": null,
+     "line": 243348,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.close",
+     "arg": null,
+     "function": null,
+     "line": 243353,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.openSync",
+     "arg": "",
+     "function": null,
+     "line": 243361,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.futimesSync",
+     "arg": null,
+     "function": null,
+     "line": 243364,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": null,
+     "function": null,
+     "line": 243369,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 243388,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 243388,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 243399,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstatSync",
+     "arg": null,
+     "function": null,
+     "line": 243399,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 243468,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 243482,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.unlink",
+     "arg": null,
+     "function": null,
+     "line": 243560,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.copyFile",
+     "arg": null,
+     "function": null,
+     "line": 243566,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 243569,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.chmod",
+     "arg": null,
+     "function": null,
+     "line": 243572,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.chmod",
+     "arg": null,
+     "function": null,
+     "line": 243578,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.mkdir",
+     "arg": null,
+     "function": null,
+     "line": 243581,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.opendir",
+     "arg": null,
+     "function": null,
+     "line": 243582,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.chmod",
+     "arg": null,
+     "function": null,
+     "line": 243590,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readlink",
+     "arg": null,
+     "function": null,
+     "line": 243593,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlink",
+     "arg": null,
+     "function": null,
+     "line": 243595,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readlink",
+     "arg": null,
+     "function": null,
+     "line": 243598,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlink",
+     "arg": null,
+     "function": null,
+     "line": 243600,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.unlink",
+     "arg": null,
+     "function": null,
+     "line": 243608,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlink",
+     "arg": null,
+     "function": null,
+     "line": 243609,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 243631,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.unlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243649,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.copyFileSync",
+     "arg": null,
+     "function": null,
+     "line": 243654,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.chmodSync",
+     "arg": null,
+     "function": null,
+     "line": 243669,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 243672,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.mkdirSync",
+     "arg": null,
+     "function": null,
+     "line": 243680,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.opendirSync",
+     "arg": null,
+     "function": null,
+     "line": 243685,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243701,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243703,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243707,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243709,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.unlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243721,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 243722,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.rm",
+     "arg": "",
+     "function": null,
+     "line": 243741,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.rmSync",
+     "arg": "",
+     "function": null,
+     "line": 243747,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readdir",
+     "arg": null,
+     "function": null,
+     "line": 243768,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readdirSync",
+     "arg": null,
+     "function": null,
+     "line": 243778,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 243805,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 243811,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFile",
+     "arg": null,
+     "function": null,
+     "line": 243815,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFile",
+     "arg": null,
+     "function": null,
+     "line": 243819,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readdir",
+     "arg": null,
+     "function": null,
+     "line": 243820,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 243825,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync().isDirectory",
+     "arg": null,
+     "function": null,
+     "line": 243830,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 243830,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readdirSync",
+     "arg": null,
+     "function": null,
+     "line": 243830,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFileSync",
+     "arg": null,
+     "function": null,
+     "line": 243835,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 243854,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 243858,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.link",
+     "arg": null,
+     "function": null,
+     "line": 243866,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstatSync",
+     "arg": null,
+     "function": null,
+     "line": 243871,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstatSync",
+     "arg": null,
+     "function": null,
+     "line": 243874,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 243881,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.linkSync",
+     "arg": null,
+     "function": null,
+     "line": 243881,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.linkSync",
+     "arg": null,
+     "function": null,
+     "line": 243883,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 243921,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 243938,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 243950,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 243958,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 243962,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 243982,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstatSync",
+     "arg": null,
+     "function": null,
+     "line": 243992,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstat",
+     "arg": null,
+     "function": null,
+     "line": 244017,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 244021,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 244026,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 244028,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 244033,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlink",
+     "arg": null,
+     "function": null,
+     "line": 244044,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.lstatSync",
+     "arg": null,
+     "function": null,
+     "line": 244049,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 244053,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 244058,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 244060,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.statSync",
+     "arg": null,
+     "function": null,
+     "line": 244065,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 244075,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 244075,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.symlinkSync",
+     "arg": null,
+     "function": null,
+     "line": 244077,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.readFileSync",
+     "arg": null,
+     "function": null,
+     "line": 244155,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFileSync",
+     "arg": null,
+     "function": null,
+     "line": 244174,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFile",
+     "arg": null,
+     "function": null,
+     "line": 244205,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 244209,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFileSync",
+     "arg": null,
+     "function": null,
+     "line": 244210,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.rename",
+     "arg": null,
+     "function": null,
+     "line": 244276,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": null,
+     "line": 244319,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.renameSync",
+     "arg": null,
+     "function": null,
+     "line": 244324,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "shell.openExternal",
+     "arg": "https://react.dev/errors/0",
+     "function": null,
+     "line": 268975,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.readText",
+     "arg": null,
+     "function": null,
+     "line": 279856,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText().catch",
+     "arg": null,
+     "function": null,
+     "line": 279864,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText",
+     "arg": null,
+     "function": null,
+     "line": 279864,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateInteractionItems",
+     "arg": null,
+     "function": null,
+     "line": 294556,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateInteractionItems",
+     "arg": null,
+     "function": null,
+     "line": 294573,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateInteractionItems",
+     "arg": null,
+     "function": null,
+     "line": 294599,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateInteractionItems",
+     "arg": null,
+     "function": null,
+     "line": 294610,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText().then",
+     "arg": null,
+     "function": null,
+     "line": 303216,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText",
+     "arg": null,
+     "function": null,
+     "line": 303216,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIP",
+     "arg": null,
+     "function": null,
+     "line": 321154,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "zlib.createInflate",
+     "arg": null,
+     "function": null,
+     "line": 323899,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "zlib.createInflateRaw",
+     "arg": null,
+     "function": null,
+     "line": 323899,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIP",
+     "arg": null,
+     "function": null,
+     "line": 324883,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.connect",
+     "arg": null,
+     "function": null,
+     "line": 324894,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.destroy",
+     "arg": null,
+     "function": null,
+     "line": 329715,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.ref",
+     "arg": null,
+     "function": null,
+     "line": 329887,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.unref",
+     "arg": null,
+     "function": null,
+     "line": 329894,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.ping",
+     "arg": null,
+     "function": null,
+     "line": 329938,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.ping",
+     "arg": null,
+     "function": null,
+     "line": 330022,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "session.destroy",
+     "arg": null,
+     "function": null,
+     "line": 330127,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIP",
+     "arg": null,
+     "function": null,
+     "line": 330763,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv6",
+     "arg": null,
+     "function": null,
+     "line": 330947,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv4",
+     "arg": null,
+     "function": null,
+     "line": 331966,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv6",
+     "arg": null,
+     "function": null,
+     "line": 331973,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv4",
+     "arg": null,
+     "function": null,
+     "line": 331995,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.hash",
+     "arg": "sha256",
+     "function": null,
+     "line": 335789,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.getHashes",
+     "arg": null,
+     "function": null,
+     "line": 342064,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.hash",
+     "arg": null,
+     "function": null,
+     "line": 342163,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "zlib.createGunzip",
+     "arg": null,
+     "function": null,
+     "line": 342890,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "zlib.createBrotliDecompress",
+     "arg": null,
+     "function": null,
+     "line": 342898,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "zlib.createZstdDecompress",
+     "arg": null,
+     "function": null,
+     "line": 342902,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.randomBytes().toString",
+     "arg": "base64",
+     "function": null,
+     "line": 344735,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.randomBytes",
+     "arg": "16",
+     "function": null,
+     "line": 344735,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "crypto.hash",
+     "arg": "sha1",
+     "function": null,
+     "line": 344772,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv4",
+     "arg": null,
+     "function": null,
+     "line": 415290,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv6",
+     "arg": null,
+     "function": null,
+     "line": 415293,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv4",
+     "arg": null,
+     "function": null,
+     "line": 415484,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv6",
+     "arg": null,
+     "function": null,
+     "line": 415487,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv4",
+     "arg": null,
+     "function": null,
+     "line": 415654,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv4",
+     "arg": null,
+     "function": null,
+     "line": 415813,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "net.isIPv6",
+     "arg": null,
+     "function": null,
+     "line": 415816,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "shell.openPath",
+     "arg": null,
+     "function": null,
+     "line": 466436,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 474739,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.utimes",
+     "arg": null,
+     "function": null,
+     "line": 474745,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.stat",
+     "arg": null,
+     "function": null,
+     "line": 474748,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "shell.showItemInFolder",
+     "arg": null,
+     "function": null,
+     "line": 488144,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText().then",
+     "arg": null,
+     "function": null,
+     "line": 514973,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText",
+     "arg": null,
+     "function": null,
+     "line": 514973,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText().then",
+     "arg": null,
+     "function": null,
+     "line": 523356,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "navigator.clipboard.writeText",
+     "arg": null,
+     "function": null,
+     "line": 523356,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.existsSync",
+     "arg": null,
+     "function": "startTracing2",
+     "line": 20491,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.mkdirSync",
+     "arg": null,
+     "function": "startTracing2",
+     "line": 20491,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.openSync",
+     "arg": null,
+     "function": "startTracing2",
+     "line": 20500,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": "0",
+     "function": "startTracing2",
+     "line": 20509,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": "0",
+     "function": "stopTracing",
+     "line": 20531,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": "0",
+     "function": "stopTracing",
+     "line": 20534,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": "0",
+     "function": "writeEvent",
+     "line": 20595,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": "0",
+     "function": "writeEvent",
+     "line": 20597,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": "0",
+     "function": "writeEvent",
+     "line": 20598,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": "0",
+     "function": "writeEvent",
+     "line": 20599,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.openSync",
+     "arg": null,
+     "function": "dumpTypes",
+     "line": 20621,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": null,
+     "function": "dumpTypes",
+     "line": 20623,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": null,
+     "function": "dumpTypes",
+     "line": 20717,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": null,
+     "function": "dumpTypes",
+     "line": 20718,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeSync",
+     "arg": null,
+     "function": "dumpTypes",
+     "line": 20720,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.closeSync",
+     "arg": null,
+     "function": "dumpTypes",
+     "line": 20721,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "fs.writeFileSync",
+     "arg": null,
+     "function": "dumpLegend",
+     "line": 20727,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40428,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40432,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40433,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40434,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40438,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40439,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40444,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40445,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40446,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40447,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40448,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40449,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40450,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40451,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40452,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40453,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40454,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40455,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": "{left.value}{right.value}",
+     "function": "evaluate",
+     "line": 40457,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40461,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateTemplateExpression",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40462,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40463,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateEntityNameExpression",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40464,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateEntityNameExpression",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40466,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateElementAccessExpression",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40468,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluate",
+     "line": 40470,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "evaluateTemplateExpression",
+     "line": 40477,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateTemplateExpression",
+     "line": 40478,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateTemplateExpression",
+     "line": 40484,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "checkBinaryLikeExpressionWorker",
+     "line": 83641,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "checkTemplateExpression",
+     "line": 83921,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "computeEnumMemberValue",
+     "line": 87257,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "computeEnumMemberValue",
+     "line": 87260,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "computeEnumMemberValue",
+     "line": 87266,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "computeConstantEnumMemberValue",
+     "line": 87271,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87282,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87285,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateEnumMember",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87287,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluate",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87291,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87292,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87293,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEntityNameExpression",
+     "line": 87296,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluateEnumMember",
+     "arg": null,
+     "function": "evaluateElementAccessExpression",
+     "line": 87307,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateElementAccessExpression",
+     "line": 87311,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEnumMember",
+     "line": 87317,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": "0",
+     "function": "evaluateEnumMember",
+     "line": 87321,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "evaluateEnumMember",
+     "line": 87324,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "evaluatorResult",
+     "arg": null,
+     "function": "getEnumMemberValue",
+     "line": 88846,
+     "module": "static/build/assets/ts.worker-D9QBw1-J.js",
+     "role": "unknown"
+    },
+    {
+     "api": "Function",
+     "arg": "return this",
+     "function": "<anonymous@909>",
+     "line": 1187,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.tmpdir",
+     "arg": null,
+     "function": "instantiate",
+     "line": 10989,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update().digest",
+     "arg": "hex",
+     "function": "<class>.constructor",
+     "line": 11818,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update",
+     "arg": null,
+     "function": "<class>.constructor",
+     "line": 11818,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "sha256",
+     "function": "<class>.constructor",
+     "line": 11818,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "shell.openExternal",
+     "arg": null,
+     "function": "<anonymous@12212>",
+     "line": 12215,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.timingSafeEqual",
+     "arg": null,
+     "function": "<anonymous@12314>",
+     "line": 12317,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update().digest",
+     "arg": null,
+     "function": "tokenMatches",
+     "line": 12378,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update",
+     "arg": null,
+     "function": "tokenMatches",
+     "line": 12378,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "sha256",
+     "function": "tokenMatches",
+     "line": 12378,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update().digest",
+     "arg": null,
+     "function": "tokenMatches",
+     "line": 12379,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update",
+     "arg": null,
+     "function": "tokenMatches",
+     "line": 12379,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "sha256",
+     "function": "tokenMatches",
+     "line": 12379,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.timingSafeEqual",
+     "arg": null,
+     "function": "tokenMatches",
+     "line": 12380,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.cookies.set",
+     "arg": null,
+     "function": "<anonymous@12441>",
+     "line": 12441,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update().digest",
+     "arg": "hex",
+     "function": "<anonymous@12917>",
+     "line": 12917,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update",
+     "arg": null,
+     "function": "<anonymous@12917>",
+     "line": 12917,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "sha256",
+     "function": "<anonymous@12917>",
+     "line": 12917,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Function",
+     "arg": "return this",
+     "function": "<anonymous@18388>",
+     "line": 18666,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.userInfo",
+     "arg": null,
+     "function": "instantiate",
+     "line": 23276,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.tmpdir",
+     "arg": null,
+     "function": "instantiate",
+     "line": 23289,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "child_process.execFile",
+     "arg": null,
+     "function": "<anonymous@28236>",
+     "line": 28238,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs-extra.pathExists",
+     "arg": null,
+     "function": "Kubectl.checkBinary",
+     "line": 28877,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs-extra.pathExists",
+     "arg": null,
+     "function": "Kubectl.checkBundled",
+     "line": 28920,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.copyFile",
+     "arg": null,
+     "function": "Kubectl.checkBundled",
+     "line": 28921,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.chmod",
+     "arg": null,
+     "function": "Kubectl.checkBundled",
+     "line": 28922,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs-extra.ensureDir",
+     "arg": null,
+     "function": "Kubectl.prepareKubectl",
+     "line": 28978,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs-extra.ensureDir",
+     "arg": null,
+     "function": "Kubectl.downloadKubectl",
+     "line": 29032,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.randomBytes().toString",
+     "arg": "hex",
+     "function": "Kubectl.downloadKubectl",
+     "line": 29041,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.randomBytes",
+     "arg": "8",
+     "function": "Kubectl.downloadKubectl",
+     "line": 29041,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.open",
+     "arg": null,
+     "function": "Kubectl.downloadKubectl",
+     "line": 29043,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.open().writeFile",
+     "arg": null,
+     "function": "Kubectl.downloadKubectl",
+     "line": 29045,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.open().close",
+     "arg": null,
+     "function": "Kubectl.downloadKubectl",
+     "line": 29047,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update().digest",
+     "arg": "hex",
+     "function": "Kubectl.downloadKubectl",
+     "line": 29049,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update",
+     "arg": null,
+     "function": "Kubectl.downloadKubectl",
+     "line": 29049,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "sha256",
+     "function": "Kubectl.downloadKubectl",
+     "line": 29049,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.chmod",
+     "arg": null,
+     "function": "Kubectl.downloadKubectl",
+     "line": 29051,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.rename",
+     "arg": null,
+     "function": "Kubectl.renameOntoPath",
+     "line": 29061,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs-extra.ensureDir",
+     "arg": null,
+     "function": "Kubectl.writeInitScripts",
+     "line": 29082,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.writeFile",
+     "arg": null,
+     "function": "Kubectl.writeInitScripts",
+     "line": 29141,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "fs.writeFile",
+     "arg": null,
+     "function": "Kubectl.writeInitScripts",
+     "line": 29141,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.tmpdir",
+     "arg": null,
+     "function": "instantiate",
+     "line": 36048,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Menu.buildFromTemplate",
+     "arg": null,
+     "function": "<anonymous@39140>",
+     "line": 39142,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Menu.setApplicationMenu",
+     "arg": null,
+     "function": "<anonymous@39140>",
+     "line": 39143,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "app.quit",
+     "arg": null,
+     "function": "<anonymous@39939>",
+     "line": 39939,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "dialog.showMessageBox",
+     "arg": null,
+     "function": "<anonymous@40079>",
+     "line": 40080,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "dialog.showOpenDialog",
+     "arg": null,
+     "function": "<anonymous@45127>",
+     "line": 45127,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(md5).update().digest",
+     "arg": "hex",
+     "function": "mobx.action callback@47092",
+     "line": 47122,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(md5).update",
+     "arg": "{filePath}:{contextName}",
+     "function": "mobx.action callback@47092",
+     "line": 47122,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "md5",
+     "function": "mobx.action callback@47092",
+     "line": 47122,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.homedir",
+     "arg": null,
+     "function": "mobx.action callback@47092",
+     "line": 47128,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update().digest",
+     "arg": "hex",
+     "function": "detect",
+     "line": 48206,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash(sha256).update",
+     "arg": null,
+     "function": "detect",
+     "line": 48206,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.createHash",
+     "arg": "sha256",
+     "function": "detect",
+     "line": 48206,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "app.requestSingleInstanceLock",
+     "arg": null,
+     "function": "<anonymous@48445>",
+     "line": 48445,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "dialog.showErrorBox",
+     "arg": null,
+     "function": "<anonymous@48474>",
+     "line": 48475,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "nativeTheme.on",
+     "arg": "updated",
+     "function": "getStartableStoppable callback@48492",
+     "line": 48496,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "nativeTheme.off",
+     "arg": "updated",
+     "function": "<anonymous@48497>",
+     "line": 48498,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Function",
+     "arg": "return this",
+     "function": "<anonymous@50037>",
+     "line": 50315,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "app.quit",
+     "arg": null,
+     "function": "app.on(window-all-closed)",
+     "line": 54027,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "app.setAsDefaultProtocolClient",
+     "arg": "freelens",
+     "function": "run",
+     "line": 54092,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Menu.buildFromTemplate().popup",
+     "arg": null,
+     "function": "ipcMainOn callback@54214",
+     "line": 54216,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Menu.buildFromTemplate",
+     "arg": null,
+     "function": "ipcMainOn callback@54214",
+     "line": 54216,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.once",
+     "arg": "close",
+     "function": "this.proxyServer.on(session)",
+     "line": 55155,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.close",
+     "arg": null,
+     "function": "<anonymous@55258>",
+     "line": 55278,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.homedir",
+     "arg": null,
+     "function": "<class>.getCwd",
+     "line": 55918,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "os.homedir",
+     "arg": null,
+     "function": "<class>.getCwd",
+     "line": 55920,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "crypto.timingSafeEqual",
+     "arg": null,
+     "function": "<anonymous@56584>",
+     "line": 56589,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "child_process.spawn",
+     "arg": null,
+     "function": "PortForward.start",
+     "line": 59374,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.clearCache().then",
+     "arg": null,
+     "function": "run",
+     "line": 59965,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.clearCache",
+     "arg": null,
+     "function": "run",
+     "line": 59965,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.clearCodeCaches().then",
+     "arg": null,
+     "function": "run",
+     "line": 59966,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.clearCodeCaches",
+     "arg": null,
+     "function": "run",
+     "line": 59966,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.clearData",
+     "arg": null,
+     "function": "run",
+     "line": 59988,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.resolveProxy(https://example.com).split(;).map().filter().map().join",
+     "arg": ",",
+     "function": "run",
+     "line": 60455,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.resolveProxy(https://example.com).split(;).map().filter().map",
+     "arg": null,
+     "function": "run",
+     "line": 60455,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.resolveProxy(https://example.com).split(;).map().filter",
+     "arg": null,
+     "function": "run",
+     "line": 60455,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.resolveProxy(https://example.com).split(;).map",
+     "arg": null,
+     "function": "run",
+     "line": 60455,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.resolveProxy(https://example.com).split",
+     "arg": ";",
+     "function": "run",
+     "line": 60455,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.resolveProxy",
+     "arg": "https://example.com",
+     "function": "run",
+     "line": 60455,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.setProxy",
+     "arg": null,
+     "function": "run",
+     "line": 60457,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "session.defaultSession.setProxy",
+     "arg": null,
+     "function": "run",
+     "line": 60460,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "new Tray",
+     "arg": null,
+     "function": "start",
+     "line": 60756,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "Menu.buildFromTemplate",
+     "arg": null,
+     "function": "setMenuItems",
+     "line": 60776,
+     "module": "static/build/main.js",
+     "role": "main"
+    },
+    {
+     "api": "process.exit",
+     "arg": "1",
+     "function": "di.inject()().catch callback@62027",
+     "line": 62029,
+     "module": "static/build/main.js",
+     "role": "main"
+    }
+   ],
+   "list": "effects",
+   "offset": 0,
+   "total": 368
+  }
+ },
+ "subject": {
+  "kind": "asar",
+  "name": "app.asar",
+  "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+ },
+ "summary": "Part of js_app_map evidence (page)."
+}

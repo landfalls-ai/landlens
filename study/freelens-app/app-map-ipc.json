@@ -1,0 +1,404 @@
+{
+ "authority": "original-files",
+ "confidence": "derived",
+ "coverage": {
+  "examined": 18,
+  "status": "complete",
+  "total": 18
+ },
+ "environment": {
+  "clean_room": false,
+  "engine": "builtin",
+  "engine_version": "0.6.1",
+  "host": "macos-aarch64"
+ },
+ "id": "ev_87a1176ef3e5044bd18431052c5b2337427693c4f7c4daed81fdb97c51b750a8",
+ "limitations": [],
+ "links": [
+  "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1"
+ ],
+ "locations": [],
+ "operation": "core_evidence_browse",
+ "params": {
+  "show": {
+   "kind": "rows",
+   "limit": 1000,
+   "list": "ipc"
+  },
+  "source": {
+   "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+   "kind": "saved"
+  }
+ },
+ "result": {
+  "coverage": {
+   "at_end": true,
+   "examined": 18,
+   "next_offset": null,
+   "status": "page",
+   "total": 18
+  },
+  "from_evidence": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "from_tool": "js_app_map",
+  "shown": {
+   "items": [
+    {
+     "bridge_members": [],
+     "channel": "app:standalone-shell-api",
+     "handlers": [],
+     "invokers": [
+      {
+       "line": 463693,
+       "method": "invoke",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "catalog:init",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [
+      {
+       "function": "getStartableStoppable callback@47591",
+       "line": 47593,
+       "method": "on",
+       "module": "static/build/main.js"
+      }
+     ],
+     "main_senders": [],
+     "paired": true,
+     "renderer_handlers": [],
+     "senders": [
+      {
+       "line": 242011,
+       "method": "send",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ]
+    },
+    {
+     "bridge_members": [],
+     "channel": "cluster:list-namespace-forbidden",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 466089,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "cluster:refresh-accessibility",
+     "handlers": [],
+     "invokers": [
+      {
+       "line": 465304,
+       "method": "invoke",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "cluster:shell-api",
+     "handlers": [],
+     "invokers": [
+      {
+       "line": 268525,
+       "method": "invoke",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "extension-installation-state-store:clear-install",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 451855,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      },
+      {
+       "function": "__publicField$2 callback@38695",
+       "line": 38696,
+       "method": "on",
+       "module": "static/build/main.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "extension-installation-state-store:install",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 451855,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      },
+      {
+       "function": "__publicField$2 callback@38695",
+       "line": 38696,
+       "method": "on",
+       "module": "static/build/main.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "extension-loader:bundled-extensions-loaded",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [
+      {
+       "function": "<anonymous@12688>",
+       "line": 12689,
+       "method": "once",
+       "module": "static/build/main.js"
+      }
+     ],
+     "main_senders": [],
+     "paired": true,
+     "renderer_handlers": [],
+     "senders": [
+      {
+       "line": 467023,
+       "method": "send",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ]
+    },
+    {
+     "bridge_members": [],
+     "channel": "history:can-go-back",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 515157,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "history:can-go-forward",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 515160,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "hotbar:too-many-items",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 466090,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "ipc:broadcast-main",
+     "handlers": [],
+     "invokers": [
+      {
+       "line": 229059,
+       "method": "invoke",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      },
+      {
+       "function": "broadcastMessage",
+       "line": 10431,
+       "method": "invoke",
+       "module": "static/build/main.js"
+      }
+     ],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "license-content",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [
+      {
+       "function": "ipcMain.once(request-license-content)",
+       "line": 39718,
+       "method": "send",
+       "module": "static/build/main.js"
+      }
+     ],
+     "paired": false,
+     "renderer_handlers": [],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "protocol-handler:extension",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 466871,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "protocol-handler:internal",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 466864,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "protocol-handler:invalid",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [
+      {
+       "line": 466887,
+       "method": "on",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "request-license-content",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [
+      {
+       "function": "<anonymous@39695>",
+       "line": 39717,
+       "method": "once",
+       "module": "static/build/main.js"
+      }
+     ],
+     "main_senders": [],
+     "paired": false,
+     "renderer_handlers": [],
+     "senders": []
+    },
+    {
+     "bridge_members": [],
+     "channel": "tray:set-visible",
+     "handlers": [],
+     "invokers": [],
+     "main_listeners": [
+      {
+       "function": "instantiate",
+       "line": 60766,
+       "method": "on",
+       "module": "static/build/main.js"
+      }
+     ],
+     "main_senders": [],
+     "paired": true,
+     "renderer_handlers": [],
+     "senders": [
+      {
+       "line": 461172,
+       "method": "send",
+       "module": "static/build/assets/index-qzQrg_7k.js"
+      }
+     ]
+    }
+   ],
+   "list": "ipc",
+   "offset": 0,
+   "total": 18
+  }
+ },
+ "subject": {
+  "kind": "asar",
+  "name": "app.asar",
+  "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+ },
+ "summary": "Part of js_app_map evidence (page)."
+}

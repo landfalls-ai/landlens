@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-14",
+  "client": "probe.mjs using @agentclientprotocol/sdk 2.7.0 (default v1 entrypoint)",
+  "agent": "@agentclientprotocol/claude-agent-acp 0.107.0, CLAUDE_AGENT_ACP_PROTOCOL=v1",
+  "claudeAgentSdk": "0.3.323, native CLI 2.1.323 from @anthropic-ai/claude-agent-sdk-darwin-arm64",
+  "node": "v22.23.1",
+  "steps": ["initialize", "session/new (cwd=empty dir, mcpServers=[])", "session/prompt (one text block)"],
+  "result": {
+    "protocolVersion": 1,
+    "authMethods": [],
+    "authenticateCalled": false,
+    "auth": "reused the existing Claude Code subscription login on this machine; reported via auth/status_update state=authenticated",
+    "stopReason": "end_turn",
+    "updateKinds": { "available_commands_update": 2, "session_info_update": 1, "usage_update": 3, "agent_message_chunk": 1 },
+    "clientMethodsCalled": [],
+    "contextTokensForTrivialPrompt": 42936,
+    "availableCommands": 73,
+    "initialMode": "auto (from the user's settings)",
+    "timingsMs": { "initializeResponse": 763, "sessionNewResponse": 3652, "promptToEndTurn": 2669 }
+  },
+  "redactions": "emails, organization names, home and temp paths"
+}

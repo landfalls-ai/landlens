@@ -1,0 +1,897 @@
+{
+ "authority": "original-files",
+ "confidence": "derived",
+ "coverage": {
+  "examined": 120,
+  "status": "complete",
+  "total": 120
+ },
+ "environment": {
+  "clean_room": false,
+  "engine": "builtin",
+  "engine_version": "0.6.1",
+  "host": "macos-aarch64"
+ },
+ "id": "ev_adb055789567fbe60131c195d82b8bbebb30735369637ae38cdbcbf835b713ca",
+ "limitations": [],
+ "links": [
+  "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1"
+ ],
+ "locations": [],
+ "operation": "core_evidence_browse",
+ "params": {
+  "show": {
+   "kind": "rows",
+   "limit": 1000,
+   "list": "routes"
+  },
+  "source": {
+   "evidence_id": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+   "kind": "saved"
+  }
+ },
+ "result": {
+  "coverage": {
+   "at_end": true,
+   "examined": 120,
+   "next_offset": null,
+   "status": "page",
+   "total": 120
+  },
+  "from_evidence": "ev_d998ad45f9d99b2806ed9d6b65e8bce5af9d489171b5a7754df73641398dbdc1",
+  "from_tool": "js_app_map",
+  "shown": {
+   "items": [
+    {
+     "line": 209930,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/",
+     "source": "router-config"
+    },
+    {
+     "line": 240932,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/preferences/:preferenceTabId?",
+     "source": "router-config"
+    },
+    {
+     "line": 241745,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/",
+     "source": "router-config"
+    },
+    {
+     "line": 307716,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/events",
+     "source": "router-config"
+    },
+    {
+     "line": 422293,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/catalog/:group?/:kind?",
+     "source": "router-config"
+    },
+    {
+     "line": 440606,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/entity/:entityId/settings",
+     "source": "router-config"
+    },
+    {
+     "line": 442522,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/terminal",
+     "source": "router-config"
+    },
+    {
+     "line": 443010,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/add-cluster",
+     "source": "router-config"
+    },
+    {
+     "line": 443075,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/configmaps",
+     "source": "router-config"
+    },
+    {
+     "line": 443126,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/hpa",
+     "source": "router-config"
+    },
+    {
+     "line": 443177,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/leases",
+     "source": "router-config"
+    },
+    {
+     "line": 443228,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/limitranges",
+     "source": "router-config"
+    },
+    {
+     "line": 443279,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/mutatingwebhookconfigurations",
+     "source": "router-config"
+    },
+    {
+     "line": 443330,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/poddisruptionbudgets",
+     "source": "router-config"
+    },
+    {
+     "line": 443381,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/priorityclasses",
+     "source": "router-config"
+    },
+    {
+     "line": 443432,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/resourcequotas",
+     "source": "router-config"
+    },
+    {
+     "line": 443483,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/runtimeclasses",
+     "source": "router-config"
+    },
+    {
+     "line": 443534,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/secrets",
+     "source": "router-config"
+    },
+    {
+     "line": 443585,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/validatingadmissionpolicies",
+     "source": "router-config"
+    },
+    {
+     "line": 443636,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/validatingadmissionpolicybindings",
+     "source": "router-config"
+    },
+    {
+     "line": 443687,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/validatingwebhookconfigurations",
+     "source": "router-config"
+    },
+    {
+     "line": 443738,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/vpa",
+     "source": "router-config"
+    },
+    {
+     "line": 443842,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/crd/definitions",
+     "source": "router-config"
+    },
+    {
+     "line": 443861,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/crd/:group/:name",
+     "source": "router-config"
+    },
+    {
+     "line": 443947,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/favorites",
+     "source": "router-config"
+    },
+    {
+     "line": 444009,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/helm/charts/:repo?/:chartName?",
+     "source": "router-config"
+    },
+    {
+     "line": 444057,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/helm/releases/:namespace?/:name?",
+     "source": "router-config"
+    },
+    {
+     "line": 444122,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/namespaces",
+     "source": "router-config"
+    },
+    {
+     "line": 444173,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/endpoint-slices",
+     "source": "router-config"
+    },
+    {
+     "line": 444224,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/endpoints",
+     "source": "router-config"
+    },
+    {
+     "line": 444275,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/ingress-classes",
+     "source": "router-config"
+    },
+    {
+     "line": 444326,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/ingresses",
+     "source": "router-config"
+    },
+    {
+     "line": 444380,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/network-policies",
+     "source": "router-config"
+    },
+    {
+     "line": 444431,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/port-forwards/:forwardport?",
+     "source": "router-config"
+    },
+    {
+     "line": 444479,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/services",
+     "source": "router-config"
+    },
+    {
+     "line": 444562,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/nodes",
+     "source": "router-config"
+    },
+    {
+     "line": 444613,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/overview",
+     "source": "router-config"
+    },
+    {
+     "line": 444664,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/persistent-volume-claims",
+     "source": "router-config"
+    },
+    {
+     "line": 444715,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/persistent-volumes",
+     "source": "router-config"
+    },
+    {
+     "line": 444766,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/storage-classes",
+     "source": "router-config"
+    },
+    {
+     "line": 444837,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/cluster-role-bindings",
+     "source": "router-config"
+    },
+    {
+     "line": 444888,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/cluster-roles",
+     "source": "router-config"
+    },
+    {
+     "line": 444940,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/pod-security-policies",
+     "source": "router-config"
+    },
+    {
+     "line": 444993,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/role-bindings",
+     "source": "router-config"
+    },
+    {
+     "line": 445045,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/roles",
+     "source": "router-config"
+    },
+    {
+     "line": 445096,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/service-accounts",
+     "source": "router-config"
+    },
+    {
+     "line": 445176,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/cronjobs",
+     "source": "router-config"
+    },
+    {
+     "line": 445227,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/daemonsets",
+     "source": "router-config"
+    },
+    {
+     "line": 445278,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/deployments",
+     "source": "router-config"
+    },
+    {
+     "line": 445329,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/jobs",
+     "source": "router-config"
+    },
+    {
+     "line": 445380,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/workloads",
+     "source": "router-config"
+    },
+    {
+     "line": 445428,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/pods",
+     "source": "router-config"
+    },
+    {
+     "line": 445479,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/replicasets",
+     "source": "router-config"
+    },
+    {
+     "line": 445530,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/replication-controllers",
+     "source": "router-config"
+    },
+    {
+     "line": 445581,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/statefulsets",
+     "source": "router-config"
+    },
+    {
+     "line": 445717,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/cluster/:clusterId",
+     "source": "router-config"
+    },
+    {
+     "line": 445782,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/extensions",
+     "source": "router-config"
+    },
+    {
+     "line": 445863,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/welcome",
+     "source": "router-config"
+    },
+    {
+     "line": 460227,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/licenses",
+     "source": "router-config"
+    },
+    {
+     "line": 460762,
+     "method": null,
+     "module": "static/build/assets/index-qzQrg_7k.js",
+     "path": "/preferences/extension/:extensionId/:preferenceTabId?",
+     "source": "router-config"
+    },
+    {
+     "line": 30832,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/catalog/:group?/:kind?",
+     "source": "router-config"
+    },
+    {
+     "line": 30888,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/terminal",
+     "source": "router-config"
+    },
+    {
+     "line": 31271,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/add-cluster",
+     "source": "router-config"
+    },
+    {
+     "line": 31344,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/configmaps",
+     "source": "router-config"
+    },
+    {
+     "line": 31395,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/hpa",
+     "source": "router-config"
+    },
+    {
+     "line": 31446,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/leases",
+     "source": "router-config"
+    },
+    {
+     "line": 31497,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/limitranges",
+     "source": "router-config"
+    },
+    {
+     "line": 31548,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/mutatingwebhookconfigurations",
+     "source": "router-config"
+    },
+    {
+     "line": 31599,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/poddisruptionbudgets",
+     "source": "router-config"
+    },
+    {
+     "line": 31650,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/priorityclasses",
+     "source": "router-config"
+    },
+    {
+     "line": 31701,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/resourcequotas",
+     "source": "router-config"
+    },
+    {
+     "line": 31752,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/runtimeclasses",
+     "source": "router-config"
+    },
+    {
+     "line": 31803,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/secrets",
+     "source": "router-config"
+    },
+    {
+     "line": 31854,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/validatingadmissionpolicies",
+     "source": "router-config"
+    },
+    {
+     "line": 31905,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/validatingadmissionpolicybindings",
+     "source": "router-config"
+    },
+    {
+     "line": 31956,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/validatingwebhookconfigurations",
+     "source": "router-config"
+    },
+    {
+     "line": 32007,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/vpa",
+     "source": "router-config"
+    },
+    {
+     "line": 32111,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/crd/definitions",
+     "source": "router-config"
+    },
+    {
+     "line": 32130,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/crd/:group/:name",
+     "source": "router-config"
+    },
+    {
+     "line": 32199,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/events",
+     "source": "router-config"
+    },
+    {
+     "line": 32250,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/favorites",
+     "source": "router-config"
+    },
+    {
+     "line": 32312,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/helm/charts/:repo?/:chartName?",
+     "source": "router-config"
+    },
+    {
+     "line": 32360,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/helm/releases/:namespace?/:name?",
+     "source": "router-config"
+    },
+    {
+     "line": 32425,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/namespaces",
+     "source": "router-config"
+    },
+    {
+     "line": 32476,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/endpoint-slices",
+     "source": "router-config"
+    },
+    {
+     "line": 32527,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/endpoints",
+     "source": "router-config"
+    },
+    {
+     "line": 32578,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/ingress-classes",
+     "source": "router-config"
+    },
+    {
+     "line": 32629,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/ingresses",
+     "source": "router-config"
+    },
+    {
+     "line": 32683,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/network-policies",
+     "source": "router-config"
+    },
+    {
+     "line": 32734,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/port-forwards/:forwardport?",
+     "source": "router-config"
+    },
+    {
+     "line": 32782,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/services",
+     "source": "router-config"
+    },
+    {
+     "line": 32865,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/nodes",
+     "source": "router-config"
+    },
+    {
+     "line": 32916,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/overview",
+     "source": "router-config"
+    },
+    {
+     "line": 32967,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/persistent-volume-claims",
+     "source": "router-config"
+    },
+    {
+     "line": 33018,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/persistent-volumes",
+     "source": "router-config"
+    },
+    {
+     "line": 33069,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/storage-classes",
+     "source": "router-config"
+    },
+    {
+     "line": 33140,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/cluster-role-bindings",
+     "source": "router-config"
+    },
+    {
+     "line": 33191,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/cluster-roles",
+     "source": "router-config"
+    },
+    {
+     "line": 33243,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/pod-security-policies",
+     "source": "router-config"
+    },
+    {
+     "line": 33296,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/role-bindings",
+     "source": "router-config"
+    },
+    {
+     "line": 33348,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/roles",
+     "source": "router-config"
+    },
+    {
+     "line": 33399,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/service-accounts",
+     "source": "router-config"
+    },
+    {
+     "line": 33479,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/cronjobs",
+     "source": "router-config"
+    },
+    {
+     "line": 33530,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/daemonsets",
+     "source": "router-config"
+    },
+    {
+     "line": 33581,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/deployments",
+     "source": "router-config"
+    },
+    {
+     "line": 33632,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/jobs",
+     "source": "router-config"
+    },
+    {
+     "line": 33683,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/workloads",
+     "source": "router-config"
+    },
+    {
+     "line": 33731,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/pods",
+     "source": "router-config"
+    },
+    {
+     "line": 33782,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/replicasets",
+     "source": "router-config"
+    },
+    {
+     "line": 33833,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/replication-controllers",
+     "source": "router-config"
+    },
+    {
+     "line": 33884,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/statefulsets",
+     "source": "router-config"
+    },
+    {
+     "line": 34020,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/cluster/:clusterId",
+     "source": "router-config"
+    },
+    {
+     "line": 34068,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/entity/:entityId/settings",
+     "source": "router-config"
+    },
+    {
+     "line": 34119,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/extensions",
+     "source": "router-config"
+    },
+    {
+     "line": 34200,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/welcome",
+     "source": "router-config"
+    },
+    {
+     "line": 39630,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/licenses",
+     "source": "router-config"
+    },
+    {
+     "line": 43574,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "freelens-extension://",
+     "source": "protocol"
+    },
+    {
+     "line": 45442,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/preferences/:preferenceTabId?",
+     "source": "router-config"
+    },
+    {
+     "line": 45686,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/preferences/extension/:extensionId/:preferenceTabId?",
+     "source": "router-config"
+    },
+    {
+     "line": 53572,
+     "method": null,
+     "module": "static/build/main.js",
+     "path": "/",
+     "source": "router-config"
+    }
+   ],
+   "list": "routes",
+   "offset": 0,
+   "total": 120
+  }
+ },
+ "subject": {
+  "kind": "asar",
+  "name": "app.asar",
+  "sha256": "f77376ff4880626638cbcb6d9eea30a94a503713fae1bf2e2591db692cf8fb52"
+ },
+ "summary": "Part of js_app_map evidence (page)."
+}
