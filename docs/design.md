@@ -47,7 +47,8 @@ read tokens only: no colours in TSX, no inline style objects for theming.
 | Ink | `--ink`, `--ink-2`, `--ink-3`, `--ink-4` | Body, secondary, labels, quietest (zero restarts) |
 | Accent | `--accent`, `--accent-fill`, `--accent-soft`, `--accent-line`, `--sel` | Selection, focus, primary buttons, Claude |
 | State | `--ok`/`--warn`/`--bad`/`--unk` fills, `-text` variants, `-soft` backgrounds | Text never uses a fill colour |
-| Type | `--t-11` … `--t-30`, `--w-regular/medium/semibold` | 13/400 body, 11.5/500 sentence-case labels, no uppercase |
+| Type | `--t-105`, `--t-11`, `--t-115`, `--t-12`, `--t-125`, `--t-13` … `--t-30`, `--w-regular/medium/semibold` | 13/400 body, 11.5/500 sentence-case labels, no uppercase; half steps are tokens too (`--t-105` axis ticks and gutter labels, `--t-115` labels, `--t-125` row names), so `charts.css` and `mcp.css` carry no raw sizes |
+| Focus | `--focus`, `--focus-in`, `--focus-gap` | The ring's gap is the surface it sits on: `--bg-1` by default, `--bg-0` in the dock, `--bg-2` in the drawer (each sets `--focus-gap` and redeclares `--focus`) |
 | Space, radii | `--s-1` … `--s-6` (4px grid), `--r-1` 4 … `--r-4` 12 | |
 | Motion | `--ease`, `--dur-1` 90ms, `--dur-2` 160ms, `--dur-3` 240ms | Off (except opacity) under `prefers-reduced-motion` |
 | Layout | `--sidebar-w` 232, `--rail-w` 52, `--drawer-w` 420, `--dock-w` 392, `--toolbar-h` 48, `--row-h` 32, `--statusbar-h` 26 | |
@@ -78,8 +79,11 @@ Numbers that line up (ready, restarts, age, counts) use `tabular-nums`.
 
 ⌘B folds the sidebar to the rail by hand. The main pane is a container (`container-name: main`), so the toolbar and
 table shrink by the pane's width, not the window's: under 860px the key hints go and the filter says "Filter"; under
-760 the status words; under 640 "Ask Claude" becomes its icon; columns drop in order Node, Ready, Age, Namespace,
-Restarts (Namespace also whenever one namespace is selected).
+760 the status words; under 640 "Ask Claude" becomes its icon (and always while a drawer is open, which has its own
+worded Ask Claude); columns drop in order Node, Ready, Age, Namespace, Restarts (Namespace also whenever one namespace
+is selected). When the drawer floats over the table (1024–1279 with the dock), the columns are chosen for the strip
+that still shows, and Status becomes a 16px icon-only column at the left (a dot when healthy, the tone's icon
+otherwise, the word in its title and for screen readers), so which rows are in trouble stays visible.
 
 **Title bar.** On macOS the window is `hiddenInset` with the traffic lights at 16,16; the sidebar's top 44px, the
 toolbar, `.drawer-top`, `.dock-head` and `.welcome-bar` are drag regions, and their controls are `no-drag`. Preload
@@ -107,17 +111,38 @@ Linux keep the native frame. The window's background follows the theme so it doe
   container left one); then facts whose Owner and Node navigate, containers, a conditions checklist, labels as
   chips. YAML (`Yaml.tsx`) is a numbered, coloured well whose `textContent` is still the exact YAML.
 - **Dock** (`AgentDock.tsx`, `DockParts.tsx`): the darkest surface, so the cluster reads as the lit centre. Header
-  with the read-only lock; consecutive tool calls in one list with icon status and numbered output; the ask card is
-  the one thing with an iris ring; the composer holds the context chips, the Mode and Model pills, the state, and
-  Send or Stop.
+  with the read-only lock; consecutive tool calls in one list with icon status and numbered output (failure lines
+  marked only in log output: `get_logs` and `kubectl logs`); the ask card is the one thing with an iris ring and
+  halo; the composer's focus is a 1px `--accent-line` ring, no halo; the composer holds the context chips, the Mode and
+  Model pills, the state, and Send or Stop. Between sending and the first thing back, a "Thinking…" row with two
+  `.skel` lines. The body reserves its scrollbar gutter (`scrollbar-gutter: stable`) and its right padding plus the
+  gutter equals the composer's inset, so cards and composer share one right edge; the user's bubble uses the cards'
+  10px padding.
+- **Views in the dock**: only the newest view stays open; earlier ones fold to their tool row plus a one-line verdict
+  (the tool's first line of text, ellipsised, with "Show view"; a heading ending in ":" takes its first item), and
+  reopen on a click ("Hide view" folds them back). A view shows at most 320px; past that a fade to `--bg-2` with
+  **Show all**. The frame is `overflow: clip`, so scrolling something inside into view can't shift the clipped view. The point is that a few tool calls never
+  push Claude's answer out of the dock.
 - **Jump to** (`JumpPalette.tsx`, ⌘K): kinds, and objects in the list already loaded.
-- **MCP** (`McpPage.tsx`, `mcp.css`; sidebar under Overview, `Plug`): `.tabs` Servers and Calls. A server is a
-  `.panel` (kind tile, mono name, status `.badge`, a `.switch` "On for <context>", Test, edit and remove icon
-  buttons) with its tools as rows: a muted **Read-only** badge (quiet: reading is the safe case) or an amber **Asks
-  first**, a `view` chip, Preview. Calls are `.ov-row`s with a status icon and word, filtered by two selects and a
-  `.seg`; a row opens the call in the `.drawer`. The add-server dialog reuses `.dialog`, `.form-row`, `.test-steps`.
+- **MCP** (`McpPage.tsx`, `mcp.css`; sidebar under Overview, `Plug`): `.tabs` Servers and Calls; "Add server" sits
+  at the intro's right edge. A server is a `.panel` (kind tile, mono name, status `.badge`, a `.switch` "On for
+  <context>", Test, edit and remove icon buttons; for an added server a second switch, "Run read-only tools without
+  asking") with its tools as rows on one grid (`minmax(0,1fr) 62px 96px 112px`: name and a one-line description
+  that expands on click, the `view` chip, the badge, Preview), so the columns line up; a muted **Read-only** badge
+  (quiet: runs without asking) or an amber **Asks first**; where Preview can't run, a disabled button in its place says
+  why (Needs arguments, Not read-only, Server off). Calls are `.ov-row`s with a status icon and word, `server · tool`
+  and the target as words, the session (and "from a view") in the sub line, a `view` chip, filtered by two selects
+  with the toolbar's chevron and a `.seg`; a row opens the call in the `.drawer`, where the session id is
+  middle-truncated with a copy button and a JSON result is indented. The add-server dialog reuses `.dialog`,
+  `.form-row`, `.test-steps`.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
-  the call drawer. Views style themselves with the MCP Apps standard variables, which the host fills from these
+  the call drawer. A view from a server you added (not `landlens-kube`) sits in `.app-third`: a `--line-2` ring, 8px
+  inset, and "View from <server>" above, drawn by the page outside the frame, so it never reads as Landlens's own.
+  Keys typed in a view: Escape and the app's ⌘/Ctrl chords come back to the page and are replayed on the frame, so
+  ⌘J or Esc work with focus inside. Past 640px a view's body scrolls. Landlens's own views: health problem rows lead
+  with the object's name (namespace with the detail), stats auto-fit (`minmax(84px, 1fr)`), the object card uses the
+  drawer's ✓/✗ conditions checklist and one owner per line, and the log view says **Logs couldn't be read** in the
+  bad tone when the kubelet answered with a reason, not a log. Views style themselves with the MCP Apps standard variables, which the host fills from these
   tokens (`irisVariables` in `app-host.ts`: backgrounds from `--bg-*`, text from `--ink-*`, borders from `--line*`,
   state from `-soft` and `-text`, rings from `--accent`), and resend on a theme change. Landlens's own views follow
   Iris: kind tile, eyebrow, title, pills with icon and word, inset rows, the viz palette for charts.
@@ -141,13 +166,23 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
   chart has a legend with values and a table view. Components set a slot class (`s1` … `s4`, `so`), never a colour.
 - **Status colours never appear in a chart**; colour in a chart is identity (which container, node or pod), not state.
 - **Marks**: 2px lines with round joins; bands at a 14% wash with their 2px edge; hairline solid grid; reference
-  lines in ink, request dashed and limit or allocatable solid, each labelled where it ends; the crosshair's dots have a
-  2px surface ring. Ranked bars are 8px, one hue, square at the baseline and rounded at the tip, the value beside it.
+  lines in ink, request dashed and limit or allocatable solid; the crosshair's dots have a 2px surface ring.
+- **Reference labels live in a right gutter**, never on the data: a fixed 96px gutter whenever the chart has a
+  reference (so CPU and memory stacked in one column share an x axis), each label at its line's height (`x = left +
+  plot width + 6`, start-anchored, baseline +3.5), pushed apart when two are closer than 12px (`spread` in
+  `scale.ts`). A reference above a fitted axis is named at the gutter's top with "↑".
+- **One unit per chart** (`chartUnit`, `formatIn`): picked from the axis's top and used by the ticks, the head, the
+  readout, the legend, the gutter labels and the table.
+- **Domains**: the Overview's usage charts fit the axis to the data ×1.25 when the data stays under half the largest
+  reference; otherwise the axis covers the references. When samples cover under half the range, the time axis starts
+  at the first sample. Ranked bars are 8px, one hue, square at the baseline and rounded at the tip, the value beside it.
 - **Forms**: stacked bands when the parts sum to something you compare with a line (a pod's containers against its
   limit, a cluster's nodes against allocatable); a line per pod for a workload; ranked bars for namespaces; a
   sparkline (quiet ink, the latest point in the accent) on node rows. Past four series the rest fold into "other".
-- **Interaction**: one range switch (`.seg.range`) above what it scopes; a crosshair snapping to the nearest sample
-  with one readout for every series (values bold, names after, line keys), by pointer or keyboard; a Table toggle.
+- **Interaction**: one range switch (`.seg.range`) above what it scopes; a crosshair snapping to the nearest sample,
+  by pointer or keyboard; a Table toggle. On a wide card (the Overview) the readout floats beside the crosshair and
+  lists the series and the total, never the reference lines (the gutter has them). In a narrow column (the drawer)
+  nothing floats over the plot: the head shows the crosshair's time and value and the legend's values follow it.
   A refetch keeps the frame at reduced opacity.
 - **Sentences, not blanks**: a chart that can't draw says which source is missing, why, and offers the fix
   ("Connect Clickland").
@@ -156,6 +191,8 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
 
 ⌘K jump, ⌘J dock, ⌘B sidebar, ⌘1 Overview, ⌘2 Pods, `/` filter, ↑/↓ or j/k rows, Enter open, Esc closes the drawer
 (never the dock), `[` `]` drawer tabs; in the dock, Enter and Esc answer the newest ask when the composer is empty.
+These work with focus inside an MCP App view too: the view hands Escape and ⌘/Ctrl with K, J, B or a digit back to
+the page.
 
 ## What the tests rely on
 
@@ -165,11 +202,12 @@ Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Graphs: regions "Usage" and "Nodes", status "Metrics
 unavailable", button "Connect Clickland", dialog "Connect Clickland" with fields "Clickland address" and "Clickland
 API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes `.metrics-src`, `.mtab`,
-`.chart-plot`, `.chart-tip`, `.chart-legend`, `path.edge`, `path.line`, `.test-steps`. MCP: button "MCP"; tabs
+`.chart-plot`, `.chart-tip` (Overview only), `.chart-now`, `.chart-legend`, `path.edge`, `path.line`, `.test-steps`. MCP: button "MCP"; tabs
 "Servers" and "Calls"; regions "MCP server <name>"; lists "<name> tools" and "MCP calls"; buttons "Add server",
 "Preview <tool>", "Test", "Save"; dialog "Add an MCP server" with fields "Server name", "Server address", "Header
 name", "Header value"; a `switch`; complementary "MCP call" with list "Front-door requests"; classes `.mcp-tool`,
-`.mcp-call`, `.tool-app`, `.app-frame`. Badges and key hints inside buttons are `aria-hidden`,
+`.mcp-call`, `.tool-app`, `.app-frame`, `.tool-with-app.folded`, `.tool-verdict`; switch "Use clickland on
+<context>". Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
 
 `LANDLENS_SHOTS=<folder>` saves screenshots of every screen in dark, light and at 1024×700 ([development.md](development.md)).

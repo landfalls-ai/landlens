@@ -42,6 +42,14 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   gets the servers on for its cluster, with their tool lists, when it starts. MCP App views can't write to the
   conversation (`ui/message`), change the model's context, read resources or go fullscreen; they run without Geist
   (fonts only from `data:`), and a view that tries to navigate is left blank.
+- **A remote server's tools ask every time** unless you turn on its auto-run switch, and that switch trusts the
+  server's own `readOnlyHint` for the listing you tested: it can't tell a tool that changes behaviour without
+  changing its listing. Its tool descriptions and results reach the model verbatim ([security.md](security.md)). If a
+  server's listing changes, auto-run turns off and you Test and turn it on again; there is no diff of what changed.
+- **Folded views reopen from scratch**: an earlier view in the dock is closed when it folds and opened again (from
+  the kept result, the last 50) when you show it, so its own state (a filter, a scroll) is lost.
+- **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit); other shortcuts stay in the
+  view while it has focus.
 - **Secret material outside Secrets** (tokens in CRD specs, passwords in ConfigMaps) shows in the IDE as the
   cluster returns it. Only what the agent reads is scrubbed.
 - **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its

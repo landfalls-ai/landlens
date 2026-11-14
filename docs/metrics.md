@@ -51,19 +51,26 @@ one for that context in the dialog (kept per context in the settings file).
 | Where | Scope | Series | Reference lines |
 |---|---|---|---|
 | Overview → **Usage**, CPU and Memory | the cluster | stacked per node (`k8s.node.cpu.usage`, `k8s.node.memory.working_set`): the top edge is the cluster | allocatable, summed over nodes |
-| Overview → Usage → **Top namespaces** | the cluster | ranked bars of each namespace's mean over the range (`k8s.pod.*`), CPU or memory, top six and "other" | |
+| Overview → Usage → **Top namespaces** | the cluster | ranked bars of each namespace's mean over the range (`k8s.pod.*`), CPU or memory, top six and "other"; when the pods add up to less than 95% of the nodes' mean, a caption says how much runs outside pods (system, kubelet, runtime) | |
 | Overview → **Nodes** rows | each node | a sparkline each for CPU and memory over the same range | the node's allocatable when it is the only node |
 | Drawer → **Metrics**, Pods | the pod | stacked per container (`container.cpu.usage`, `container.memory.working_set`) | the pod's request (sum over containers) and limit (only when every container sets one) |
 | Drawer → **Metrics**, Deployments, StatefulSets, DaemonSets | the workload | a line per pod (`k8s.pod.*`); past four pods the smaller ones are summed as "other" | one pod's request and limit (the template's) |
 
-CPU is in cores, written as Kubernetes does (`120m`, `1.25`); memory is the working set in binary units. Requests
+CPU is in cores, written as Kubernetes does (`120m`, `1.25`); memory is the working set in binary units. One chart
+uses one unit everywhere (axis, head, readout, legend, reference labels, table), picked from its axis: millicores
+when the axis stays under a core, else cores ("0.91 of 18 cores"); MiB under a GiB, else GiB. Requests
 and limits are the latest values Clickland has (from `k8s.container.cpu_request` and friends) or, with
 metrics-server, from the pod's or the template's spec; a request set only as a limit counts as both.
 
 Each chart has a range switch (1h, 6h, 24h) above it that also scopes the node sparklines, a crosshair that snaps to
-the nearest sample and lists every series with the reference lines (also by keyboard: focus the chart, ←/→, Home,
-End, Esc), a legend with the latest values, and a **Table** view of up to twelve evenly spaced samples. Charts refresh
-every 30s while the window is visible, and keep the previous frame dimmed while a new range loads.
+the nearest sample (also by keyboard: focus the chart, ←/→, Home, End, Esc), a legend with the latest values, and a
+**Table** view of up to twelve evenly spaced samples. On the Overview the crosshair's readout floats beside it and
+lists the series and the total, not the reference lines (they're labelled in the gutter). In the drawer nothing
+floats over the plot: the head shows the crosshair's time and value, and the legend's values follow the crosshair.
+The Overview's Usage charts fit the axis to the data (×1.25) when usage stays under half of allocatable, so a quiet
+cluster isn't a flat line; allocatable is then named at the top of the gutter with "↑". When the samples cover less
+than half the range (a new pod), the time axis starts at the first sample. Charts refresh every 30s while the window
+is visible, and keep the previous frame dimmed while a new range loads.
 
 **Empty and unavailable states** say exactly why:
 
@@ -78,15 +85,25 @@ every 30s while the window is visible, and keep the previous frame dimmed while 
 Hand-rolled SVG (`apps/desktop/src/renderer/src/charts/`), no chart library: the CSP forbids eval and network, and
 four small components cover it. Built with the dataviz method: the categorical palette was validated with its
 `validate_palette.js` against the card surface in both themes, slot 1 is the Iris accent, then orange, blue and aqua
-([design.md](design.md#charts)); status colours never appear in a chart; reference lines are ink with their name and
-value where they end; 2px lines, 14% washes, hairline grid.
+([design.md](design.md#charts)); status colours never appear in a chart; reference lines are ink, with their name
+and value in a right gutter beside the line's end, pushed apart when two are closer than 12px; 2px lines, 14% washes,
+hairline grid.
+
+## What Landlens trusts from Clickland
+
+Nothing it doesn't check. The key is bound to the address it was saved for (saving another address without a key
+drops it; Test elsewhere won't send it). Answers are validated with zod (`parseSeries`): series keys must be
+Kubernetes names, values finite, at most 200 series and 4,000 points, or the answer is refused with "Clickland's
+answer didn't look like metrics, so Landlens didn't use it." Errors are fixed sentences ("Clickland answered HTTP
+502."), never Clickland's body; the health check reports only "ok" or "not ok" and a checked version string. The
+agent's `metrics` tool reads with the session's own token and repeats at most 40 series lines to the model.
 
 ## Code
 
 | Path | What |
 |---|---|
 | `packages/contracts/src/index.ts` | `metrics:series` (`MetricsRequest` → `MetricsSeries`), the Clickland settings channels and their URL and key rules |
-| `packages/metrics/src/clickland.ts` | `ClicklandClient` (key only to the configured URL, no redirects, 8s timeout), `honoursFilters` |
+| `packages/metrics/src/clickland.ts` | `ClicklandClient` (key only to the configured URL, no redirects, 8s timeout), `honoursFilters`, `parseSeries` (the zod checks and caps) |
 | `packages/metrics/src/clickland-series.ts` | A scope as Clickland queries, filtered on `k8s.cluster.name` and the scope's attributes |
 | `packages/metrics/src/sampler.ts`, `live-series.ts` | The metrics-server sampler and its ring buffer; a scope's series from samples and the cluster's specs |
 | `packages/metrics/src/service.ts` | `MetricsService`: the source choice, the Settings test |

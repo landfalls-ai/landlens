@@ -21,9 +21,15 @@ Built 14 November 2026. The security rules are in [security.md](security.md#mcp-
 - **Remote servers** are reached over streamable HTTP only (never stdio: nothing the gateway proxies runs on this
   machine), with the header you stored added in main, redirects refused. A session gets the servers turned on for its
   cluster when it starts; their tools are listed then.
-- **Approval.** A proxied tool runs without asking only if it says it only reads (`annotations.readOnlyHint: true`)
-  and the model may call it: the gateway gives the fence `mcp__<server>__<tool>` for exactly those. Every other tool
-  makes Claude Code ask, and the ask shows in the dock as for any tool. Calls from a view to a tool that doesn't say
+- **Approval.** A remote server's tools ask by default. On the MCP page, **Run read-only tools without asking** (per
+  server, off when added, available after a Test) pre-allows the tools that say they only read
+  (`annotations.readOnlyHint: true`) and that the model may call: the gateway gives the fence
+  `mcp__<server>__<tool>` for exactly those. The switch pins the listing Test saw (`listingHash`: SHA-256 over each
+  tool's name, title, description, annotations, schemas and view); if a session opens and the server lists anything
+  else, its tools ask, the switch turns off and the server's panel says the tools changed. Every other tool makes
+  Claude Code ask, and the ask shows in the dock as for any tool. The gateway checks it too: an agent call to a tool
+  that isn't pre-allowed runs only with the permit main hands over when you answer the ask (by tool call id, once, or
+  for the session with "always"); without one it is refused and logged. Calls from a view to a tool that doesn't say
   it only reads get a native dialog first. From the MCP page (Preview) only read-only tools run.
 - **Visibility** (MCP Apps `_meta.ui.visibility`). Tools for a view only (`["app"]`) are left out of the model's tool
   list and refused if the model calls them anyway; a view can call only tools offered to apps, on its own server.
@@ -31,8 +37,11 @@ Built 14 November 2026. The security rules are in [security.md](security.md#mcp-
   arguments and a 2,000-character preview of the result, both scrubbed like a tool result (`redactText`,
   `redactObject`), start, end, duration, status (`ok`, `error`, `refused`: refused before it reached the server). For
   `landlens-kube` calls it also keeps the **front-door requests** behind each call: every request the tool made
-  carries `X-Landlens-Call: <call id>`, the front door files its audit entry under that call and strips the header
-  before forwarding. Each change is pushed to the renderer on `mcp:call`.
+  carries `X-Landlens-Call: <call id>` (a random id), the front door files its audit entry under that call only if the
+  call is running, is `landlens-kube`'s and the request's token is the call's session, and strips the header before
+  forwarding. Each change is pushed to the renderer on `mcp:call`.
+- **Errors** from a remote server reach the page as fixed sentences ("Nothing is listening at that address.", "The
+  server answered HTTP 401.", "The server's answer wasn't a valid MCP response."); the raw error goes to main's log.
 - **What the model sees.** The result's text, unchanged. A tool with a view also returns structured data for the view
   (`structuredContent`); the gateway drops it from what Claude Code gets when there is text beside it and the tool
   promises no output schema, and keeps the full result (the last 50) for the view.
@@ -43,16 +52,19 @@ Sidebar, under Overview (`McpPage.tsx`). The tool bar is the usual one; the page
 
 **Servers.** `landlens-kube` first (built in, on for every cluster), then the servers you added, each a panel: name,
 status (Ready, Not tested, Failed), address, whether a header is stored, how many tools and how many read-only; a
-switch to turn it on for this cluster; Test; Edit; Remove. Each tool shows its title and description, a **Read-only**
-or **Asks first** badge, and a **view** chip when it has an MCP App. Tools that read and need no arguments have
-**Preview**, which runs the tool as you (a read-only front-door token labelled `you · <context>`) and shows the view, or
-the text. When Clickland is connected for graphs ([metrics.md](metrics.md)) and its MCP endpoint answers, a card
+switch to turn it on for this cluster; **Run read-only tools without asking** (above); Test; Edit; Remove. Each tool is
+one row on a shared grid: name and title, its description on one line (click to read it all), a **view** chip when it
+has an MCP App, **Read-only** (runs without asking) or **Asks first**, and **Preview**. Tools that read and need no
+arguments can Preview, which runs the tool as you (a read-only front-door token labelled `you · <context>`) and shows
+the view, or the text; the others show why not in the same place (Needs arguments, Not read-only, Server off). When Clickland is connected for graphs ([metrics.md](metrics.md)) and its MCP endpoint answers, a card
 offers **Add Clickland**: its `/api/mcp` with the read key Connect Clickland stored, turned on for the cluster.
 
 **Calls.** The log, newest first, filtered by session, server and status (All, OK, Failed, Refused). A row shows the
-status icon, `server · tool` and its target, the session, a **view** chip, who called and how long it took; it opens
-the call in the drawer: times, session, the dock card it belongs to, arguments, result or why it failed, the view, and
-for `landlens-kube` the front-door requests (method, path, status, or the refusal).
+status icon, `server · tool` and its target (or its arguments as words, never raw JSON), the session (and "from a
+view" when a view called), a **view** chip, and how long it took; it opens the call in the drawer: times, the session
+id (shortened, with Copy), the dock card it belongs to, arguments, the result (indented when it's JSON; failure lines
+marked only for `get_logs`) or why it failed, the view, and for `landlens-kube` the front-door requests (method,
+path, status, or the refusal).
 
 ## Adding a server
 
@@ -79,9 +91,9 @@ SDK, data set as text only):
 | Tool | View |
 |---|---|
 | `cluster_overview` | Health card: the verdict, nodes, pods (a segmented bar), deployments, restarts, problems worst first (each opens the object in Landlens) |
-| `describe` | Object card: kind, state, ready, restarts, age, node; containers with last exits; owners; failing conditions; recent events; **Open in Landlens** |
-| `get_logs` | Log view: numbered lines, failure-looking lines highlighted, All or Failures (with a line of context) |
-| `metrics` (new) | CPU and memory over 1h, 6h or 24h as two line charts, request dashed, limit or allocatable solid, a pointer readout; from Landlens's metrics source (Clickland, else metrics-server) |
+| `describe` | Object card: kind, state, ready, restarts, age, node; containers with last exits; owners one per line, nearest first; conditions as the drawer's ✓/✗ checklist; recent events; **Open in Landlens** |
+| `get_logs` | Log view: numbered lines, failure-looking lines highlighted (`FAILURE_LINE` in contracts, the same rule the dock's log wells use), All or Failures (with a line of context); when the kubelet answers with why it couldn't read the log, **Logs couldn't be read** in the bad tone instead |
+| `metrics` (new) | CPU and memory over 1h, 6h or 24h as two line charts, request dashed, limit or allocatable solid, a pointer readout; from Landlens's metrics source (Clickland, else metrics-server), read with the session's own front-door token (its audit label and namespace limit) |
 
 The tools register with `@modelcontextprotocol/ext-apps` 1.7.5's `registerAppTool` and `registerAppResource` (checked
 to work with SDK 1.32's `McpServer`: the listing carries `_meta.ui.resourceUri` and the legacy key, the resource its
@@ -93,14 +105,22 @@ the MCP `Protocol` class into the renderer, and the wire format is small. It is 
 answers `ui/initialize` (host capabilities: open links, server tools, logging; the host context with the theme and
 the standard variables filled from Iris tokens), then on `ui/notifications/initialized` sends `tool-input` and
 `tool-result`; `tools/call` goes to main (`mcp:app-call`) and through the gateway; `ui/open-link` opens https links
-after a native dialog that shows the host, and `landlens://object/<Kind>/<namespace or _>/<name>` moves the main
-view to that object (Open in Landlens); `size-changed` sets the frame's height (48 to 640 px);
+after a native dialog that shows the host (one at a time, at most 3 a minute per view), and
+`landlens://object/<Kind>/<namespace or _>/<name>` moves the main view to that object (Open in Landlens);
+`size-changed` sets the frame's height (48 to 640 px; past 640 the view's own body scrolls); a view hands back Escape
+and the app's ⌘/Ctrl chords (`ui/notifications/landlens-key`, a Landlens extension; only Escape and ⌘/Ctrl with K, J,
+B or a digit are accepted) and the page replays them on the frame element, so ⌘J and Escape work with focus in a view;
 `ui/request-display-mode` answers inline. A theme change sends `host-context-changed`. Refused: `ui/message` and
 `ui/update-model-context` (a view may not write to the agent's conversation or change what the model sees),
 resources and anything else.
 
 **Views from remote servers** work the same way: Clickland's `list_services` and friends show Clickland's own view
-(`ui://clickland/view`) inline, under the same sandbox and CSP.
+(`ui://clickland/view`) inline, under the same sandbox and CSP. The page draws them in a quieter ring, inset, with
+"View from <server>" above, so a remote view never reads as Landlens's own. Their HTML is cached by the server's
+address and the resource's URI.
+
+**In the dock** only the newest view stays open; an earlier one folds to its tool row and a one-line verdict (the
+tool's first line of text), and opens again on a click. A view shows at most 320 px until **Show all**.
 
 ## Pairing a dock card with its call
 
