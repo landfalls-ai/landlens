@@ -6,7 +6,10 @@ import { resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const run = (process.env.LANDLENS_INTEGRATION ?? "").split(",").includes("orbstack");
+const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
+const run = flags.includes("orbstack");
+/** Runs your own Claude Code (your login and usage) against deploy/scenarios/crashloop.yaml in landlens-dev. */
+const claude = flags.includes("claude");
 const shots = process.env.LANDLENS_SHOTS;
 const shot = async (page: Page, name: string) => {
   if (!shots) return;
@@ -126,4 +129,49 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     for (const v of values) expect(v).toMatch(/bytes|••••••/);
     await shot(page, "06-secret-redacted");
   }, 60_000);
+
+  it.runIf(claude)("asks Claude why the crash-looping pod fails, and shows the evidence it read", async () => {
+    await page.getByRole("button", { name: "Pods", exact: true }).click();
+    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    const row = page.locator(".tr", { hasText: "orders-api" }).first();
+    await row.waitFor({ timeout: 30_000 });
+    await row.click();
+    await page.locator(".drawer").getByRole("button", { name: /Ask Claude/ }).click();
+    const dock = page.getByRole("complementary", { name: "Claude Code" });
+    await dock.locator(".ctx-chip", { hasText: "orders-api" }).waitFor();
+    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
+    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    await shot(page, "07-agent-dock-ready");
+    await box.fill("Why is this pod crashlooping? Keep the answer short.");
+    await box.press("Enter");
+    const stop = dock.getByRole("button", { name: "Stop" });
+    await stop.waitFor({ timeout: 30_000 }).catch(async (err) => {
+      await shot(page, "08-agent-did-not-start");
+      throw new Error(`the agent did not start working; the dock says:\n${await dock.innerText()}`, { cause: err });
+    });
+    await shot(page, "08-agent-working");
+    // While it works, answer any question the way a person would: allow once (the session can only read anyway).
+    let asked = 0;
+    const deadline = Date.now() + 240_000;
+    while (await stop.count()) {
+      if (Date.now() > deadline) throw new Error("the agent did not finish in 4 minutes");
+      const ask = dock.locator(".ask button.primary").first();
+      if (await ask.count()) {
+        if (!asked++) await shot(page, "09-agent-asks");
+        await ask.click();
+      }
+      await page.waitForTimeout(500);
+    }
+    await shot(page, "10-agent-answer");
+
+    const answer = (await dock.locator(".msg-agent").allTextContents()).join("\n");
+    expect(answer).toContain("DATABASE_URL");
+    const tools = await dock.locator(".tool").count();
+    // What it read beyond the attached pod (its YAML and events go with "Ask Claude") is on screen as cards.
+    expect(tools).toBeGreaterThanOrEqual(1);
+    const failed = await dock.locator(".tool-failed").evaluateAll((els) => els.map((e) => (e as unknown as { innerText: string }).innerText));
+    expect(failed, failed.join("\n---\n")).toEqual([]);
+    await dock.locator(".tool summary").first().click();
+    await shot(page, "11-agent-tool-card");
+  }, 360_000);
 });

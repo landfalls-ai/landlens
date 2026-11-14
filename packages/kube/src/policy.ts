@@ -25,6 +25,11 @@ export type Policy = {
   deniedResources?: string[];
   /** If set, namespaced requests must be in one of these namespaces, and all-namespace reads are refused. */
   namespaces?: string[];
+  /**
+   * Scrub every response before it reaches the caller (redact.ts): JSON objects, lists, tables and watch events, and
+   * plain-text logs. Anything the front door can't scrub (protobuf, compressed or other bodies) is refused.
+   */
+  redact?: boolean;
 };
 
 export type Decision = { allow: true } | { allow: false; reason: string };
@@ -200,5 +205,6 @@ const CLUSTER_SCOPED_CORE = new Set([
 export const agentReadOnlyPolicy = (namespaces?: string[]): Policy => ({
   access: "read",
   deniedResources: ["secrets"],
+  redact: true,
   ...(namespaces?.length ? { namespaces } : {}),
 });

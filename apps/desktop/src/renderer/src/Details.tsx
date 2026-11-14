@@ -1,13 +1,14 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { useEffect, useState } from "react";
 import { stringify } from "yaml";
+import type { AskContext } from "./AgentDock";
 import { api, type ApiError } from "./api";
 import { age, podStatus } from "@landlens/kube/status";
 
 type Tab = "overview" | "yaml" | "events";
 
 /** The details drawer: what this object is, its live state, its events, and its YAML. */
-export function Details(props: { handle: string; type: ResourceType; object: KubeObject; now: number; onClose: () => void }) {
+export function Details(props: { handle: string; type: ResourceType; object: KubeObject; now: number; onClose: () => void; onAsk: (c: AskContext) => void }) {
   const { object: o, type, now } = props;
   const [tab, setTab] = useState<Tab>("overview");
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();
@@ -28,7 +29,18 @@ export function Details(props: { handle: string; type: ResourceType; object: Kub
           <div className="eyebrow">{type.kind}{o.metadata.namespace ? ` · ${o.metadata.namespace}` : ""}</div>
           <h2 className="drawer-title">{o.metadata.name}</h2>
         </div>
-        <button className="icon" onClick={props.onClose} aria-label="Close details">✕</button>
+        <div className="drawer-actions">
+          {isSecret(type) ? null : (
+            <button
+              className="ask-btn"
+              onClick={() => props.onAsk({
+                ref: { group: type.group, version: type.version, resource: type.resource, name: o.metadata.name, ...(o.metadata.namespace ? { namespace: o.metadata.namespace } : {}) },
+                label: `${type.kind} ${o.metadata.namespace ? `${o.metadata.namespace}/` : ""}${o.metadata.name}`,
+              })}
+            >✦ Ask Claude</button>
+          )}
+          <button className="icon" onClick={props.onClose} aria-label="Close details">✕</button>
+        </div>
       </header>
       <nav className="tabs" role="tablist">
         {(["overview", "events", "yaml"] as Tab[]).map((t) => (

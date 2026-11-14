@@ -2,6 +2,7 @@
 
 | Page | What it covers |
 |---|---|
+| [agent.md](agent.md) | Claude Code in the dock: what you see, the cluster tools, the fence and how it was checked |
 | [architecture.md](architecture.md) | The processes, a request end to end, the front door, the code map |
 | [security.md](security.md) | Every security rule and how it is checked |
 | [development.md](development.md) | Setup, running, every test command |

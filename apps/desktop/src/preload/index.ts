@@ -6,8 +6,9 @@ import { contextBridge, ipcRenderer } from "electron";
 const CHANNELS: readonly Channel[] = [
   "catalog:list", "cluster:connect", "cluster:disconnect", "cluster:discovery", "cluster:access",
   "resource:get", "resource:events", "watch:subscribe", "watch:unsubscribe",
+  "agent:start", "agent:prompt", "agent:cancel", "agent:mode", "agent:config", "agent:answer", "agent:close",
 ];
-const PUSH: readonly PushChannel[] = ["watch:event", "cluster:status"];
+const PUSH: readonly PushChannel[] = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status"];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */
 function unwrap(err: unknown): Error & { status: number } {

@@ -8,3 +8,4 @@ export * from "./policy.js";
 export * from "./sidecar.js";
 export * from "./tool-kubeconfig.js";
 export * from "./watch.js";
+export * from "./redact.js";

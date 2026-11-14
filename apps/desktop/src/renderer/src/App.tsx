@@ -1,5 +1,6 @@
 import type { ClusterInfo, KubeContext, KubeObject } from "@landlens/contracts";
 import { useEffect, useMemo, useState } from "react";
+import { AgentDock, type AskContext } from "./AgentDock";
 import { api, useNow, useWatch, type ApiError } from "./api";
 import { Details } from "./Details";
 import { buildNav, SECTIONS, type NavItem } from "./kinds";
@@ -37,7 +38,7 @@ export function App() {
   return (
     <div className={"app" + (cluster ? "" : " no-cluster")}>
       <aside className="rail" aria-label="Clusters">
-        <div className="brand"><span className="mark" aria-hidden>◎</span> Landlens</div>
+        <div className="brand"><span className="mark" aria-hidden>◎</span> <span className="brand-text">Landlens</span></div>
         <div className="rail-title">Clusters</div>
         <ul className="contexts">
           {contexts?.map((c) => (
@@ -99,6 +100,8 @@ function Workspace({ cluster }: { cluster: ClusterInfo }) {
   const [namespace, setNamespace] = useState("");
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<KubeObject>();
+  const [dock, setDock] = useState(false);
+  const [askContext, setAskContext] = useState<AskContext[]>([]);
 
   useEffect(() => {
     api.invoke("cluster:discovery", { handle: cluster.handle }).then(
@@ -185,6 +188,7 @@ function Workspace({ cluster }: { cluster: ClusterInfo }) {
             <span className="sr-only">Filter by name</span>
             <input type="search" placeholder="Filter by name or namespace" value={filter} onChange={(e) => setFilter(e.target.value)} />
           </label>
+          {dock ? null : <button className="ask-btn" onClick={() => setDock(true)}>✦ Ask Claude</button>}
         </header>
         {list.error ? (
           <div className="notice">
@@ -196,8 +200,19 @@ function Workspace({ cluster }: { cluster: ClusterInfo }) {
         ) : null}
       </main>
       {selected && current ? (
-        <Details handle={cluster.handle} type={current.type} object={live ?? selected} now={now} onClose={() => setSelected(undefined)} />
+        <Details
+          handle={cluster.handle}
+          type={current.type}
+          object={live ?? selected}
+          now={now}
+          onClose={() => setSelected(undefined)}
+          onAsk={(ctx) => {
+            setAskContext((cs) => (cs.some((c) => c.label === ctx.label) ? cs : [...cs, ctx]));
+            setDock(true);
+          }}
+        />
       ) : null}
+      {dock ? <AgentDock cluster={cluster} context={askContext} onContextChange={setAskContext} onClose={() => setDock(false)} /> : null}
     </>
   );
 }

@@ -87,3 +87,20 @@ describe("capResult", () => {
     expect(capResult("abcdef", 3)).toMatch(/^abc\n… truncated \(3 more characters\)/);
   });
 });
+
+describe("redactObject on lists", () => {
+  it("scrubs every item's metadata and Secret values in a SecretList", () => {
+    const r = redactObject({
+      kind: "List",
+      items: [{ kind: "ConfigMap", metadata: { name: "c", managedFields: [{}], annotations: { "kubectl.kubernetes.io/last-applied-configuration": "{}" } } }],
+    }) as any;
+    expect(r.items[0].metadata).toEqual({ name: "c", annotations: {} });
+    const s = redactObject({ kind: "SecretList", items: [{ metadata: { name: "s" }, data: { k: "c2VjcmV0" } }] }) as any;
+    expect(s.items[0].data).toEqual({ k: "<redacted>" });
+  });
+
+  it("caps a string once, however many times it is scrubbed", () => {
+    const once = redactObject({ v: "x".repeat(MAX_STRING + 100) });
+    expect(redactObject(once)).toEqual(once);
+  });
+});

@@ -49,7 +49,7 @@ export async function getJson(c: AgentCluster, path: string): Promise<any> {
 }
 
 export async function getText(c: AgentCluster, path: string): Promise<string> {
-  const r = await c.get(path, "text/plain");
+  const r = await c.get(path, "*/*"); // the log endpoint answers 406 to text/plain
   if (r.status < 200 || r.status >= 300) throw toKubeError(r.status, r.text);
   return r.text;
 }

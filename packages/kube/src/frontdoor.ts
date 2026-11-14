@@ -1,16 +1,18 @@
 // The front door: the one local entry to the clusters for tools (kubectl, helm) and the agent.
 //
 // https://127.0.0.1:<port>/c/<handle>/<API server path>. TLS because kubectl and client-go only send credentials
-// over TLS; the certificate is made fresh each run (loopbackCert) and pinned in the tool kubeconfig. Every request needs a bearer token Landlens issued; each
-// token names the clusters it may reach and carries a policy (policy.ts). Allowed requests go to that cluster's
+// over TLS; the certificate is made fresh each run (loopbackCert) and its CA pinned in the tool kubeconfig. Every
+// request needs a bearer token Landlens issued; each token names the clusters it may reach and carries a policy
+// (policy.ts). Allowed requests go to that cluster's
 // sidecar with the sidecar secret; the caller's token never reaches the cluster. OpenLens's proxy had no token at
 // all and Freelens added one per run; here each agent session gets its own, read-only, revocable token.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { connect, type AddressInfo, type Socket } from "node:net";
-import { authorize, isCanonicalPath, parseRequest, type Policy, type ScopeOf } from "./policy.js";
-import { SIDECAR_HEADER } from "./sidecar.js";
+import { authorize, isCanonicalPath, parseRequest, type ParsedRequest, type Policy, type ScopeOf } from "./policy.js";
+import { redactObject, redactText } from "./redact.js";
+import { SIDECAR_HEADER, type LoopbackCert } from "./sidecar.js";
 
 export type Upstream = {
   url: string;
@@ -48,13 +50,13 @@ export class FrontDoor {
   private port = 0;
 
   constructor(
-    private readonly tls: { cert: string; key: string },
+    private readonly tls: LoopbackCert,
     private readonly onAudit: (e: AuditEntry) => void = () => {},
   ) {}
 
-  /** The certificate tools must trust (PEM). */
+  /** The certificate tools must trust (PEM): this run's CA, which signed only the front door's certificate. */
   get certificate(): string {
-    return this.tls.cert;
+    return this.tls.ca;
   }
 
   async start(): Promise<void> {
@@ -113,7 +115,7 @@ export class FrontDoor {
 
   /** The shared checks for plain and upgraded requests. */
   private check(req: IncomingMessage):
-    | { ok: true; grant: TokenGrant; handle: string; path: string; upstream: Upstream }
+    | { ok: true; grant: TokenGrant; handle: string; path: string; upstream: Upstream; parsed: ParsedRequest }
     | { ok: false; status: number; reason: string; label: string; handle: string; path: string } {
     const m = PREFIX.exec(req.url ?? "");
     const handle = m?.[1] ?? "";
@@ -133,9 +135,10 @@ export class FrontDoor {
     if (Object.keys(req.headers).some((h) => h.startsWith("impersonate-"))) {
       return { ok: false, status: 403, reason: "impersonation is not allowed through Landlens", label, handle, path };
     }
-    const decision = authorize(grant.policy, parseRequest(req.method ?? "GET", path), upstream.scopeOf);
+    const parsed = parseRequest(req.method ?? "GET", path);
+    const decision = authorize(grant.policy, parsed, upstream.scopeOf);
     if (!decision.allow) return { ok: false, status: 403, reason: decision.reason, label, handle, path };
-    return { ok: true, grant, handle, path, upstream };
+    return { ok: true, grant, handle, path, upstream, parsed };
   }
 
   private audit(req: IncomingMessage, c: { label: string; handle: string; path: string }, allowed: boolean, status?: number, reason?: string) {
@@ -162,14 +165,26 @@ export class FrontDoor {
     delete headers.authorization;
     delete headers.host;
     headers[SIDECAR_HEADER.toLowerCase()] = c.upstream.secret;
+    const scrub = !!c.grant.policy.redact;
+    if (scrub) {
+      // Ask for bodies the front door can read: uncompressed, JSON rather than protobuf.
+      delete headers["accept-encoding"];
+      headers.accept = jsonAccept(req.headers.accept);
+    }
+    const who = { label: c.grant.label, handle: c.handle, path: c.path };
     const up = httpRequest(target, { method: req.method, headers }, (upRes) => {
-      this.audit(req, { label: c.grant.label, handle: c.handle, path: c.path }, true, upRes.statusCode);
-      res.writeHead(upRes.statusCode ?? 502, upRes.headers);
-      upRes.pipe(res);
+      this.audit(req, who, true, upRes.statusCode);
+      if (!scrub || req.method === "HEAD") {
+        res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+        upRes.pipe(res);
+        return;
+      }
+      const q = new URL(c.path, "http://x").searchParams;
+      scrubResponse(upRes, res, c.parsed.verb === "watch" || q.get("follow") === "true" || q.get("follow") === "1");
     });
     up.on("error", () => {
       if (!res.headersSent) {
-        this.audit(req, { label: c.grant.label, handle: c.handle, path: c.path }, true, 502);
+        this.audit(req, who, true, 502);
         sendStatus(res, 502, "the cluster could not be reached");
       } else res.destroy();
     });
@@ -218,6 +233,95 @@ export class FrontDoor {
     up.on("error", close).on("close", close);
     socket.on("error", close).on("close", close);
   }
+}
+
+/** The most the front door buffers to scrub one response, and one line of a stream. */
+export const MAX_SCRUBBED = 64 * 1024 * 1024;
+
+function jsonAccept(accept: string | undefined): string {
+  const kept = (accept ?? "").split(",").map((a) => a.trim()).filter((a) => a && !/protobuf/i.test(a));
+  return kept.length ? kept.join(",") : "application/json";
+}
+
+/**
+ * Scrub a response for a redacting token (Policy.redact): JSON as objects, plain text (logs) as text. Streams (watch,
+ * logs -f) line by line. Fails closed: a body it can't read is refused, never passed through.
+ */
+function scrubResponse(upRes: IncomingMessage, res: ServerResponse, stream: boolean) {
+  const status = upRes.statusCode ?? 502;
+  const type = String(upRes.headers["content-type"] ?? "");
+  const encoding = String(upRes.headers["content-encoding"] ?? "identity");
+  const json = /^application\/json\b/i.test(type);
+  const text = /^text\/plain\b/i.test(type);
+  const empty = upRes.headers["content-length"] === "0" || status === 204 || status === 304;
+  const refuse = (why: string) => {
+    upRes.destroy();
+    if (!res.headersSent) sendStatus(res, 502, why);
+    else res.destroy();
+  };
+  if (empty) {
+    res.writeHead(status, upRes.headers);
+    return void upRes.pipe(res);
+  }
+  if (encoding !== "identity") return refuse(`Landlens can't scrub a ${encoding} response for this token`);
+  if (!json && !text) return refuse(`Landlens can't scrub a ${type || "untyped"} response for this token`);
+  const headers = { ...upRes.headers };
+  delete headers["content-length"];
+  delete headers["content-encoding"];
+  delete headers["transfer-encoding"];
+  const scrubLine = (line: string): string | undefined => {
+    if (text) return redactText(line);
+    if (!line.trim()) return line;
+    try {
+      return JSON.stringify(redactObject(JSON.parse(line)));
+    } catch {
+      return undefined; // not a whole JSON event: drop it rather than pass it through unscrubbed
+    }
+  };
+
+  if (stream) {
+    res.writeHead(status, headers);
+    let pending = "";
+    upRes.setEncoding("utf8");
+    upRes.on("data", (chunk: string) => {
+      pending += chunk;
+      if (pending.length > MAX_SCRUBBED) return refuse("a line too long to scrub");
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      const out = lines.map(scrubLine).filter((l): l is string => l !== undefined);
+      if (out.length) res.write(out.join("\n") + "\n");
+    });
+    upRes.on("end", () => {
+      const last = pending ? scrubLine(pending) : undefined;
+      res.end(last ?? "");
+    });
+    upRes.on("error", () => res.destroy());
+    return;
+  }
+
+  const chunks: Buffer[] = [];
+  let size = 0;
+  upRes.on("data", (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > MAX_SCRUBBED) return refuse("the response is too large to scrub; narrow the request (namespace, labelSelector, limit, tailLines)");
+    chunks.push(chunk);
+  });
+  upRes.on("end", () => {
+    if (res.headersSent || res.destroyed) return;
+    const body = Buffer.concat(chunks).toString("utf8");
+    let out: string;
+    if (text) out = redactText(body);
+    else {
+      try {
+        out = JSON.stringify(redactObject(JSON.parse(body)));
+      } catch {
+        return refuse("the cluster's answer was not valid JSON");
+      }
+    }
+    res.writeHead(status, { ...headers, "content-length": Buffer.byteLength(out) });
+    res.end(out);
+  });
+  upRes.on("error", () => res.destroy());
 }
 
 function statusBody(code: number, message: string) {

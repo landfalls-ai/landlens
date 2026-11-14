@@ -151,21 +151,31 @@ func TestLoopbackCertIsValidFor127001(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, _ := pem.Decode([]byte(c.Cert))
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
+	parse := func(p string) *x509.Certificate {
+		block, _ := pem.Decode([]byte(p))
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cert
+	}
+	leaf, ca := parse(c.Cert), parse(c.CA)
+	if leaf.IsCA || leaf.KeyUsage&x509.KeyUsageCertSign != 0 {
+		t.Fatal("the serving certificate must not be a CA")
+	}
+	if !ca.IsCA || !ca.MaxPathLenZero || !ca.PermittedDNSDomainsCritical {
+		t.Fatal("the CA must sign leaves only, and only for localhost")
 	}
 	pool := x509.NewCertPool()
-	pool.AddCert(cert)
-	if cert.IsCA {
-		t.Fatal("the loopback certificate must not be a CA")
-	}
-	if _, err := cert.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
+	pool.AddCert(ca)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
 		t.Fatalf("does not verify for 127.0.0.1: %v", err)
 	}
 	if _, err := tls.X509KeyPair([]byte(c.Cert), []byte(c.Key)); err != nil {
 		t.Fatalf("cert and key don't pair: %v", err)
+	}
+	if strings.Contains(c.Key, c.CA) {
+		t.Fatal("only the leaf's key leaves")
 	}
 }
 

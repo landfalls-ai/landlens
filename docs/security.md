@@ -46,7 +46,7 @@ applies them to a clone of the Electron app and reads the wire back. On 14 Novem
 
 | Rule | How it's checked |
 |---|---|
-| TLS on 127.0.0.1 with a fresh in-memory certificate, pinned in the tool kubeconfig. It is a leaf (not a CA), so it can sign nothing else | Go test (verifies for 127.0.0.1, asserts not a CA); integration test with real kubectl |
+| TLS on 127.0.0.1 with a fresh in-memory certificate. It is a leaf (it can sign nothing), signed by a CA made for this run alone, name-constrained to `localhost`, whose key is discarded once it has signed; that CA is what clients pin. (A self-signed leaf as its own anchor works for Go and Node but not for Electron's BoringSSL, which also rejects IP name constraints) | Go test (verifies for 127.0.0.1, leaf not a CA, CA path length 0 and constrained); integration test with real kubectl; desktop e2e (main's MCP client) |
 | Every request needs a token Landlens issued; tokens are compared by hash in constant time and revocable | unit tests |
 | A read-only token can't write (including dry runs), can't read Secrets, can't exec, attach, port-forward or proxy, and stays in its namespaces | unit tests for the policy and the front door; integration test: the agent-style kubectl's `delete pod` and `get secrets` are refused before the cluster sees them |
 | Paths that could be read two ways are refused: empty or dot segments, any `%`, backslashes, `#`, spaces, control characters | unit tests |
@@ -56,15 +56,35 @@ applies them to a clone of the Electron app and reads the wire back. On 14 Novem
 | Every request is audited with the cluster's answer, upgrades (exec, attach) included | unit tests |
 | Without `LANDLENS_TOKEN`, tools fail to authenticate | integration test |
 
+## The agent
+
+Claude Code runs as you, and Landlens can't see inside its shell. So the rules are made to hold whatever the model
+does; the live test asks it to try each way around them ([agent.md](agent.md#the-fence)).
+
+| Rule | How it's checked |
+|---|---|
+| None of your Claude Code setup loads: no settings files, CLAUDE.md, hooks, plugins, skills or MCP servers (`settingSources: []`, `strictMcpConfig`). Those would run outside the sandbox with your full environment | unit test; live test |
+| Built-in tools are only Bash, Read, Grep, Glob, TodoWrite and ExitPlanMode; WebFetch, WebSearch, Edit and Write are also named as disallowed | unit test; live test asks for WebFetch and gets "no such tool" |
+| The Claude Code process gets an allowlisted environment (who you are, locale, proxies, how Claude Code reaches Anthropic), not Landlens's; its Anthropic credentials are hidden from its shell by the sandbox | `agentEnv`, unit test; live test plants a canary cloud key in Landlens's environment and checks the shell's `env` |
+| Its shell reads nothing in your home folder but the session's folder and the tool folders on PATH (not ones holding credentials, like `~/.orbstack/bin`), and none of your kubeconfig files wherever `$KUBECONFIG` puts them; it writes only to the session folder, never its kubeconfig; it can't run unsandboxed, and the session fails if the sandbox can't start | unit test; live test: `~/.kube/config` and `ls ~` are refused |
+| Its file tools can't read outside the session folder (`blockReadsOutsideWorkingDirectories`), and permission rules deny the credential folders and your kubeconfig files besides | unit test |
+| Its shell's network is one local port: the front door's, as both its HTTP and its SOCKS proxy, with `strictAllowlist`. The front door refuses proxy requests, so there is no internet, and the cluster's own API port is unreachable | live test: `curl` to the API port, to example.com, and through `$ALL_PROXY` all fail |
+| Its kubectl reaches only the front door, with a per-session read-only token that is revoked when the session ends, Claude Code exits, the cluster disconnects (also mid-start) or the window reloads | unit tests; live test (delete refused by rule, Secrets 403) |
+| Everything the front door returns to an agent token is scrubbed: objects, lists, tables and watch events as objects (no env values, no `last-applied-configuration`, no `managedFields`, credential-shaped strings replaced), logs as text. It asks the cluster for uncompressed JSON and refuses any body it can't scrub | unit tests (lists, watch streams split mid-event, logs, protobuf and gzip refused, the IDE's token untouched); live test: the agent's `kubectl get configmap -o yaml` has no last-applied |
+| "Ask Claude" context is read with the session's token, so the session's namespace limit, Secrets refusal and scrubbing apply to it as well | desktop e2e |
+| The cluster's version string goes into the standing rules only if it looks like a version | unit test |
+| Main accepts only Manual and Plan modes and only offered model choices, and an answer only to an open question with one of the options it offered; closing a session withdraws its questions | `AgentService` |
+| Links in answers show their host beside the text, and the full address on hover | `Markdown.tsx` |
+
 ## What this doesn't stop
 
 Landlens runs as you. Another process running as your user can read your kubeconfig directly, and could read
 Landlens's memory with a debugger if macOS lets it. The sidecar secret and the front door keep a same-user process
 from borrowing Landlens's open connections without such access; they don't make a compromised user account safe.
-The agent (wave 2) runs its tools in the Claude Agent SDK sandbox with your kubeconfig and credential folders
-unreadable, so its kubectl can only use the front door.
-
 Secret material outside Secrets (a token in a CRD's spec, a password in a ConfigMap) is shown as the cluster returns
-it in the IDE. The agent's tools redact common secret patterns ([redact.ts](../packages/kube-mcp/src/redact.ts)).
+it in the IDE. What the agent reads is scrubbed by pattern ([redact.ts](../packages/kube/src/redact.ts)); a secret in
+an unusual format can still reach it. The kubectl permission rules match command prefixes (`kubectl -n x delete`
+isn't matched); the front door is what refuses the write.
 
-The review that drove this list: a Fable security review of wave 1, 14 November 2026 ([history.md](history.md)).
+The reviews that drove this list: Fable security reviews of wave 1 and wave 2, 14 November 2026
+([history.md](history.md)).

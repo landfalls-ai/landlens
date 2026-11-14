@@ -15,8 +15,12 @@
     "check:fuses": "node scripts/check-fuses.mjs"
   },
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.107.0",
+    "@agentclientprotocol/sdk": "2.7.0",
+    "@landlens/acp-host": "workspace:*",
     "@landlens/contracts": "workspace:*",
-    "@landlens/kube": "workspace:*"
+    "@landlens/kube": "workspace:*",
+    "@landlens/kube-mcp": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

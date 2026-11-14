@@ -110,6 +110,9 @@ export const AccessCheck = z.object({
 });
 export type AccessCheck = z.infer<typeof AccessCheck>;
 
+/** An ACP session id, as the agent made it. */
+export const SessionId = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:-]+$/, "not a session id");
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -121,6 +124,14 @@ export const channels = {
   "resource:events": z.object({ handle: Handle, namespace: NamespaceName.optional(), uid: Uid }),
   "watch:subscribe": WatchRequest,
   "watch:unsubscribe": z.object({ subscription: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/) }),
+  // The agent (wave 2): one session per cluster, read-only.
+  "agent:start": z.object({ handle: Handle, namespaces: z.array(NamespaceName).max(20).optional() }),
+  "agent:prompt": z.object({ session: SessionId, text: z.string().min(1).max(20_000), context: z.array(ResourceRef).max(10).optional() }),
+  "agent:cancel": z.object({ session: SessionId }),
+  "agent:mode": z.object({ session: SessionId, mode: z.string().min(1).max(64) }),
+  "agent:config": z.object({ session: SessionId, config: z.string().min(1).max(64), value: z.string().min(1).max(200) }),
+  "agent:answer": z.object({ request: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), option: z.string().max(200).nullable() }),
+  "agent:close": z.object({ session: SessionId }),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -134,11 +145,52 @@ export type Responses = {
   "resource:events": { items: KubeObject[] };
   "watch:subscribe": { subscription: string };
   "watch:unsubscribe": { ok: true };
+  "agent:start": AgentSessionInfo;
+  "agent:prompt": { stopReason: string };
+  "agent:cancel": { ok: true };
+  "agent:mode": { ok: true };
+  "agent:config": { ok: true };
+  "agent:answer": { ok: true };
+  "agent:close": { ok: true };
 };
+
+/** A choice the agent offers: a mode, or a value of a config option such as the model. */
+export type AgentChoice = { id: string; name: string; description?: string | null };
+
+export type AgentSessionInfo = {
+  session: string;
+  /** How the front door's audit trail names this session, e.g. "agent 2 · orbstack". */
+  label: string;
+  agent: string;
+  context: string;
+  namespaces?: string[];
+  mode?: { current: string; available: AgentChoice[] };
+  /** Select-type config options (model, effort): current value and choices. */
+  options: { id: string; name: string; current: string; choices: AgentChoice[] }[];
+};
+
+/**
+ * An ACP session/update, passed through as the agent sent it. The dock reads `sessionUpdate` and the fields of each
+ * kind (agent_message_chunk, tool_call, tool_call_update, plan, current_mode_update, usage_update, …).
+ */
+export type AgentUpdate = { session: string; update: { sessionUpdate: string; [k: string]: unknown } };
+
+/** The agent asks before a tool call its own rules don't settle. Landlens shows it; the person answers. */
+export type AgentPermissionRequest = {
+  request: string;
+  session: string;
+  toolCall: { toolCallId: string; title?: string | null; kind?: string | null; rawInput?: unknown };
+  options: { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" }[];
+};
+
+export type AgentStatus =
+  | { state: "starting" | "ready" }
+  | { state: "stopped"; message: string }
+  | { state: "answered"; request: string };
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */
-export const pushChannels = ["watch:event", "cluster:status"] as const;
+export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status"] as const;
 export type PushChannel = (typeof pushChannels)[number];
 
 /** An error crossing IPC keeps a Kubernetes-like status code so the UI can say "no access" vs "failed". */

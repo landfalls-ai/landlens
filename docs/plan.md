@@ -100,8 +100,9 @@ Taken from OpenLens and Freelens (`research/lens-architecture.md`), with their h
 
 - **ACP v1 over stdio** with `@agentclientprotocol/sdk` 2.x (`client().connect(ndJsonStream(...))`); the adapter
   `@agentclientprotocol/claude-agent-acp` ships as a dependency and is spawned from main with
-  `CLAUDE_AGENT_ACP_PROTOCOL=v1`. It runs Claude Code with **your own login and `~/.claude` settings** (CLAUDE.md,
-  skills, plugins, hooks); `CLAUDE_CODE_EXECUTABLE` switches it to your installed `claude`. Login, if ever needed,
+  `CLAUDE_AGENT_ACP_PROTOCOL=v1`. It runs Claude Code with **your own login**. (Built: not your `~/.claude`
+  settings, skills, plugins, hooks or MCP servers, which would run outside the sandbox; see docs/agent.md.)
+  `CLAUDE_CODE_EXECUTABLE` switches it to your installed `claude`. Login, if ever needed,
   runs in a Landlens terminal pane.
 - **Kubectl is fenced.** Claude Code runs its own Bash, file reads and edits; it does not use ACP's client terminals
   or file system. So each session gets, through `_meta.claudeCode.options`: an env whose `KUBECONFIG` points at the

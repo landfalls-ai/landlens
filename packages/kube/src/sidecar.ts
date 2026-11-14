@@ -105,11 +105,14 @@ function lastLine(lines: string[]): string {
 }
 
 /** A fresh self-signed certificate for 127.0.0.1 from the sidecar binary (Go's crypto/x509), kept in memory. */
-export async function loopbackCert(binary: string): Promise<{ cert: string; key: string }> {
+/** The front door's serving certificate and key, and the one-run CA that signed it (what clients pin). */
+export type LoopbackCert = { cert: string; key: string; ca: string };
+
+export async function loopbackCert(binary: string): Promise<LoopbackCert> {
   const { execFile } = await import("node:child_process");
   const out = await new Promise<string>((resolve, reject) =>
     execFile(binary, ["--loopback-cert"], { timeout: 10_000 }, (err, stdout) => (err ? reject(err) : resolve(stdout))));
   const c = JSON.parse(out);
-  if (typeof c.cert !== "string" || typeof c.key !== "string") throw new Error("landlens-kube-proxy: bad certificate output");
+  if (typeof c.cert !== "string" || typeof c.key !== "string" || typeof c.ca !== "string") throw new Error("landlens-kube-proxy: bad certificate output");
   return c;
 }

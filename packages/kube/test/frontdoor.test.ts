@@ -42,7 +42,7 @@ afterEach(async () => {
 /** HTTPS to the front door, trusting only its certificate. */
 const call = (path: string, token?: string, method = "GET") =>
   new Promise<{ status: number; json: () => Promise<any> }>((ok, fail) => {
-    const req = httpsRequest(door.url + path, { method, ca: tls.cert, headers: token ? { Authorization: `Bearer ${token}` } : {} }, (res) => {
+    const req = httpsRequest(door.url + path, { method, ca: tls.ca, headers: token ? { Authorization: `Bearer ${token}` } : {} }, (res) => {
       let body = "";
       res.setEncoding("utf8").on("data", (d) => (body += d)).on("end", () => ok({ status: res.statusCode!, json: async () => JSON.parse(body) }));
     });
@@ -94,7 +94,7 @@ describe("FrontDoor", () => {
     const ide = door.issueToken({ label: "ide", policy: { access: "full" }, clusters: [HANDLE] });
     const status = await new Promise<number>((ok, fail) => {
       const req = httpsRequest(door.url + `/c/${HANDLE}/api/v1/pods`, {
-        ca: tls.cert,
+        ca: tls.ca,
         headers: { Authorization: `Bearer ${ide}`, "Impersonate-User": "system:admin", "Impersonate-Group": "system:masters" },
       }, (res) => {
         res.resume();
@@ -116,7 +116,7 @@ describe("FrontDoor", () => {
     });
     const ide = door.issueToken({ label: "ide", policy: { access: "full" }, clusters: [HANDLE] });
     const res = await new Promise<string>((resolve) => {
-      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.cert }, () => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
         s.write(`GET /c/${HANDLE}/api/v1/namespaces/a/pods/p1/exec?command=sh HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${ide}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
       });
       let buf = "";
@@ -132,7 +132,7 @@ describe("FrontDoor", () => {
   it("refuses an upgrade (exec) for a read-only token", async () => {
     const token = door.issueToken({ label: "agent 1", policy: agentReadOnlyPolicy(), clusters: [HANDLE] });
     const res = await new Promise<string>((resolve) => {
-      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.cert }, () => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
         s.write(`GET /c/${HANDLE}/api/v1/namespaces/a/pods/p1/exec?command=sh HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
       });
       let buf = "";
@@ -141,5 +141,98 @@ describe("FrontDoor", () => {
     });
     expect(res).toMatch(/^HTTP\/1.1 403/);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("FrontDoor scrubbing for agent tokens", () => {
+  /** What the fake cluster answers next: content type, body (string or chunks), extra headers. */
+  let answer: { type: string; body: string | string[]; headers?: Record<string, string> };
+  let s: Server;
+  let d: FrontDoor;
+  const H = "clusterBBBB2";
+  const pod = (name: string) => ({
+    metadata: {
+      name,
+      annotations: { "kubectl.kubernetes.io/last-applied-configuration": '{"env":[{"name":"DB","value":"hunter2hunter2"}]}' },
+      managedFields: [{ manager: "kubectl" }],
+    },
+    spec: { containers: [{ name: "app", env: [{ name: "DATABASE_URL", value: "postgres://app:hunter2@db/app" }] }] },
+  });
+
+  beforeEach(async () => {
+    seen = [];
+    s = createServer((req, res) => {
+      seen.push(req);
+      res.writeHead(200, { "Content-Type": answer.type, ...answer.headers });
+      for (const c of [answer.body].flat()) res.write(c);
+      res.end();
+    });
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    d = new FrontDoor(tls);
+    await d.start();
+    d.addCluster(H, { url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`, secret: SECRET });
+  });
+
+  afterEach(async () => {
+    await d.stop();
+    s.closeAllConnections();
+    await new Promise((r) => s.close(r));
+  });
+
+  const get = (path: string, token: string, accept = "application/vnd.kubernetes.protobuf,application/json") =>
+    new Promise<{ status: number; body: string }>((ok, fail) => {
+      const req = httpsRequest(d.url + `/c/${H}` + path, { ca: tls.ca, headers: { Authorization: `Bearer ${token}`, Accept: accept, "Accept-Encoding": "gzip" } }, (res) => {
+        let body = "";
+        res.setEncoding("utf8").on("data", (x) => (body += x)).on("end", () => ok({ status: res.statusCode!, body }));
+      });
+      req.on("error", fail);
+      req.end();
+    });
+  const agent = () => d.issueToken({ label: "agent", policy: agentReadOnlyPolicy(), clusters: [H] });
+
+  it("scrubs a list the way the MCP tools do, and asks the cluster for uncompressed JSON", async () => {
+    answer = { type: "application/json", body: JSON.stringify({ kind: "PodList", items: [pod("a"), pod("b")] }) };
+    const r = await get("/api/v1/namespaces/x/pods", agent());
+    expect(r.status).toBe(200);
+    expect(r.body).not.toContain("hunter2");
+    const list = JSON.parse(r.body);
+    expect(list.items[1].spec.containers[0].env[0]).toEqual({ name: "DATABASE_URL", value: "<redacted>" });
+    expect(list.items[0].metadata.managedFields).toBeUndefined();
+    expect(seen[0]!.headers.accept).toBe("application/json");
+    expect(seen[0]!.headers["accept-encoding"]).toBeUndefined();
+  });
+
+  it("scrubs watch events one by one", async () => {
+    const ev = (n: string) => JSON.stringify({ type: "ADDED", object: pod(n) }) + "\n";
+    const two = ev("a") + ev("b");
+    answer = { type: "application/json;stream=watch", body: [two.slice(0, 40), two.slice(40)] };
+    const r = await get("/api/v1/namespaces/x/pods?watch=true", agent());
+    const lines = r.body.trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.object.metadata.name)).toEqual(["a", "b"]);
+    expect(r.body).not.toContain("hunter2");
+  });
+
+  it("scrubs logs as text", async () => {
+    answer = { type: "text/plain", body: "connecting to postgres://app:hunter2@db/app\npassword=hunter2hunter2\n" };
+    const r = await get("/api/v1/namespaces/x/pods/a/log", agent(), "*/*");
+    expect(r.body).toContain("connecting to postgres://app:<redacted>@db/app");
+    expect(r.body).not.toContain("hunter2");
+  });
+
+  it("refuses what it can't read rather than pass it through", async () => {
+    answer = { type: "application/vnd.kubernetes.protobuf", body: "k8s\0hunter2" };
+    let r = await get("/api/v1/namespaces/x/pods", agent());
+    expect(r.status).toBe(502);
+    expect(r.body).not.toContain("hunter2");
+    answer = { type: "application/json", body: "{}", headers: { "Content-Encoding": "gzip" } };
+    r = await get("/api/v1/namespaces/x/pods", agent());
+    expect(r.status).toBe(502);
+  });
+
+  it("leaves the IDE's own token alone", async () => {
+    answer = { type: "application/json", body: JSON.stringify(pod("a")) };
+    const ide = d.issueToken({ label: "ide", policy: { access: "full" }, clusters: [H] });
+    const r = await get("/api/v1/namespaces/x/pods/a", ide);
+    expect(r.body).toContain("hunter2");
   });
 });

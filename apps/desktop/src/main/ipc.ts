@@ -3,11 +3,12 @@
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
 import { checkAccess, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
+import type { AgentService } from "./agent";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService) {
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -68,6 +69,13 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
       hub.unsubscribe(subscription);
       return { ok: true };
     },
+    "agent:start": ({ handle, namespaces }) => agent.start(handle, namespaces),
+    "agent:prompt": ({ session, text, context }) => agent.prompt(session, text, context),
+    "agent:cancel": async ({ session }) => (await agent.cancel(session), { ok: true }),
+    "agent:mode": async ({ session, mode }) => (await agent.setMode(session, mode), { ok: true }),
+    "agent:config": async ({ session, config, value }) => (await agent.setConfig(session, config, value), { ok: true }),
+    "agent:answer": async ({ request, option }) => (agent.answer(request, option), { ok: true }),
+    "agent:close": async ({ session }) => (await agent.close(session), { ok: true }),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {

@@ -1,6 +1,6 @@
 # Architecture
 
-How Landlens is built today (wave 1). The plan and the waves are in [plan.md](plan.md); why each choice was made is in
+How Landlens is built today (waves 1 and 2). The plan and the waves are in [plan.md](plan.md); why each choice was made is in
 [research.md](research.md).
 
 ## The processes
@@ -11,6 +11,8 @@ How Landlens is built today (wave 1). The plan and the waves are in [plan.md](pl
 | Renderer | The UI. Sandboxed, no Node, reaches main only through `window.landlens` | `apps/desktop/src/renderer/` |
 | Preload | The bridge: `invoke(channel, request)` and `on(pushChannel)` for the listed channels only | `apps/desktop/src/preload/index.ts` |
 | `landlens-kube-proxy` (Go), one per connected cluster | Holds that cluster's credentials (client-go reads your kubeconfig, so exec plugins, OIDC and client certificates work as in kubectl) and forwards requests to the API server | `sidecar/kube-proxy/` |
+| `claude-agent-acp` (Node), one per window, started when the dock first opens | Runs your Claude Code; Landlens speaks ACP v1 to it over stdio. Its shell commands run in Claude Code's sandbox | `packages/acp-host/` |
+| The `landlens-kube` MCP server (in main) | The agent's read-only cluster tools on a loopback port, one bearer token per session | `packages/kube-mcp/` |
 
 ## A request, end to end
 
@@ -58,7 +60,11 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/frontdoor.ts` | The front door |
 | `packages/kube/src/tool-kubeconfig.ts` | The kubeconfig for tools and the agent |
 | `apps/desktop/src/main/security.ts` | Sandbox, CSP, navigation and permission guards |
+| `packages/acp-host/src/` | The ACP host, a cluster session, the fence, the standing rules ([agent.md](agent.md)) |
+| `packages/kube-mcp/src/` | The MCP server, its tools, the front-door client (redaction lives in `packages/kube/src/redact.ts`, applied by the front door) |
+| `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |
+| `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock |
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
 | `apps/desktop/scripts/fuses.mjs` | The Electron fuses the packaged app ships with |
 | `apps/desktop/src/renderer/src/kinds.ts` | Sidebar sections and table columns per kind; everything else gets a generic table |
-| `apps/desktop/src/renderer/src/status.ts` | kubectl-style pod and node status, ages |
+| `packages/kube/src/status.ts` (`@landlens/kube/status`) | kubectl-style pod and node status, ages; shared by the UI and the agent's tools |

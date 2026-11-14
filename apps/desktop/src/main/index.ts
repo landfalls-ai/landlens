@@ -3,6 +3,7 @@ import { ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kub
 import { app, BrowserWindow } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { AgentService } from "./agent";
 import { registerIpc } from "./ipc";
 import { DEV_URL, hardenApp, hardenSession, RENDERER_INDEX, secureWebPreferences } from "./security";
 
@@ -35,14 +36,25 @@ async function start() {
     log: (l) => console.log(`[sidecar] ${l}`),
   });
   const hub = new WatchHub(clusters);
-  registerIpc(clusters, hub);
+  let win: BrowserWindow | undefined;
+  const agent = new AgentService({
+    frontDoor,
+    clusters,
+    sessionsDir: join(app.getPath("userData"), "agent-sessions"),
+    push: ((channel: string, payload: unknown) => {
+      if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+    }) as ConstructorParameters<typeof AgentService>[0]["push"],
+    log: (l) => console.log(l),
+  });
+  registerIpc(clusters, hub, agent);
   shutdown = async () => {
+    await agent.stop();
     await hub.stopAll();
     await clusters.disconnectAll();
     await frontDoor.stop();
   };
 
-  const win = new BrowserWindow({
+  win = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 960,
@@ -53,6 +65,12 @@ async function start() {
     webPreferences: secureWebPreferences(join(__dirname, "../preload/index.js")),
   });
   win.once("ready-to-show", () => win.show());
+  // A reload or a crashed renderer leaves no dock to show the agent sessions: end them, which revokes their tokens.
+  win.webContents.on("did-start-navigation", (d) => {
+    if (d.isMainFrame && !d.isSameDocument) void agent.closeAll();
+  });
+  win.webContents.on("render-process-gone", () => void agent.closeAll());
+  win.webContents.on("destroyed", () => void agent.closeAll());
   if (DEV_URL) await win.loadURL(DEV_URL);
   else await win.loadFile(RENDERER_INDEX);
 }
