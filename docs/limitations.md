@@ -10,6 +10,9 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **Upgraded connections** (exec, attach, port-forward) pass through the front door and the sidecar but have no UI and
   no live test yet (wave 4).
 - **The audit trail** of front-door decisions is kept in memory and not shown yet (wave 2 shows the agent's).
-- **Namespace-limited tokens** refuse all-namespace reads only for the common built-in kinds; a namespaced custom
-  resource listed across all namespaces is not refused by Landlens (the cluster's RBAC still applies). Wave 2 passes
-  discovery's scope to the policy.
+- **Secret material outside Secrets** (tokens in CRD specs, passwords in ConfigMaps) shows in the IDE as the
+  cluster returns it. Only the agent's tools scrub common secret patterns (wave 2).
+- **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its
+  connections allows but doesn't defend against a compromised user account ([security.md](security.md)).
+- **Integrated terminals** (wave 4) will put a front-door token in the shell's environment, readable by anything that
+  shell runs; each terminal gets its own revocable token for that reason.

@@ -113,4 +113,20 @@ describe("ResourceWatcher", () => {
     expect(events[0]).toMatchObject({ type: "error", status: 403, fatal: true, message: expect.stringContaining("forbidden") });
     expect(calls).toHaveLength(1);
   });
+
+  it("backs off when the server keeps answering 410, and stop() ends the wait at once", async () => {
+    const list = () => json({ kind: "PodList", metadata: { resourceVersion: "5" }, items: [pod("u1", "1")] });
+    const gone = () => stream({ type: "ERROR", object: { kind: "Status", code: 410, message: "too old" } });
+    const { client } = scripted({ list: [list(), list(), list(), list()], watch: [gone, gone, gone, gone] });
+    const events: WatcherEvent[] = [];
+    const watcher = new ResourceWatcher(client, { group: "", version: "v1", resource: "pods" }, (e) => events.push(e), {
+      backoffMs: 10_000,
+    }).start();
+    await new Promise((r) => setTimeout(r, 300));
+    // One relist at once, then a 10 s backoff rather than a third list.
+    expect(events.filter((e) => e.type === "snapshot")).toHaveLength(2);
+    const t0 = Date.now();
+    await watcher.stop();
+    expect(Date.now() - t0).toBeLessThan(500);
+  });
 });

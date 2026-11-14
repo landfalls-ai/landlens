@@ -52,4 +52,11 @@ describe("withoutSecretValues", () => {
     expect(withoutSecretValues({ kind: "ConfigMap", metadata: { name: "c", uid: "u" }, data: { a: "1" } } as any))
       .toMatchObject({ data: { a: "1" } });
   });
+
+  it("covers lists of Secrets, and anything read from the secrets resource whatever its kind says", () => {
+    const item = { metadata: { name: "db", uid: "u" }, data: { pw: "aHVudGVyMg==" } };
+    expect(JSON.stringify(withoutSecretValues({ kind: "SecretList", metadata: { name: "", uid: "" }, items: [item] } as any))).not.toContain("aHVudGVyMg");
+    expect(JSON.stringify(withoutSecretValues({ kind: "List", metadata: { name: "", uid: "" }, items: [{ kind: "Secret", ...item }] } as any))).not.toContain("aHVudGVyMg");
+    expect(JSON.stringify(withoutSecretValues({ kind: "Whatever", ...item } as any, true))).not.toContain("aHVudGVyMg");
+  });
 });

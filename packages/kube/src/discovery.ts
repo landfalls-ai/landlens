@@ -30,6 +30,7 @@ export function fromAggregated(list: any): ResourceType[] {
         kind: r.responseKind?.kind ?? r.resource,
         namespaced: r.scope === "Namespaced",
         verbs: r.verbs ?? [],
+        ...(r.shortNames?.length ? { shortNames: r.shortNames } : {}),
       });
     }
   }
@@ -55,5 +56,8 @@ async function legacy(client: KubeClient, groups: any): Promise<ResourceType[]> 
 export function fromResourceList(group: string, version: string, list: any): ResourceType[] {
   return (list.resources ?? [])
     .filter((r: any) => !String(r.name).includes("/")) // subresources such as pods/log
-    .map((r: any) => ({ group, version, resource: r.name, kind: r.kind, namespaced: !!r.namespaced, verbs: r.verbs ?? [] }));
+    .map((r: any) => ({
+      group, version, resource: r.name, kind: r.kind, namespaced: !!r.namespaced, verbs: r.verbs ?? [],
+      ...(r.shortNames?.length ? { shortNames: r.shortNames } : {}),
+    }));
 }

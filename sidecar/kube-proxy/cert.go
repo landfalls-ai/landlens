@@ -36,10 +36,10 @@ func newLoopbackCert(now time.Time) (LoopbackCert, error) {
 		Subject:               pkix.Name{CommonName: "Landlens front door", Organization: []string{"Landlens"}},
 		NotBefore:             now.Add(-time.Minute),
 		NotAfter:              now.Add(30 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		IsCA:                  true, // self-signed: it is its own trust anchor in the kubeconfig
+		IsCA:                  false, // a leaf, pinned as its own trust anchor in the tool kubeconfig; it can sign nothing
 		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1)},
 		DNSNames:              []string{"localhost"},
 	}

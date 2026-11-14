@@ -1,5 +1,5 @@
 // Talks to one cluster through its sidecar, from Electron main.
-import type { KubeObject, ResourceRef } from "@landlens/contracts";
+import { GroupName, NamespaceName, ObjectName, ResourceName, VersionName, type KubeObject, type ResourceRef } from "@landlens/contracts";
 import { SIDECAR_HEADER, type Sidecar } from "./sidecar.js";
 
 export class KubeError extends Error {
@@ -48,10 +48,22 @@ export function toKubeError(status: number, body: string): KubeError {
 }
 
 /** The API path for a kind, optionally in a namespace and for one object. */
+/**
+ * The API path for a kind, namespace and name. Each part must meet Kubernetes's naming rules (contracts), so the
+ * path is canonical as built: nothing is percent-encoded, and the front door reads it the way the API server does.
+ */
 export function apiPath(t: { group: string; version: string; resource: string }, namespace?: string, name?: string) {
+  const check = (schema: { safeParse(v: unknown): { success: boolean } }, v: string, what: string) => {
+    if (!schema.safeParse(v).success) throw new KubeError(400, `not a valid ${what}: ${JSON.stringify(v).slice(0, 80)}`);
+  };
+  check(GroupName, t.group, "API group");
+  check(VersionName, t.version, "API version");
+  check(ResourceName, t.resource, "resource");
+  if (namespace !== undefined) check(NamespaceName, namespace, "namespace");
+  if (name !== undefined) check(ObjectName, name, "name");
   const base = t.group ? `/apis/${t.group}/${t.version}` : `/api/${t.version}`;
-  const ns = namespace ? `/namespaces/${encodeURIComponent(namespace)}` : "";
-  const n = name ? `/${encodeURIComponent(name)}` : "";
+  const ns = namespace ? `/namespaces/${namespace}` : "";
+  const n = name ? `/${name}` : "";
   return `${base}${ns}/${t.resource}${n}`;
 }
 
@@ -68,9 +80,18 @@ export function slim<T extends KubeObject>(o: T): T {
  * Secret values never leave main. Keys stay (so the UI can list them) with the value's byte length instead of the
  * value; the last-applied annotation, which holds the values in clear, is dropped.
  */
-export function withoutSecretValues<T extends KubeObject>(o: T): T {
-  // Lists and watches fill in kind (watch.ts withKind), so kind is always set here.
-  if (o?.kind !== "Secret") return o;
+/**
+ * Secret values never leave main: each value becomes its length. Applies to a Secret, to every item of a list of
+ * Secrets, and to anything when `isSecret` says the object came from the secrets resource (whatever its kind says).
+ */
+export function withoutSecretValues<T extends KubeObject>(o: T, isSecret = false): T {
+  const items = (o as { items?: unknown }).items;
+  if (Array.isArray(items)) {
+    const all = isSecret || o.kind === "SecretList";
+    return { ...o, items: items.map((i) => withoutSecretValues(i, all)) } as T;
+  }
+  // Lists and watches fill in kind (watch.ts withKind), so kind is set here.
+  if (!isSecret && o?.kind !== "Secret") return o;
   const lengths = (m: unknown) =>
     m && typeof m === "object"
       ? Object.fromEntries(Object.entries(m as Record<string, string>).map(([k, v]) => [k, `<${Buffer.from(String(v), "base64").length} bytes>`]))

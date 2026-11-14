@@ -3,8 +3,18 @@
 // clusters, so the renderer gets none of that: sandboxed, isolated, no Node, a strict CSP, no navigation, no new
 // windows, no permissions, and it can only call the IPC channels the preload bridge lists.
 import { app, session, shell, type BrowserWindowConstructorOptions, type WebContents } from "electron";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { CSP_PROD } from "./csp";
 
-export const DEV_URL = process.env.ELECTRON_RENDERER_URL; // set by electron-vite dev
+export { CSP_PROD };
+
+/** Set by electron-vite dev; ignored in a packaged app, so an environment variable can't point Landlens elsewhere. */
+export const DEV_URL = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
+
+/** The one page Landlens loads in production. */
+export const RENDERER_INDEX = join(__dirname, "../renderer/index.html");
+const RENDERER_URL = pathToFileURL(RENDERER_INDEX).href;
 
 export function secureWebPreferences(preload: string): BrowserWindowConstructorOptions["webPreferences"] {
   return {
@@ -22,20 +32,16 @@ export function secureWebPreferences(preload: string): BrowserWindowConstructorO
   };
 }
 
-/** The production CSP: only our own files; no eval, no inline scripts, no network. */
-export const CSP_PROD =
-  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
-  "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
-
 /** Dev only: Vite's HMR client and React refresh need the dev server, its websocket and one inline preamble. */
 const cspDev = (origin: string) =>
   `default-src 'none'; script-src 'self' ${origin} 'unsafe-inline'; style-src 'self' 'unsafe-inline' ${origin}; ` +
   `img-src 'self' data: ${origin}; font-src 'self' ${origin}; connect-src 'self' ${origin} ${origin.replace(/^http/, "ws")}; ` +
   "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
 
+/** Our own page and nothing else: the dev server's origin in development, the exact index.html file otherwise. */
 export function isAppUrl(url: string): boolean {
   if (DEV_URL) return url.startsWith(new URL(DEV_URL).origin + "/");
-  return url.startsWith("file://") && url.includes("/out/renderer/");
+  return url.split("#")[0] === RENDERER_URL;
 }
 
 export function hardenSession() {

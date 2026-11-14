@@ -84,6 +84,26 @@ describe("the agent's read-only policy", () => {
     expect(allowed(limited, "GET", "/api/v1/nodes")).toBe(true);
     expect(allowed(limited, "GET", "/api/v1/namespaces")).toBe(true);
   });
+
+  it("takes scope from discovery, and refuses kinds it can't place", () => {
+    const limited = agentReadOnlyPolicy(["landlens-dev"]);
+    const scope = new Map([["widgets.example.com", true], ["clusterthings.example.com", false]]);
+    const scoped = (path: string) => authorize(limited, parseRequest("GET", path), (k) => scope.get(k)).allow;
+    expect(scoped("/apis/example.com/v1/widgets")).toBe(false); // namespaced, all namespaces
+    expect(scoped("/apis/example.com/v1/namespaces/landlens-dev/widgets")).toBe(true);
+    expect(scoped("/apis/example.com/v1/clusterthings")).toBe(true);
+    expect(scoped("/apis/other.io/v1/gadgets")).toBe(false); // unknown: fail closed
+    expect(scoped("/apis/storage.k8s.io/v1/storageclasses")).toBe(true); // built-in cluster-scoped
+  });
+});
+
+describe("non-resource paths for a read-only token", () => {
+  it("allows version, discovery, OpenAPI and health only", () => {
+    for (const p of ["/version", "/api", "/apis", "/api/v1", "/apis/apps", "/apis/apps/v1", "/openapi/v2", "/openapi/v3/apis/apps/v1",
+      "/healthz", "/readyz/ping"]) expect(allowed(agent, "GET", p), p).toBe(true);
+    for (const p of ["/metrics", "/logs/", "/logs/kube-apiserver.log", "/debug/pprof/heap", "/configz", "/flowcontrol"])
+      expect(allowed(agent, "GET", p), p).toBe(false);
+  });
 });
 
 describe("the IDE's full policy", () => {
@@ -97,7 +117,8 @@ describe("the IDE's full policy", () => {
 describe("isCanonicalPath", () => {
   it("refuses paths that could be read two ways", () => {
     for (const p of ["//api/v1/secrets", "/api/v1/namespaces/a/secret%73", "/api/v1/namespaces/a/x%2Fy", "/api/v1/../v1/secrets",
-      "/api/v1/./secrets", "api/v1/pods", "/api\\v1"]) expect(isCanonicalPath(p), p).toBe(false);
+      "/api/v1/./secrets", "api/v1/pods", "/api\\v1", "/api/v1/pods#x", "/api/v1/pods\u0000", "/api/v1/po ds", "/api/v1/pods?x=\n"])
+      expect(isCanonicalPath(p), JSON.stringify(p)).toBe(false);
     expect(isCanonicalPath("/api/v1/namespaces/a/pods?labelSelector=app%3Dx")).toBe(true);
   });
 });

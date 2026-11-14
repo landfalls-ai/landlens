@@ -3,13 +3,15 @@
 // Landlens starts one per connected cluster. It reads the user's kubeconfig with client-go, so exec plugins, OIDC
 // tokens and client certificates behave exactly as in kubectl, and forwards requests to the API server with those
 // credentials. It listens on loopback only and answers only callers that present the per-process secret Landlens
-// passed in LANDLENS_SIDECAR_SECRET, so no other local process can borrow the user's credentials. It exits when its
-// stdin closes, so it never outlives Landlens.
+// writes as the first line of its stdin (not the environment: any process of the same user can read another's
+// environment with `ps eww`), so no other local process can borrow the user's credentials. It exits when its stdin
+// closes, so it never outlives Landlens.
 //
 // With --loopback-cert it instead prints a fresh certificate for Landlens's front door (cert.go).
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -24,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,12 +65,11 @@ func run() error {
 	if *contextName == "" {
 		return errors.New("--context is required")
 	}
-	secret := os.Getenv("LANDLENS_SIDECAR_SECRET")
-	if len(secret) < minSecretLen {
-		return fmt.Errorf("LANDLENS_SIDECAR_SECRET must be at least %d characters", minSecretLen)
+	stdin := bufio.NewReader(os.Stdin)
+	secret, err := readSecret(stdin)
+	if err != nil {
+		return err
 	}
-	// Don't leak the secret to exec credential plugins the transport may start.
-	_ = os.Unsetenv("LANDLENS_SIDECAR_SECRET")
 
 	cfg, err := loadConfig(*kubeconfig, *contextName)
 	if err != nil {
@@ -90,7 +92,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() { // stdin closing means Landlens is gone
-		_, _ = io.Copy(io.Discard, os.Stdin)
+		_, _ = io.Copy(io.Discard, stdin)
 		stop()
 	}()
 	go func() {
@@ -103,6 +105,19 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// readSecret takes the per-process secret from the first line of stdin.
+func readSecret(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("reading the secret from stdin: %w", err)
+	}
+	secret := strings.TrimSpace(line)
+	if len(secret) < minSecretLen {
+		return "", fmt.Errorf("the first line of stdin must be a secret of at least %d characters", minSecretLen)
+	}
+	return secret, nil
 }
 
 // loadConfig reads one context from the kubeconfig the way kubectl does.
@@ -154,11 +169,19 @@ func newHandler(cfg *rest.Config, secret string) (http.Handler, error) {
 			r.Out.Header.Del("Authorization")
 			r.Out.Header.Del(SecretHeader)
 			r.Out.Header.Del("Cookie")
+			// Impersonation would let a caller act as someone else with the user's credentials (kubectl --as).
+			for k := range r.Out.Header {
+				if strings.HasPrefix(http.CanonicalHeaderKey(k), "Impersonate-") {
+					r.Out.Header.Del(k)
+				}
+			}
 		},
 		Transport:     transport,
 		FlushInterval: -1, // stream watches and logs as they arrive
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeStatus(w, http.StatusBadGateway, "BadGateway", "landlens-kube-proxy: "+err.Error())
+			// The detail (which may include exec-plugin output) goes to Landlens's log, not to the caller.
+			slog.Warn("cluster request failed", "error", err)
+			writeStatus(w, http.StatusBadGateway, "BadGateway", "landlens-kube-proxy: the cluster could not be reached")
 		},
 	}
 	want := []byte(secret)

@@ -90,6 +90,45 @@ describe("FrontDoor", () => {
     expect((await call(`/c/${HANDLE}/api/v1/pods`, ide)).status).toBe(401);
   });
 
+  it("refuses impersonation for every token", async () => {
+    const ide = door.issueToken({ label: "ide", policy: { access: "full" }, clusters: [HANDLE] });
+    const status = await new Promise<number>((ok, fail) => {
+      const req = httpsRequest(door.url + `/c/${HANDLE}/api/v1/pods`, {
+        ca: tls.cert,
+        headers: { Authorization: `Bearer ${ide}`, "Impersonate-User": "system:admin", "Impersonate-Group": "system:masters" },
+      }, (res) => {
+        res.resume();
+        ok(res.statusCode!);
+      });
+      req.on("error", fail);
+      req.end();
+    });
+    expect(status).toBe(403);
+    expect(seen).toHaveLength(0);
+    expect(audit.at(-1)).toMatchObject({ allowed: false, reason: expect.stringContaining("impersonation") });
+  });
+
+  it("audits an upgrade with the cluster's answer", async () => {
+    sidecar.on("upgrade", (req, socket) => {
+      seen.push(req);
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+      socket.end();
+    });
+    const ide = door.issueToken({ label: "ide", policy: { access: "full" }, clusters: [HANDLE] });
+    const res = await new Promise<string>((resolve) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.cert }, () => {
+        s.write(`GET /c/${HANDLE}/api/v1/namespaces/a/pods/p1/exec?command=sh HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${ide}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      });
+      let buf = "";
+      s.on("data", (d) => (buf += d));
+      s.on("close", () => resolve(buf));
+    });
+    expect(res).toMatch(/^HTTP\/1.1 101/);
+    expect(seen[0]!.headers["x-landlens-sidecar"]).toBe(SECRET);
+    expect(seen[0]!.headers.authorization).toBeUndefined();
+    expect(audit.at(-1)).toMatchObject({ label: "ide", allowed: true, status: 101 });
+  });
+
   it("refuses an upgrade (exec) for a read-only token", async () => {
     const token = door.issueToken({ label: "agent 1", policy: agentReadOnlyPolicy(), clusters: [HANDLE] });
     const res = await new Promise<string>((resolve) => {

@@ -19,6 +19,7 @@ export type Sidecar = {
   secret: string;
   server: string;
   context: string;
+  pid: number | undefined;
   stop(): Promise<void>;
   exited: Promise<number | null>;
 };
@@ -30,10 +31,13 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
   const args = ["--context", opts.context];
   if (opts.kubeconfig) args.push("--kubeconfig", opts.kubeconfig);
   const child: ChildProcess = spawn(opts.binary, args, {
-    // stdin stays open as a pipe: when Landlens dies, it closes and the sidecar exits.
+    // stdin stays open as a pipe: its first line is the secret (never the environment, which any same-user process
+    // can read with `ps eww`), and when Landlens dies it closes and the sidecar exits.
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, LANDLENS_SIDECAR_SECRET: secret },
+    env: withoutLandlensSecrets(process.env),
   });
+  child.stdin?.on("error", () => {}); // EPIPE if it exits early; `exited` reports that
+  child.stdin?.write(secret + "\n");
   const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
   const stderr: string[] = [];
   child.stderr?.setEncoding("utf8").on("data", (d: string) => {
@@ -50,8 +54,11 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
     rl.once("line", (line) => {
       clearTimeout(timer);
       try {
-        resolve(JSON.parse(line));
+        const r = JSON.parse(line);
+        if (typeof r?.listening !== "string" || typeof r?.server !== "string") throw new Error("shape");
+        resolve(r);
       } catch {
+        child.kill();
         reject(new Error(`landlens-kube-proxy: unexpected output ${line.slice(0, 200)}`));
       }
     });
@@ -70,6 +77,7 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
     secret,
     server: ready.server,
     context: opts.context,
+    pid: child.pid,
     exited,
     async stop() {
       if (child.exitCode !== null) return;
@@ -79,6 +87,14 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
       clearTimeout(t);
     },
   };
+}
+
+/** Child processes never inherit Landlens's own secrets (the agent's token, an old sidecar secret). */
+export function withoutLandlensSecrets(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  delete out.LANDLENS_SIDECAR_SECRET;
+  delete out.LANDLENS_TOKEN;
+  return out;
 }
 
 /** The sidecar logs JSON via slog; show the human part. */

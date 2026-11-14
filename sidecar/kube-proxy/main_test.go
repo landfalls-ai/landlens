@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -96,6 +97,9 @@ func TestForwardsWithTheUsersCredentialsOnly(t *testing.T) {
 	req, _ := http.NewRequest("GET", proxy.URL+"/api/v1/namespaces/a/pods?limit=5", nil)
 	req.Header.Set(SecretHeader, testSecret)
 	req.Header.Set("Authorization", "Bearer caller-token")
+	req.Header.Set("Impersonate-User", "system:admin")
+	req.Header.Add("Impersonate-Group", "system:masters")
+	req.Header.Set("Impersonate-Extra-Scopes", "x")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +113,11 @@ func TestForwardsWithTheUsersCredentialsOnly(t *testing.T) {
 	}
 	if seen.Header.Get(SecretHeader) != "" {
 		t.Fatal("the sidecar secret was forwarded to the API server")
+	}
+	for k := range seen.Header {
+		if strings.HasPrefix(k, "Impersonate-") {
+			t.Fatalf("impersonation header %s reached the API server", k)
+		}
 	}
 	if seen.URL.Path != "/api/v1/namespaces/a/pods" || seen.URL.Query().Get("limit") != "5" {
 		t.Fatalf("forwarded %s", seen.URL)
@@ -149,10 +158,26 @@ func TestLoopbackCertIsValidFor127001(t *testing.T) {
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
+	if cert.IsCA {
+		t.Fatal("the loopback certificate must not be a CA")
+	}
 	if _, err := cert.Verify(x509.VerifyOptions{Roots: pool, DNSName: "127.0.0.1"}); err != nil {
 		t.Fatalf("does not verify for 127.0.0.1: %v", err)
 	}
 	if _, err := tls.X509KeyPair([]byte(c.Cert), []byte(c.Key)); err != nil {
 		t.Fatalf("cert and key don't pair: %v", err)
+	}
+}
+
+func TestSecretComesFromTheFirstLineOfStdin(t *testing.T) {
+	got, err := readSecret(bufio.NewReader(strings.NewReader(testSecret + "\nrest stays for the EOF watch")))
+	if err != nil || got != testSecret {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if _, err := readSecret(bufio.NewReader(strings.NewReader("short\n"))); err == nil {
+		t.Fatal("a short secret must be refused")
+	}
+	if _, err := readSecret(bufio.NewReader(strings.NewReader(""))); err == nil {
+		t.Fatal("no secret must be refused")
 	}
 }

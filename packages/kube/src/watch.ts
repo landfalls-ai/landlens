@@ -26,11 +26,15 @@ export type WatcherOptions = {
 class Gone extends Error {}
 
 export class ResourceWatcher {
+  /** Set when the loop ended on its own after a fatal error (no access, unknown kind). */
+  failed = false;
   private readonly items = new Map<string, KubeObject>();
   private pendingUpserts = new Map<string, KubeObject>();
   private pendingRemoved = new Set<string>();
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private abort: AbortController | undefined;
+  /** Ends a backoff sleep early, so stop() doesn't wait up to maxBackoffMs. */
+  private wake: (() => void) | undefined;
   private stopped = false;
   private readonly opts: Required<WatcherOptions>;
   /** Resolves when the loop has ended after stop(). */
@@ -53,6 +57,7 @@ export class ResourceWatcher {
   async stop(): Promise<void> {
     this.stopped = true;
     this.abort?.abort();
+    this.wake?.();
     clearTimeout(this.flushTimer);
     await this.done.catch(() => {});
   }
@@ -64,21 +69,36 @@ export class ResourceWatcher {
 
   private async loop(): Promise<void> {
     let backoff = this.opts.backoffMs;
+    let gones = 0;
     while (!this.stopped) {
       try {
         let rv = await this.list();
-        backoff = this.opts.backoffMs;
-        while (!this.stopped) rv = await this.watch(rv);
+        while (!this.stopped) {
+          rv = await this.watch(rv);
+          // Only a watch that ran its course counts as healthy: a server that lists fine but refuses every watch
+          // must not make us relist in a tight loop.
+          backoff = this.opts.backoffMs;
+          gones = 0;
+        }
       } catch (err) {
         if (this.stopped) return;
-        if (err instanceof Gone) continue; // relist at once
+        if (err instanceof Gone) {
+          // Relist at once the first time; if the server keeps answering 410, back off instead of spinning.
+          if (gones++ === 0) continue;
+          await this.sleep(backoff);
+          backoff = Math.min(backoff * 2, this.opts.maxBackoffMs);
+          continue;
+        }
         const status = err instanceof KubeError ? err.status : 0;
         const message = err instanceof Error ? err.message : String(err);
         // No access, or the kind doesn't exist: retrying won't help.
         const fatal = status === 401 || status === 403 || status === 404;
         this.onEvent({ type: "error", status, message, fatal });
-        if (fatal) return;
-        await sleep(backoff);
+        if (fatal) {
+          this.failed = true;
+          return;
+        }
+        await this.sleep(backoff);
         backoff = Math.min(backoff * 2, this.opts.maxBackoffMs);
       }
     }
@@ -191,6 +211,17 @@ export class ResourceWatcher {
     }, this.opts.batchMs);
   }
 
+  private sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const t = setTimeout(() => this.wake?.(), ms);
+      this.wake = () => {
+        clearTimeout(t);
+        this.wake = undefined;
+        resolve();
+      };
+    });
+  }
+
   private path() {
     return apiPath(this.target, this.target.namespace);
   }
@@ -202,4 +233,3 @@ export class ResourceWatcher {
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

@@ -4,17 +4,19 @@ import { app, BrowserWindow } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { registerIpc } from "./ipc";
-import { DEV_URL, hardenApp, hardenSession, secureWebPreferences } from "./security";
+import { DEV_URL, hardenApp, hardenSession, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
 
-/** The Go sidecar: bundled in Resources when packaged; built in the repo during development. */
+/**
+ * The Go sidecar holds cluster credentials, so a packaged app only runs the copy in its own Resources. The
+ * LANDLENS_SIDECAR override and the repo build are for development.
+ */
 function sidecarBinary(): string {
-  const candidates = [
-    process.env.LANDLENS_SIDECAR,
-    join(process.resourcesPath ?? "", "bin", "landlens-kube-proxy"),
-    resolve(app.getAppPath(), "../../sidecar/kube-proxy/bin/landlens-kube-proxy"),
-  ].filter((p): p is string => !!p);
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, "bin", "landlens-kube-proxy")]
+    : [process.env.LANDLENS_SIDECAR, resolve(app.getAppPath(), "../../sidecar/kube-proxy/bin/landlens-kube-proxy")]
+        .filter((p): p is string => !!p);
   const found = candidates.find((p) => existsSync(p));
   if (!found) throw new Error(`landlens-kube-proxy not found; run pnpm build:sidecar (looked in ${candidates.join(", ")})`);
   return found;
@@ -52,7 +54,7 @@ async function start() {
   });
   win.once("ready-to-show", () => win.show());
   if (DEV_URL) await win.loadURL(DEV_URL);
-  else await win.loadFile(join(__dirname, "../renderer/index.html"));
+  else await win.loadFile(RENDERER_INDEX);
 }
 
 app.whenReady().then(start).catch((err) => {

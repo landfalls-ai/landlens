@@ -2,7 +2,7 @@ import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { useEffect, useState } from "react";
 import { stringify } from "yaml";
 import { api, type ApiError } from "./api";
-import { age, podStatus } from "./status";
+import { age, podStatus } from "@landlens/kube/status";
 
 type Tab = "overview" | "yaml" | "events";
 

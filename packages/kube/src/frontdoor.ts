@@ -9,10 +9,15 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer, type Server } from "node:https";
 import { connect, type AddressInfo, type Socket } from "node:net";
-import { authorize, isCanonicalPath, parseRequest, type Policy } from "./policy.js";
+import { authorize, isCanonicalPath, parseRequest, type Policy, type ScopeOf } from "./policy.js";
 import { SIDECAR_HEADER } from "./sidecar.js";
 
-export type Upstream = { url: string; secret: string };
+export type Upstream = {
+  url: string;
+  secret: string;
+  /** Whether a kind is namespaced, from the cluster's discovery; for namespace-limited tokens. */
+  scopeOf?: ScopeOf;
+};
 
 export type TokenGrant = {
   /** Shown in the audit trail, e.g. "ide" or "agent session 3". */
@@ -123,7 +128,12 @@ export class FrontDoor {
     const upstream = this.upstreams.get(handle);
     if (!upstream) return { ok: false, status: 503, reason: "cluster is not connected in Landlens", label, handle, path };
     if (!isCanonicalPath(path)) return { ok: false, status: 400, reason: "path is not canonical", label, handle, path };
-    const decision = authorize(grant.policy, parseRequest(req.method ?? "GET", path));
+    // Impersonation would act as someone else with the user's credentials (kubectl --as). The sidecar strips the
+    // headers too; refusing here makes it an error rather than a silent request as the user.
+    if (Object.keys(req.headers).some((h) => h.startsWith("impersonate-"))) {
+      return { ok: false, status: 403, reason: "impersonation is not allowed through Landlens", label, handle, path };
+    }
+    const decision = authorize(grant.policy, parseRequest(req.method ?? "GET", path), upstream.scopeOf);
     if (!decision.allow) return { ok: false, status: 403, reason: decision.reason, label, handle, path };
     return { ok: true, grant, handle, path, upstream };
   }
@@ -157,9 +167,11 @@ export class FrontDoor {
       res.writeHead(upRes.statusCode ?? 502, upRes.headers);
       upRes.pipe(res);
     });
-    up.on("error", (err) => {
-      if (!res.headersSent) sendStatus(res, 502, `cluster unreachable: ${err.message}`);
-      else res.destroy();
+    up.on("error", () => {
+      if (!res.headersSent) {
+        this.audit(req, { label: c.grant.label, handle: c.handle, path: c.path }, true, 502);
+        sendStatus(res, 502, "the cluster could not be reached");
+      } else res.destroy();
     });
     res.on("close", () => up.destroy());
     req.pipe(up);
@@ -173,25 +185,38 @@ export class FrontDoor {
       socket.end(`HTTP/1.1 ${c.status} ${c.status === 401 ? "Unauthorized" : "Forbidden"}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n${statusBody(c.status, c.reason)}`);
       return;
     }
-    this.audit(req, { label: c.grant.label, handle: c.handle, path: c.path }, true, 101);
     const target = new URL(c.upstream.url);
+    const who = { label: c.grant.label, handle: c.handle, path: c.path };
+    let audited = false;
     const up = connect(Number(target.port), target.hostname, () => {
       const lines = [`${req.method} ${c.path} HTTP/1.1`, `Host: ${target.host}`, `${SIDECAR_HEADER}: ${c.upstream.secret}`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const k = req.rawHeaders[i]!;
-        if (/^(host|authorization|x-landlens-sidecar)$/i.test(k)) continue;
+        if (/^(host|authorization|cookie|x-landlens-sidecar|impersonate-.*)$/i.test(k)) continue;
         lines.push(`${k}: ${req.rawHeaders[i + 1]}`);
       }
       up.write(lines.join("\r\n") + "\r\n\r\n");
       if (head.length) up.write(head);
-      up.pipe(socket).pipe(up);
+      // Audit with the cluster's answer (101, or 403 from RBAC), not before it.
+      up.once("data", (first: Buffer) => {
+        audited = true;
+        const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(first.subarray(0, 32).toString("latin1"))?.[1] ?? 0);
+        this.audit(req, who, true, status || undefined);
+        socket.write(first);
+        up.pipe(socket);
+      });
+      socket.pipe(up);
     });
     const close = () => {
+      if (!audited) {
+        audited = true;
+        this.audit(req, who, true, 502);
+      }
       up.destroy();
       socket.destroy();
     };
-    up.on("error", close);
-    socket.on("error", close);
+    up.on("error", close).on("close", close);
+    socket.on("error", close).on("close", close);
   }
 }
 

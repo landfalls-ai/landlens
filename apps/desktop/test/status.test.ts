@@ -1,7 +1,7 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { describe, expect, it } from "vitest";
 import { buildNav } from "../src/renderer/src/kinds";
-import { age, nodeRoles, nodeStatus, podReady, podRestarts, podStatus } from "../src/renderer/src/status";
+import { age, nodeRoles, nodeStatus, podReady, podRestarts, podStatus } from "@landlens/kube/status";
 
 const pod = (status: any, extra: Partial<KubeObject> = {}): KubeObject =>
   ({ metadata: { name: "p", uid: "u" }, spec: { containers: [{ name: "a" }, { name: "b" }] }, status, ...extra }) as KubeObject;

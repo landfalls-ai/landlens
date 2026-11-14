@@ -43,9 +43,10 @@ const isTrue = (v: string | null) => v === "true" || v === "1";
 
 /**
  * Refuse paths whose meaning could differ between this parser and the API server: empty segments, dot segments,
- * percent-encoding or backslashes. The front door rejects these outright.
+ * percent-encoding, backslashes, fragments, spaces or control characters. The front door rejects these outright.
  */
 export function isCanonicalPath(rawPath: string): boolean {
+  if (/[\x00-\x20\x7f#]/.test(rawPath)) return false;
   const path = rawPath.split("?")[0] ?? "";
   if (!path.startsWith("/")) return false;
   if (path.includes("//") || path.includes("\\")) return false;
@@ -124,12 +125,31 @@ function resourceVerb(m: string, name: string | undefined, sub: string | undefin
   }
 }
 
-const key = (resource: string, group: string) => (group ? `${resource}.${group}` : resource);
+export const key = (resource: string, group: string) => (group ? `${resource}.${group}` : resource);
+
+/**
+ * Non-resource paths a read-only token may GET: version, discovery, OpenAPI and health. Not /metrics, /logs (node
+ * log files), /debug or anything else the API server or an aggregated API might serve.
+ */
+export function isReadableNonResource(path: string): boolean {
+  if (["/version", "/api", "/apis", "/healthz", "/livez", "/readyz"].includes(path)) return true;
+  if (/^\/(healthz|livez|readyz)\/[a-z0-9-]+$/.test(path)) return true;
+  if (/^\/openapi\/v[23](\/.*)?$/.test(path)) return true;
+  // Discovery under /api and /apis (/api/v1, /apis/apps, /apis/apps/v1) parses as non-resource.
+  return /^\/apis?(\/[a-z0-9.-]+){1,2}$/.test(path);
+}
+
+/**
+ * Whether a kind is namespaced, from the cluster's discovery: `true`, `false`, or `undefined` when not known.
+ * Keys are `resource` or `resource.group`.
+ */
+export type ScopeOf = (key: string) => boolean | undefined;
 
 /** Decide whether a token with this policy may make this request. */
-export function authorize(policy: Policy, req: ParsedRequest): Decision {
+export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf = () => undefined): Decision {
   if (req.kind === "nonResource") {
-    if (policy.access === "full" || READ_VERBS.has(req.verb)) return { allow: true };
+    if (policy.access === "full") return { allow: true };
+    if (req.verb === "get" && isReadableNonResource(req.path)) return { allow: true };
     return { allow: false, reason: `read-only token: ${req.verb} on ${req.path} is not allowed` };
   }
   const k = key(req.resource, req.group);
@@ -153,23 +173,27 @@ export function authorize(policy: Policy, req: ParsedRequest): Decision {
       return { allow: false, reason: `this token is limited to namespaces ${policy.namespaces.join(", ")}` };
     }
     // Reading the namespaces themselves, or cluster-scoped kinds, is fine; listing a namespaced kind across all
-    // namespaces is not. We can't know scope from the path alone, so the caller passes namespacedResources.
-    if (clusterScopedRead && NAMESPACED_CORE.has(k)) {
-      return { allow: false, reason: `this token is limited to namespaces ${policy.namespaces.join(", ")}` };
+    // namespaces is not. Scope comes from the cluster's discovery, else the built-in kinds; unknown is refused.
+    if (clusterScopedRead) {
+      const namespaced = scopeOf(k) ?? (CLUSTER_SCOPED_CORE.has(k) ? false : true);
+      if (namespaced) {
+        return { allow: false, reason: `this token is limited to namespaces ${policy.namespaces.join(", ")}` };
+      }
     }
   }
   return { allow: true };
 }
 
-/** Common namespaced kinds; an all-namespaces read of these is refused when a token is namespace-limited. */
-const NAMESPACED_CORE = new Set([
-  "pods", "services", "configmaps", "secrets", "events", "endpoints", "persistentvolumeclaims", "serviceaccounts",
-  "replicationcontrollers", "limitranges", "resourcequotas", "podtemplates",
-  "deployments.apps", "statefulsets.apps", "daemonsets.apps", "replicasets.apps", "controllerrevisions.apps",
-  "jobs.batch", "cronjobs.batch", "ingresses.networking.k8s.io", "networkpolicies.networking.k8s.io",
-  "roles.rbac.authorization.k8s.io", "rolebindings.rbac.authorization.k8s.io",
-  "horizontalpodautoscalers.autoscaling", "poddisruptionbudgets.policy", "events.events.k8s.io",
-  "endpointslices.discovery.k8s.io", "leases.coordination.k8s.io",
+/** Built-in cluster-scoped kinds, for when discovery hasn't run; anything else counts as namespaced. */
+const CLUSTER_SCOPED_CORE = new Set([
+  "namespaces", "nodes", "persistentvolumes", "componentstatuses",
+  "storageclasses.storage.k8s.io", "csidrivers.storage.k8s.io", "csinodes.storage.k8s.io", "volumeattachments.storage.k8s.io",
+  "clusterroles.rbac.authorization.k8s.io", "clusterrolebindings.rbac.authorization.k8s.io",
+  "customresourcedefinitions.apiextensions.k8s.io", "apiservices.apiregistration.k8s.io",
+  "priorityclasses.scheduling.k8s.io", "runtimeclasses.node.k8s.io", "ingressclasses.networking.k8s.io",
+  "mutatingwebhookconfigurations.admissionregistration.k8s.io", "validatingwebhookconfigurations.admissionregistration.k8s.io",
+  "certificatesigningrequests.certificates.k8s.io", "flowschemas.flowcontrol.apiserver.k8s.io",
+  "prioritylevelconfigurations.flowcontrol.apiserver.k8s.io",
 ]);
 
 /** The policy every agent session gets. */

@@ -52,6 +52,39 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     expect(err).toContain("unknown channel");
   });
 
+  it("carries the CSP in the built page: no inline scripts, no eval", async () => {
+    const csp = await page.evaluate(() => (globalThis as any).document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content") ?? "");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("unsafe-eval");
+    // page.evaluate runs through DevTools, which CSP exempts, so test what injected markup would do: an inline
+    // script and a string timer (an eval) must both be blocked, and the page must see the violations.
+    const probe = await page.evaluate(async () => {
+      const g = globalThis as any;
+      const violations: string[] = [];
+      g.document.addEventListener("securitypolicyviolation", (e: any) => violations.push(e.effectiveDirective));
+      const s = g.document.createElement("script");
+      s.textContent = "globalThis.__inline = 1";
+      g.document.head.appendChild(s);
+      g.setTimeout("globalThis.__timer = 1", 0);
+      await new Promise((r) => g.setTimeout(r, 100));
+      return { inline: g.__inline ?? null, timer: g.__timer ?? null, violations: [...new Set(violations)].sort() };
+    });
+    expect(probe).toEqual({ inline: null, timer: null, violations: ["script-src-elem", "script-src"].sort() });
+  });
+
+  it("refuses requests whose names could change the API path", async () => {
+    const tries = [
+      { group: "", version: "v1", resource: "secrets?x=", name: "a" },
+      { group: "", version: "v1", resource: "pods", namespace: "kube-system", name: "../secrets" },
+      { group: "", version: "v1", resource: "pods", namespace: "kube-system", name: "a/b" },
+      { group: "", version: "v1", resource: "pods", namespace: "kube%2fsystem", name: "a" },
+    ];
+    for (const ref of tries) {
+      const err = await page.evaluate((ref) => (globalThis as any).landlens.invoke("resource:get", { handle: "aaaaaaaaaaaaaaaa", ref }).then(() => "", (e: Error) => e.message), ref);
+      expect(err).toContain("bad request");
+    }
+  });
+
   it("connects and lists live pods, filters, and opens one", async () => {
     await page.getByRole("button", { name: /orbstack/ }).first().click();
     await page.getByRole("heading", { name: "Pods" }).waitFor({ timeout: 30_000 });

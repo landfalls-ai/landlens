@@ -18,5 +18,9 @@
     "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vitest": "4.1.12"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./status": "./src/status.ts"
   }
 }

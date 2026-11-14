@@ -1,7 +1,7 @@
 // How each kind is shown: where it sits in the sidebar and which columns its table has. Kinds the cluster serves but
 // that aren't listed here still get a generic table (name, namespace, age) under their API group.
 import type { KubeObject, ResourceType } from "@landlens/contracts";
-import { age, podStatus, podReady, podRestarts, nodeStatus, nodeRoles, type Tone } from "./status";
+import { age, podStatus, podReady, podRestarts, nodeStatus, nodeRoles, type Tone } from "@landlens/kube/status";
 
 export type Cell = { text: string; tone?: Tone; title?: string; sort?: number | string };
 export type Column = { id: string; label: string; cell: (o: KubeObject, now: number) => Cell; width?: string };

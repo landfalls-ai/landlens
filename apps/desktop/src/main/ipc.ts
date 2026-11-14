@@ -1,6 +1,6 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
-import { channels, type Channel, type Request, type Responses, type WatchEvent } from "@landlens/contracts";
+import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
 import { checkAccess, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
 import { isAppUrl } from "./security";
@@ -19,7 +19,11 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
         return { contexts: [], error: `Could not read your kubeconfig: ${(err as Error).message}` };
       }
     },
-    "cluster:connect": ({ context }) => clusters.connect(context),
+    "cluster:connect": async ({ context }) => {
+      // Only contexts from the user's kubeconfig; the name goes to the sidecar as an argument.
+      if (!listContexts().some((c) => c.name === context)) throw ipcError(404, `no context named ${context} in your kubeconfig`);
+      return clusters.connect(context);
+    },
     "cluster:disconnect": async ({ handle }) => {
       await hub.stopAll(handle);
       await clusters.disconnect(handle);
@@ -27,9 +31,14 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
     },
     "cluster:discovery": async ({ handle }) => ({ types: await clusters.discovery(handle) }),
     "cluster:access": async ({ handle, checks }) => ({ allowed: await checkAccess(clusters.get(handle).client, checks) }),
-    "resource:get": async ({ handle, ref }) => ({ object: withoutSecretValues(await clusters.getObject(handle, ref)) }),
+    "resource:get": async ({ handle, ref }) => {
+      const type = await clusters.typeOf(handle, ref); // only kinds the cluster serves
+      return { object: withoutSecretValues(await clusters.getObject(handle, ref), isSecrets(type)) };
+    },
     "resource:events": async ({ handle, uid, namespace }) => ({ items: await clusters.eventsFor(handle, uid, namespace) }),
     "watch:subscribe": async (req, event) => {
+      const secrets = isSecrets(await clusters.typeOf(req.handle, req));
+      const hide = (o: KubeObject) => withoutSecretValues(o, secrets);
       const wc = event.sender;
       let set = owned.get(wc);
       if (!set) {
@@ -47,8 +56,8 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
           e.type === "error"
             ? { subscription, type: "error", status: e.status, message: e.message }
             : e.type === "snapshot"
-              ? { subscription, type: "snapshot", items: e.items.map(withoutSecretValues) }
-              : { subscription, type: "delta", upserted: e.upserted.map(withoutSecretValues), removed: e.removed };
+              ? { subscription, type: "snapshot", items: e.items.map(hide) }
+              : { subscription, type: "delta", upserted: e.upserted.map(hide), removed: e.removed };
         wc.send("watch:event", payload);
       });
       set.add(subscription);
@@ -69,6 +78,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
       try {
         return await (handlers[name] as (r: unknown, e: IpcMainInvokeEvent) => Promise<unknown>)(parsed.data, event);
       } catch (err) {
+        if (err instanceof Error && /^\{"status":\d+/.test(err.message)) throw err; // already an ipcError
         if (err instanceof KubeError) throw ipcError(err.status, err.message);
         const status = typeof (err as { status?: unknown }).status === "number" ? (err as { status: number }).status : 500;
         throw ipcError(status, (err as Error).message ?? String(err));
@@ -76,5 +86,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub) {
     });
   }
 }
+
+const isSecrets = (t: ResourceType) => t.group === "" && t.resource === "secrets";
 
 const ipcError = (status: number, message: string) => new Error(JSON.stringify({ status, message }));

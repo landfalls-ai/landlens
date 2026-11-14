@@ -2,6 +2,26 @@
 // the preload bridge only forwards the channels listed here.
 import { z } from "zod";
 
+// What may reach an API path. Main builds paths from these fields, so each is held to Kubernetes's own naming
+// rules: no "/", "%", "?", "#", "\\", dot segments, spaces or control characters can get through.
+const label = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+export const GroupName = z.string().max(253).regex(/^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/, "not an API group name");
+export const VersionName = z.string().max(63).regex(label, "not an API version");
+export const ResourceName = z.string().max(63).regex(label, "not a resource name");
+export const NamespaceName = z.string().max(63).regex(label, "not a namespace name");
+/**
+ * Object names are DNS subdomains for most kinds, but RBAC and a few others allow ":" and more. Printable ASCII
+ * that is legal as-is in a URL path, never "." or "..": nothing a client would percent-encode.
+ */
+export const ObjectName = z
+  .string()
+  .min(1)
+  .max(253)
+  .regex(/^(?!\.{1,2}$)[\x21-\x7e]+$/, "not an object name")
+  .regex(/^[^/%?#\\"<>`{}|^[\]]+$/, "not an object name");
+export const Handle = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, "not a cluster handle");
+export const Uid = z.string().regex(/^[A-Za-z0-9-]{1,64}$/, "not a uid");
+
 export const KubeContext = z.object({
   name: z.string(),
   cluster: z.string(),
@@ -29,6 +49,7 @@ export const ResourceType = z.object({
   kind: z.string(),
   namespaced: z.boolean(),
   verbs: z.array(z.string()),
+  shortNames: z.array(z.string()).optional(),
 });
 export type ResourceType = z.infer<typeof ResourceType>;
 
@@ -36,11 +57,11 @@ export const resourceKey = (t: Pick<ResourceType, "group" | "resource">) =>
   t.group ? `${t.resource}.${t.group}` : t.resource;
 
 export const ResourceRef = z.object({
-  group: z.string(),
-  version: z.string(),
-  resource: z.string(),
-  namespace: z.string().optional(),
-  name: z.string(),
+  group: GroupName,
+  version: VersionName,
+  resource: ResourceName,
+  namespace: NamespaceName.optional(),
+  name: ObjectName,
 });
 export type ResourceRef = z.infer<typeof ResourceRef>;
 
@@ -65,11 +86,11 @@ export type KubeObject = {
 };
 
 export const WatchRequest = z.object({
-  handle: z.string(),
-  group: z.string(),
-  version: z.string(),
-  resource: z.string(),
-  namespace: z.string().optional(), // absent: all namespaces (or cluster-scoped)
+  handle: Handle,
+  group: GroupName,
+  version: VersionName,
+  resource: ResourceName,
+  namespace: NamespaceName.optional(), // absent: all namespaces (or cluster-scoped)
 });
 export type WatchRequest = z.infer<typeof WatchRequest>;
 
@@ -79,25 +100,27 @@ export type WatchEvent =
   | { subscription: string; type: "delta"; upserted: KubeObject[]; removed: string[] }
   | { subscription: string; type: "error"; status: number; message: string };
 
+// Access checks go into a SelfSubjectAccessReview body, not a path, and may use "*".
+const orAny = <T extends z.ZodString>(s: T) => z.union([z.literal("*"), s]);
 export const AccessCheck = z.object({
-  verb: z.string(),
-  group: z.string(),
-  resource: z.string(),
-  namespace: z.string().optional(),
+  verb: z.string().max(32).regex(/^[a-z*]+$/, "not a verb"),
+  group: orAny(GroupName),
+  resource: orAny(ResourceName),
+  namespace: NamespaceName.optional(),
 });
 export type AccessCheck = z.infer<typeof AccessCheck>;
 
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
-  "cluster:connect": z.object({ context: z.string() }),
-  "cluster:disconnect": z.object({ handle: z.string() }),
-  "cluster:discovery": z.object({ handle: z.string() }),
-  "cluster:access": z.object({ handle: z.string(), checks: z.array(AccessCheck).max(200) }),
-  "resource:get": z.object({ handle: z.string(), ref: ResourceRef }),
-  "resource:events": z.object({ handle: z.string(), namespace: z.string().optional(), uid: z.string() }),
+  "cluster:connect": z.object({ context: z.string().min(1).max(253) }),
+  "cluster:disconnect": z.object({ handle: Handle }),
+  "cluster:discovery": z.object({ handle: Handle }),
+  "cluster:access": z.object({ handle: Handle, checks: z.array(AccessCheck).max(200) }),
+  "resource:get": z.object({ handle: Handle, ref: ResourceRef }),
+  "resource:events": z.object({ handle: Handle, namespace: NamespaceName.optional(), uid: Uid }),
   "watch:subscribe": WatchRequest,
-  "watch:unsubscribe": z.object({ subscription: z.string() }),
+  "watch:unsubscribe": z.object({ subscription: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/) }),
 } as const;
 export type Channel = keyof typeof channels;
 
