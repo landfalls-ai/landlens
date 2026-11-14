@@ -127,9 +127,14 @@ function ToolRow({ tool, views, onOpenObject, newest = false }: { tool: Tool; ne
   );
 }
 
-/** The first line of a tool's text answer, which the cluster tools write as their verdict. */
-function firstLine(text: string): string {
-  return text.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 200) ?? "";
+/**
+ * The first line of a tool's text answer, which the cluster tools write as their verdict; a heading that ends in ":"
+ * ("Problems (4):") takes its first item with it.
+ */
+export function firstLine(text: string): string {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const first = lines[0] ?? "";
+  return (first.endsWith(":") && lines[1] ? `${first} ${lines[1].replace(/^[-*•]\s*/, "")}` : first).slice(0, 200);
 }
 
 /**
