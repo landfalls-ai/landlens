@@ -6,7 +6,9 @@ import { ArrowRight, ArrowUp, ChevronDown, CircleX, Lock, Sparkles, X } from "lu
 import { useEffect, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
 import { answerKeys, AskCard, Plan, Transcript, type Item, type PlanEntry, type Tool } from "./DockParts";
+import type { ObjectTarget } from "./app-host";
 import { Ic, kindIcon } from "./icons";
+import { hasView, useMcpCalls } from "./mcpStore";
 
 export type AskContext = { ref: ResourceRef; label: string };
 
@@ -23,6 +25,8 @@ export function AgentDock(props: {
   suggestion?: string;
   /** What Claude is doing, for the status bar. */
   onActivity: (text?: string) => void;
+  /** A view's "Open in Landlens": move the main view to the object. */
+  onOpenObject: (t: ObjectTarget) => void;
 }) {
   const [info, setInfo] = useState<AgentSessionInfo>();
   const [failed, setFailed] = useState<string>();
@@ -39,6 +43,9 @@ export function AgentDock(props: {
   const bottom = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   const sent = useRef<number | undefined>(undefined);
+  // MCP App views: a tool card whose gateway call returned a view shows it inline (paired by toolCallId in main).
+  const mcpCalls = useMcpCalls();
+  const views = new Map(mcpCalls.filter((c) => hasView(c) && c.toolCallId && c.session === info?.session).map((c) => [c.toolCallId!, c.id]));
 
   // Updates can arrive before agent:start returns the session id; keep them until it does.
   useEffect(() => {
@@ -231,7 +238,7 @@ export function AgentDock(props: {
             </div>
           </div>
         ) : null}
-        <Transcript items={items} busy={busy} />
+        <Transcript items={items} busy={busy} views={views} onOpenObject={props.onOpenObject} />
         {plan.length ? <Plan plan={plan} /> : null}
         {asks.map((p) => <AskCard key={p.request} ask={p} onAnswer={(o) => answer(p, o)} />)}
         <div ref={bottom} />

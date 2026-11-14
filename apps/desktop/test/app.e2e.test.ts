@@ -4,7 +4,7 @@
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
+import { _electron as electron, type ElectronApplication, type Frame, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
@@ -29,6 +29,18 @@ const shot = async (page: Page, name: string, colorScheme: "dark" | "light" = "d
   await page.evaluate(() => new Promise((r) => (globalThis as any).requestAnimationFrame(() => (globalThis as any).requestAnimationFrame(r))));
   await page.screenshot({ path: resolve(shots, `${name}.png`) });
 };
+
+/** The MCP App view frames on the page (landlens-app://view/…), newest last. */
+const viewFrames = (page: Page): Frame[] => page.frames().filter((f) => f.url().startsWith("landlens-app://"));
+/** Wait for a view frame whose document shows `selector`. */
+async function viewWith(page: Page, selector: string, timeout = 30_000): Promise<Frame> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    for (const f of viewFrames(page)) if (await f.locator(selector).count().catch(() => 0)) return f;
+    if (Date.now() > deadline) throw new Error(`no view showing ${selector}; frames: ${viewFrames(page).map((f) => f.url()).join(", ")}`);
+    await page.waitForTimeout(250);
+  }
+}
 
 describe.runIf(run)("Landlens app on OrbStack", () => {
   let app: ElectronApplication;
@@ -198,6 +210,105 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await shot(page, "20-usage-unavailable");
   }, 60_000);
 
+
+  it("lists the MCP servers, previews landlens-kube's health card in its sandbox, in dark and light", async () => {
+    await page.getByRole("button", { name: "MCP", exact: true }).click();
+    await page.getByRole("heading", { name: "MCP" }).waitFor();
+    const kube = page.getByRole("region", { name: "MCP server landlens-kube" });
+    await kube.getByRole("list", { name: "landlens-kube tools" }).waitFor({ timeout: 30_000 });
+    const tools = (await kube.locator(".mcp-tool").allTextContents()).join("\n");
+    for (const t of ["cluster_overview", "describe", "get_logs", "metrics"]) expect(tools).toContain(t);
+    expect(await kube.locator(".badge", { hasText: "Asks first" }).count()).toBe(0);
+    await shot(page, "30-mcp-servers");
+
+    await kube.getByRole("button", { name: "Preview cluster_overview" }).click();
+    const view = await viewWith(page, ".verdict");
+    expect(await view.locator(".eyebrow").first().textContent()).toContain("orbstack");
+    await page.waitForTimeout(300);
+    await shot(page, "31-mcp-preview-health");
+    await shot(page, "32-light-mcp-preview-health", "light");
+    await expect.poll(() => view.evaluate(() => (globalThis as any).document.documentElement.getAttribute("data-theme"))).toBe("light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect.poll(() => view.evaluate(() => (globalThis as any).document.documentElement.getAttribute("data-theme"))).toBe("dark");
+  }, 90_000);
+
+  it("keeps a view off the network, away from the page and window.landlens, and where it was loaded", async () => {
+    const view = await viewWith(page, ".verdict");
+    const url = view.url();
+    const probe = await view.evaluate(async () => {
+      const g = globalThis as any;
+      const violations: string[] = [];
+      g.document.addEventListener("securitypolicyviolation", (e: any) => violations.push(e.effectiveDirective));
+      const tryFetch = (u: string) => fetch(u).then(() => "reached", () => "blocked");
+      let parent = "";
+      try {
+        parent = typeof g.parent.document;
+      } catch {
+        parent = "blocked";
+      }
+      let storage = "";
+      try {
+        storage = typeof g.localStorage;
+      } catch {
+        storage = "blocked";
+      }
+      const img = await new Promise<string>((r) => {
+        const i = new g.Image();
+        i.onload = () => r("loaded");
+        i.onerror = () => r("blocked");
+        i.src = "https://example.com/x.png";
+      });
+      const out = {
+        landlens: typeof g.landlens,
+        parentLandlens: (() => { try { return typeof g.parent.landlens; } catch { return "blocked"; } })(),
+        origin: g.origin,
+        parent,
+        storage,
+        local: await tryFetch("http://127.0.0.1:9/"),
+        web: await tryFetch("https://example.com/"),
+        img,
+        popup: g.open("https://example.com") === null ? "blocked" : "opened",
+      };
+      await new Promise((r) => setTimeout(r, 100));
+      return { ...out, violations: [...new Set(violations)].sort() };
+    });
+    expect(probe).toMatchObject({ landlens: "undefined", parentLandlens: "blocked", origin: "null", parent: "blocked", storage: "blocked", local: "blocked", web: "blocked", img: "blocked", popup: "blocked" });
+    expect(probe.violations).toEqual(expect.arrayContaining(["connect-src", "img-src"]));
+    // It can't navigate itself elsewhere: main cancels it (the frame is left on Chromium's error page) and the
+    // address never loads.
+    const frames = page.frames().length;
+    await view.evaluate(() => { (globalThis as any).location.href = "https://example.com/"; }).catch(() => {});
+    await page.waitForTimeout(800);
+    const urls = page.frames().map((f) => f.url());
+    expect(urls.some((u) => u.startsWith("https://example.com")), urls.join(", ")).toBe(false);
+    expect(urls.filter((u) => !u.startsWith("file:") && !u.startsWith("landlens-app:") && !u.startsWith("chrome-error:")), urls.join(", ")).toEqual([]);
+    expect(page.frames().length).toBe(frames);
+    expect(url).toMatch(/^landlens-app:\/\/view\/[0-9a-f]{32}$/);
+    // And main serves a view only at a live view's own address.
+    const other = await page.evaluate(() => fetch("landlens-app://view/" + "0".repeat(32)).then((r) => r.status, () => "blocked"));
+    expect(other).toBe("blocked"); // the page's own CSP: connect-src 'self'
+  }, 60_000);
+
+  it("logs the calls, with the front-door requests behind each landlens-kube call", async () => {
+    await page.getByRole("tab", { name: /Calls/ }).click();
+    const list = page.getByRole("list", { name: "MCP calls" });
+    const row = list.locator(".mcp-call", { hasText: "landlens-kube · cluster_overview" }).first();
+    await row.waitFor({ timeout: 10_000 });
+    expect(await row.textContent()).toContain("you");
+    await shot(page, "33-mcp-calls");
+    await row.click();
+    const drawer = page.getByRole("complementary", { name: "MCP call" });
+    await drawer.waitFor();
+    const reqs = drawer.getByRole("list", { name: "Front-door requests" });
+    await reqs.waitFor();
+    expect(await reqs.locator("li").count()).toBeGreaterThan(1);
+    expect(await reqs.textContent()).toContain("/api/v1/pods");
+    await viewWith(page, ".verdict");
+    await shot(page, "34-mcp-call-detail");
+    await page.keyboard.press("Escape");
+    await page.getByRole("tab", { name: /Servers/ }).click();
+  }, 60_000);
+
   it.runIf(clickland)("connects Clickland, then draws the cluster's usage and a pod's metrics, in dark and light", async () => {
     const made = await fetch(`${CLICKLAND_URL}/api/keys`, {
       method: "POST",
@@ -267,6 +378,56 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     }
   }, 180_000);
 
+
+  it.runIf(clickland)("adds Clickland's MCP server with a read key, tests it, and shows its view from Preview", async () => {
+    const made = await fetch(`${CLICKLAND_URL}/api/keys`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${CLICKLAND_ADMIN}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "landlens-e2e-mcp", scopes: ["read"] }),
+    });
+    expect(made.status).toBe(201);
+    const { id, key } = (await made.json()) as { id: string; key: string };
+    try {
+      await page.getByRole("button", { name: "MCP", exact: true }).click();
+      await page.getByRole("button", { name: "Add server" }).click();
+      const dialog = page.getByRole("dialog", { name: "Add an MCP server" });
+      await dialog.getByLabel("Server name").fill("clickland");
+      await dialog.getByLabel("Server address").fill(`${CLICKLAND_URL}/api/mcp`);
+      await dialog.getByLabel("Header name").fill("Authorization");
+      await dialog.getByLabel("Header value").fill(`Bearer ${key}`);
+      await dialog.getByRole("button", { name: "Test" }).click();
+      const result = dialog.getByRole("list", { name: "Test result" });
+      await result.waitFor({ timeout: 20_000 });
+      expect(await result.textContent()).toMatch(/initialize.*tools\/list/s);
+      await expect(dialog.locator(".test-steps .tone-bad").count()).resolves.toBe(0);
+      await shot(page, "35-mcp-add-server");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      const panel = page.getByRole("region", { name: "MCP server clickland" });
+      await panel.waitFor();
+      await expect(panel.getByRole("switch").isChecked()).resolves.toBe(true);
+      // The header never comes back to the page.
+      expect(JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:servers", { context: "orbstack" })))).not.toContain(key);
+      await panel.getByRole("button", { name: "Test" }).click();
+      await panel.getByRole("list", { name: "clickland tools" }).waitFor({ timeout: 20_000 });
+      await panel.getByRole("button", { name: "Preview list_services" }).click();
+      const before = viewFrames(page).length;
+      await expect.poll(() => viewFrames(page).length, { timeout: 30_000 }).toBeGreaterThan(before);
+      const frame = viewFrames(page).at(-1)!;
+      await expect.poll(() => frame.evaluate(() => (globalThis as any).document.body.innerText.trim().length).catch(() => 0), { timeout: 30_000 }).toBeGreaterThan(20);
+      await page.waitForTimeout(800);
+      await panel.scrollIntoViewIfNeeded();
+      await shot(page, "36-mcp-clickland-view");
+      await page.getByRole("tab", { name: /Calls/ }).click();
+      await page.getByRole("list", { name: "MCP calls" }).locator(".mcp-call", { hasText: "clickland · list_services" }).first().click();
+      await page.getByRole("complementary", { name: "MCP call" }).waitFor();
+      await shot(page, "37-mcp-clickland-call");
+      await page.keyboard.press("Escape");
+      await page.getByRole("tab", { name: /Servers/ }).click();
+    } finally {
+      await fetch(`${CLICKLAND_URL}/api/keys/${id}`, { method: "DELETE", headers: { authorization: `Bearer ${CLICKLAND_ADMIN}` } });
+    }
+  }, 120_000);
+
   it.runIf(claude)("asks Claude why the crash-looping pod fails, and shows the evidence it read", async () => {
     await page.getByRole("button", { name: "Pods", exact: true }).click();
     await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
@@ -317,5 +478,46 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await page.locator(".drawer").getByRole("button", { name: "Close details" }).click();
     await shot(page, "19-1024-dock");
     await page.setViewportSize({ width: 1440, height: 880 });
+  }, 360_000);
+
+  it.runIf(claude)("shows cluster_overview's health card and describe's object card inline in the dock, dark and light", async () => {
+    const dock = page.getByRole("complementary", { name: "Claude Code" });
+    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
+    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    await box.fill("Call the cluster_overview tool, then the describe tool for pod orders-api in namespace landlens-dev (use list_resources first if you need its full name). Answer in one sentence.");
+    await box.press("Enter");
+    const stop = dock.getByRole("button", { name: "Stop" });
+    await stop.waitFor({ timeout: 30_000 });
+    const deadline = Date.now() + 240_000;
+    while (await stop.count()) {
+      if (Date.now() > deadline) throw new Error("the agent did not finish in 4 minutes");
+      const ask = dock.locator(".ask button.primary").first();
+      if (await ask.count()) await ask.click();
+      await page.waitForTimeout(500);
+    }
+    const health = await viewWith(page, ".verdict");
+    const object = await viewWith(page, "button:has-text('Open in Landlens')");
+    expect(await dock.locator(".tool-app iframe").count()).toBeGreaterThanOrEqual(2);
+    await page.waitForTimeout(500);
+    await dock.locator(".tool-app").first().scrollIntoViewIfNeeded();
+    await shot(page, "40-dock-health-card");
+    await shot(page, "41-light-dock-health-card", "light");
+    await dock.locator(".tool-app").last().scrollIntoViewIfNeeded();
+    await shot(page, "42-dock-object-card");
+    await shot(page, "43-light-dock-object-card", "light");
+    expect(await health.evaluate(() => (globalThis as any).document.documentElement.getAttribute("data-theme"))).toBe("light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    // "Open in Landlens" takes the main view to the pod.
+    await object.locator("button", { hasText: "Open in Landlens" }).click();
+    await expect.poll(async () => (await page.locator(".drawer").textContent().catch(() => "")) ?? "", { timeout: 30_000 }).toContain("orders-api");
+    await shot(page, "44-open-in-landlens");
+    // The calls are logged against the agent session and paired with their cards.
+    await page.getByRole("button", { name: "MCP", exact: true }).click();
+    await page.getByRole("tab", { name: /Calls/ }).click();
+    const row = page.getByRole("list", { name: "MCP calls" }).locator(".mcp-call", { hasText: "landlens-kube · describe" }).first();
+    await row.click();
+    const drawer = page.getByRole("complementary", { name: "MCP call" });
+    await expect.poll(() => drawer.textContent()).toContain("Dock card");
+    await shot(page, "45-mcp-agent-call-detail");
   }, 360_000);
 });

@@ -8,7 +8,7 @@ import { Ic, kindIcon, MOD } from "./icons";
 import { SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview";
+export type Current = NavItem | "overview" | "mcp";
 
 export function Sidebar(props: {
   cluster: ClusterInfo;
@@ -117,6 +117,7 @@ export function Sidebar(props: {
       </button>
       <nav className="nav">
         {item("overview", "Overview", "overview", props.current === "overview", props.badges.overview, () => props.onPick("overview"))}
+        {item("mcp", "MCP", "mcp", props.current === "mcp", undefined, () => props.onPick("mcp"))}
         {props.navError ? <p className="small tone-bad">{props.navError}</p> : null}
         {props.sections.map(([section, items]) => {
           const open = rail || !closed.has(section);

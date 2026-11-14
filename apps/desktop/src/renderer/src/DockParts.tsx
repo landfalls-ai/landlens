@@ -1,8 +1,10 @@
 // What the dock draws: messages, thinking, tool calls grouped into one list, the plan, and the agent's questions.
 import type { AgentPermissionRequest } from "@landlens/contracts";
-import { AlignLeft, ArrowDown, Check, ChevronRight, CircleX, Ellipsis, Eye, FileText, Search, Terminal, Wrench, X, type LucideIcon } from "lucide-react";
+import { Activity, AlignLeft, ArrowDown, Check, ChevronRight, CircleX, Ellipsis, Eye, FileText, Plug, Search, Terminal, Wrench, X, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AskContext } from "./AgentDock";
+import { AppFrame } from "./AppFrame";
+import type { ObjectTarget } from "./app-host";
 import { Ic, kindIcon } from "./icons";
 import { Markdown } from "./Markdown";
 
@@ -15,8 +17,11 @@ export type Item =
   | { type: "note"; text: string; tone?: "bad" };
 export type PlanEntry = { content: string; status: string; priority?: string };
 
+/** What a tool card needs to show its call's MCP App view: toolCallId → gateway call id. */
+export type Views = { views?: Map<string, string>; onOpenObject?: (t: ObjectTarget) => void };
+
 /** Consecutive tool calls render as one bordered list. */
-export function Transcript({ items, busy }: { items: Item[]; busy: boolean }) {
+export function Transcript({ items, busy, views, onOpenObject }: { items: Item[]; busy: boolean } & Views) {
   const out: ReactNode[] = [];
   for (let i = 0; i < items.length; i++) {
     const it = items[i]!;
@@ -24,7 +29,7 @@ export function Transcript({ items, busy }: { items: Item[]; busy: boolean }) {
       const group: Tool[] = [];
       while (i < items.length && items[i]!.type === "tool") group.push((items[i++] as { tool: Tool }).tool);
       i--;
-      out.push(<div key={`g${i}`} className="tool-group">{group.map((t) => <ToolRow key={t.id} tool={t} />)}</div>);
+      out.push(<div key={`g${i}`} className="tool-group">{group.map((t) => <ToolRow key={t.id} tool={t} {...(views ? { views } : {})} {...(onOpenObject ? { onOpenObject } : {})} />)}</div>);
     } else out.push(<Entry key={i} item={it} streaming={busy && i === items.length - 1} />);
   }
   return <>{out}</>;
@@ -60,13 +65,14 @@ function Entry({ item, streaming }: { item: Item; streaming: boolean }) {
 }
 
 const KIND_ICON: Record<string, LucideIcon> = { read: Eye, search: Search, execute: Terminal, fetch: ArrowDown, think: Ellipsis };
-const MCP_ICON: Record<string, LucideIcon> = { get_logs: AlignLeft, get_resource: FileText, describe: Eye, list_resources: Search, cluster_overview: Eye, get_events: AlignLeft };
+const MCP_ICON: Record<string, LucideIcon> = { get_logs: AlignLeft, get_resource: FileText, describe: Eye, list_resources: Search, cluster_overview: Eye, get_events: AlignLeft, metrics: Activity };
 const STATUS_WORD: Record<string, string> = { pending: "queued", in_progress: "running", completed: "done", failed: "failed" };
 
-function ToolRow({ tool }: { tool: Tool }) {
+function ToolRow({ tool, views, onOpenObject }: { tool: Tool } & Views) {
   const { label, detail, icon } = toolLabel(tool);
   const word = STATUS_WORD[tool.status] ?? tool.status;
-  return (
+  const call = tool.status === "completed" ? views?.get(tool.id) : undefined;
+  const row = (
     <details className={`tool tool-${tool.status}`}>
       <summary>
         <span className="tool-icon"><Ic icon={icon} size={13} /></span>
@@ -79,6 +85,14 @@ function ToolRow({ tool }: { tool: Tool }) {
       {tool.input ? <Well text={inputText(tool.input)} /> : null}
       {tool.output ? <Well text={tool.output} className="tool-out" /> : null}
     </details>
+  );
+  if (!call) return row;
+  // The view sits under its card, open, while the text stays one click away in the card.
+  return (
+    <div className="tool-with-app">
+      {row}
+      <div className="tool-app"><AppFrame call={call} onOpenObject={onOpenObject ?? (() => {})} /></div>
+    </div>
   );
 }
 
@@ -97,15 +111,20 @@ export function Well({ text, className = "" }: { text: string; className?: strin
   );
 }
 
-/** "describe pod landlens-dev/orders-api-…" for the cluster tools; the command for Bash; the agent's title otherwise. */
+/**
+ * "describe pod landlens-dev/orders-api-…" for the cluster tools, "clickland · list services" for a proxied server's;
+ * the command for Bash; the agent's title otherwise.
+ */
 function toolLabel(t: Tool): { label: string; detail?: string; icon: LucideIcon } {
   const name = t.mcp ?? t.title;
-  const m = /^mcp__landlens-kube__(\w+)/.exec(name);
+  const m = /^mcp__([a-z0-9-]+)__([\w.-]+)/.exec(name);
   const a = (t.input ?? {}) as Record<string, unknown>;
-  const icon = (m && MCP_ICON[m[1]!]) || KIND_ICON[t.kind ?? ""] || Wrench;
+  const own = m?.[1] === "landlens-kube";
+  const icon = (own && MCP_ICON[m![2]!]) || KIND_ICON[t.kind ?? ""] || (m ? Plug : Wrench);
   if (m) {
-    const target = [a.kind ?? a.what, [a.namespace, a.name].filter(Boolean).join("/")].filter(Boolean).join(" ") + (a.previous ? " · previous" : "");
-    return { label: m[1]!.replace(/_/g, " "), icon, ...(target.trim() ? { detail: target.trim() } : {}) };
+    const target = [a.kind ?? a.what ?? a.scope, [a.namespace, a.name].filter(Boolean).join("/")].filter(Boolean).join(" ") + (a.previous ? " · previous" : "");
+    const tool = m[2]!.replace(/_/g, " ");
+    return { label: own ? tool : `${m[1]} · ${tool}`, icon, ...(target.trim() ? { detail: target.trim() } : {}) };
   }
   if (typeof a.command === "string") return { label: "shell", detail: a.command, icon: Terminal };
   return { label: t.title, icon };

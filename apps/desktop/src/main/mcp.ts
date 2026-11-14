@@ -82,7 +82,8 @@ export class McpService {
       gateway: this.gateway.url,
       servers: [builtin, ...remotes],
       canStore: this.deps.store.canStore,
-      presets: [{ id: "clickland", name: "Clickland", url, reachable: await reachable(url), hasKey: c.hasKey, added: remotes.some((s) => s.url === url) }],
+      // Only a Clickland you connected is probed: Landlens doesn't knock on addresses you haven't given it a key for.
+      presets: [{ id: "clickland", name: "Clickland", url, reachable: c.hasKey ? await reachable(url) : false, hasKey: c.hasKey, added: remotes.some((s) => s.url === url) }],
     };
   }
 

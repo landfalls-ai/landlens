@@ -9,6 +9,8 @@ export type StatusFilter = "all" | "bad" | "warn";
 export function Toolbar(props: {
   title: string;
   count?: number;
+  /** A page with no count (MCP). */
+  hideCount?: boolean;
   updatedAt?: string;
   seg?: { value: StatusFilter; all: number; bad: number; warn: number; onChange: (v: StatusFilter) => void };
   namespaces?: { list: string[]; value: string; onChange: (ns: string) => void };
@@ -18,7 +20,7 @@ export function Toolbar(props: {
   return (
     <header className="toolbar">
       <h1 className="view-title">{props.title}</h1>
-      {props.count !== undefined || !props.updatedAt ? <span className="count-badge" aria-live="polite">{props.count ?? "…"}</span> : null}
+      {!props.hideCount && (props.count !== undefined || !props.updatedAt) ? <span className="count-badge" aria-live="polite">{props.count ?? "…"}</span> : null}
       {props.updatedAt ? <Updated at={props.updatedAt} /> : null}
       {props.seg ? (
         <div className="seg" role="group" aria-label="Status">

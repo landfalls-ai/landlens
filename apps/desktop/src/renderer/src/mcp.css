@@ -1,0 +1,61 @@
+/* The MCP page, the call drawer and MCP App views (docs/mcp.md). Iris tokens only (docs/design.md). */
+
+/* page */
+.ov.mcp { gap: 12px; }
+.mcp-tabs { padding: 0; margin: -6px 0 2px; }
+.mcp-tabs .count { margin-left: 2px; }
+.mcp-intro { display: flex; align-items: flex-start; gap: 16px; }
+.mcp-intro p { margin: 0; flex: 1; font-size: 12.5px; max-width: 760px; }
+.mcp-preset-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; }
+.mcp-preset { box-shadow: inset 0 0 0 1px var(--accent-line), var(--shadow-1); }
+.mcp-server .panel-head { gap: 10px; }
+.mcp-server .panel-head h3 { font-family: var(--mono); font-size: 13px; }
+.mcp-server-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 10px 16px 0; }
+.mcp-server-meta .mono { overflow-wrap: anywhere; }
+.mcp-test { margin: 10px 16px 0; }
+.mcp-none { margin: 10px 16px 14px; }
+.mcp-tools { padding-top: 8px; }
+.mcp-tool + .mcp-tool { border-top: 1px solid var(--line); }
+.mcp-tool-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; min-width: 0; }
+.mcp-tool-row .badge, .mcp-tool-row .chip { flex: none; }
+.mcp-tool-row .ov-name .mono { font-size: 12.5px; }
+.mcp-tool-row .ov-detail { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mcp-try { height: 26px; }
+.mcp-tried { display: grid; gap: 6px; justify-items: start; padding: 0 10px 10px; }
+.mcp-tried > :first-child { width: 100%; }
+.mcp-tried .tool-io { border: 0; border-radius: var(--r-2); }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.switch input { appearance: none; width: 28px; height: 16px; border-radius: 8px; background: var(--bg-4); box-shadow: inset 0 0 0 1px var(--line-2); position: relative; margin: 0; cursor: pointer; transition: background var(--dur-2) var(--ease); flex: none; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--ink-2); transition: transform var(--dur-2) var(--ease), background var(--dur-2) var(--ease); }
+.switch input:checked { background: var(--accent-fill); box-shadow: none; }
+.switch input:checked::after { transform: translateX(12px); background: #fff; }
+.switch input:disabled { opacity: .5; }
+.form-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; }
+
+/* calls */
+.mcp-filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mcp-filters .seg { margin-left: 0; }
+.mcp-call { width: 100%; text-align: left; }
+.mcp-call.on { background: var(--sel); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.mcp-call .ov-name .mono { font-size: 12.5px; flex: none; }
+.mcp-call .chip { flex: none; }
+.mcp-ms { flex: none; width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.mcp-age { flex: none; width: 64px; text-align: right; }
+@container main (max-width: 760px) { .mcp-age, .mcp-call .chip { display: none; } }
+
+/* drawer */
+.mcp-drawer .drawer-body .tool-io { border: 0; border-radius: var(--r-2); }
+.mcp-requests { list-style: none; margin: 0; padding: 6px 10px; display: grid; gap: 4px; background: var(--bg-0); border-radius: var(--r-2); }
+.mcp-requests li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11.5px; }
+.mcp-requests .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+
+/* MCP App views: inline, under their tool card or in a preview */
+.app-frame { position: relative; border-radius: var(--r-3); overflow: hidden; background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); min-width: 0; }
+.app-frame.bordered { box-shadow: inset 0 0 0 1px var(--line-2); }
+.app-frame iframe { display: block; width: 100%; border: 0; background: transparent; color-scheme: normal; transition: height var(--dur-2) var(--ease), opacity var(--dur-2) var(--ease); }
+.app-frame.loading iframe { opacity: 0; }
+.app-frame.failed { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 12px; color: var(--ink-2); }
+.tool-with-app { min-width: 0; }
+.tool-with-app + .tool, .tool + .tool-with-app, .tool-with-app + .tool-with-app { border-top: 1px solid var(--line); }
+.tool-app { padding: 0 8px 8px; }
+.tool-app .app-frame { box-shadow: none; border-radius: var(--r-2); }
