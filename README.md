@@ -6,7 +6,7 @@ The land family's Kubernetes IDE, designed from a reverse-engineering study of
 [ACP](https://agentclientprotocol.com) client, so your own Claude Code runs inside the IDE, sees the cluster you are
 looking at, and helps you debug it and suggests what to do.
 
-Status: **study done, plan proposed.** Start at [docs/research.md](docs/research.md), then [docs/plan.md](docs/plan.md).
+Status: **study done, plan approved; wave 1 (the shell) in progress.** Start at [docs/research.md](docs/research.md), then [docs/plan.md](docs/plan.md).
 
 ```bash
 scripts/fetch-upstream.sh       # OpenLens, Freelens, ACP spec, ACP TypeScript SDK, claude-agent-acp into upstream/ (pinned)

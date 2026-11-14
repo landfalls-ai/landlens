@@ -10,8 +10,8 @@ Paths are relative to `~/WorkSpace`. The surfaces below come from each project's
 - **Clickland gives the agent evidence.** Its MCP server (`/api/mcp`, 13 read tools) can be handed to the Claude
   session next to Landlens's own cluster MCP server, so "why is this pod crashlooping" can read the pod *and* its
   logs, traces and metrics. Landlens also sends its own telemetry to Clickland's collector, like every land app.
-- **Landfall gets rooms from Landlens.** "Open a war room" on a failing workload posts a remote trigger with entity
-  hints; a session's findings can go to the room's timeline. Landfall's MCP connector can be handed to the session
+- **Landfall gets rooms from Landlens, through Landflow.** "Open a war room" on a failing workload calls Landflow's
+  triage flow with entity hints; a session's findings can go to the room's timeline. Landfall's MCP connector can be handed to the session
   so the agent sees the incident.
 - **landfall-cluster-agent already solved redaction.** Its strip-and-redact rules are the rules Landlens's MCP server
   should apply before any object reaches the model.
@@ -79,8 +79,9 @@ Paths are relative to `~/WorkSpace`. The surfaces below come from each project's
 - **The cluster itself**: Landflow runs in `landflow-dev` on the same OrbStack cluster, so it is a real workload
   to debug with Landlens (read-only, per the local-only rules).
 
-## Questions for the user
+## Decided
 
-1. Should Landlens send Landfall rooms directly (needs a remote-source connection) or only through Landflow's
-   triage flow (the family default)?
-2. Should session summaries go to the brain automatically (after a confirm) or only when asked?
+1. **Landfall rooms open only through Landflow's triage flow** (the family default; user, 14 November 2026). Landlens
+   calls a Landflow webhook flow with the resource and its evidence; Landflow decides and opens or attaches the room.
+   Landlens never calls Landfall's `POST /triggers` itself.
+2. Session summaries to the brain: open, decided in wave 6.

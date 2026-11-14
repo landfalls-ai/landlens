@@ -1,6 +1,6 @@
 # Landlens: the plan
 
-Status: **proposed, 14 November 2026.** Not approved yet. Built from `docs/research.md`.
+Status: **approved, 14 November 2026.** Built from `docs/research.md`. Decisions: the waves in this order (the agent before the workbench); the repository is public at `landfalls-ai/landlens`; Landfall war rooms are opened only through Landflow's triage flow.
 
 ## What Landlens is
 
@@ -141,9 +141,3 @@ Each wave ends with the app running against the OrbStack cluster, tests green an
 - Bundled kubectl/helm downloads at start; we use the ones on `PATH` and say clearly when missing.
 - Node shell as Lens does it (a privileged `nsenter` pod in `kube-system`); maybe later, behind the write gate.
 - One iframe per cluster with its own origin; one renderer with a cluster switcher is enough without extensions.
-
-## Questions for the user
-
-1. Approve the plan and waves (ACP before the workbench)?
-2. Create `landfalls-ai/landlens` on GitHub now (public, like Clickland), or keep it local until wave 2?
-3. Landfall rooms: only through Landflow's triage flow (family default), or also directly?

@@ -4,14 +4,14 @@ The land family's Kubernetes IDE: a desktop app, designed by reverse-engineering
 Freelens, whose headline feature is an ACP (Agent Client Protocol) client. Landlens runs the user's Claude Code as an
 ACP agent, hands it the cluster the user is looking at (through a Landlens MCP server, read-only unless the user
 approves a write), and shows the session inside the IDE: messages, tool calls, permission prompts, YAML diffs and
-suggestions. Today the repository holds the study and the proposed plan. No product code yet.
+suggestions. The study and the approved plan are in `docs/`; the code is being built in waves (`docs/plan.md`).
 
 ## Read first
 
 - `docs/README.md`: the docs index.
 - `docs/research.md`: what we learned and what Landlens takes from it. The detail is in `docs/research/`
   (`lens-architecture.md`, `lens-features.md`, `acp.md`, `land-family.md`).
-- `docs/plan.md`: the proposed architecture and waves (proposed, not yet approved).
+- `docs/plan.md`: the approved architecture and waves.
 - `study/README.md`: the evidence the research cites (Craft Anything captures, source graphs, the ACP handshake).
 
 ## Layout
