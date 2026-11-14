@@ -1,6 +1,9 @@
 // Enough Markdown for an agent's answers: paragraphs, headings, lists, code blocks, inline code, bold, italics and
 // links. It builds React elements from text, never HTML, so nothing the agent writes can run in the page.
-import { Fragment, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
+import { Fragment, useState, type ReactNode } from "react";
+import { Ic } from "./icons";
+import { copyText } from "./present";
 
 export function Markdown({ text }: { text: string }) {
   const blocks: ReactNode[] = [];
@@ -15,7 +18,7 @@ export function Markdown({ text }: { text: string }) {
       i++;
       while (i < lines.length && !/^\s*```/.test(lines[i]!)) body.push(lines[i++]!);
       i++; // closing fence
-      blocks.push(<pre key={key++} className="md-code" data-lang={fence[1] || undefined}><code>{body.join("\n")}</code></pre>);
+      blocks.push(<CodeBlock key={key++} lang={fence[1]} code={body.join("\n")} />);
       continue;
     }
     if (!line.trim()) {
@@ -48,6 +51,25 @@ export function Markdown({ text }: { text: string }) {
     blocks.push(<p key={key++}>{inline(para.join(" "))}</p>);
   }
   return <div className="md">{blocks}</div>;
+}
+
+/** A fenced block: horizontal scroll, and a Copy button on hover. */
+function CodeBlock({ code, lang }: { code: string; lang?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="md-pre">
+      <pre className="md-code" data-lang={lang || undefined}><code>{code}</code></pre>
+      <button
+        type="button"
+        className="secondary md-copy"
+        aria-label="Copy code"
+        onClick={() => void copyText(code).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        })}
+      ><Ic icon={copied ? Check : Copy} size={12} />{copied ? "Copied" : "Copy"}</button>
+    </div>
+  );
 }
 
 /** `code`, **bold**, *italic*, [text](https://…) */

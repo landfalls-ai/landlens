@@ -8,8 +8,8 @@ export type Column = { id: string; label: string; cell: (o: KubeObject, now: num
 
 type Spec = { group: string; resource: string; label: string; section: string; columns?: Column[] };
 
-const name: Column = { id: "name", label: "Name", cell: (o) => ({ text: o.metadata.name }), width: "minmax(220px, 2fr)" };
-const namespace: Column = { id: "namespace", label: "Namespace", cell: (o) => ({ text: o.metadata.namespace ?? "" }) };
+const name: Column = { id: "name", label: "Name", cell: (o) => ({ text: o.metadata.name }), width: "minmax(180px, 2fr)" };
+const namespace: Column = { id: "namespace", label: "Namespace", cell: (o) => ({ text: o.metadata.namespace ?? "" }), width: "minmax(100px, 140px)" };
 const ageCol: Column = {
   id: "age",
   label: "Age",
@@ -17,7 +17,7 @@ const ageCol: Column = {
     const t = Date.parse(o.metadata.creationTimestamp ?? "");
     return { text: age(t, now), sort: -t, title: o.metadata.creationTimestamp ?? "" };
   },
-  width: "70px",
+  width: "56px",
 };
 
 const replicas = (ready: (o: KubeObject) => number, want: (o: KubeObject) => number): Column => ({
@@ -26,9 +26,10 @@ const replicas = (ready: (o: KubeObject) => number, want: (o: KubeObject) => num
   cell: (o) => {
     const r = ready(o) ?? 0;
     const w = want(o) ?? 0;
-    return { text: `${r}/${w}`, tone: r < w ? "warn" : "ok", sort: w - r };
+    // Ready is the status of a workload: none ready is a failure, some is a warning.
+    return { text: `${r}/${w}`, tone: r >= w ? "ok" : r === 0 ? "bad" : "warn", sort: w - r };
   },
-  width: "80px",
+  width: "64px",
 });
 
 const text = (id: string, label: string, f: (o: KubeObject) => unknown, width?: string): Column => ({
@@ -41,10 +42,10 @@ const text = (id: string, label: string, f: (o: KubeObject) => unknown, width?: 
 export const SPECS: Spec[] = [
   { section: "Workloads", group: "", resource: "pods", label: "Pods", columns: [
     name, namespace,
-    { id: "ready", label: "Ready", cell: (o) => podReady(o), width: "70px" },
-    { id: "status", label: "Status", cell: (o) => podStatus(o), width: "minmax(130px, 1fr)" },
-    { id: "restarts", label: "Restarts", cell: (o) => podRestarts(o), width: "80px" },
-    text("node", "Node", (o) => o.spec?.nodeName),
+    { id: "ready", label: "Ready", cell: (o) => podReady(o), width: "60px" },
+    { id: "status", label: "Status", cell: (o) => podStatus(o), width: "minmax(150px, 180px)" },
+    { id: "restarts", label: "Restarts", cell: (o) => podRestarts(o), width: "72px" },
+    text("node", "Node", (o) => o.spec?.nodeName, "minmax(90px, 150px)"),
     ageCol,
   ] },
   { section: "Workloads", group: "apps", resource: "deployments", label: "Deployments", columns: [
@@ -98,7 +99,7 @@ export const SPECS: Spec[] = [
   { section: "Access", group: "rbac.authorization.k8s.io", resource: "clusterroles", label: "Cluster roles" },
   { section: "Access", group: "rbac.authorization.k8s.io", resource: "clusterrolebindings", label: "Cluster role bindings" },
   { section: "Cluster", group: "", resource: "nodes", label: "Nodes", columns: [
-    name, { id: "status", label: "Status", cell: (o) => nodeStatus(o), width: "110px" }, text("roles", "Roles", nodeRoles),
+    name, { id: "status", label: "Status", cell: (o) => nodeStatus(o), width: "130px" }, text("roles", "Roles", nodeRoles),
     text("version", "Version", (o) => o.status?.nodeInfo?.kubeletVersion, "130px"), ageCol,
   ] },
   { section: "Cluster", group: "", resource: "namespaces", label: "Namespaces", columns: [

@@ -27,22 +27,23 @@ api.on("watch:event", (e: WatchEvent) => {
 export type WatchState = { items: KubeObject[]; loading: boolean; error?: { status: number; message: string } };
 
 export function useWatch(req: WatchRequest | undefined): WatchState {
-  const [state, setState] = useState<WatchState>({ items: [], loading: true });
   const key = req ? JSON.stringify(req) : "";
+  // Tagged with the request it answers, so a new request never shows the previous one's items.
+  const [state, setState] = useState<WatchState & { key: string }>({ items: [], loading: true, key: "" });
   useEffect(() => {
     if (!req) return;
-    setState({ items: [], loading: true });
+    setState({ items: [], loading: true, key });
     let byUid = new Map<string, KubeObject>();
     let id: string | undefined;
     let closed = false;
     const apply = (e: WatchEvent) => {
-      if (e.type === "error") return setState((s) => ({ ...s, loading: false, error: { status: e.status, message: e.message } }));
+      if (e.type === "error") return setState((s) => ({ ...s, key, loading: false, error: { status: e.status, message: e.message } }));
       if (e.type === "snapshot") byUid = new Map(e.items.map((o) => [o.metadata.uid, o]));
       else {
         for (const o of e.upserted) byUid.set(o.metadata.uid, o);
         for (const uid of e.removed) byUid.delete(uid);
       }
-      setState({ items: [...byUid.values()], loading: false });
+      setState({ items: [...byUid.values()], loading: false, key });
     };
     api.invoke("watch:subscribe", req).then(
       ({ subscription }) => {
@@ -52,7 +53,7 @@ export function useWatch(req: WatchRequest | undefined): WatchState {
         for (const e of early.get(subscription) ?? []) apply(e);
         early.delete(subscription);
       },
-      (err: ApiError) => setState({ items: [], loading: false, error: { status: err.status ?? 500, message: err.message } }),
+      (err: ApiError) => setState({ items: [], loading: false, key, error: { status: err.status ?? 500, message: err.message } }),
     );
     return () => {
       closed = true;
@@ -62,8 +63,10 @@ export function useWatch(req: WatchRequest | undefined): WatchState {
       }
     };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return state;
+  return state.key === key ? state : STALE;
 }
+
+const STALE: WatchState = { items: [], loading: true };
 
 /** Re-render every few seconds so ages stay current. */
 export function useNow(intervalMs = 5000): number {

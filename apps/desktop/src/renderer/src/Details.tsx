@@ -1,17 +1,38 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
-import { useEffect, useState } from "react";
+import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
+import { Box, Check, ChevronRight, CircleX, Clock, Copy, Server, Sparkles, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
 import { api, type ApiError } from "./api";
-import { age, podStatus } from "@landlens/kube/status";
+import { Ic, iconOfKind, kindIcon } from "./icons";
+import { copyText, duration, splitName, statusTone } from "./present";
+import { Status } from "./ResourceTable";
+import { Yaml } from "./Yaml";
 
-type Tab = "overview" | "yaml" | "events";
+type Tab = "overview" | "events" | "yaml";
+const TABS: Tab[] = ["overview", "events", "yaml"];
+export type NavTarget = { kind: string; name: string; namespace?: string };
 
-/** The details drawer: what this object is, its live state, its events, and its YAML. */
-export function Details(props: { handle: string; type: ResourceType; object: KubeObject; now: number; onClose: () => void; onAsk: (c: AskContext) => void }) {
+/** Waiting reasons that mean a container can't run (kept in step with packages/kube/src/health.ts). */
+const BAD_WAITING = new Set(["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "CreateContainerError", "InvalidImageName", "RunContainerError"]);
+
+/** The details drawer: what this object is, what is wrong with it, its events, and its YAML. */
+export function Details(props: {
+  handle: string;
+  type: ResourceType;
+  object: KubeObject;
+  /** The object's tone from its list row (Ready for workloads), when it has one. */
+  tone?: Tone;
+  now: number;
+  onClose: () => void;
+  onAsk: (c: AskContext) => void;
+  onNavigate: (t: NavTarget) => void;
+}) {
   const { object: o, type, now } = props;
   const [tab, setTab] = useState<Tab>("overview");
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     setEvents(undefined);
@@ -20,16 +41,33 @@ export function Details(props: { handle: string; type: ResourceType; object: Kub
       .then((r) => setEvents(r.items), (e: ApiError) => setEvents({ error: e.message }));
   }, [props.handle, o.metadata.uid, o.metadata.resourceVersion]);
 
+  // [ and ] step through the tabs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== "[" && e.key !== "]")) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable]") || t.closest(".dock"))) return;
+      setTab((cur) => TABS[(TABS.indexOf(cur) + (e.key === "]" ? 1 : TABS.length - 1)) % TABS.length]!);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const pod = type.resource === "pods" && type.group === "";
   const view = isSecret(type) ? redactSecret(o) : o;
+  const status = pod ? podStatus(o) : undefined;
+  const tone = status ? statusTone(status.text, status.tone) : props.tone;
+  const { base, hash } = splitName(o);
+  const created = Date.parse(o.metadata.creationTimestamp ?? "");
+  const warnings = Array.isArray(events) && events.some((e: any) => e.type === "Warning");
 
   return (
     <aside className="drawer" aria-label={`${type.kind} ${o.metadata.name}`}>
       <header className="drawer-head">
-        <div>
-          <div className="eyebrow">{type.kind}{o.metadata.namespace ? ` · ${o.metadata.namespace}` : ""}</div>
-          <h2 className="drawer-title">{o.metadata.name}</h2>
-        </div>
-        <div className="drawer-actions">
+        <div className="drawer-top">
+          <span className={`kind-tile sm${tone === "bad" || tone === "warn" ? ` ${tone}` : ""}`}><Ic icon={kindIcon(type.resource)} size={15} /></span>
+          <div className="eyebrow">{type.kind}{o.metadata.namespace ? <><span className="sep"> / </span>{o.metadata.namespace}</> : null}</div>
+          <span className="grow" />
           {isSecret(type) ? null : (
             <button
               className="ask-btn"
@@ -37,81 +75,213 @@ export function Details(props: { handle: string; type: ResourceType; object: Kub
                 ref: { group: type.group, version: type.version, resource: type.resource, name: o.metadata.name, ...(o.metadata.namespace ? { namespace: o.metadata.namespace } : {}) },
                 label: `${type.kind} ${o.metadata.namespace ? `${o.metadata.namespace}/` : ""}${o.metadata.name}`,
               })}
-            >✦ Ask Claude</button>
+            ><Ic icon={Sparkles} size={14} />Ask Claude</button>
           )}
-          <button className="icon" onClick={props.onClose} aria-label="Close details">✕</button>
+          <button
+            className="icon-btn"
+            aria-label={copied ? "Name copied" : "Copy name"}
+            title={copied ? "Copied" : "Copy name"}
+            onClick={() => void copyText(o.metadata.name).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            })}
+          ><Ic icon={copied ? Check : Copy} size={15} /></button>
+          <button className="icon-btn" onClick={props.onClose} aria-label="Close details" title="Close (Esc)"><Ic icon={X} size={15} /></button>
+        </div>
+        <h2 className="drawer-title">{base}{hash ? <span className="hash">{hash}</span> : null}</h2>
+        <div className="drawer-meta">
+          {status ? <Status text={status.text} tone={status.tone} /> : null}
+          {pod ? (
+            <>
+              <span className="meta"><b className="mono">{podReady(o).text}</b> ready</span>
+              <span className="meta"><b className="mono">{podRestarts(o).text}</b> restarts</span>
+            </>
+          ) : readyOf(o) ? <span className="meta"><b className="mono">{readyOf(o)}</b> ready</span> : null}
+          <span className="meta"><b className="mono">{age(created, now)}</b> old</span>
         </div>
       </header>
-      <nav className="tabs" role="tablist">
-        {(["overview", "events", "yaml"] as Tab[]).map((t) => (
+      <nav className="tabs" role="tablist" aria-label="Details">
+        {TABS.map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
             {t === "yaml" ? "YAML" : t[0]!.toUpperCase() + t.slice(1)}
-            {t === "events" && Array.isArray(events) && events.length ? <span className="count">{events.length}</span> : null}
+            {t === "events" && Array.isArray(events) && events.length ? <span className={"count" + (warnings ? " warn" : "")} aria-hidden="true">{events.length}</span> : null}
           </button>
+        ))}
+        {["Logs", "Metrics"].map((t) => (
+          <button key={t} role="tab" aria-selected={false} aria-disabled="true" tabIndex={-1} title={`${t} arrive in wave 4`}>{t}</button>
         ))}
       </nav>
       <div className="drawer-body">
-        {tab === "overview" && <Overview o={view} type={type} now={now} />}
+        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} />}
         {tab === "events" && <Events events={events} now={now} />}
-        {tab === "yaml" && <pre className="yaml">{stringify(view, { lineWidth: 0 })}</pre>}
+        {tab === "yaml" && <Yaml text={stringify(view, { lineWidth: 0 })} />}
       </div>
     </aside>
   );
 }
 
-function Overview({ o, type, now }: { o: KubeObject; type: ResourceType; now: number }) {
+const LIFECYCLE = ["PodScheduled", "PodReadyToStartContainers", "Initialized", "ContainersReady", "Ready"];
+const lifecycle = (t: string) => (LIFECYCLE.indexOf(t) + 1 || 99);
+
+function readyOf(o: KubeObject): string | undefined {
+  const s = o.status ?? {};
+  if (typeof o.spec?.replicas === "number") return `${s.readyReplicas ?? 0}/${o.spec.replicas}`;
+  if (typeof s.desiredNumberScheduled === "number") return `${s.numberReady ?? 0}/${s.desiredNumberScheduled}`;
+  return undefined;
+}
+
+function Overview({ o, type, now, onNavigate }: { o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void }) {
+  const pod = type.resource === "pods" && type.group === "";
   const created = Date.parse(o.metadata.creationTimestamp ?? "");
-  const conditions: any[] = o.status?.conditions ?? [];
+  // In the order they happened; ties (most of them share the pod's first seconds) in lifecycle order.
+  const conditions: any[] = [...(o.status?.conditions ?? [])].sort(
+    (a, b) => (Date.parse(a.lastTransitionTime ?? "") || 0) - (Date.parse(b.lastTransitionTime ?? "") || 0) || lifecycle(a.type) - lifecycle(b.type),
+  );
+  const owners = o.metadata.ownerReferences ?? [];
+  const annotations = Object.entries(o.metadata.annotations ?? {}).filter(([k]) => k !== "kubectl.kubernetes.io/last-applied-configuration");
   return (
     <div className="overview">
+      {pod ? <Diagnosis pod={o} now={now} /> : null}
       <dl className="facts">
-        <dt>Created</dt><dd title={o.metadata.creationTimestamp}>{age(created, now)} ago</dd>
-        {o.metadata.ownerReferences?.length ? (<><dt>Owner</dt><dd>{o.metadata.ownerReferences.map((r) => `${r.kind}/${r.name}`).join(", ")}</dd></>) : null}
-        {type.resource === "pods" ? (<>
-          <dt>Status</dt><dd className={`tone-${podStatus(o).tone}`}>{podStatus(o).text}</dd>
-          <dt>Node</dt><dd>{o.spec?.nodeName ?? "—"}</dd>
-          <dt>Pod IP</dt><dd className="mono">{o.status?.podIP ?? "—"}</dd>
-        </>) : null}
+        {owners.length ? (
+          <>
+            <dt>Owner</dt>
+            <dd>
+              {owners.map((r) => (
+                <button key={r.uid ?? r.name} className="ref" onClick={() => onNavigate({ kind: r.kind, name: r.name, ...(o.metadata.namespace ? { namespace: o.metadata.namespace } : {}) })}>
+                  <Ic icon={iconOfKind(r.kind)} size={12} />{r.kind}/{r.name}
+                </button>
+              ))}
+            </dd>
+          </>
+        ) : null}
+        {pod ? (
+          <>
+            <dt>Node</dt>
+            <dd>{o.spec?.nodeName ? <button className="ref" onClick={() => onNavigate({ kind: "Node", name: o.spec!.nodeName })}><Ic icon={Server} size={12} />{o.spec.nodeName}</button> : "—"}</dd>
+            <dt>Pod IP</dt><dd className="mono">{o.status?.podIP ?? "—"}</dd>
+          </>
+        ) : null}
+        <dt>Created</dt>
+        <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
-      <Labels title="Labels" map={o.metadata.labels} />
-      {type.resource === "pods" && <Containers pod={o} />}
+      {pod ? <Containers pod={o} now={now} /> : null}
       {conditions.length ? (
         <section>
           <h3>Conditions</h3>
           <ul className="conditions">
-            {conditions.map((c) => (
-              <li key={c.type} className={c.status === "True" ? "tone-ok" : "tone-warn"}>
-                <strong>{c.type}</strong> {c.status}
-                {c.reason ? <span className="muted"> · {c.reason}</span> : null}
-                {c.message ? <div className="muted small">{c.message}</div> : null}
-              </li>
-            ))}
+            {conditions.map((c) => {
+              const on = c.status === "True";
+              const why = [c.reason, c.message].filter(Boolean).join(" · ");
+              return (
+                <li key={c.type} className={on ? "" : "off"} title={why || undefined}>
+                  <Ic icon={on ? Check : X} size={13} className={on ? "tone-ok" : "tone-bad"} />
+                  <span>{c.type}</span>
+                  <span className="sr-only">{on ? "true" : "false"}</span>
+                  {why ? <em>{why}</em> : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
+      ) : null}
+      <Labels title="Labels" map={o.metadata.labels} />
+      {annotations.length ? (
+        <details className="fold">
+          <summary><Ic icon={ChevronRight} size={12} />Annotations <span className="count">{annotations.length}</span></summary>
+          <div className="chips">{annotations.map(([k, v]) => <span key={k} className="chip mono" title={`${k}=${v}`}><i>{k}</i>{v}</span>)}</div>
+        </details>
       ) : null}
     </div>
   );
 }
 
-function Containers({ pod }: { pod: KubeObject }) {
+/** For a pod that isn't fine: what is wrong, in one card, from the pod object alone. */
+function Diagnosis({ pod, now }: { pod: KubeObject; now: number }) {
+  const status = podStatus(pod);
+  const tone = statusTone(status.text, status.tone);
+  if (tone !== "bad" && tone !== "warn") return null;
+  const all: any[] = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])];
+  const c = all.find((x) => BAD_WAITING.has(x.state?.waiting?.reason) || (x.state?.terminated && x.state.terminated.exitCode !== 0))
+    ?? all.find((x) => x.lastState?.terminated && !x.ready)
+    ?? all.find((x) => x.state?.waiting);
+  const waiting = c?.state?.waiting;
+  const term = c?.state?.terminated ?? c?.lastState?.terminated;
+  const name = c ? <span className="mono">{c.name}</span> : null;
+
+  let title: ReactNode;
+  let message: string | undefined;
+  if (waiting?.reason === "CrashLoopBackOff") title = <>Container {name} keeps exiting</>;
+  else if (waiting?.reason === "ImagePullBackOff" || waiting?.reason === "ErrImagePull" || waiting?.reason === "InvalidImageName") {
+    title = <>Container {name} can't pull its image</>;
+    message = waiting.message;
+  } else if (waiting && BAD_WAITING.has(waiting.reason)) {
+    title = <>Container {name} can't start</>;
+    message = waiting.message;
+  } else if (term?.reason === "OOMKilled") title = <>Container {name} ran out of memory</>;
+  else if (c && term && tone === "bad") title = <>Container {name} exited</>;
+  else {
+    const unsched = (pod.status?.conditions ?? []).find((x: any) => x.type === "PodScheduled" && x.status === "False");
+    title = <>Pod is waiting: {status.text}</>;
+    message = unsched?.message ?? waiting?.message;
+  }
+
+  // "back-off 5m0s restarting failed container=…": when the next try is.
+  let next: string | undefined;
+  const backoff = /back-off (\d+m)?(\d+s)?/.exec(waiting?.message ?? "");
+  if (backoff && c?.lastState?.terminated?.finishedAt) {
+    const ms = (parseInt(backoff[1] ?? "0") * 60 + parseInt(backoff[2] ?? "0")) * 1000;
+    const at = Date.parse(c.lastState.terminated.finishedAt) + ms;
+    if (at > now) next = `retry in ${duration(at - now)}`;
+  }
+  const ran = term?.startedAt && term?.finishedAt ? Date.parse(term.finishedAt) - Date.parse(term.startedAt) : NaN;
+
+  return (
+    <section className={`diag ${tone}`} aria-label="Diagnosis">
+      <div className="diag-head">
+        <Ic icon={tone === "bad" ? CircleX : Clock} size={15} />
+        <strong>{title}</strong>
+        {next ? <span className="diag-next mono">{next}</span> : null}
+      </div>
+      {term ? (
+        <div className="diag-facts">
+          <span>Exit code <b className="mono">{term.exitCode}</b></span>
+          {term.reason ? <span>Reason <b>{term.reason}</b></span> : null}
+          {Number.isFinite(ran) ? <span>Ran for <b className="mono">{duration(ran)}</b></span> : null}
+        </div>
+      ) : null}
+      {message ? <div className="diag-msg">{message}</div> : null}
+      {term?.message ? <pre className="diag-log"><span className="ln">last line</span>{String(term.message).trim().split("\n").at(-1)}</pre> : null}
+    </section>
+  );
+}
+
+function Containers({ pod, now }: { pod: KubeObject; now: number }) {
   const statuses = new Map<string, any>((pod.status?.containerStatuses ?? []).map((c: any) => [c.name, c]));
+  const specs: any[] = pod.spec?.containers ?? [];
+  if (!specs.length) return null;
   return (
     <section>
       <h3>Containers</h3>
       <ul className="containers">
-        {(pod.spec?.containers ?? []).map((c: any) => {
+        {specs.map((c) => {
           const s = statuses.get(c.name);
-          const state = s?.state ? Object.keys(s.state)[0] : "unknown";
-          const reason = s?.state?.waiting?.reason ?? s?.state?.terminated?.reason;
+          const state = s?.state?.waiting?.reason ?? s?.state?.terminated?.reason ?? (s?.state?.running ? "Running" : s?.state ? Object.keys(s.state)[0] : "Unknown");
+          const tone: Tone = s?.state?.running && s?.ready ? "ok" : s?.state?.waiting && !BAD_WAITING.has(s.state.waiting.reason) ? "warn" : s?.state?.running ? "warn" : state === "Completed" ? "muted" : "bad";
+          const last = s?.lastState?.terminated;
           return (
             <li key={c.name}>
               <div className="row-between">
-                <strong>{c.name}</strong>
-                <span className={s?.ready ? "tone-ok" : "tone-warn"}>{reason ?? state}{s?.restartCount ? ` · ${s.restartCount} restarts` : ""}</span>
+                <strong className="c-name"><Ic icon={Box} size={13} />{c.name}</strong>
+                <Status text={state} tone={tone} />
               </div>
-              <div className="mono small muted">{c.image}</div>
-              {s?.lastState?.terminated ? (
-                <div className="small tone-bad">Last exit: {s.lastState.terminated.reason ?? ""} (code {s.lastState.terminated.exitCode})</div>
+              <div className="mono c-image">{c.image}</div>
+              {s?.restartCount || last ? (
+                <div className="c-foot">
+                  <span>{s?.restartCount ?? 0} restarts</span>
+                  {last ? <span>last exit <b>{last.reason ?? "?"}</b>, code <b className="mono">{last.exitCode}</b></span> : null}
+                  {last?.finishedAt ? <span>{age(Date.parse(last.finishedAt), now)} ago</span> : null}
+                </div>
               ) : null}
             </li>
           );
@@ -127,25 +297,28 @@ function Labels({ title, map }: { title: string; map?: Record<string, string> })
   return (
     <section>
       <h3>{title}</h3>
-      <div className="chips">{entries.map(([k, v]) => <span key={k} className="chip mono">{k}={v}</span>)}</div>
+      <div className="chips">{entries.map(([k, v]) => <span key={k} className="chip mono" title={`${k}=${v}`}><i>{k}</i>{v}</span>)}</div>
     </section>
   );
 }
 
 function Events({ events, now }: { events: KubeObject[] | { error: string } | undefined; now: number }) {
-  if (!events) return <p className="muted">Loading events…</p>;
+  if (!events) return <p className="muted-line">Loading events…</p>;
   if (!Array.isArray(events)) return <p className="tone-bad">Could not load events: {events.error}</p>;
-  if (!events.length) return <p className="muted">No recent events. Kubernetes keeps events for about an hour.</p>;
-  const sorted = [...events].sort((a: any, b: any) => Date.parse(b.lastTimestamp ?? b.eventTime) - Date.parse(a.lastTimestamp ?? a.eventTime));
+  if (!events.length) return <p className="muted-line">No recent events. Kubernetes keeps events for about an hour.</p>;
+  const when = (e: any) => Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp);
+  const sorted = [...events].sort((a, b) => when(b) - when(a));
   return (
-    <ul className="events">
+    <ul className="ev-list" aria-label="Events">
       {sorted.map((e: any) => (
-        <li key={e.metadata.uid} className={e.type === "Warning" ? "warning" : ""}>
-          <div className="row-between">
+        <li key={e.metadata.uid} className="ev-row">
+          <i className={"diamond" + (e.type === "Warning" ? "" : " normal")} aria-hidden="true" />
+          <div className="ev-main">
             <strong>{e.reason}</strong>
-            <span className="muted small">{age(Date.parse(e.lastTimestamp ?? e.eventTime), now)} ago{e.count > 1 ? ` · ×${e.count}` : ""}</span>
+            <span className="sr-only">{e.type}</span>
+            <div className="ev-msg">{e.message}</div>
           </div>
-          <div className="small">{e.message}</div>
+          <span className="ev-meta">{(e.count ?? 1) > 1 ? `×${e.count} · ` : ""}{age(when(e), now)}</span>
         </li>
       ))}
     </ul>
