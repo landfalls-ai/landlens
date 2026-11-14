@@ -111,6 +111,16 @@ Linux keep the native frame. The window's background follows the theme so it doe
   the one thing with an iris ring; the composer holds the context chips, the Mode and Model pills, the state, and
   Send or Stop.
 - **Jump to** (`JumpPalette.tsx`, ⌘K): kinds, and objects in the list already loaded.
+- **MCP** (`McpPage.tsx`, `mcp.css`; sidebar under Overview, `Plug`): `.tabs` Servers and Calls. A server is a
+  `.panel` (kind tile, mono name, status `.badge`, a `.switch` "On for <context>", Test, edit and remove icon
+  buttons) with its tools as rows: a muted **Read-only** badge (quiet: reading is the safe case) or an amber **Asks
+  first**, a `view` chip, Preview. Calls are `.ov-row`s with a status icon and word, filtered by two selects and a
+  `.seg`; a row opens the call in the `.drawer`. The add-server dialog reuses `.dialog`, `.form-row`, `.test-steps`.
+- **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
+  the call drawer. Views style themselves with the MCP Apps standard variables, which the host fills from these
+  tokens (`irisVariables` in `app-host.ts`: backgrounds from `--bg-*`, text from `--ink-*`, borders from `--line*`,
+  state from `-soft` and `-text`, rings from `--accent`), and resend on a theme change. Landlens's own views follow
+  Iris: kind tile, eyebrow, title, pills with icon and word, inset rows, the viz palette for charts.
 
 ## Components
 
@@ -155,7 +165,11 @@ Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Graphs: regions "Usage" and "Nodes", status "Metrics
 unavailable", button "Connect Clickland", dialog "Connect Clickland" with fields "Clickland address" and "Clickland
 API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes `.metrics-src`, `.mtab`,
-`.chart-plot`, `.chart-tip`, `.chart-legend`, `path.edge`, `path.line`, `.test-steps`. Badges and key hints inside buttons are `aria-hidden`,
+`.chart-plot`, `.chart-tip`, `.chart-legend`, `path.edge`, `path.line`, `.test-steps`. MCP: button "MCP"; tabs
+"Servers" and "Calls"; regions "MCP server <name>"; lists "<name> tools" and "MCP calls"; buttons "Add server",
+"Preview <tool>", "Test", "Save"; dialog "Add an MCP server" with fields "Server name", "Server address", "Header
+name", "Header value"; a `switch`; complementary "MCP call" with list "Front-door requests"; classes `.mcp-tool`,
+`.mcp-call`, `.tool-app`, `.app-frame`. Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
 
 `LANDLENS_SHOTS=<folder>` saves screenshots of every screen in dark, light and at 1024×700 ([development.md](development.md)).

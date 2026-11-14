@@ -12,7 +12,7 @@ was studied from. Each item says how it is checked.
 | Main answers only our own page: the exact `index.html` file in a build, the dev server only when not packaged | `isAppUrl` in `security.ts`; `DEV_URL` is ignored when `app.isPackaged` |
 | Every request is validated with zod, and every group, version, resource, namespace and name must meet Kubernetes's naming rules, so no `/`, `%`, `?`, `#`, `\`, dot segment, space or control character can reach an API path | `packages/contracts`; `apiPath` checks again; unit tests; e2e test sends `../secrets`, `a/b`, `secrets?x=` and `kube%2fsystem` |
 | Requests may only name kinds the cluster's discovery lists, and contexts from the user's kubeconfig | `ClusterManager.typeOf`, `ipc.ts` |
-| CSP: `script-src 'self'`, no `unsafe-eval`, `connect-src 'self'`, `object-src 'none'` (dev adds the Vite server). A page loaded from `file://` gets no response headers, so the build also writes it as a `<meta>` tag | `apps/desktop/src/main/csp.ts`; e2e test: an injected inline script and a string timer are both blocked and reported as violations |
+| CSP: `script-src 'self'`, no `unsafe-eval`, `connect-src 'self'`, `object-src 'none'` (dev adds the Vite server). A page loaded from `file://` gets no response headers, so the build also writes it as a `<meta>` tag. Its one frame source is `landlens-app:`, the scheme main serves MCP App views on (below); nothing else changed | `apps/desktop/src/main/csp.ts`; e2e test: an injected inline script and a string timer are both blocked and reported as violations; unit test on `CSP_PROD` |
 | The renderer learns the platform only as data: preload writes `process.platform` to `data-platform` on `<html>`, for the macOS title-bar inset; the bridge gains no channel and the page no power. Fonts and icons are bundled, so `font-src 'self'` and the CSP are unchanged; copy uses the clipboard API or `execCommand`, with no permission granted | `apps/desktop/src/preload/index.ts`; the e2e test still finds `require` and `process` undefined |
 | No navigation away, no new windows (https links open in your browser), no permissions, no webviews | `hardenContents`, `hardenSession` |
 | Secret values never reach the renderer: main replaces them with their size and drops `last-applied-configuration`, for a Secret, for every item of a list, and for anything read from the `secrets` resource whatever its `kind` says | `withoutSecretValues`, unit tests; e2e test opens a Secret's YAML |
@@ -89,6 +89,46 @@ does; the live test asks it to try each way around them ([agent.md](agent.md#the
 | The cluster's version string goes into the standing rules only if it looks like a version | unit test |
 | Main accepts only Manual and Plan modes and only offered model choices, and an answer only to an open question with one of the options it offered; closing a session withdraws its questions | `AgentService` |
 | Links in answers show their host beside the text, and the full address on hover | `Markdown.tsx` |
+
+## MCP: the gateway and app views
+
+Every MCP call of an agent session goes through Landlens's gateway in main ([mcp.md](mcp.md)), and some tools come
+with an MCP App: HTML from an MCP server that Landlens shows in the dock. The gateway keeps the agent's MCP inside the
+fence; the views are treated as untrusted pages from the server that sent them.
+
+| Rule | How it's checked |
+|---|---|
+| A session's only MCP endpoint is the gateway on 127.0.0.1: every server it gets (`landlens-kube` and the remote ones turned on for its cluster) is a gateway path, with the session's bearer token only. Requests with an `Origin`, another `Host`, an unknown or revoked token, an unknown server, or a server not turned on for that session are refused; tokens are kept as SHA-256 and compared in constant time; the token is revoked with the session | gateway unit tests (401, 403, 404 cases; the server list carries no remote address or header) |
+| Remote servers only over streamable HTTP, https or http on this machine; never stdio, so nothing a server ships runs here. Redirects are refused (`redirect: "error"`), so a stored header can't follow one to another host; errors never echo a bearer value | contracts schema test; gateway unit test (a 307 is refused with the reason) |
+| A remote server's header value is encrypted with `safeStorage` in `userData/mcp-servers.json` (0600), decrypted only in main when the gateway connects or tests; no channel returns it; it is never in Claude Code's environment or session config; header names that would change the request (`Host`, `Cookie`, `Origin`, `Mcp-Session-Id`, `X-Landlens-*`, …) are refused | `McpServerStore` unit tests (file, mode, views); e2e test reads `mcp:servers` after saving and finds no key |
+| Only tools that say they only read (`readOnlyHint: true`) and that the model may call run without asking; any other proxied tool makes Claude Code ask, shown in the dock. The rules the fence accepts name one tool on one server, never a whole server or a `landlens` name. `landlens-kube` stays allowed whole: its tools read through the front door, which refuses writes | approval and fence unit tests |
+| App-only tools (`visibility: ["app"]`) never reach the model's tool list and are refused if called by the agent; a view may call only tools offered to apps, on its own server, at most 60 a minute; one that doesn't say it only reads needs your yes in a native dialog. From the MCP page (Preview) only read-only tools run, with a read-only front-door token labelled `you · <context>` | gateway unit tests; `AppViews` unit test |
+| Every call is logged with scrubbed arguments and a scrubbed 2,000-character preview; the full result of a tool with a view is kept in main (the last 50) for its view only. `landlens-kube`'s front-door requests are filed under their call by an `X-Landlens-Call` id, which the front door accepts only in its own format and never forwards | gateway and front-door unit tests; e2e test opens a call's front-door requests |
+| A view is served by main on its own scheme, `landlens-app://view/<128-bit id>`, only while it's open, only by GET, with `nosniff`, `no-store`, `no-referrer`, a Permissions-Policy that grants nothing, and its own CSP: `default-src 'none'`; inline script and style only; images, fonts and media from `data:` only; `connect-src 'none'` unless its resource declares connect domains that you also listed for its server (https origins only); `frame-src`, `child-src`, `worker-src`, `object-src`, `base-uri`, `form-action` all `'none'`. The renderer's CSP rewrite skips this scheme | `AppViews` unit tests (addresses, headers, CSP); e2e probes |
+| The frame is `<iframe sandbox="allow-scripts">` and nothing more: no `allow-same-origin` (its origin is opaque), `allow-popups`, `allow-forms`, `allow-top-navigation` or `allow-modals`. No preload runs in subframes, so `window.landlens` doesn't exist there, and main answers IPC only from our own page | e2e test in a live view: `window.landlens` undefined, `parent.document` and `parent.landlens` blocked, `origin` is `"null"`, `localStorage` blocked, `fetch` to 127.0.0.1 and to the web blocked, an image from the web blocked (CSP violations reported), `window.open` returns null |
+| A frame may load only a live view's own address: main cancels any other frame navigation (`will-frame-navigate`), and a window a view asks for is denied without opening anything | e2e test: a view that sets `location` ends on Chromium's error page, never at the address |
+| The page takes messages only from its own frame's window (`event.source`), drops non-JSON-RPC and messages over 1 MB, and answers a fixed set of methods: no `ui/message` (a view can't write to the agent's conversation), no `ui/update-model-context`, no resources. `ui/open-link` opens only https, after a native dialog that names the host; `landlens://object/…` only moves the main view | app-host unit tests against the SDK's `App` |
+
+**Threat model for views.** A view is code from an MCP server: Landlens's own, or a remote one you added, which may be
+compromised or hostile. Assume it runs arbitrary script. What it gets: the tool's input and result (it already sent
+the result), the theme, and a channel to its own server's app-visible tools under the session's rules. What it must
+not get, and why it can't:
+
+- *Your cluster, credentials or other servers.* It has no network (CSP), no Node, no preload, no IPC, and an opaque
+  origin; its tool calls go to its own server only, through the gateway, logged and rate-limited.
+- *The agent.* It can't post into the conversation or the model's context (refused methods), and it never sees the
+  model's other tools. What it returns from its own tools reaches the model only if the model calls them itself.
+- *The page.* It can't read or script the page (cross-origin), navigate it (no top navigation; frame navigation
+  cancelled), open windows or popups, submit forms, or frame anything.
+- *Your data leaving.* With no network and no navigation, the only ways out are a link you approve (https, host
+  shown) and its own server's tools, which the server could be called with anyway.
+- *Your attention.* It can draw anything inside its frame, so a view could imitate Landlens; the frame sits under its
+  tool's card, named for its server and tool, and anything that acts outside the frame (links, writing tools) goes
+  through a native dialog the view can't draw.
+
+Left open: a view can show misleading content within its frame; a remote server's text results reach the model like
+any tool result (prompt injection is the server's to answer for; its writing tools still ask); timing and size of its
+tool calls are visible to its own server.
 
 ## What this doesn't stop
 

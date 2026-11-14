@@ -35,8 +35,13 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 7).
 - **Upgraded connections** (exec, attach, port-forward) pass through the front door and the sidecar but have no UI and
   no live test yet (wave 4).
-- **The audit trail** of front-door decisions is kept in memory and not shown. The dock shows each agent tool call
-  and what it returned, but not the front door's own log of the requests behind them (wave 3).
+- **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
+  front-door requests ([mcp.md](mcp.md)), but the agent's own kubectl requests and the IDE's are still kept in
+  memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls).
+- **MCP servers** are remote and streamable HTTP only: no stdio servers, no OAuth (a header you paste), and a session
+  gets the servers on for its cluster, with their tool lists, when it starts. MCP App views can't write to the
+  conversation (`ui/message`), change the model's context, read resources or go fullscreen; they run without Geist
+  (fonts only from `data:`), and a view that tries to navigate is left blank.
 - **Secret material outside Secrets** (tokens in CRD specs, passwords in ConfigMaps) shows in the IDE as the
   cluster returns it. Only what the agent reads is scrubbed.
 - **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its

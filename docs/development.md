@@ -47,6 +47,11 @@ The agent tests need the scenario workload: `kubectl --context orbstack apply -f
 (namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
 healthy two-replica `catalog-api` with requests, limits and an uneven load.
 
+MCP ([mcp.md](mcp.md)): `pnpm test` runs `@landlens/mcp-gateway`'s unit tests (a fake remote server over HTTP, the
+built-in server in memory). The e2e test opens the MCP page, previews `cluster_overview`'s view and probes its sandbox
+(with `orbstack`); adds Clickland's MCP server with its own read key and shows Clickland's view (with `clickland`); and
+asks the agent to call `cluster_overview` and `describe` and checks both views inline in the dock (with `claude`).
+
 ## Where things start
 
 See [architecture.md](architecture.md), "Code map". New IPC: add the channel and its schema to

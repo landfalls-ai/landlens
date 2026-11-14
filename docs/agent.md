@@ -45,8 +45,12 @@ narrows to make room.
 
 ## The cluster tools (`landlens-kube` MCP server)
 
-A loopback HTTP MCP server in Landlens main; each session has its own bearer token, and every tool call goes through
-the front door with that session's token, so the same policy and audit trail apply as to its kubectl.
+The session's MCP endpoint is Landlens's **MCP gateway** ([mcp.md](mcp.md)): loopback HTTP in main, one bearer token
+per session. `landlens-kube` runs behind it in memory, bound to the session's cluster, and every tool call goes through
+the front door with that session's token, so the same policy and audit trail apply as to its kubectl. The gateway
+also serves the remote MCP servers you turned on for the cluster, logs every call (the MCP page's Calls), and tags
+each `landlens-kube` call's front-door requests so the call log can show them. Four tools have an MCP App view, which
+the dock shows inline under the tool's card; the model still gets the same text.
 
 | Tool | What it returns |
 |---|---|
@@ -59,8 +63,11 @@ the front door with that session's token, so the same policy and audit trail app
 | `api_resources` | The kinds the cluster serves |
 | `top` | CPU and memory from metrics-server |
 | `rollout_history` | A Deployment's ReplicaSets by revision, with images |
+| `metrics` | CPU and memory over 1h, 6h or 24h for the cluster, a node, a namespace, a pod or a workload, with requests and limits, from Landlens's metrics source (Clickland, else metrics-server) |
 
-All are marked read-only, and Landlens pre-allows them (`mcp__landlens-kube`), so they don't prompt.
+All are marked read-only, and Landlens pre-allows them (`mcp__landlens-kube`), so they don't prompt. `cluster_overview`,
+`describe`, `get_logs` and `metrics` have views (health card, object card with Open in Landlens, log view, charts).
+A proxied server's tools run without a prompt only if they say they only read; the rest ask.
 
 ## What the agent sees
 
@@ -124,10 +131,11 @@ ConfigMap with the exact commands, and said it couldn't check the Secret because
 | Path | What |
 |---|---|
 | `packages/acp-host/src/host.ts` | `AcpHost`: spawn the adapter, ACP client, sessions, prompts, permission requests |
-| `packages/acp-host/src/session.ts` | `startClusterSession`: tokens, tool kubeconfig, MCP session, fence, `session/new` |
+| `packages/acp-host/src/session.ts` | `startClusterSession`: tokens, tool kubeconfig, the session on the MCP gateway, fence, `session/new` |
 | `packages/acp-host/src/fence.ts` | The sandbox, environment and permission rules for a session |
 | `packages/acp-host/src/env.ts` | Your login shell's PATH; finding `node` and the adapter; the Claude Code process's environment |
-| `packages/kube-mcp/src/server.ts`, `tools.ts` | The MCP server and its tools |
+| `packages/kube-mcp/src/server.ts`, `tools.ts`, `apps/` | The built-in MCP server, its tools and their views |
+| `packages/mcp-gateway/src/` | The gateway every MCP call goes through ([mcp.md](mcp.md)) |
 | `packages/kube/src/redact.ts`, `frontdoor.ts` (`scrubResponse`) | What the agent may see, and where it is enforced |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the host, the sessions, the dock's channels |
 | `apps/desktop/src/renderer/src/AgentDock.tsx`, `Markdown.tsx` | The dock |

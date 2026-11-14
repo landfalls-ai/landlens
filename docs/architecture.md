@@ -1,6 +1,6 @@
 # Architecture
 
-How Landlens is built today (waves 1 and 2). The plan and the waves are in [plan.md](plan.md); why each choice was made is in
+How Landlens is built today (waves 1 and 2, the graphs and MCP). The plan and the waves are in [plan.md](plan.md); why each choice was made is in
 [research.md](research.md).
 
 ## The processes
@@ -13,7 +13,8 @@ How Landlens is built today (waves 1 and 2). The plan and the waves are in [plan
 | `landlens-kube-proxy` (Go), one per connected cluster | Holds that cluster's credentials (client-go reads your kubeconfig, so exec plugins, OIDC and client certificates work as in kubectl) and forwards requests to the API server | `sidecar/kube-proxy/` |
 | `claude-agent-acp` (Node), one per window, started when the dock first opens | Runs your Claude Code; Landlens speaks ACP v1 to it over stdio. Its shell commands run in Claude Code's sandbox | `packages/acp-host/` |
 | Clickland (another project, optional) | Metrics history; main alone calls it over HTTP at the configured address with a read-scoped key ([metrics.md](metrics.md)) | `packages/metrics/` |
-| The `landlens-kube` MCP server (in main) | The agent's read-only cluster tools on a loopback port, one bearer token per session | `packages/kube-mcp/` |
+| The MCP gateway (in main) | The agent's one MCP endpoint, on a loopback port with one bearer token per session: Landlens's read-only cluster tools (`landlens-kube`, in memory per session) and the remote MCP servers you turned on for the cluster, every call logged and checked ([mcp.md](mcp.md)) | `packages/mcp-gateway/`, `packages/kube-mcp/` |
+| MCP App views (in the renderer, sandboxed frames) | HTML from an MCP server, served by main on `landlens-app:` with its own CSP, framed with `sandbox="allow-scripts"` | `apps/desktop/src/main/app-views.ts`, `renderer/src/AppFrame.tsx` |
 
 ## A request, end to end
 
@@ -62,7 +63,10 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/tool-kubeconfig.ts` | The kubeconfig for tools and the agent |
 | `apps/desktop/src/main/security.ts` | Sandbox, CSP, navigation and permission guards |
 | `packages/acp-host/src/` | The ACP host, a cluster session, the fence, the standing rules ([agent.md](agent.md)) |
-| `packages/kube-mcp/src/` | The MCP server, its tools, the front-door client (redaction lives in `packages/kube/src/redact.ts`, applied by the front door) |
+| `packages/kube-mcp/src/` | The built-in MCP server, its tools and their App views (`apps/`), the front-door client (redaction lives in `packages/kube/src/redact.ts`, applied by the front door) |
+| `packages/mcp-gateway/src/` | The MCP gateway: endpoint, upstreams (in memory, streamable HTTP), approval rules, call log, card pairing ([mcp.md](mcp.md)) |
+| `apps/desktop/src/main/mcp.ts`, `mcp-store.ts`, `app-views.ts` | `McpService` (servers, Test, Preview, views, links), the server store (headers in safeStorage), the `landlens-app:` scheme |
+| `apps/desktop/src/renderer/src/McpPage.tsx`, `AppFrame.tsx`, `app-host.ts`, `mcpStore.ts` | The MCP page and call drawer, a view's frame, the MCP Apps host, the live call log |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |
 | `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock: session, transcript, composer |
 | `apps/desktop/src/renderer/src/DockParts.tsx` | The dock's tool groups, wells, plan and permission ask |

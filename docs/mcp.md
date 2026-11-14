@@ -1,0 +1,131 @@
+# MCP: the gateway, the MCP page and MCP Apps
+
+Every MCP call an agent session makes goes through one place in Landlens main, the **MCP gateway**: Landlens's own
+cluster tools (`landlens-kube`) and any remote MCP server you added and turned on for the cluster. The gateway logs
+each call, decides what runs without asking, and hands the results of tools that have an **MCP App** view to the dock,
+which shows the view inline under the tool's card. The **MCP page** lists the servers and the call log.
+
+Built 14 November 2026. The security rules are in [security.md](security.md#mcp-the-gateway-and-app-views).
+
+## The gateway
+
+`packages/mcp-gateway/` (`McpGateway`), started with the app (`apps/desktop/src/main/mcp.ts`).
+
+- **One endpoint per session.** Loopback HTTP on `127.0.0.1:<port>`: `/mcp` is `landlens-kube`, `/mcp/<name>` a
+  remote server. A session's `session/new` lists every server on the gateway, each with the session's bearer token
+  and nothing else; Claude Code never gets a remote server's address or header. No browser (an `Origin` header is
+  refused), no other host name, a 1 MB request limit, stateless (a fresh MCP server per POST).
+- **landlens-kube** runs in memory per session, bound to the session's cluster (its own front-door token, its
+  namespaces, Landlens's metrics source). It is still allowed whole (`mcp__landlens-kube`): every tool reads through
+  the front door, which refuses writes.
+- **Remote servers** are reached over streamable HTTP only (never stdio: nothing the gateway proxies runs on this
+  machine), with the header you stored added in main, redirects refused. A session gets the servers turned on for its
+  cluster when it starts; their tools are listed then.
+- **Approval.** A proxied tool runs without asking only if it says it only reads (`annotations.readOnlyHint: true`)
+  and the model may call it: the gateway gives the fence `mcp__<server>__<tool>` for exactly those. Every other tool
+  makes Claude Code ask, and the ask shows in the dock as for any tool. Calls from a view to a tool that doesn't say
+  it only reads get a native dialog first. From the MCP page (Preview) only read-only tools run.
+- **Visibility** (MCP Apps `_meta.ui.visibility`). Tools for a view only (`["app"]`) are left out of the model's tool
+  list and refused if the model calls them anyway; a view can call only tools offered to apps, on its own server.
+- **The call log** keeps the last 500 calls in memory: session, server, tool, who called (agent, view, you), the
+  arguments and a 2,000-character preview of the result, both scrubbed like a tool result (`redactText`,
+  `redactObject`), start, end, duration, status (`ok`, `error`, `refused`: refused before it reached the server). For
+  `landlens-kube` calls it also keeps the **front-door requests** behind each call: every request the tool made
+  carries `X-Landlens-Call: <call id>`, the front door files its audit entry under that call and strips the header
+  before forwarding. Each change is pushed to the renderer on `mcp:call`.
+- **What the model sees.** The result's text, unchanged. A tool with a view also returns structured data for the view
+  (`structuredContent`); the gateway drops it from what Claude Code gets when there is text beside it and the tool
+  promises no output schema, and keeps the full result (the last 50) for the view.
+
+## The MCP page
+
+Sidebar, under Overview (`McpPage.tsx`). The tool bar is the usual one; the page has two tabs.
+
+**Servers.** `landlens-kube` first (built in, on for every cluster), then the servers you added, each a panel: name,
+status (Ready, Not tested, Failed), address, whether a header is stored, how many tools and how many read-only; a
+switch to turn it on for this cluster; Test; Edit; Remove. Each tool shows its title and description, a **Read-only**
+or **Asks first** badge, and a **view** chip when it has an MCP App. Tools that read and need no arguments have
+**Preview**, which runs the tool as you (a read-only front-door token labelled `you · <context>`) and shows the view, or
+the text. When Clickland is connected for graphs ([metrics.md](metrics.md)) and its MCP endpoint answers, a card
+offers **Add Clickland**: its `/api/mcp` with the read key Connect Clickland stored, turned on for the cluster.
+
+**Calls.** The log, newest first, filtered by session, server and status (All, OK, Failed, Refused). A row shows the
+status icon, `server · tool` and its target, the session, a **view** chip, who called and how long it took; it opens
+the call in the drawer: times, session, the dock card it belongs to, arguments, result or why it failed, the view, and
+for `landlens-kube` the front-door requests (method, path, status, or the refusal).
+
+## Adding a server
+
+Add server: a name (lowercase letters, digits, dashes; its tools appear to the model as `mcp__<name>__<tool>`), the
+address (https, or http on this machine only), a header name and value (for example `Authorization` and
+`Bearer …`; header names that would change the request's meaning, like `Host`, `Cookie` or `X-Landlens-*`, are
+refused), the https origins its views may reach (none by default), and whether it's on for this cluster. **Test**
+initializes and lists its tools. The header value is encrypted with `safeStorage` in `userData/mcp-servers.json` (mode
+0600) and never comes back to the page; edit with the value empty to keep it. Agent sessions started after the change
+get it.
+
+Clickland in one step: Connect Clickland first, then Add Clickland on the MCP page; or add
+`http://127.0.0.1:<port>/api/mcp` with `Authorization: Bearer <read key>` yourself.
+
+## MCP Apps
+
+The 2026-01-26 MCP Apps extension (`io.modelcontextprotocol/ui`): a tool names a `ui://` resource in
+`_meta.ui.resourceUri`; the resource is an HTML document (`text/html;profile=mcp-app`) the host shows in a sandboxed
+frame and talks to over `postMessage` (JSON-RPC).
+
+**landlens-kube's views** (`packages/kube-mcp/src/apps/`, plain JavaScript and CSS, one self-contained page each, no
+SDK, data set as text only):
+
+| Tool | View |
+|---|---|
+| `cluster_overview` | Health card: the verdict, nodes, pods (a segmented bar), deployments, restarts, problems worst first (each opens the object in Landlens) |
+| `describe` | Object card: kind, state, ready, restarts, age, node; containers with last exits; owners; failing conditions; recent events; **Open in Landlens** |
+| `get_logs` | Log view: numbered lines, failure-looking lines highlighted, All or Failures (with a line of context) |
+| `metrics` (new) | CPU and memory over 1h, 6h or 24h as two line charts, request dashed, limit or allocatable solid, a pointer readout; from Landlens's metrics source (Clickland, else metrics-server) |
+
+The tools register with `@modelcontextprotocol/ext-apps` 1.7.5's `registerAppTool` and `registerAppResource` (checked
+to work with SDK 1.32's `McpServer`: the listing carries `_meta.ui.resourceUri` and the legacy key, the resource its
+MIME type). The views style themselves only with the spec's standard variables (`--color-background-primary`, …),
+with Iris values as fallbacks for dark and light.
+
+**The host** is hand-written (`apps/desktop/src/renderer/src/app-host.ts`): the SDK's `AppBridge` would bring zod and
+the MCP `Protocol` class into the renderer, and the wire format is small. It is tested against the SDK's own `App`. It
+answers `ui/initialize` (host capabilities: open links, server tools, logging; the host context with the theme and
+the standard variables filled from Iris tokens), then on `ui/notifications/initialized` sends `tool-input` and
+`tool-result`; `tools/call` goes to main (`mcp:app-call`) and through the gateway; `ui/open-link` opens https links
+after a native dialog that shows the host, and `landlens://object/<Kind>/<namespace or _>/<name>` moves the main
+view to that object (Open in Landlens); `size-changed` sets the frame's height (48 to 640 px);
+`ui/request-display-mode` answers inline. A theme change sends `host-context-changed`. Refused: `ui/message` and
+`ui/update-model-context` (a view may not write to the agent's conversation or change what the model sees),
+resources and anything else.
+
+**Views from remote servers** work the same way: Clickland's `list_services` and friends show Clickland's own view
+(`ui://clickland/view`) inline, under the same sandbox and CSP.
+
+## Pairing a dock card with its call
+
+The dock knows ACP tool calls (`toolCallId`); the gateway knows MCP calls. Main pairs them (`pairing.ts`):
+
+1. **Exact.** Claude Code sends the tool_use id as `_meta["claudecode/toolUseId"]` on every MCP `tools/call`, and
+   `claude-agent-acp` uses the same id as the ACP `toolCallId`. When it's there, that's the pair.
+2. **Fallback**, if a Claude Code version stops sending it: main sees every ACP `tool_call` update before the dock
+   does and matches, within one session, the card's tool name (`_meta.claudeCode.toolName`, `mcp__<server>__<tool>`)
+   and its input (canonical JSON, keys sorted) against the call's, oldest first. A card whose input isn't known yet
+   pairs only when it and the call are the only unpaired ones for that tool in the session. Unclaimed entries go after
+   ten minutes.
+
+The pair is written on the call (`toolCallId`) and pushed; the dock shows the view under the card once the card is
+done and the call returned a view.
+
+## Code
+
+| Path | What |
+|---|---|
+| `packages/mcp-gateway/src/gateway.ts` | `McpGateway`, `GatewaySession`: the endpoint, `run()` (checks, log, pairing), view resources |
+| `packages/mcp-gateway/src/upstream.ts` | The built-in server in memory; remote servers over streamable HTTP; Test |
+| `packages/mcp-gateway/src/approval.ts` | Read-only, visibility, the permission rules for a session |
+| `packages/mcp-gateway/src/calls.ts`, `pairing.ts` | The call log; card ↔ call pairing |
+| `packages/kube-mcp/src/tools.ts`, `apps.ts`, `apps/` | The tools (text for the model, structured data for views), the `metrics` tool, the views |
+| `apps/desktop/src/main/mcp.ts`, `mcp-store.ts` | `McpService` (servers, Test, Preview, views, links); the server store |
+| `apps/desktop/src/main/app-views.ts`, `security.ts` | The `landlens-app:` scheme, each view's CSP, the frame guards |
+| `apps/desktop/src/renderer/src/McpPage.tsx`, `AppFrame.tsx`, `app-host.ts`, `mcpStore.ts`, `mcp.css` | The page, the drawer, the frame, the host, the live call list |
