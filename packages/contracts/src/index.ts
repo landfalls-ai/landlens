@@ -153,6 +153,12 @@ export const ClicklandSettingsInput = z.object({
 // MCP (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers it serves (the built-in
 // landlens-kube and remote servers you add), the call log, and MCP Apps (tool views in a sandboxed frame).
 
+/**
+ * A log line that looks like the failure. Applied to log output only (the log view, and the dock's wells for get_logs
+ * and kubectl logs): in a describe or a command line, "FATAL" is just a word.
+ */
+export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fatal:|error:|OOMKilled|Killed)\b|\b(ERR|CRIT|SEVERE)\b/;
+
 /** The built-in server's name; no remote server may take it or anything starting with "landlens". */
 export const BUILTIN_MCP_SERVER = "landlens-kube";
 /** How a remote server is named in Claude Code (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */

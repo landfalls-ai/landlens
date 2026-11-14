@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { APP_URI } from "../src/apps.js";
 import type { AgentCluster } from "../src/cluster.js";
 import { kubeMcpServer } from "../src/server.js";
-import { CALL_META } from "../src/tools.js";
+import { CALL_META, FAILURE_LINE, UNREADABLE_LOG } from "../src/tools.js";
 
 const now = new Date().toISOString();
 const types: ResourceType[] = [
@@ -191,5 +191,13 @@ describe("landlens-kube MCP server", () => {
   it("tags the front-door requests of a call with its id", async () => {
     await client.callTool({ name: "get_events", arguments: { namespace: "landlens-dev" }, _meta: { [CALL_META]: "c42" } });
     expect(tagged).toContain("c42");
+  });
+
+  it("tells a log from the kubelet's reason it couldn't read one", () => {
+    expect(UNREADABLE_LOG.test('unable to retrieve container logs for containerd://abc')).toBe(true);
+    expect(UNREADABLE_LOG.test('container "api" in pod "orders-api-1" is waiting to start: ContainerCreating')).toBe(true);
+    expect(UNREADABLE_LOG.test("ERROR connecting to db")).toBe(false);
+    expect(FAILURE_LINE.test("2026-11-14 ERROR connecting to db")).toBe(true);
+    expect(FAILURE_LINE.test("errors=0 handled")).toBe(false);
   });
 });

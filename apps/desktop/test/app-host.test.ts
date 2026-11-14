@@ -4,7 +4,7 @@ import { App } from "@modelcontextprotocol/ext-apps";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
-import { AppHost, irisVariables, objectLink, type HostContext, type ObjectTarget } from "../src/renderer/src/app-host";
+import { AppHost, irisVariables, objectLink, viewKey, type HostContext, type ObjectTarget, type ViewKey } from "../src/renderer/src/app-host";
 
 const view: McpAppView = {
   view: "a".repeat(32), url: `landlens-app://view/${"a".repeat(32)}`, server: "landlens-kube",
@@ -123,5 +123,21 @@ describe("the MCP Apps host core", () => {
     expect(v["--color-text-primary"]).toBe("#ECEEF2");
     expect(v["--color-border-danger"]).toBeUndefined();
     expect(v["--font-weight-medium"]).toBe("500");
+  });
+
+  it("hands back only Escape and the app's own chords from a view", () => {
+    const k = (key: string, mods: Partial<ViewKey> = {}) => viewKey({ key, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...mods });
+    expect(k("Escape")).toMatchObject({ key: "Escape" });
+    expect(k("j", { metaKey: true })).toMatchObject({ key: "j", metaKey: true });
+    expect(k("1", { ctrlKey: true })).toMatchObject({ key: "1" });
+    expect(k("a", { metaKey: true })).toBeUndefined(); // select-all stays in the view
+    expect(k("j")).toBeUndefined();
+    expect(k("j", { metaKey: true, altKey: true })).toBeUndefined();
+    expect(viewKey({ key: { toString: () => "Escape" } })).toBeUndefined();
+    const keys: ViewKey[] = [];
+    const host = new AppHost(view, { post: () => {}, callTool: async () => ({ content: [] }), openLink: async () => true, openObject: () => {}, resize: () => {}, key: (x) => keys.push(x), context: () => ctx() });
+    host.receive({ jsonrpc: "2.0", method: "ui/notifications/landlens-key", params: { key: "k", metaKey: true } });
+    host.receive({ jsonrpc: "2.0", method: "ui/notifications/landlens-key", params: { key: "Tab" } });
+    expect(keys.map((x) => x.key)).toEqual(["k"]);
   });
 });

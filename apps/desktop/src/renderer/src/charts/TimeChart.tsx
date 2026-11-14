@@ -1,14 +1,22 @@
 // A time chart for one measure (CPU or memory): usage as stacked bands (a pod's containers, a cluster's nodes) or as
-// lines (a workload's pods), request/limit/allocatable as labelled reference lines, a crosshair that snaps to the
+// lines (a workload's pods), request/limit/allocatable as reference lines labelled in a right gutter, a crosshair that snaps to the
 // nearest sample with one readout for every series, a legend, and a table view. Hand-rolled SVG; colours come from
 // charts.css classes (s1…s4, so), never from TSX.
 import type { MetricLine, MetricPanel } from "@landlens/contracts";
 import { useMemo, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { clock, fold, format, grid, last, linear, linePath, nearest, stack, ticks, times, timeTicks, type Unit } from "./scale";
+import { chartUnit, clock, fold, formatIn, grid, last, linear, linePath, nearest, spread, stack, ticks, times, timeTicks, unitWord, type Unit } from "./scale";
 import { useWidth } from "./useWidth";
 
-const M = { top: 10, right: 10, bottom: 22, left: 44 };
+const M = { top: 10, bottom: 22, left: 44 };
 export const slotClass = (key: string, i: number) => (key === "other" ? "so" : `s${i + 1}`);
+/**
+ * Reference labels sit in a right gutter, never on the plot; a label this close to another is pushed apart. The
+ * gutter is one fixed width whenever a chart has references, so CPU and memory above each other share their x axis.
+ */
+const LABEL_GAP = 12;
+const GUTTER = 96;
+
+type Ref = { name: string; v: number; cls: string };
 
 export function TimeChart(props: {
   title: string;
@@ -23,8 +31,19 @@ export function TimeChart(props: {
   height?: number;
   /** Dim while a new range loads (the frame stays). */
   stale?: boolean;
+  /**
+   * Fit the y axis to the data (×1.25) when it stays under half the largest reference, so a quiet cluster's usage
+   * isn't a flat line under its allocatable; a reference above the axis is named at the gutter's top with "↑".
+   */
+  fit?: boolean;
+  /**
+   * "inline" (the drawer): no floating readout. The head shows the crosshair's time and value and the legend values
+   * follow the crosshair, so nothing covers the plot in a narrow column.
+   */
+  readout?: "tip" | "inline";
 }) {
-  const { unit, panel, from, to, stacked } = props;
+  const { unit, panel, to, stacked } = props;
+  const inline = props.readout === "inline";
   const [ref, width] = useWidth<HTMLDivElement>();
   const [at, setAt] = useState<number>();
   const [table, setTable] = useState(false);
@@ -34,20 +53,30 @@ export function TimeChart(props: {
   const values = useMemo(() => grid(series, ts), [series, ts]);
   const bands = useMemo(() => (stacked ? stack(values) : undefined), [stacked, values]);
   const totals = ts.map((_, i) => values.reduce((a, row) => a + (row[i] ?? 0), 0));
+  // Samples covering less than half the range: start the axis at the first sample rather than draw an empty half.
+  const from = ts.length && to - ts[0]! < (to - props.from) / 2 ? ts[0]! : props.from;
 
   const refs = [
     panel.allocatable !== undefined ? { name: "allocatable", v: panel.allocatable, cls: "ref-hard" } : undefined,
     panel.limit !== undefined ? { name: "limit", v: panel.limit, cls: "ref-hard" } : undefined,
     panel.request !== undefined ? { name: "request", v: panel.request, cls: "ref-soft" } : undefined,
-  ].filter((r): r is { name: string; v: number; cls: string } => !!r);
-  const top = Math.max(0, ...(stacked ? totals : values.flat().map((v) => v ?? 0)), ...refs.map((r) => r.v));
-  const yt = ticks(top * 1.04, unit);
-  const plotW = Math.max(0, width - M.left - M.right);
+  ].filter((r): r is Ref => !!r);
+  const dataTop = Math.max(0, ...(stacked ? totals : values.flat().map((v) => v ?? 0)));
+  const refTop = Math.max(0, ...refs.map((r) => r.v));
+  const fitted = !!props.fit && dataTop > 0 && refTop > dataTop * 2;
+  const yt = ticks(fitted ? dataTop * 1.25 : Math.max(dataTop, refTop) * 1.04, unit);
+  const yMax = yt[yt.length - 1]!;
+  const u = chartUnit(yMax, unit);
+  const f = (v: number, axis = false) => formatIn(v, u, axis);
+  const labelOf = (r: Ref) => `${r.name} ${f(r.v)}${r.v > yMax ? " ↑" : ""}`;
+  const right = refs.length ? GUTTER : 10;
+  const plotW = Math.max(0, width - M.left - right);
   const x = linear(from, to, M.left, M.left + plotW);
-  const y = linear(0, yt[yt.length - 1]!, M.top + height, M.top);
+  const y = linear(0, yMax, M.top + height, M.top);
   const xs = ts.map(x);
   const gap = Math.max(props.step * 2.5, 75) * 1000;
   const i = at === undefined ? undefined : Math.min(at, ts.length - 1);
+  const labelY = spread(refs.map((r) => Math.max(M.top, y(Math.min(r.v, yMax)))), LABEL_GAP, M.top, M.top + height);
 
   const move = (e: PointerEvent<HTMLDivElement>) => {
     if (!ts.length) return;
@@ -61,19 +90,28 @@ export function TimeChart(props: {
     if (next !== undefined) (e.preventDefault(), setAt(Math.max(0, Math.min(ts.length - 1, next))));
     if (e.key === "Escape") setAt(undefined);
   };
-  const latestTotal = stacked ? totals.at(-1) : undefined;
-  const summary = `${props.title} over ${clock(from)}–${clock(to)}: ${series.map((s) => `${s.key} ${format(last(s) ?? 0, unit)}`).join(", ")}${refs.map((r) => `; ${r.name} ${format(r.v, unit)}`).join("")}`;
+  // The head's number: the stack's total (or the one line), at the crosshair when inline, else the latest.
+  const pick = inline && i !== undefined ? i : ts.length - 1;
+  const headValue = stacked ? totals[pick] : series.length === 1 ? (values[0]![pick] ?? undefined) : undefined;
+  const legendValue = (k: number) => (inline && i !== undefined ? values[k]![i] : last(series[k])) ?? null;
+  const summary = `${props.title} over ${clock(from)}–${clock(to)}: ${series.map((s) => `${s.key} ${f(last(s) ?? 0)}`).join(", ")}${refs.map((r) => `; ${r.name} ${f(r.v)}`).join("")}`;
 
   return (
     <figure className={"chart" + (props.stale ? " stale" : "")}>
       <figcaption className="chart-head">
         <span className="chart-title">{props.title}</span>
-        {latestTotal !== undefined ? <span className="chart-now">{format(latestTotal, unit)}{refs[0] ? <span className="dim"> of {format(refs[0].v, unit)}{unit === "cpu" && refs[0].v >= 1 ? " cores" : ""} {refs[0].name}</span> : null}</span> : null}
+        {headValue !== undefined && headValue !== null ? (
+          <span className="chart-now">
+            {inline && i !== undefined ? <span className="dim">{clock(ts[i]!)} · </span> : null}
+            {f(headValue)}
+            {refs[0] ? <span className="dim"> of {f(refs[0].v)}{unitWord(u)} {refs[0].name}</span> : unitWord(u) ? <span className="dim">{unitWord(u)}</span> : null}
+          </span>
+        ) : inline && i !== undefined ? <span className="chart-now dim">{clock(ts[i]!)}</span> : null}
         <span className="grow" />
         <button className="chart-toggle" aria-pressed={table} onClick={() => setTable((t) => !t)}>{table ? "Chart" : "Table"}</button>
       </figcaption>
       {table ? (
-        <ChartTable series={series} ts={ts} values={values} unit={unit} by={props.by} totals={stacked ? totals : undefined} />
+        <ChartTable series={series} ts={ts} values={values} f={f} by={props.by} totals={stacked ? totals : undefined} />
       ) : (
         <div ref={ref} className="chart-plot" tabIndex={0} role="group" aria-roledescription="chart" aria-label={summary}
           onPointerMove={move} onPointerLeave={() => setAt(undefined)} onKeyDown={key} onFocus={() => ts.length && setAt(ts.length - 1)} onBlur={() => setAt(undefined)}>
@@ -82,7 +120,7 @@ export function TimeChart(props: {
               {yt.map((t) => (
                 <g key={t}>
                   <line className={t === 0 ? "axis" : "gridline"} x1={M.left} x2={M.left + plotW} y1={y(t)} y2={y(t)} />
-                  <text className="tick" x={M.left - 6} y={y(t) + 3.5} textAnchor="end">{format(t, unit, true)}</text>
+                  <text className="tick" x={M.left - 6} y={y(t) + 3.5} textAnchor="end">{f(t, true)}</text>
                 </g>
               ))}
               {timeTicks(from, to, Math.max(2, Math.floor(plotW / 70))).map((t) => (
@@ -107,10 +145,10 @@ export function TimeChart(props: {
                     );
                   })()
                 : series.map((s, k) => <path key={s.key} className={`${slotClass(s.key, k)} line`} d={linePath(xs, values[k]!.map((v) => (v == null ? null : y(v))), ts, gap)} />)}
-              {refs.map((r) => (
+              {refs.map((r, k) => (
                 <g key={r.name} className={r.cls}>
-                  <line x1={M.left} x2={M.left + plotW} y1={y(r.v)} y2={y(r.v)} />
-                  <text x={M.left + plotW - 2} y={y(r.v) - 4} textAnchor="end">{r.name} {format(r.v, unit)}</text>
+                  {r.v <= yMax ? <line x1={M.left} x2={M.left + plotW} y1={y(r.v)} y2={y(r.v)} /> : null}
+                  <text x={M.left + plotW + 6} y={labelY[k]! + 3.5} textAnchor="start">{labelOf(r)}</text>
                 </g>
               ))}
               {i !== undefined ? (
@@ -124,30 +162,30 @@ export function TimeChart(props: {
               ) : null}
             </svg>
           ) : null}
-          {i !== undefined ? (
+          {i !== undefined && !inline ? (
             <div className={"chart-tip" + (xs[i]! > width / 2 ? " left" : "")} style={{ left: xs[i] }} aria-live="polite">
               <div className="tip-time">{clock(ts[i]!)}</div>
               {series.map((s, k) =>
                 values[k]![i] == null ? null : (
                   <div key={s.key} className="tip-row">
                     <i className={`key ${slotClass(s.key, k)}`} />
-                    <b>{format(values[k]![i]!, unit)}</b>
+                    <b>{f(values[k]![i]!)}</b>
                     <span>{s.key}</span>
-                    {panel.byKey?.[s.key]?.limit !== undefined ? <span className="dim">/ {format(panel.byKey[s.key]!.limit!, unit)} limit</span> : null}
+                    {panel.byKey?.[s.key]?.limit !== undefined ? <span className="dim">/ {f(panel.byKey[s.key]!.limit!)} limit</span> : null}
                   </div>
                 ),
               )}
-              {stacked && series.length > 1 ? <div className="tip-row total"><i className="key none" /><b>{format(totals[i]!, unit)}</b><span>total</span></div> : null}
-              {refs.map((r) => <div key={r.name} className="tip-row ref"><i className={`key ${r.cls}`} /><b>{format(r.v, unit)}</b><span>{r.name}</span></div>)}
+              {stacked && series.length > 1 ? <div className="tip-row total"><i className="key none" /><b>{f(totals[i]!)}</b><span>total</span></div> : null}
             </div>
           ) : null}
         </div>
       )}
       {series.length > 1 ? (
-        <ul className="chart-legend" aria-label={`${props.title} legend`}>
-          {series.map((s, k) => (
-            <li key={s.key}><i className={`key ${stacked ? "area" : "line"} ${slotClass(s.key, k)}`} /><span className="lg-name">{s.key}</span><b>{format(last(s) ?? 0, unit)}</b></li>
-          ))}
+        <ul className="chart-legend" aria-label={`${props.title} legend`} {...(inline ? { "aria-live": "polite" as const } : {})}>
+          {series.map((s, k) => {
+            const v = legendValue(k);
+            return <li key={s.key}><i className={`key ${stacked ? "area" : "line"} ${slotClass(s.key, k)}`} /><span className="lg-name">{s.key}</span><b>{v == null ? "–" : f(v)}</b></li>;
+          })}
         </ul>
       ) : null}
       {!stacked && series.at(-1)?.key === "other" ? (
@@ -157,7 +195,7 @@ export function TimeChart(props: {
   );
 }
 
-function ChartTable(props: { series: MetricLine[]; ts: number[]; values: (number | null)[][]; unit: Unit; by: string; totals?: number[] }) {
+function ChartTable(props: { series: MetricLine[]; ts: number[]; values: (number | null)[][]; f: (v: number) => string; by: string; totals?: number[] }) {
   const n = props.ts.length;
   const pick = Array.from(new Set(Array.from({ length: Math.min(12, n) }, (_, k) => n - 1 - Math.round((k * (n - 1)) / Math.max(1, Math.min(12, n) - 1)))));
   return (
@@ -170,8 +208,8 @@ function ChartTable(props: { series: MetricLine[]; ts: number[]; values: (number
           {pick.map((j) => (
             <tr key={j}>
               <td>{clock(props.ts[j]!)}</td>
-              {props.values.map((row, k) => <td key={k}>{row[j] == null ? "–" : format(row[j]!, props.unit)}</td>)}
-              {props.totals && props.series.length > 1 ? <td>{format(props.totals[j]!, props.unit)}</td> : null}
+              {props.values.map((row, k) => <td key={k}>{row[j] == null ? "–" : props.f(row[j]!)}</td>)}
+              {props.totals && props.series.length > 1 ? <td>{props.f(props.totals[j]!)}</td> : null}
             </tr>
           ))}
         </tbody>

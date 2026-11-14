@@ -30,6 +30,8 @@ export function ResourceTable(props: {
   selected?: string;
   /** Width of the main pane: narrow panes drop Node, then Ready. */
   width: number;
+  /** Pixels on the right that a floating drawer covers (a narrow window with the dock and a drawer open). */
+  covered?: number;
   /** One namespace is selected, so the Namespace column would repeat it. */
   oneNamespace: boolean;
   empty: { title: string; onClear?: () => void };
@@ -46,14 +48,20 @@ export function ResourceTable(props: {
 
   // Column priority as the pane narrows: Node, then Ready (when there is a Status), then Age, Namespace, Restarts.
   // Name never goes under 180px; a row's trouble still shows in its left edge.
+  // Under a floating drawer only a strip of the table shows: Status becomes a 16px icon column at the left, so which
+  // rows are in trouble stays visible next to their names.
+  const covered = props.covered ?? 0;
   const columns = useMemo(() => {
-    const w = props.width;
+    const w = props.width - covered;
     const hasStatus = props.columns.some((x) => x.id === "status");
     const drop = (id: string) =>
       (id === "node" && w < 860) || (id === "ready" && hasStatus && w < 700) || (id === "age" && w < 600) ||
       (id === "namespace" && (props.oneNamespace || w < 540)) || (id === "restarts" && w < 470);
-    return props.columns.filter((c) => !drop(c.id));
-  }, [props.columns, props.width, props.oneNamespace]);
+    const kept = props.columns.filter((c) => !drop(c.id));
+    const status = kept.find((c) => c.id === "status");
+    if (!covered || !status || w >= 420) return kept;
+    return [{ ...status, id: "status-icon", label: "", width: "32px" }, ...kept.filter((c) => c !== status)];
+  }, [props.columns, props.width, props.oneNamespace, covered]);
 
   const rows = useMemo(() => {
     const col = props.columns.find((c) => c.id === sort.id) ?? props.columns[0]!;
@@ -110,16 +118,17 @@ export function ResourceTable(props: {
       <div className="table-inner" style={{ minWidth }}>
         <div className="thead" style={template} role="row">
           {columns.map((c) => {
-            const on = sort.id === c.id;
+            const id = c.id === "status-icon" ? "status" : c.id;
+            const on = sort.id === id;
             return (
               <button
                 key={c.id}
                 className={"th" + (NUMERIC.has(c.id) ? " num" : "") + (on ? " sorted" : "")}
                 role="columnheader"
                 aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
-                onClick={() => setSort((s) => ({ id: c.id, dir: s.id === c.id ? (s.dir === 1 ? -1 : 1) : 1 }))}
+                onClick={() => setSort((s) => ({ id, dir: s.id === id ? (s.dir === 1 ? -1 : 1) : 1 }))}
               >
-                {c.label}
+                {c.label || <span className="sr-only">{c.id === "status-icon" ? "Status" : c.id}</span>}
                 {on ? <Ic icon={sort.dir === 1 ? ArrowUp : ArrowDown} size={11} /> : null}
               </button>
             );
@@ -190,6 +199,15 @@ function Td({ col, cell, o, rowTone, split }: { col: Column; cell: Cell; o: Kube
     }
     case "status":
       return <span role="gridcell" className="td" title={title}>{cell.tone ? <Status text={cell.text} tone={cell.tone} /> : cell.text}</span>;
+    case "status-icon": {
+      const t = cell.tone ? statusTone(cell.text, cell.tone) : "muted";
+      return (
+        <span role="gridcell" className={`td st-icon tone-${t}`} title={cell.text}>
+          {t === "ok" ? <i className="dot" /> : <Ic icon={TONE_ICON[t]} size={16} />}
+          <span className="sr-only">{cell.text}</span>
+        </span>
+      );
+    }
     case "restarts": {
       const n = typeof cell.sort === "number" ? cell.sort : Number(cell.text) || 0;
       return <span role="gridcell" className={`td num ${restartTone(n).cls}`} title={title}>{cell.text}</span>;

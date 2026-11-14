@@ -39,8 +39,8 @@ export function MetricsTab(props: { handle: string; type: ResourceType; object: 
   } else
     body = (
       <>
-        <TimeChart title="CPU" unit="cpu" panel={data.cpu} from={data.from} to={data.to} step={data.step} stacked={pod} by={by} height={140} stale={stale} />
-        <TimeChart title="Memory" unit="memory" panel={data.memory} from={data.from} to={data.to} step={data.step} stacked={pod} by={by} height={140} stale={stale} />
+        <TimeChart title="CPU" unit="cpu" panel={data.cpu} from={data.from} to={data.to} step={data.step} stacked={pod} by={by} height={140} stale={stale} readout="inline" />
+        <TimeChart title="Memory" unit="memory" panel={data.memory} from={data.from} to={data.to} step={data.step} stacked={pod} by={by} height={140} stale={stale} readout="inline" />
         <p className="chart-note">
           {pod ? "Stacked per container: the top edge is the pod. " : "One line per pod, against one pod's request and limit. "}
           {data.cpu.limit === undefined ? "No CPU limit line: not every container sets one." : ""}

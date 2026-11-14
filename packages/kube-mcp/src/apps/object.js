@@ -37,9 +37,24 @@
       })));
     }
 
-    var failing = (o.conditions || []).filter(function (c) { return !c.ok; });
-    if (o.owners && o.owners.length) app.appendChild(h("div", { class: "sub" }, h("span", { class: "dim", text: "Owners " }), h("span", { class: "mono", text: o.owners.join(" → ") })));
-    if (failing.length) app.appendChild(h("div", { class: "sub" }, h("span", { class: "dim", text: "Not true " }), failing.map(function (c) { return c.type + (c.reason ? " (" + c.reason + ")" : ""); }).join(", ")));
+    // As the drawer shows them: one owner per line, nearest first; conditions as a checklist.
+    if (o.owners && o.owners.length) {
+      app.appendChild(h("div", { class: "section", text: o.owners.length === 1 ? "Owner" : "Owners" }));
+      app.appendChild(h("ul", { class: "rows box" }, o.owners.map(function (w, i) {
+        var kind = String(w).split("/")[0];
+        return h("li", { class: "owner" }, i ? h("span", { class: "dim", text: "↳" }) : null, v.icon(v.kindIcon(kind), 13, "dim"), h("span", { class: "mono", text: w, title: w }));
+      })));
+    }
+    if (o.conditions && o.conditions.length) {
+      app.appendChild(h("div", { class: "section", text: "Conditions" }));
+      app.appendChild(h("ul", { class: "rows box" }, o.conditions.map(function (c) {
+        return h("li", { class: "cond" + (c.ok ? "" : " off"), title: c.reason || null },
+          v.icon(c.ok ? "check" : "x", 13, c.ok ? "t-ok" : "t-bad"),
+          h("span", { text: c.type }),
+          h("span", { class: "sr-only", text: c.ok ? "true" : "false" }),
+          c.reason ? h("em", { text: c.reason }) : null);
+      })));
+    }
 
     if (o.events && o.events.length) {
       app.appendChild(h("div", { class: "section", text: "Recent events" }));

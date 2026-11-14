@@ -46,6 +46,8 @@
       var shown = hl.problems.slice(0, 6);
       app.appendChild(h("ul", { class: "rows box" }, shown.map(function (x) {
         var where = (x.namespace ? x.namespace + "/" : "") + x.name;
+        // The name leads (a narrow dock would otherwise show only "namespace/…"); the namespace goes with the detail.
+        var detail = x.detail.replace(/; back-off .*$/, "");
         return h("li", null, h("button", {
           class: "row",
           title: "Open " + x.kind + " " + where + " in Landlens",
@@ -53,8 +55,8 @@
           onclick: function () { v.openObject(x.kind, x.namespace, x.name).catch(function () {}); },
         },
           h("div", { class: "row-main" },
-            h("div", { class: "row-name" }, h("span", { class: "kind", text: x.kind }), h("span", { text: where })),
-            h("div", { class: "row-detail", text: x.detail.replace(/; back-off .*$/, "") })),
+            h("div", { class: "row-name" }, h("span", { class: "kind", text: x.kind }), h("span", { text: x.name, title: where })),
+            h("div", { class: "row-detail", text: x.namespace ? x.namespace + " · " + detail : detail })),
           v.pill(x.tone, x.reason),
           v.icon("open", 13, "dim")));
       })));

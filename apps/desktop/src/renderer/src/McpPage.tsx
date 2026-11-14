@@ -2,9 +2,9 @@
 // through it. Servers: landlens-kube (built in, always on) with its tools, and the remote servers you added, each
 // turned on per cluster, tested, edited or removed; Clickland in one step when it answers. Calls: the live log, with
 // filters; a row opens the call in the drawer.
-import type { McpCall, McpServerInfo, McpServers, McpTest, McpToolInfo } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import {
-  Ban, CircleAlert, CircleCheck, CircleDashed, CircleX, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X,
+  Ban, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { age } from "@landlens/kube/status";
@@ -13,6 +13,7 @@ import { AppFrame } from "./AppFrame";
 import type { ObjectTarget } from "./app-host";
 import { inputText, Well } from "./DockParts";
 import { Ic } from "./icons";
+import { copyText } from "./present";
 import { hasView, useMcpCalls } from "./mcpStore";
 
 export type McpTab = "servers" | "calls";
@@ -105,7 +106,7 @@ function Servers(props: {
           under Calls. landlens-kube's tools run without asking; a remote server's tools ask you in the dock unless you let its read-only tools run.
           Remote servers' keys stay encrypted in the main process.
         </p>
-        <button className="secondary" onClick={props.onAdd}><Ic icon={Plus} size={14} />Add server</button>
+        <button className="secondary mcp-add" onClick={props.onAdd}><Ic icon={Plus} size={14} />Add server</button>
       </div>
       {preset && !preset.added && preset.reachable ? (
         <section className="panel mcp-preset" aria-label="Clickland preset">
@@ -233,6 +234,7 @@ function TestSteps({ test, inPanel }: { test: McpTest; inPanel?: boolean }) {
 function ToolRow(props: { tool: McpToolInfo; server: McpServerInfo; handle: string; onOpenObject: (t: ObjectTarget) => void; onError: (m?: string) => void }) {
   const t = props.tool;
   const [tried, setTried] = useState<McpCall | "running">();
+  const [more, setMore] = useState(false);
   const calls = useMcpCalls();
   const live = typeof tried === "object" ? calls.find((c) => c.id === tried.id) ?? tried : tried;
   const canTry = t.readOnly && t.required.length === 0 && (props.server.builtin || props.server.enabled);
@@ -248,9 +250,11 @@ function ToolRow(props: { tool: McpToolInfo; server: McpServerInfo; handle: stri
       <div className="mcp-tool-row">
         <div className="ov-main">
           <div className="ov-name"><span className="mono">{t.name}</span>{t.title && t.title !== t.name ? <span className="dim">{t.title}</span> : null}</div>
-          {t.description ? <div className="ov-detail" title={t.description}>{t.description}</div> : null}
+          {t.description ? (
+            <button className={"ov-detail mcp-desc" + (more ? " open" : "")} aria-expanded={more} onClick={() => setMore((m) => !m)} title={more ? undefined : t.description}>{t.description}</button>
+          ) : null}
         </div>
-        {t.app ? <span className="chip" title={t.app}><Ic icon={LayoutPanelTop} size={11} />{appOnly ? "view only" : "view"}</span> : null}
+        {t.app ? <span className="chip" title={t.app}><Ic icon={LayoutPanelTop} size={11} />{appOnly ? "view only" : "view"}</span> : <span aria-hidden="true" />}
         {runsFree ? (
           <span className="badge muted" title="Runs without asking"><Ic icon={Eye} size={13} />Read-only</span>
         ) : (
@@ -260,7 +264,12 @@ function ToolRow(props: { tool: McpToolInfo; server: McpServerInfo; handle: stri
           <button className="secondary mcp-try" onClick={run} disabled={live === "running"} aria-label={`Preview ${t.name}`}>
             {live === "running" ? <span className="spinner" /> : <Ic icon={Play} size={13} />}Preview
           </button>
-        ) : null}
+        ) : (
+          // Same slot, so the columns line up; says why there's no Preview.
+          <button className="secondary mcp-try" disabled title={t.required.length ? `Needs ${t.required.join(", ")}` : undefined}>
+            {t.required.length ? "Needs arguments" : !t.readOnly ? "Not read-only" : "Server off"}
+          </button>
+        )}
       </div>
       {live && live !== "running" ? (
         <div className="mcp-tried">
@@ -374,13 +383,41 @@ const CALL_STATUS: Record<McpCall["status"], { word: string; icon: typeof Circle
 };
 const ORIGIN_WORD: Record<McpCall["origin"], string> = { agent: "agent", app: "view", you: "you" };
 
-/** "kind name" or the arguments in one line. */
+/** "kind namespace/name", or the arguments as words ("range 1h · scope cluster"); never raw JSON in a row. */
 export function argsLine(args: unknown): string {
   const a = (args ?? {}) as Record<string, unknown>;
   const target = [a.kind ?? a.scope, [a.namespace, a.name].filter(Boolean).join("/")].filter(Boolean).join(" ");
   if (target) return target;
-  const s = JSON.stringify(a);
-  return s === "{}" ? "" : s.slice(0, 120);
+  const words = Object.entries(a).map(([k, v]) =>
+    v === null || v === undefined ? "" : typeof v === "object" ? `${k} …` : `${k} ${String(v).slice(0, 40)}`,
+  ).filter(Boolean);
+  return words.join(" · ").slice(0, 120);
+}
+
+/** "2b0f8c…41de": the start and end of an id, which is how you match one by eye. */
+export function middle(id: string, keep = 6): string {
+  return id.length > keep * 2 + 1 ? `${id.slice(0, keep)}…${id.slice(-4)}` : id;
+}
+
+/** A result's text, indented when it's JSON. */
+export function prettyResult(text: string): string {
+  const t = text.trim();
+  if (!/^[[{]/.test(t)) return text;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function CopyId({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button className="icon-btn sm" aria-label={copied ? "Copied" : `Copy ${label}`} title={copied ? "Copied" : `Copy ${label}`}
+      onClick={() => void copyText(value).then(() => (setCopied(true), setTimeout(() => setCopied(false), 1200)))}>
+      <Ic icon={copied ? Check : Copy} size={12} />
+    </button>
+  );
 }
 
 function Calls(props: { calls: McpCall[]; selected?: string; onSelect: (id: string) => void }) {
@@ -404,6 +441,7 @@ function Calls(props: { calls: McpCall[]; selected?: string; onSelect: (id: stri
             <option value="">All sessions</option>
             {labels.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
+          <Ic icon={ChevronDown} size={13} className="chev" />
         </label>
         <label className="field select">
           <span className="sr-only">Server</span>
@@ -411,6 +449,7 @@ function Calls(props: { calls: McpCall[]; selected?: string; onSelect: (id: stri
             <option value="">All servers</option>
             {names.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
+          <Ic icon={ChevronDown} size={13} className="chev" />
         </label>
         <div className="seg" role="group" aria-label="Status">
           {([["all", "All", props.calls.length], ["ok", "OK", n("ok")], ["error", "Failed", n("error")], ["refused", "Refused", n("refused")]] as const).map(([v, word, count]) => (
@@ -429,10 +468,9 @@ function Calls(props: { calls: McpCall[]; selected?: string; onSelect: (id: stri
                     {c.status === "running" ? <span className="spinner" aria-label="Running" /> : <span role="img" aria-label={st.word} title={st.word}><Ic icon={st.icon} size={14} className={st.cls} /></span>}
                     <div className="ov-main">
                       <div className="ov-name"><span className="mono">{c.server} · {c.tool}</span><span className="dim">{argsLine(c.args)}</span></div>
-                      <div className="ov-detail">{c.label}{c.error ? ` · ${c.error}` : ""}</div>
+                      <div className="ov-detail">{c.label}{c.origin === "app" ? " · from a view" : ""}{c.error ? ` · ${c.error}` : ""}</div>
                     </div>
                     {c.app && c.status === "ok" ? <span className="chip"><Ic icon={LayoutPanelTop} size={11} />view</span> : null}
-                    <span className="chip">{ORIGIN_WORD[c.origin]}</span>
                     <span className="mono dim mcp-ms">{c.ms !== undefined ? `${c.ms} ms` : "…"}</span>
                     <span className="dim small mcp-age">{age(c.startedAt, now)} ago</span>
                   </button>
@@ -479,14 +517,14 @@ export function McpCallDrawer(props: { id: string; onClose: () => void; onOpenOb
         <dl className="facts">
           <dt>Started</dt><dd className="mono">{new Date(c.startedAt).toLocaleTimeString()}</dd>
           {c.endedAt ? (<><dt>Ended</dt><dd className="mono">{new Date(c.endedAt).toLocaleTimeString()}</dd></>) : null}
-          <dt>Session</dt><dd className="mono">{c.session}</dd>
+          <dt>Session</dt><dd className="mono copy-id" title={c.session}>{middle(c.session)}<CopyId value={c.session} label="session id" /></dd>
           {c.toolCallId ? (<><dt>Dock card</dt><dd className="mono">{c.toolCallId}</dd></>) : null}
           {c.app ? (<><dt>View</dt><dd className="mono">{c.app}</dd></>) : null}
         </dl>
         <h3>Arguments</h3>
         <Well text={inputText(c.args)} />
         {c.error ? (<><h3>Why</h3><Well text={c.error} className="tool-out" /></>) : null}
-        {c.preview ? (<><h3>Result</h3><Well text={c.preview} className="tool-out" /></>) : null}
+        {c.preview ? (<><h3>Result</h3><Well text={prettyResult(c.preview)} className="tool-out" failures={c.server === BUILTIN_MCP_SERVER && c.tool === "get_logs"} /></>) : null}
         {hasView(c) ? (<><h3>View</h3><AppFrame call={c.id} onOpenObject={props.onOpenObject} /></>) : null}
         {c.server === "landlens-kube" ? (
           <>

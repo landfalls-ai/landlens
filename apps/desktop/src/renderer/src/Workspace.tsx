@@ -237,6 +237,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             loading={watch.loading}
             selected={selected?.metadata.uid}
             width={width.main}
+            {...(narrow && dock && drawer ? { covered: 372 } : {})}
             oneNamespace={!!scoped}
             empty={{
               title: `No ${list.label.toLowerCase()}${scoped ? ` in ${scoped}` : ""}${filter.trim() ? ` matching “${filter.trim()}”` : status !== "all" ? ` ${status === "bad" ? "failing" : "pending"}` : ""}`,

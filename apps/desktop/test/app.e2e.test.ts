@@ -424,7 +424,10 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       const plot = usage.locator(".chart-plot").first();
       const box = (await plot.boundingBox())!;
       await page.mouse.move(box.x + box.width * 0.62, box.y + box.height * 0.5);
-      await expect(plot.locator(".chart-tip").textContent()).resolves.toContain("allocatable");
+      // The readout is the series (and the total), never the reference lines: those are labelled in the gutter.
+      await plot.locator(".chart-tip").waitFor();
+      expect(await plot.locator(".chart-tip").textContent()).not.toContain("allocatable");
+      expect(await plot.locator("svg").textContent()).toContain("allocatable");
       await shot(page, "22-overview-usage");
       await shot(page, "23-light-overview-usage", "light");
       await page.mouse.move(0, 0);
@@ -439,7 +442,9 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       expect(await tab.textContent()).toMatch(/limit 250m.*request 60m/s);
       const pbox = (await tab.locator(".chart-plot").first().boundingBox())!;
       await page.mouse.move(pbox.x + pbox.width * 0.8, pbox.y + pbox.height * 0.5);
-      await tab.locator(".chart-tip").waitFor();
+      // In the drawer nothing floats over the plot: the head takes the crosshair's time and the legend its values.
+      await expect.poll(() => tab.locator(".chart-now").first().textContent()).toMatch(/^\d\d:\d\d · /);
+      expect(await tab.locator(".chart-tip").count()).toBe(0);
       await shot(page, "24-pod-metrics");
       await shot(page, "25-light-pod-metrics", "light");
       await page.mouse.move(0, 0);
@@ -585,9 +590,18 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       if (await ask.count()) await ask.click();
       await page.waitForTimeout(500);
     }
-    const health = await viewWith(page, ".verdict");
+    // Only the newest view stays open; the earlier ones fold to their tool row and verdict, so the answer stays near.
     const object = await viewWith(page, "button:has-text('Open in Landlens')");
-    expect(await dock.locator(".tool-app iframe").count()).toBeGreaterThanOrEqual(2);
+    expect(await dock.locator(".tool-app iframe").count()).toBe(1);
+    const folded = dock.locator(".tool-verdict");
+    expect(await folded.count()).toBeGreaterThanOrEqual(1);
+    await dock.locator(".msg-agent").last().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+    await shot(page, "38-dock-views-folded");
+    await shot(page, "39-light-dock-views-folded", "light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await dock.locator(".tool-with-app.folded", { hasText: "cluster overview" }).last().locator(".tool-verdict").click();
+    const health = await viewWith(page, ".verdict");
     await page.waitForTimeout(500);
     // Each view's own frame element, so the shot shows that card (the first test's log view is above them).
     await (await health.frameElement()).evaluate((el: any) => el.scrollIntoView({ block: "center" }));

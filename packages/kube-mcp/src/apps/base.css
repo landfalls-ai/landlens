@@ -35,6 +35,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--color-background-primary); }
 body { color: var(--color-text-primary); font: var(--font-text-md-size)/1.45 var(--font-sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+/* Taller than the host lets a view be (runtime.js sets this): the body scrolls rather than clipping silently. */
+html.capped, html.capped body { height: 100%; }
+html.capped body { overflow-y: auto; }
 #app { padding: 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 button:focus-visible { outline: 2px solid var(--color-ring-primary); outline-offset: 2px; }
@@ -82,11 +85,20 @@ button.row:hover { background: var(--color-background-ghost); }
 .ln { display: block; padding: 0 10px 0 42px; position: relative; }
 .ln::before { content: attr(data-n); position: absolute; left: 0; width: 32px; text-align: right; color: var(--color-text-disabled); user-select: none; }
 .ln.hit { background: var(--color-background-danger); color: var(--color-text-danger); }
+.unread { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: var(--border-radius-md); background: var(--color-background-danger); color: var(--color-text-danger); font-size: var(--font-text-sm-size); }
+.unread .mono { color: var(--color-text-secondary); overflow-wrap: anywhere; display: block; margin-top: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cond { display: flex; align-items: center; gap: 8px; padding: 4px 8px; min-width: 0; color: var(--color-text-secondary); }
+.cond.off > span:not(.ic) { color: var(--color-text-primary); }
+.cond em { font-style: normal; margin-left: auto; color: var(--color-text-tertiary); font-size: var(--font-text-sm-size); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; padding-left: 8px; }
+.owner { display: flex; align-items: center; gap: 6px; padding: 3px 8px; min-width: 0; }
+.owner .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ln.hit::before { color: var(--color-text-danger); }
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--border-radius-md); background: var(--color-background-tertiary); box-shadow: inset 0 0 0 1px var(--color-border-secondary); }
 .seg button { height: 22px; padding: 0 8px; border-radius: 5px; font-size: var(--font-text-xs-size); color: var(--color-text-tertiary); }
 .seg button[aria-pressed="true"] { background: var(--color-background-secondary); color: var(--color-text-primary); }
-.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 6px; }
+.stat-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat { padding: 7px 9px; border-radius: var(--border-radius-md); box-shadow: inset 0 0 0 1px var(--color-border-secondary); min-width: 0; }
 .stat-label { font-size: var(--font-text-xs-size); color: var(--color-text-tertiary); }
 .stat-num { font-size: 18px; font-weight: var(--font-weight-semibold); letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; }

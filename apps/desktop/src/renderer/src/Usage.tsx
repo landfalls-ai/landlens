@@ -5,6 +5,7 @@ import { CircleX } from "lucide-react";
 import { useState } from "react";
 import { Bars } from "./charts/Bars";
 import { TimeChart } from "./charts/TimeChart";
+import { format, grid, times } from "./charts/scale";
 import { Ic } from "./icons";
 import type { MetricsState } from "./metrics";
 import { MetricsSource, MetricsUnavailable, RangeSwitch } from "./MetricsNotice";
@@ -31,8 +32,8 @@ export function Usage(props: { state: MetricsState; range: MetricsRange; onRange
         <div className="usage-body unavailable"><MetricsUnavailable data={data} onSettings={props.onSettings} /></div>
       ) : (
         <div className="usage-body">
-          <TimeChart title="CPU" unit="cpu" panel={data.cpu} from={data.from} to={data.to} step={data.step} stacked by="node" stale={stale} />
-          <TimeChart title="Memory" unit="memory" panel={data.memory} from={data.from} to={data.to} step={data.step} stacked by="node" stale={stale} />
+          <TimeChart title="CPU" unit="cpu" panel={data.cpu} from={data.from} to={data.to} step={data.step} stacked by="node" stale={stale} fit />
+          <TimeChart title="Memory" unit="memory" panel={data.memory} from={data.from} to={data.to} step={data.step} stacked by="node" stale={stale} fit />
           <Namespaces data={data} stale={stale} />
         </div>
       )}
@@ -46,6 +47,11 @@ function Namespaces({ data, stale }: { data: MetricsSeries; stale: boolean }) {
   const rows = all.slice(0, TOP).map((n) => ({ key: n.key, value: n[measure] }));
   const rest = [...all.slice(TOP), ...(data.namespaces ?? []).filter((n) => n.key === "other")];
   if (rest.length) rows.push({ key: "other", value: rest.reduce((a, n) => a + n[measure], 0) });
+  // The charts above are the nodes' own usage, which includes what runs outside pods (the kubelet, the runtime, the
+  // OS): say how much, so the bars don't read as the whole cluster.
+  const pods = all.reduce((a, n) => a + n[measure], 0) + (data.namespaces ?? []).filter((n) => n.key === "other").reduce((a, n) => a + n[measure], 0);
+  const cluster = clusterMean(data, measure);
+  const outside = cluster !== undefined && cluster - pods > cluster * 0.05 ? cluster - pods : undefined;
   return (
     <div className={"usage-ns chart" + (stale ? " stale" : "")}>
       <div className="chart-head">
@@ -58,6 +64,22 @@ function Namespaces({ data, stale }: { data: MetricsSeries; stale: boolean }) {
         </div>
       </div>
       {rows.length ? <Bars rows={rows} unit={measure} label={`Namespaces by ${measure === "cpu" ? "CPU" : "memory"}`} /> : <p className="chart-note">No pod samples in this range.</p>}
+      {rows.length && outside !== undefined && cluster !== undefined ? (
+        <p className="chart-note">Pods use {amount(pods, measure)} of the nodes' {amount(cluster, measure)} mean; the other {amount(outside, measure)} runs outside pods (system, kubelet, container runtime).</p>
+      ) : null}
     </div>
   );
+}
+
+/** "4.6 cores", "141m", "3.1 GiB": a bare CPU number reads as cores only with the word. */
+const amount = (v: number, measure: "cpu" | "memory") => format(v, measure) + (measure === "cpu" && v >= 1 ? " cores" : "");
+
+/** The nodes' summed usage, averaged over the range: what the stacked chart's top edge averages to. */
+function clusterMean(data: MetricsSeries, measure: "cpu" | "memory"): number | undefined {
+  const series = data[measure].series;
+  const ts = times(series);
+  if (!ts.length) return undefined;
+  const values = grid(series, ts);
+  const totals = ts.map((_, i) => values.reduce((a, row) => a + (row[i] ?? 0), 0));
+  return totals.reduce((a, v) => a + v, 0) / totals.length;
 }

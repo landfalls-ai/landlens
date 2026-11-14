@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fold, formatBytes, formatCpu, grid, linear, linePath, nearest, stack, ticks, timeTicks, times } from "../src/renderer/src/charts/scale";
+import { chartUnit, fold, formatBytes, formatCpu, formatIn, grid, linear, linePath, nearest, spread, stack, ticks, timeTicks, times } from "../src/renderer/src/charts/scale";
 
 const MIB = 2 ** 20;
 
@@ -56,5 +56,22 @@ describe("chart scales", () => {
   it("breaks a line at missing values and long gaps", () => {
     expect(linePath([0, 1, 2], [5, null, 7], [0, 30, 60], 90)).toBe("M0.0,5.0M2.0,7.0");
     expect(linePath([0, 1, 2], [5, 6, 7], [0, 30, 300], 90)).toBe("M0.0,5.0L1.0,6.0M2.0,7.0");
+  });
+
+  it("keeps one unit across a chart", () => {
+    const m = chartUnit(0.5, "cpu");
+    expect([formatIn(0.0042, m), formatIn(0.25, m, true), formatIn(0.5, m)]).toEqual(["4.2m", "250m", "500m"]);
+    const c = chartUnit(8, "cpu");
+    expect([formatIn(0.12, c), formatIn(2, c, true), formatIn(8, c)]).toEqual(["0.12", "2", "8"]);
+    const g = chartUnit(3 * 2 ** 30, "memory");
+    expect([formatIn(512 * 2 ** 20, g), formatIn(2 ** 31, g, true)]).toEqual(["0.5 GiB", "2 GiB"]);
+    expect(formatIn(300 * 2 ** 20, chartUnit(512 * 2 ** 20, "memory"))).toBe("300 MiB");
+  });
+
+  it("pushes reference labels apart and keeps them in the plot's height", () => {
+    expect(spread([50, 52], 12, 10, 160)).toEqual([50, 62]);
+    expect(spread([52, 50], 12, 10, 160)).toEqual([62, 50]);
+    expect(spread([158, 160], 12, 10, 160)).toEqual([148, 160]);
+    expect(spread([5], 12, 10, 160)).toEqual([10]);
   });
 });

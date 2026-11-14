@@ -13,18 +13,25 @@
     app.textContent = "";
     var hits = new Set(d.hits || []);
     app.appendChild(h("div", { class: "head" },
-      h("span", { class: "tile " + (hits.size ? "bad" : "") }, v.icon("logs", 16)),
+      h("span", { class: "tile " + (hits.size || d.unreadable ? "bad" : "") }, v.icon("logs", 16)),
       h("div", { class: "head-text" },
         h("div", { class: "eyebrow", text: "Logs / " + d.namespace + (d.container ? " · " + d.container : "") + (d.previous ? " · the run before the last restart" : "") }),
         h("div", { class: "title", text: d.pod }))));
+    if (d.unreadable) {
+      // The kubelet answered with why it couldn't read the log, not a log: say so, in the bad tone.
+      app.appendChild(h("div", { class: "unread", role: "status" }, v.icon("bad", 14),
+        h("div", null, h("b", { text: "Logs couldn't be read" }), h("span", { class: "mono", text: d.unreadable }))));
+      return;
+    }
     if (!d.lines.length) {
       app.appendChild(h("div", { class: "empty" }, v.icon("muted", 14, "dim"), h("span", { text: "The log is empty." })));
       return;
     }
+    var count = " · " + d.lines.length + (d.lines.length === 1 ? " line" : " lines");
     var bar = h("div", { class: "head" },
       h("div", { class: "sub", style: "flex:1" }, hits.size
-        ? [v.icon("bad", 12, "t-bad"), " ", String(hits.size), hits.size === 1 ? " line looks like the failure" : " lines look like the failure", h("span", { class: "dim", text: " · " + d.lines.length + " lines" })]
-        : [v.icon("ok", 12, "t-ok"), " Nothing looks like a failure", h("span", { class: "dim", text: " · " + d.lines.length + " lines" })]));
+        ? [v.icon("bad", 12, "t-bad"), " ", String(hits.size), hits.size === 1 ? " line looks like the failure" : " lines look like the failure", h("span", { class: "dim", text: count })]
+        : [v.icon("ok", 12, "t-ok"), " Nothing looks like a failure", h("span", { class: "dim", text: count })]));
     if (hits.size) {
       bar.appendChild(h("div", { class: "seg", role: "group", "aria-label": "Lines" },
         h("button", { "aria-pressed": String(!only), onclick: function () { only = false; render(data); }, text: "All" }),

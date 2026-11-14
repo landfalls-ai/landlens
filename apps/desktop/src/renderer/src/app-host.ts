@@ -38,9 +38,21 @@ export type HostDeps = {
   /** Move the main view to an object (the view's "Open in Landlens"). */
   openObject(t: ObjectTarget): void;
   resize(height: number): void;
+  /** A key typed in the view that the app answers (Escape, ⌘/Ctrl chords): replay it in the host. */
+  key?(k: ViewKey): void;
   context(): HostContext;
   log?(level: string, data: unknown): void;
 };
+
+export type ViewKey = { key: string; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean };
+
+/** The keys a view may hand back: Escape, and ⌘/Ctrl with a letter or digit the app binds. Anything else is dropped. */
+export function viewKey(p: Record<string, unknown>): ViewKey | undefined {
+  const key = typeof p.key === "string" ? p.key : "";
+  const k = { key, metaKey: p.metaKey === true, ctrlKey: p.ctrlKey === true, shiftKey: p.shiftKey === true, altKey: p.altKey === true };
+  if (key === "Escape") return { ...k, metaKey: false, ctrlKey: false, altKey: false };
+  return (k.metaKey || k.ctrlKey) && !k.altKey && /^[kjb1-9]$/i.test(key) ? k : undefined;
+}
 
 type Msg = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown; result?: unknown; error?: unknown };
 
@@ -120,6 +132,11 @@ export class AppHost {
       case "ui/notifications/size-changed": {
         const h = Number(params.height);
         if (Number.isFinite(h)) this.deps.resize(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(h))));
+        return;
+      }
+      case "ui/notifications/landlens-key": {
+        const k = viewKey(params);
+        if (k) this.deps.key?.(k);
         return;
       }
       case "notifications/message":

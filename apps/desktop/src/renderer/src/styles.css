@@ -4,7 +4,7 @@
 :root {
   --font: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --t-11: 11px; --t-12: 12px; --t-13: 13px; --t-15: 15px; --t-16: 16px; --t-26: 26px; --t-30: 30px;
+  --t-105: 10.5px; --t-11: 11px; --t-115: 11.5px; --t-12: 12px; --t-125: 12.5px; --t-13: 13px; --t-15: 15px; --t-16: 16px; --t-26: 26px; --t-30: 30px;
   --w-regular: 400; --w-medium: 500; --w-semibold: 600;
   --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px;
   --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-4: 12px;
@@ -26,7 +26,9 @@
   --shadow-1: 0 1px 0 rgba(255,255,255,.04) inset, 0 1px 2px rgba(0,0,0,.4);
   --shadow-2: 0 0 0 1px rgba(255,255,255,.06), 0 12px 32px -8px rgba(0,0,0,.6);
   --shadow-panel: -16px 0 32px -16px rgba(0,0,0,.55);
-  --focus: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--accent);
+  /* The ring's gap is the surface it sits on, so it reads as a gap and not a stripe; each surface sets its own. */
+  --focus-gap: var(--bg-1);
+  --focus: 0 0 0 2px var(--focus-gap), 0 0 0 4px var(--accent);
   --focus-in: inset 0 0 0 2px var(--accent);
   --code-key: #9DB4FF; --code-str: #8FD6A8; --code-num: #F3C148; --code-punct: var(--ink-3);
   --glow: rgba(120,108,255,.13); --ring: 160,150,255;
@@ -94,6 +96,7 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
 .ask-btn:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 .ask-btn kbd { background: none; border-color: var(--accent-line); color: var(--accent); margin-left: 2px; }
 .icon-btn { width: 26px; height: 26px; border-radius: var(--r-2); display: grid; place-items: center; color: var(--ink-3); flex: none; transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
+.icon-btn.sm { width: 20px; height: 20px; }
 .icon-btn:hover { background: var(--hover); color: var(--ink); }
 .link-btn { color: var(--accent); font-weight: 500; }
 .link-btn:hover { text-decoration: underline; }
@@ -224,6 +227,9 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
 .seg button:focus-visible { box-shadow: var(--focus-in); }
 @container main (max-width: 860px) { .toolbar .ask-btn kbd, .toolbar .field.search kbd { display: none; } }
 @container main (max-width: 760px) { .seg button .seg-word { display: none; } }
+/* With a drawer open, the drawer has its own Ask Claude: the toolbar's becomes the icon, so there's one worded button. */
+.app.with-drawer .toolbar .ask-btn { width: 30px; padding: 0; justify-content: center; }
+.app.with-drawer .toolbar .ask-btn :is(.ask-word, kbd) { display: none; }
 /* A narrow pane (a drawer at 1024px): the controls shrink before anything overlaps. */
 @container main (max-width: 640px) {
   .toolbar { gap: 8px; padding-right: 10px; }
@@ -266,6 +272,8 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
 .td.num.zero { color: var(--ink-4); } .td.num.tone-warn { color: var(--warn-text); } .td.num.tone-bad { color: var(--bad-text); font-weight: 600; }
 .td.age { text-align: right; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
 .td.plain { color: var(--ink-2); }
+.td.st-icon { display: flex; align-items: center; justify-content: center; padding: 0; }
+.td.st-icon .dot { color: var(--ok); }
 .st { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); max-width: 100%; }
 .st.tone-ok .dot { color: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
 .st.tone-muted { color: var(--ink-3); gap: 5px; }
@@ -285,7 +293,7 @@ button.sb-item:hover { color: var(--ink-2); }
 .with-dock .sb-url { display: none; }
 
 /* drawer */
-.drawer { width: var(--drawer-w); background: var(--bg-2); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; box-shadow: var(--shadow-panel); position: relative; z-index: 1; animation: slide-in var(--dur-3) var(--ease); }
+.drawer { --focus-gap: var(--bg-2); --focus: 0 0 0 2px var(--focus-gap), 0 0 0 4px var(--accent); width: var(--drawer-w); background: var(--bg-2); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; box-shadow: var(--shadow-panel); position: relative; z-index: 1; animation: slide-in var(--dur-3) var(--ease); }
 @keyframes slide-in { from { opacity: 0; transform: translateX(16px); } }
 .app.narrow .drawer { width: 380px; }
 .app.with-dock .drawer { width: 372px; }
@@ -366,7 +374,7 @@ button.ref:hover { border-bottom-color: var(--accent); color: var(--accent); }
 .yaml .lock { position: absolute; left: 33px; top: 4px; color: var(--ink-4); }
 
 /* dock */
-.dock { width: var(--dock-w); background: var(--bg-0); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; z-index: 2; animation: slide-in var(--dur-3) var(--ease); }
+.dock { --focus-gap: var(--bg-0); --focus: 0 0 0 2px var(--focus-gap), 0 0 0 4px var(--accent); width: var(--dock-w); background: var(--bg-0); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; z-index: 2; animation: slide-in var(--dur-3) var(--ease); }
 .app.narrow .dock { width: 360px; }
 .dock-head { display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px; height: 56px; flex: none; border-bottom: 1px solid var(--line); }
 .claude-tile { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); flex: none; }
@@ -377,9 +385,11 @@ button.ref:hover { border-bottom-color: var(--accent); color: var(--accent); }
 .dock-title { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dock-sub { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; }
 .scope { display: inline-flex; align-items: center; gap: 4px; color: var(--ok-text); }
-.dock-body { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; min-height: 0; padding: 14px 14px 10px; display: flex; flex-direction: column; gap: 10px; }
+/* The scrollbar's gutter is reserved, and the body's right padding plus that gutter equals the composer's inset, so
+   cards and the composer share one right edge whether or not the transcript scrolls. */
+.dock-body { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; min-height: 0; padding: 14px 4px 10px 14px; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 10px; }
 .dock-body > * { flex: none; }
-.msg-user { align-self: flex-end; max-width: 92%; background: var(--bg-3); border-radius: 12px 12px 3px 12px; padding: 8px 11px; display: grid; gap: 6px; box-shadow: inset 0 0 0 1px var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-user { align-self: flex-end; max-width: 92%; background: var(--bg-3); border-radius: 12px 12px 3px 12px; padding: 8px 10px; display: grid; gap: 6px; box-shadow: inset 0 0 0 1px var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg-user .chip { background: var(--bg-1); font-size: 11px; }
 .thought summary { display: flex; align-items: center; gap: 4px; color: var(--ink-3); font-size: 12px; list-style: none; cursor: pointer; width: fit-content; }
 .thought summary::-webkit-details-marker { display: none; }
@@ -387,6 +397,8 @@ button.ref:hover { border-bottom-color: var(--accent); color: var(--accent); }
 .thought[open] summary .ic { transform: rotate(90deg); }
 .thought .thought-text { color: var(--ink-3); font-size: 12px; white-space: pre-wrap; margin: 6px 0 0 16px; overflow-wrap: anywhere; }
 .shimmer-text { background: linear-gradient(90deg, var(--ink-3) 0%, var(--ink) 50%, var(--ink-3) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 1.6s linear infinite; }
+.thinking-row { display: grid; gap: 7px; padding: 2px 0; font-size: var(--t-12); }
+.thinking-row .skel { height: 8px; }
 .tool-group { display: grid; grid-template-columns: minmax(0, 1fr); border-radius: var(--r-3); box-shadow: inset 0 0 0 1px var(--line); background: var(--bg-2); overflow: hidden; }
 .tool { min-width: 0; }
 .tool + .tool { border-top: 1px solid var(--line); }
@@ -451,9 +463,9 @@ button.ref:hover { border-bottom-color: var(--accent); color: var(--accent); }
 .suggestion .ic { color: var(--ink-4); }
 .suggestion:hover { box-shadow: inset 0 0 0 1px var(--accent-line); }
 .suggestion:hover .ic { color: var(--accent); }
-.dock-input { padding: 8px 12px 12px; flex: none; }
+.dock-input { padding: 8px 14px 12px; flex: none; }
 .composer { border-radius: var(--r-4); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line-2); padding: 10px 10px 8px 12px; display: grid; gap: 8px; transition: box-shadow var(--dur-1) var(--ease); }
-.composer:focus-within { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
+.composer:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line); }
 .composer textarea { resize: none; background: none; border: 0; outline: none; padding: 0; color: var(--ink); line-height: 1.5; min-height: 38px; max-height: 156px; overflow-y: auto; }
 .composer textarea:focus-visible { box-shadow: none; }
 .composer textarea::placeholder { color: var(--ink-3); }

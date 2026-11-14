@@ -5,7 +5,7 @@
 // Four of them have an MCP App (apps.ts): cluster_overview, metrics, describe and get_logs. Their text result is what
 // it always was, for the model; the view gets the same facts as structuredContent, which the gateway keeps for the view
 // and doesn't hand to Claude Code (docs/mcp.md).
-import type { KubeObject, MetricsSeries, ResourceType } from "@landlens/contracts";
+import { FAILURE_LINE, type KubeObject, type MetricsSeries, type ResourceType } from "@landlens/contracts";
 import { clusterHealth, healthText, KubeError } from "@landlens/kube";
 import { age, nodeStatus, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
@@ -173,11 +173,14 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
     const log = await getText(c, `${pathFor(pods, a.namespace, a.name)}/log?${q}`);
     const shown = log.trim() ? log : "(empty log)";
     const lines = capResult(redactText(log)).replace(/\n$/, "").split("\n").slice(-2000);
+    // The kubelet sometimes answers 200 with why it couldn't read the log instead of a log.
+    const unreadable = lines.length <= 2 && UNREADABLE_LOG.test(lines[0] ?? "") ? lines.join(" ") : undefined;
     return {
       text: shown,
       data: {
         context: cluster.context, pod: a.name, namespace: a.namespace, ...(a.container ? { container: a.container } : {}), previous: !!a.previous,
-        lines: log.trim() ? lines : [], hits: lines.flatMap((l, i) => (FAILURE_LINE.test(l) ? [i] : [])),
+        lines: log.trim() ? lines : [], hits: unreadable ? [] : lines.flatMap((l, i) => (FAILURE_LINE.test(l) ? [i] : [])),
+        ...(unreadable ? { unreadable } : {}),
       },
     };
   }));
@@ -370,8 +373,11 @@ function eventsTable(events: any[], now: number): string {
 
 type MetricsScopeName = "cluster" | "node" | "namespace" | "pod" | "deployment" | "statefulset" | "daemonset";
 
-/** Lines that look like the failure, for the log view (the dock's tool well marks the same). */
-export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fatal:|error:|OOMKilled|Killed)\b|\b(ERR|CRIT|SEVERE)\b/;
+/** Lines that look like the failure, for log output only: the log view and the dock's log wells use this one. */
+export { FAILURE_LINE };
+
+/** What the kubelet says instead of a log when it can't read one. */
+export const UNREADABLE_LOG = /^(unable to retrieve container logs|failed to (get|try resolving|create fsnotify)|container "[^"]+" in pod "[^"]+" is (waiting to start|terminated)|previous terminated container "[^"]+" in pod "[^"]+" not found)/i;
 
 /** What the object view draws: the facts describe prints, as data. */
 function objectCard(context: string, t: ResourceType, o: KubeObject, owners: string[], events: any[], now: number): Record<string, unknown> {

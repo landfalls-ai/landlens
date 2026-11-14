@@ -47,6 +47,50 @@ export function formatBytes(bytes: number): string {
 }
 
 export const format = (v: number, unit: Unit, axis = false) => (unit === "cpu" ? formatCpu(v, axis) : formatBytes(v));
+
+/**
+ * One unit for a whole chart (axis, header, readout, legend, reference labels, table), picked from its domain: CPU in
+ * millicores when the axis tops out under a core, in cores otherwise; memory in MiB under a GiB, in GiB otherwise.
+ */
+export type ChartUnit = { unit: Unit; base: "m" | "cores" | "MiB" | "GiB" };
+export function chartUnit(max: number, unit: Unit): ChartUnit {
+  if (unit === "cpu") return { unit, base: max < 1 ? "m" : "cores" };
+  return { unit, base: max < GIB ? "MiB" : "GiB" };
+}
+export function formatIn(v: number, u: ChartUnit, axis = false): string {
+  if (!Number.isFinite(v)) return "–";
+  if (v === 0) return "0";
+  switch (u.base) {
+    case "m": {
+      const m = v * 1000;
+      return `${m < 10 && !axis ? trim(m.toFixed(1)) : Math.round(m)}m`;
+    }
+    case "cores":
+      return trim(v.toFixed(axis ? 2 : v < 10 ? 2 : 1));
+    case "MiB":
+    case "GiB": {
+      const n = v / (u.base === "GiB" ? GIB : MIB);
+      return `${trim(n.toFixed(n < 10 ? (axis && u.base === "MiB" ? 0 : 1) : 0))} ${u.base}`;
+    }
+  }
+}
+/** " cores" after a bare CPU number, so "1.5 of 8 cores" reads; nothing for the others, which carry their unit. */
+export const unitWord = (u: ChartUnit) => (u.base === "cores" ? " cores" : "");
+
+/**
+ * Reference-label positions in the right gutter: each at its line, pushed apart so no two are closer than `gap` px,
+ * kept inside [lo, hi]. Takes and returns y values in the input's order.
+ */
+export function spread(ys: number[], gap: number, lo: number, hi: number): number[] {
+  const order = ys.map((y, i) => ({ y, i })).sort((a, b) => a.y - b.y);
+  for (let k = 1; k < order.length; k++) order[k]!.y = Math.max(order[k]!.y, order[k - 1]!.y + gap);
+  const over = (order.at(-1)?.y ?? hi) - hi;
+  if (over > 0) for (const o of order) o.y -= over;
+  for (let k = 0; k < order.length; k++) order[k]!.y = Math.max(order[k]!.y, lo + k * gap);
+  const out = new Array<number>(ys.length);
+  for (const o of order) out[o.i] = o.y;
+  return out;
+}
 const trim = (s: string) => (s.includes(".") ? s.replace(/\.?0+$/, "") : s);
 
 /** Time ticks at whole steps (10 min, 1 h, 4 h, …) that fit `count`, as ms. */

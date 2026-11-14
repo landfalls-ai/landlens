@@ -22,6 +22,14 @@
     post({ jsonrpc: "2.0", method: method, params: params || {} });
   }
 
+  // Keys typed in a view would otherwise stop here: Escape and the app's ⌘/Ctrl chords go to the host, which decides
+  // what they do (Landlens accepts a fixed few). Nothing else a view types leaves it.
+  window.addEventListener("keydown", function (e) {
+    var chord = (e.metaKey || e.ctrlKey) && /^[a-z0-9]$/i.test(e.key);
+    if (e.key !== "Escape" && !chord) return;
+    notify("ui/notifications/landlens-key", { key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey });
+  });
+
   window.addEventListener("message", function (e) {
     if (e.source !== host) return;
     var m = e.data;
@@ -72,6 +80,9 @@
     var key = w + "x" + h;
     if (key === lastSize) return;
     lastSize = key;
+    // Past the host's cap the frame stops growing: let the body scroll instead of cutting the bottom off.
+    var max = context.containerDimensions && context.containerDimensions.maxHeight;
+    document.documentElement.classList.toggle("capped", typeof max === "number" && h > max);
     notify("ui/notifications/size-changed", { width: w, height: h });
   }
 
@@ -121,6 +132,8 @@
     logs: '<path d="M15 12H3"/><path d="M17 18H3"/><path d="M21 6H3"/>',
     chart: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/>',
     alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   };
   function icon(name, size, cls) {
     var span = document.createElement("span");
