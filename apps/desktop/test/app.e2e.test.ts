@@ -11,9 +11,13 @@ const run = flags.includes("orbstack");
 /** Runs your own Claude Code (your login and usage) against deploy/scenarios/crashloop.yaml in landlens-dev. */
 const claude = flags.includes("claude");
 const shots = process.env.LANDLENS_SHOTS;
-const shot = async (page: Page, name: string) => {
+/** Dark is Landlens's default, so screenshots are dark unless asked, whatever this machine's appearance. */
+const shot = async (page: Page, name: string, colorScheme: "dark" | "light" = "dark") => {
   if (!shots) return;
   mkdirSync(shots, { recursive: true });
+  await page.emulateMedia({ colorScheme });
+  await page.waitForTimeout(400); // the drawer and dock slide in over 240ms
+  await page.evaluate(() => new Promise((r) => (globalThis as any).requestAnimationFrame(() => (globalThis as any).requestAnimationFrame(r))));
   await page.screenshot({ path: resolve(shots, `${name}.png`) });
 };
 
@@ -88,8 +92,13 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     }
   });
 
-  it("connects and lists live pods, filters, and opens one", async () => {
+  it("connects and lands on the Overview, then lists live pods, filters, and opens one", async () => {
     await page.getByRole("button", { name: /orbstack/ }).first().click();
+    await page.getByRole("heading", { name: "Overview" }).waitFor({ timeout: 30_000 });
+    await page.getByRole("region", { name: "Verdict" }).waitFor({ timeout: 30_000 });
+    await shot(page, "02-overview");
+
+    await page.getByRole("button", { name: "Pods", exact: true }).click();
     await page.getByRole("heading", { name: "Pods" }).waitFor({ timeout: 30_000 });
     await page.locator(".tr").first().waitFor({ timeout: 30_000 });
     expect(await page.locator(".tr").count()).toBeGreaterThan(3);
@@ -129,6 +138,43 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     for (const v of values) expect(v).toMatch(/bytes|••••••/);
     await shot(page, "06-secret-redacted");
   }, 60_000);
+
+  it("shows a failing pod's diagnosis, in dark and light, at 1440×880 and 1024×700", async () => {
+    const failing = async () => {
+      await page.getByRole("button", { name: "Pods", exact: true }).click();
+      await page.getByRole("combobox", { name: "Namespace" }).selectOption("");
+      const row = page.locator(".tr", { hasText: "orders-api" }).first();
+      await row.waitFor({ timeout: 30_000 });
+      await row.click();
+      await page.getByRole("region", { name: "Diagnosis" }).waitFor();
+      await expect(page.locator(".tr.row-bad").count()).resolves.toBeGreaterThan(0);
+    };
+    const overview = async () => {
+      await page.getByRole("button", { name: "Overview", exact: true }).click();
+      await page.getByRole("region", { name: "Verdict" }).waitFor({ timeout: 30_000 });
+    };
+    try {
+      await failing();
+      await shot(page, "12-pods-drawer");
+      await page.keyboard.press("Escape");
+      await overview();
+
+      await shot(page, "13-light-overview", "light");
+      await failing();
+      await shot(page, "14-light-pods-drawer", "light");
+
+      await page.setViewportSize({ width: 1024, height: 700 });
+      await page.keyboard.press("Escape");
+      await overview();
+      await shot(page, "15-1024-overview");
+      await failing();
+      await shot(page, "16-1024-pods-drawer");
+      await shot(page, "17-1024-light-pods-drawer", "light");
+    } finally {
+      await page.setViewportSize({ width: 1440, height: 880 });
+      await page.keyboard.press("Escape");
+    }
+  }, 120_000);
 
   it.runIf(claude)("asks Claude why the crash-looping pod fails, and shows the evidence it read", async () => {
     await page.getByRole("button", { name: "Pods", exact: true }).click();
@@ -173,5 +219,12 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     expect(failed, failed.join("\n---\n")).toEqual([]);
     await dock.locator(".tool summary").first().click();
     await shot(page, "11-agent-tool-card");
+
+    // With the drawer and the dock open at 1024×700 the sidebar is a rail and the drawer floats over the table.
+    await page.setViewportSize({ width: 1024, height: 700 });
+    await shot(page, "18-1024-dock-drawer");
+    await page.locator(".drawer").getByRole("button", { name: "Close details" }).click();
+    await shot(page, "19-1024-dock");
+    await page.setViewportSize({ width: 1440, height: 880 });
   }, 360_000);
 });
