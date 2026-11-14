@@ -1,7 +1,7 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { checkAccess, clusterHealth, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { AgentService } from "./agent";
 import { isAppUrl } from "./security";
@@ -32,6 +32,10 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     },
     "cluster:discovery": async ({ handle }) => ({ types: await clusters.discovery(handle) }),
     "cluster:access": async ({ handle, checks }) => ({ allowed: await checkAccess(clusters.get(handle).client, checks) }),
+    "cluster:health": async ({ handle, namespace }) => {
+      const client = clusters.get(handle).client;
+      return clusterHealth((path) => client.json(path), namespace ? { namespace } : {});
+    },
     "resource:get": async ({ handle, ref }) => {
       const type = await clusters.typeOf(handle, ref); // only kinds the cluster serves
       return { object: withoutSecretValues(await clusters.getObject(handle, ref), isSecrets(type)) };

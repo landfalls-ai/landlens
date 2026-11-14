@@ -2,7 +2,7 @@
 // Every call goes through the front door with the session's own token (cluster.ts), so the policy and the audit
 // trail apply to these exactly as to the agent's kubectl.
 import type { KubeObject, ResourceType } from "@landlens/contracts";
-import { KubeError } from "@landlens/kube";
+import { clusterHealth, healthText, KubeError } from "@landlens/kube";
 import { age, nodeStatus, podReady, podRestarts, podStatus } from "@landlens/kube/status";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { stringify } from "yaml";
@@ -295,62 +295,8 @@ async function eventsText(
   ]));
 }
 
-const BAD_WAITING = new Set(["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "CreateContainerError", "InvalidImageName", "RunContainerError"]);
-
 async function overview(cluster: AgentCluster, namespace?: string): Promise<string> {
-  const now = Date.now();
-  const problems: string[] = [];
-  const pods = await getJson(cluster, `${pathFor({ group: "", version: "v1", resource: "pods" }, namespace)}?limit=2000`);
-  for (const p of (pods.items ?? []) as KubeObject[]) {
-    const id = `pod ${p.metadata.namespace}/${p.metadata.name}`;
-    const status = podStatus(p).text;
-    const restarts = podRestarts(p).sort;
-    for (const c of p.status?.containerStatuses ?? []) {
-      const waiting = c.state?.waiting?.reason;
-      const last = c.lastState?.terminated;
-      if (waiting && BAD_WAITING.has(waiting)) {
-        problems.push(`${id}: ${waiting} in container ${c.name} (${c.restartCount} restarts)` +
-          (last ? `; last exit ${last.reason ?? "?"} code ${last.exitCode}` : "") + (c.state.waiting.message ? `; ${c.state.waiting.message}` : ""));
-      } else if (last?.reason === "OOMKilled") {
-        problems.push(`${id}: container ${c.name} was OOMKilled (${c.restartCount} restarts)`);
-      }
-    }
-    const created = Date.parse(p.metadata.creationTimestamp ?? "");
-    if (p.status?.phase === "Pending" && now - created > 120_000 && !problems.some((x) => x.startsWith(id))) {
-      const unsched = (p.status?.conditions ?? []).find((c: any) => c.type === "PodScheduled" && c.status === "False");
-      problems.push(`${id}: Pending for ${age(created, now)}${unsched?.message ? `; ${unsched.message}` : ""}`);
-    } else if (p.status?.phase === "Running" && podReady(p).tone !== "ok" && !problems.some((x) => x.startsWith(id))) {
-      problems.push(`${id}: Running but not ready (${podReady(p).text})`);
-    } else if (restarts >= 5 && !problems.some((x) => x.startsWith(id))) {
-      problems.push(`${id}: ${restarts} restarts (${status})`);
-    }
-  }
-  try {
-    const deps = await getJson(cluster, `${pathFor({ group: "apps", version: "v1", resource: "deployments" }, namespace)}?limit=1000`);
-    for (const d of deps.items ?? []) {
-      const want = d.spec?.replicas ?? 1;
-      const have = d.status?.availableReplicas ?? 0;
-      if (have < want) problems.push(`deployment ${d.metadata.namespace}/${d.metadata.name}: ${have}/${want} available`);
-    }
-  } catch (err) {
-    problems.push(`(deployments not readable: ${(err as Error).message})`);
-  }
-  if (!namespace) {
-    try {
-      const nodes = await getJson(cluster, "/api/v1/nodes");
-      for (const n of nodes.items ?? []) {
-        if (nodeStatus(n).tone !== "ok") problems.push(`node ${n.metadata.name}: ${nodeStatus(n).text}`);
-        for (const c of n.status?.conditions ?? []) {
-          if (c.type !== "Ready" && c.status === "True") problems.push(`node ${n.metadata.name}: ${c.type}`);
-        }
-      }
-    } catch {
-      // A namespace-limited session can't list nodes everywhere; skip.
-    }
-  }
-  const warnings = await eventsText(cluster, { namespace, warningsOnly: true, limit: 25 }, now);
-  const head = problems.length ? `Problems (${problems.length}):\n${problems.map((p) => `- ${p}`).join("\n")}` : "No failing pods, short deployments or unready nodes found.";
-  return `${head}\n\nRecent warning events:\n${warnings}`;
+  return healthText(await clusterHealth((path) => getJson(cluster, path), { ...(namespace ? { namespace } : {}) }));
 }
 
 function cpuMillis(v?: string): number {

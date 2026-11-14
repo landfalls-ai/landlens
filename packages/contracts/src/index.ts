@@ -120,6 +120,7 @@ export const channels = {
   "cluster:disconnect": z.object({ handle: Handle }),
   "cluster:discovery": z.object({ handle: Handle }),
   "cluster:access": z.object({ handle: Handle, checks: z.array(AccessCheck).max(200) }),
+  "cluster:health": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
   "resource:get": z.object({ handle: Handle, ref: ResourceRef }),
   "resource:events": z.object({ handle: Handle, namespace: NamespaceName.optional(), uid: Uid }),
   "watch:subscribe": WatchRequest,
@@ -141,6 +142,7 @@ export type Responses = {
   "cluster:disconnect": { ok: true };
   "cluster:discovery": { types: ResourceType[] };
   "cluster:access": { allowed: boolean[] };
+  "cluster:health": ClusterHealth;
   "resource:get": { object: KubeObject };
   "resource:events": { items: KubeObject[] };
   "watch:subscribe": { subscription: string };
@@ -152,6 +154,38 @@ export type Responses = {
   "agent:config": { ok: true };
   "agent:answer": { ok: true };
   "agent:close": { ok: true };
+};
+
+/** What is wrong in a cluster right now, problems first: the Overview page and the agent's cluster_overview. */
+export type HealthProblem = {
+  kind: "Pod" | "Deployment" | "Node";
+  namespace?: string;
+  name: string;
+  /** CrashLoopBackOff, OOMKilled, Pending, NotReady, Unavailable, Restarts, … */
+  reason: string;
+  /** One line: "in container api, 11 restarts; last exit Error code 1". */
+  detail: string;
+  tone: "bad" | "warn";
+  container?: string;
+  restarts?: number;
+};
+export type HealthEvent = {
+  at: string;
+  namespace?: string;
+  kind: string;
+  name: string;
+  reason: string;
+  message: string;
+  count: number;
+};
+export type ClusterHealth = {
+  at: string;
+  nodes: { total: number; ready: number; items: { name: string; ready: boolean; version: string; roles: string[] }[] } | null;
+  pods: { total: number; running: number; succeeded: number; pending: number; failing: number; restarts: number };
+  deployments: { total: number; available: number } | null;
+  namespaces: number;
+  problems: HealthProblem[];
+  warnings: HealthEvent[];
 };
 
 /** A choice the agent offers: a mode, or a value of a config option such as the model. */
