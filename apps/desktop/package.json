@@ -20,7 +20,8 @@
     "@landlens/acp-host": "workspace:*",
     "@landlens/contracts": "workspace:*",
     "@landlens/kube": "workspace:*",
-    "@landlens/kube-mcp": "workspace:*"
+    "@landlens/kube-mcp": "workspace:*",
+    "@landlens/metrics": "workspace:*"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",

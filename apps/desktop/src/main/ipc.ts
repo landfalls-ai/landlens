@@ -3,12 +3,14 @@
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
 import { checkAccess, clusterHealth, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
+import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
+import type { ClicklandSettingsStore } from "./clickland-settings";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }) {
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -26,6 +28,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       return clusters.connect(context);
     },
     "cluster:disconnect": async ({ handle }) => {
+      metrics.service.forget(handle);
       await hub.stopAll(handle);
       await clusters.disconnect(handle);
       return { ok: true };
@@ -80,6 +83,12 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "agent:config": async ({ session, config, value }) => (await agent.setConfig(session, config, value), { ok: true }),
     "agent:answer": async ({ request, option }) => (agent.answer(request, option), { ok: true }),
     "agent:close": async ({ session }) => (await agent.close(session), { ok: true }),
+    // Graphs (docs/metrics.md). The Clickland key comes in with configure and test; nothing sends it back.
+    "metrics:series": (req) => metrics.service.series(req),
+    "metrics:settings": async ({ context }) => metrics.settings.view(context),
+    "metrics:configure": async (input) => metrics.settings.set(input),
+    "metrics:test": (input) => metrics.service.test(input),
+    "metrics:disconnect": async () => metrics.settings.clear(),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {

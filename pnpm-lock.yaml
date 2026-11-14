@@ -28,6 +28,9 @@ importers:
       '@landlens/kube-mcp':
         specifier: workspace:*
         version: link:../../packages/kube-mcp
+      '@landlens/metrics':
+        specifier: workspace:*
+        version: link:../../packages/metrics
     devDependencies:
       '@electron/fuses':
         specifier: 2.1.3

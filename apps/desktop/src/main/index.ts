@@ -1,13 +1,18 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
 import { ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
-import { app, BrowserWindow, nativeTheme } from "electron";
+import { MetricsService } from "@landlens/metrics";
+import { app, BrowserWindow, nativeTheme, safeStorage } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentService } from "./agent";
+import { ClicklandSettingsStore } from "./clickland-settings";
 import { registerIpc } from "./ipc";
 import { DEV_URL, hardenApp, hardenSession, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
+
+// Development and tests only: a separate profile (the e2e test uses one, so it never touches your settings).
+if (!app.isPackaged && process.env.LANDLENS_USER_DATA) app.setPath("userData", process.env.LANDLENS_USER_DATA);
 
 /**
  * The Go sidecar holds cluster credentials, so a packaged app only runs the copy in its own Resources. The
@@ -46,8 +51,17 @@ async function start() {
     }) as ConstructorParameters<typeof AgentService>[0]["push"],
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent);
+  const settings = new ClicklandSettingsStore(join(app.getPath("userData"), "clickland.json"), safeStorage);
+  const metrics = new MetricsService({
+    clickland: () => ({ config: settings.config(), clusterName: (context) => settings.clusterName(context) }),
+    cluster: (handle) => {
+      const c = clusters.get(handle);
+      return { context: c.info.context, get: (path) => c.client.json(path) };
+    },
+  });
+  registerIpc(clusters, hub, agent, { service: metrics, settings });
   shutdown = async () => {
+    metrics.stopAll();
     await agent.stop();
     await hub.stopAll();
     await clusters.disconnectAll();
