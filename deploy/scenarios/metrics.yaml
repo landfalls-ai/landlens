@@ -1,0 +1,44 @@
+# A healthy deployment with a steady, uneven load, so the Metrics tab and the Overview's Usage card have real series:
+# two replicas, two containers each, with requests and limits. The api container burns CPU in bursts (throttled by its
+# 200m limit) and holds 8 to 40 MiB in a memory-backed volume; the proxy container idles.
+# kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml -f deploy/scenarios/metrics.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+  namespace: landlens-dev
+  labels: { app: catalog-api, scenario: metrics }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: catalog-api } }
+  template:
+    metadata:
+      labels: { app: catalog-api }
+    spec:
+      containers:
+        - name: api
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "catalog-api 1.8.0 listening on :8080"
+              i=0
+              while true; do
+                i=$(( (i + 1) % 5 ))
+                dd if=/dev/zero of=/scratch/cache bs=1M count=$(( 8 + i * 8 )) 2>/dev/null
+                timeout 4 sh -c 'while :; do :; done'
+                sleep $(( 4 + i * 2 ))
+              done
+          volumeMounts: [{ name: scratch, mountPath: /scratch }]
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 96Mi }
+        - name: proxy
+          image: busybox:1.36
+          command: ["sh", "-c", "echo proxy ready; while true; do sleep 30; done"]
+          resources:
+            requests: { cpu: 10m, memory: 8Mi }
+            limits: { cpu: 50m, memory: 16Mi }
+      volumes:
+        - name: scratch
+          emptyDir: { medium: Memory, sizeLimit: 64Mi }

@@ -113,6 +113,48 @@ export type AccessCheck = z.infer<typeof AccessCheck>;
 /** An ACP session id, as the agent made it. */
 export const SessionId = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:-]+$/, "not a session id");
 
+// Graphs (docs/metrics.md): CPU and memory over time, from Clickland when it is connected and answers, else from
+// metrics-server sampled while Landlens is open, else nothing and a reason.
+export const MetricsRange = z.enum(["1h", "6h", "24h"]);
+export type MetricsRange = z.infer<typeof MetricsRange>;
+export const MetricsScope = z.enum(["cluster", "namespace", "node", "deployment", "statefulset", "daemonset", "pod"]);
+export type MetricsScope = z.infer<typeof MetricsScope>;
+export const MetricsRequest = z
+  .object({ handle: Handle, scope: MetricsScope, namespace: NamespaceName.optional(), name: ObjectName.optional(), range: MetricsRange })
+  .refine((r) => r.scope === "cluster" || !!r.name || r.scope === "namespace", "this scope needs a name")
+  .refine((r) => !["namespace", "deployment", "statefulset", "daemonset", "pod"].includes(r.scope) || !!r.namespace, "this scope needs a namespace");
+export type MetricsRequest = z.infer<typeof MetricsRequest>;
+
+/**
+ * Clickland's address and key. The key travels renderer → main only (when the person types it); main keeps it
+ * encrypted with safeStorage and never sends it back. Plain http only to this machine, so a key never crosses a network
+ * in the clear.
+ */
+export const ClicklandUrl = z
+  .string()
+  .max(500)
+  .url()
+  .refine((u) => {
+    try {
+      const url = new URL(u);
+      if (url.username || url.password || url.search || url.hash) return false;
+      if (url.protocol === "https:") return true;
+      return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    } catch {
+      return false;
+    }
+  }, "https, or http to this machine (127.0.0.1, localhost)");
+export const ClicklandKey = z.string().max(200).regex(/^ck_[A-Za-z0-9_-]{16,128}$/, "not a Clickland API key (ck_…)");
+/** The cluster's name in Clickland's data (`k8s.cluster.name`); a label value. */
+export const ClicklandClusterName = z.string().max(253).regex(/^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/, "not a cluster name");
+export const ClicklandSettingsInput = z.object({
+  url: ClicklandUrl,
+  /** Absent: keep the key already stored. */
+  key: ClicklandKey.optional(),
+  /** The kubeconfig context this name is for, and the name; absent: the context's own name. */
+  cluster: z.object({ context: z.string().min(1).max(253), name: ClicklandClusterName }).optional(),
+});
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -133,6 +175,11 @@ export const channels = {
   "agent:config": z.object({ session: SessionId, config: z.string().min(1).max(64), value: z.string().min(1).max(200) }),
   "agent:answer": z.object({ request: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), option: z.string().max(200).nullable() }),
   "agent:close": z.object({ session: SessionId }),
+  "metrics:series": MetricsRequest,
+  "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
+  "metrics:configure": ClicklandSettingsInput,
+  "metrics:test": z.object({ handle: Handle.optional(), url: ClicklandUrl.optional(), key: ClicklandKey.optional(), cluster: ClicklandClusterName.optional() }),
+  "metrics:disconnect": z.object({}),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -154,6 +201,68 @@ export type Responses = {
   "agent:config": { ok: true };
   "agent:answer": { ok: true };
   "agent:close": { ok: true };
+  "metrics:series": MetricsSeries;
+  "metrics:settings": ClicklandSettings;
+  "metrics:configure": ClicklandSettings;
+  "metrics:test": ClicklandTest;
+  "metrics:disconnect": ClicklandSettings;
+};
+
+/** [time in ms, value]. CPU in cores, memory in bytes. */
+export type MetricPoint = [number, number];
+export type MetricLine = { key: string; points: MetricPoint[] };
+/** One measure (CPU or memory) for a scope. Reference values are the latest known; absent when unknown or unset. */
+export type MetricPanel = {
+  /** Usage: per container (pod), per pod (workload, namespace), per node (cluster, node). */
+  series: MetricLine[];
+  /** For a pod, the sum over its containers; for a workload, per pod. Absent if no container sets one. */
+  request?: number;
+  /** As request, and only when every container sets one (otherwise there is no total limit). */
+  limit?: number;
+  /** Cluster and node: what the nodes can give to pods. */
+  allocatable?: number;
+  /** Per container: its own request and limit, for the readout. */
+  byKey?: Record<string, { request?: number; limit?: number }>;
+};
+export type MetricsReasonCode =
+  | "clickland-off" // no key stored
+  | "clickland-unreachable"
+  | "clickland-unauthorized"
+  | "clickland-failed"
+  | "clickland-no-cluster" // answers, but has nothing for this cluster's name
+  | "no-metrics-server"
+  | "live-only"; // metrics-server: samples only since Landlens opened, at most an hour
+export type MetricsReason = { code: MetricsReasonCode; message: string };
+export type MetricsSeries = {
+  source: "clickland" | "metrics-server" | "none";
+  /** Why a better source wasn't used, and anything the reader should know about this one. */
+  reasons: MetricsReason[];
+  /** Seconds between points. */
+  step: number;
+  from: number;
+  to: number;
+  /** What one series is. */
+  by: "container" | "pod" | "node";
+  cpu: MetricPanel;
+  memory: MetricPanel;
+  /** Cluster scope: the namespaces using the most, mean over the range, largest CPU first. */
+  namespaces?: { key: string; cpu: number; memory: number }[];
+  /** The name the cluster has in Clickland's data. */
+  cluster?: string;
+};
+export type ClicklandSettings = {
+  url: string;
+  /** Whether a key is stored. The key itself never leaves main. */
+  hasKey: boolean;
+  /** Whether safeStorage can encrypt on this machine; without it Landlens won't store a key. */
+  canStore: boolean;
+  /** The Clickland cluster name for the asked context (its own name unless set). */
+  cluster?: string;
+};
+export type ClicklandTest = {
+  ok: boolean;
+  /** One line per step: the health check, then a query. */
+  steps: { name: string; ok: boolean; detail: string }[];
 };
 
 /** What is wrong in a cluster right now, problems first: the Overview page and the agent's cluster_overview. */

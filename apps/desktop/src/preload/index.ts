@@ -7,6 +7,7 @@ const CHANNELS: readonly Channel[] = [
   "catalog:list", "cluster:connect", "cluster:disconnect", "cluster:discovery", "cluster:access",
   "cluster:health", "resource:get", "resource:events", "watch:subscribe", "watch:unsubscribe",
   "agent:start", "agent:prompt", "agent:cancel", "agent:mode", "agent:config", "agent:answer", "agent:close",
+  "metrics:series", "metrics:settings", "metrics:configure", "metrics:test", "metrics:disconnect",
 ];
 const PUSH: readonly PushChannel[] = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status"];
 
