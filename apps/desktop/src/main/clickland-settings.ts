@@ -1,9 +1,18 @@
 // Clickland's address and API key, kept in userData/clickland.json. The key is encrypted with Electron's safeStorage
-// (the macOS Keychain holds the encryption key) and is read only here, in main: no channel ever returns it.
+// (the macOS Keychain holds the encryption key) and is read only here, in main: no channel ever returns it. The key
+// belongs to the origin it was saved with: saving another origin without typing the key again drops it.
 import type { ClicklandSettings } from "@landlens/contracts";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
 export const DEFAULT_CLICKLAND_URL = "http://127.0.0.1:4710";
+
+const origin = (u: string) => {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return "";
+  }
+};
 
 /** The part of Electron's safeStorage this needs (a fake in tests). */
 export type Crypto = {
@@ -62,7 +71,9 @@ export class ClicklandSettingsStore {
 
   set(input: { url: string; key?: string; cluster?: { context: string; name: string } }, context?: string): ClicklandSettings {
     const s = this.read();
+    const moved = origin(input.url) !== origin(s.url ?? DEFAULT_CLICKLAND_URL);
     s.url = input.url;
+    if (input.key === undefined && moved) delete s.key; // a stored key never follows the address to another origin
     if (input.key !== undefined) {
       if (!this.crypto.isEncryptionAvailable()) throw Object.assign(new Error("This machine can't encrypt the key (safeStorage is unavailable), so Landlens won't store it."), { status: 409 });
       s.key = this.crypto.encryptString(input.key).toString("base64");
@@ -75,6 +86,12 @@ export class ClicklandSettingsStore {
     }
     this.write(s);
     return this.view(context ?? input.cluster?.context);
+  }
+
+  /** Main only: the origin the stored key was saved for. */
+  keyOrigin(): string | undefined {
+    const s = this.read();
+    return s.key ? origin(s.url ?? DEFAULT_CLICKLAND_URL) : undefined;
   }
 
   /** Forget the key (the address and cluster names stay). */

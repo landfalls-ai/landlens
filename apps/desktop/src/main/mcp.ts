@@ -3,11 +3,11 @@
 import { BUILTIN_MCP_SERVER, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
-import { BuiltinUpstream, McpGateway, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { BuiltinUpstream, listingHash, McpGateway, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import type { SessionMcp } from "@landlens/acp-host";
 import { AppViews, viewCsp } from "./app-views";
 import type { ClicklandSettingsStore } from "./clickland-settings";
-import type { McpServerStore } from "./mcp-store";
+import { originOf, type McpServerStore } from "./mcp-store";
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 
@@ -22,13 +22,15 @@ export class McpService {
   readonly views = new AppViews();
   private readonly consoles = new Map<string, Promise<{ session: GatewaySession; revoke(): void }>>(); // handle → yours
   private builtinTools: Promise<McpServerInfo["tools"]> | undefined;
+  /** A view's link dialog is open. */
+  private linkAsked = false;
 
   constructor(private readonly deps: {
     store: McpServerStore;
     clickland: ClicklandSettingsStore;
     frontDoor: FrontDoor;
     clusters: ClusterManager;
-    metrics: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0]) => Promise<MetricsSeries>;
+    metrics: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>) => Promise<MetricsSeries>;
     push: (call: McpCall) => void;
     ask: Ask;
     log?: (l: string) => void;
@@ -40,6 +42,8 @@ export class McpService {
         yes: "Run it once",
       }),
       ...(deps.log ? { log: deps.log } : {}),
+      // Every RemoteSpec the gateway gets comes from the store, with its id.
+      onDrift: (spec) => deps.store.drifted((spec as RemoteSpec & { id: string }).id),
     });
     this.gateway.log.subscribe(deps.push);
     deps.clusters.onGone((handle) => void this.closeConsole(handle));
@@ -72,7 +76,7 @@ export class McpService {
   async servers(context?: string): Promise<McpServers> {
     this.builtinTools ??= new BuiltinUpstream(BUILTIN_MCP_SERVER, stubCluster()).tools().then((t) => t.map(toolInfo));
     const builtin: McpServerInfo = {
-      id: BUILTIN_MCP_SERVER, name: BUILTIN_MCP_SERVER, builtin: true, url: this.gateway.url, enabled: true, appOrigins: [],
+      id: BUILTIN_MCP_SERVER, name: BUILTIN_MCP_SERVER, builtin: true, url: this.gateway.url, enabled: true, autoRun: true, appOrigins: [],
       tools: (await this.builtinTools) ?? [], status: "ready",
     };
     const remotes = this.deps.store.list(context);
@@ -92,22 +96,46 @@ export class McpService {
     return this.deps.store.info(s.id, context);
   }
 
-  /** Initialize and list tools, with the typed header or, for a saved server, the stored one. */
+  /**
+   * Initialize and list tools, with the typed header or, for a saved server, the stored one. A stored value goes only
+   * to the origin and under the header name it was saved with: for another address or name, type it again.
+   */
   async test(req: { id?: string; url?: string; header?: { name: string; value?: string } }): Promise<McpTest> {
     let spec: RemoteSpec;
+    // Only a test of the saved server as it is saved updates its status, tools and listing.
+    let asSaved = false;
     if (req.id) {
       const saved = this.deps.store.spec(req.id);
-      const name = req.header?.name ?? Object.keys(saved.headers ?? {})[0];
-      const value = req.header?.value ?? this.deps.store.headerValue(req.id);
-      spec = { name: saved.name, url: req.url ?? saved.url, ...(name && value ? { headers: { [name]: value } } : {}) };
+      const storedName = this.deps.store.headerName(req.id);
+      const url = req.url ?? saved.url;
+      const name = req.header?.name ?? storedName;
+      let value = req.header?.value;
+      if (value === undefined && saved.headers) {
+        if (originOf(url) !== originOf(saved.url) || name?.toLowerCase() !== storedName?.toLowerCase()) {
+          return { ok: false, steps: [{ name: "header", ok: false, detail: "The stored header value is only sent to the address and header it was saved for. Type it again to test this one." }] };
+        }
+        value = Object.values(saved.headers)[0];
+      }
+      spec = { name: saved.name, url, ...(name && value ? { headers: { [name]: value } } : {}) };
+      asSaved = url === saved.url && req.header?.value === undefined && name?.toLowerCase() === storedName?.toLowerCase();
     } else {
       if (!req.url) throw fail(400, "Give the server's address.");
       spec = { name: "test", url: req.url, ...(req.header?.value ? { headers: { [req.header.name]: req.header.value } } : {}) };
     }
     const r = await testRemote(spec);
     const tools = r.tools?.map(toolInfo);
-    if (req.id) this.deps.store.status(req.id, { status: r.ok ? "ready" : "failed", ...(r.ok ? {} : { detail: r.steps.at(-1)?.detail ?? "failed" }), ...(tools ? { tools } : {}) });
+    if (req.id && asSaved) {
+      this.deps.store.status(req.id, {
+        status: r.ok ? "ready" : "failed", ...(r.ok ? {} : { detail: r.steps.at(-1)?.detail ?? "failed" }),
+        ...(tools ? { tools } : {}), ...(r.tools ? { listing: listingHash(r.tools) } : {}),
+      });
+    }
     return { ok: r.ok, steps: r.steps, ...(tools ? { tools } : {}) };
+  }
+
+  /** "Run read-only tools without asking" for a server, pinned to the tools the page shows. */
+  autoRun(id: string, on: boolean, context?: string): McpServerInfo {
+    return this.deps.store.setAutoRun(id, on, context);
   }
 
   enable(id: string, context: string, on: boolean): McpServerInfo {
@@ -161,7 +189,7 @@ export class McpService {
         const token = this.deps.frontDoor.issueToken({ label, policy: agentReadOnlyPolicy(), clusters: [handle] });
         const cluster = frontDoorCluster({
           url: this.deps.frontDoor.clusterUrl(handle), certificate: this.deps.frontDoor.certificate, token, context: info.context,
-          types: async () => types, metrics: (r) => this.deps.metrics(handle, r),
+          types: async () => types, metrics: (r, read) => this.deps.metrics(handle, r, read),
         });
         const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: this.deps.store.remotesFor(info.context) });
         return { session, revoke: () => this.deps.frontDoor.revokeToken(token) };
@@ -200,7 +228,7 @@ export class McpService {
     const kept = this.gateway.log.result(callId);
     if (!call?.app || !kept) throw fail(404, "That call has no view (or it's too old to show).");
     const session = this.gateway.sessionOf(callId);
-    const res = await this.gateway.appResource(session, call.server, call.app);
+    const res = await this.gateway.appResource(session, call.server, call.app, kept.url);
     const csp = viewCsp(res.csp, call.server === BUILTIN_MCP_SERVER ? [] : this.deps.store.appOriginsOf(call.server));
     const view = this.views.add({ call: callId, server: call.server, tool: call.tool, html: res.html, csp });
     const t = this.gateway.tool(call.server, call.tool);
@@ -226,10 +254,15 @@ export class McpService {
     return (await session.call(v.server, name, args, "app")) as McpToolResult;
   }
 
-  /** ui/open-link: https only, after you've seen the host and said yes. */
+  /**
+   * ui/open-link: https only, after you've seen the host and said yes. One dialog at a time for all views, and at
+   * most three a minute per view, so a view can't bury you in dialogs until you click Open.
+   */
   async viewLink(viewId: string, raw: string): Promise<boolean> {
     const v = this.views.get(viewId);
     if (!v) throw fail(404, "That view has closed.");
+    if (this.linkAsked) throw fail(429, "Landlens is already asking about a link.");
+    if (!this.views.allowLink(viewId)) throw fail(429, "That view is opening links too often.");
     let u: URL;
     try {
       u = new URL(raw);
@@ -237,13 +270,18 @@ export class McpService {
       throw fail(400, "not a link");
     }
     if (u.protocol !== "https:" || u.username || u.password) throw fail(400, "Views may open https links only.");
-    const yes = await this.deps.ask.confirm({
-      message: `Open ${u.host} in your browser?`,
-      detail: `The ${v.server} view (${v.tool}) wants to open:\n${u.href.slice(0, 500)}`,
-      yes: "Open",
-    });
-    if (yes) await this.deps.ask.openExternal(u.href);
-    return yes;
+    this.linkAsked = true;
+    try {
+      const yes = await this.deps.ask.confirm({
+        message: `Open ${u.host} in your browser?`,
+        detail: `The ${v.server} view (${v.tool}) wants to open:\n${u.href.slice(0, 500)}`,
+        yes: "Open",
+      });
+      if (yes) await this.deps.ask.openExternal(u.href);
+      return yes;
+    } finally {
+      this.linkAsked = false;
+    }
   }
 }
 

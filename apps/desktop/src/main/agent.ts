@@ -27,7 +27,15 @@ export class AgentService {
   private starting: Promise<AcpHost> | undefined;
   private path = "";
   private readonly sessions = new Map<string, ClusterSession>();
-  private readonly pending = new Map<string, { session: string; options: Set<string>; resolve: (o: RequestPermissionOutcome) => void }>();
+  private readonly pending = new Map<string, {
+    session: string;
+    options: Set<string>;
+    /** Each offered option's kind (allow_once, allow_always, reject_once, …). */
+    kinds: Map<string, string>;
+    toolCallId: string;
+    toolName?: string;
+    resolve: (o: RequestPermissionOutcome) => void;
+  }>();
 
   constructor(
     private readonly deps: {
@@ -38,6 +46,8 @@ export class AgentService {
       mcp: SessionMcp;
       /** A tool call seen in a session's updates, for pairing with the gateway's call log. */
       onToolCall?: (u: { session: string; toolCallId: string; toolName?: string; title?: string; rawInput?: unknown }) => void;
+      /** You said yes to a permission request: the MCP gateway runs a proxied tool that asks only after this. */
+      onPermit?: (p: { session: string; toolCallId: string; toolName?: string; always: boolean }) => void;
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
       log?: (l: string) => void;
     },
@@ -184,6 +194,10 @@ export class AgentService {
     if (!p) throw Object.assign(new Error("that question was already answered or withdrawn"), { status: 404 });
     if (option !== null && !p.options.has(option)) throw Object.assign(new Error("that isn't one of the choices offered"), { status: 400 });
     this.pending.delete(request);
+    const kind = option ? p.kinds.get(option) : undefined;
+    if (kind === "allow_once" || kind === "allow_always") {
+      this.deps.onPermit?.({ session: p.session, toolCallId: p.toolCallId, ...(p.toolName ? { toolName: p.toolName } : {}), always: kind === "allow_always" });
+    }
     p.resolve(option ? { outcome: "selected", optionId: option } : { outcome: "cancelled" });
     this.deps.push("agent:status", { state: "answered", request });
   }
@@ -209,7 +223,15 @@ export class AgentService {
   private ask(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionOutcome> {
     const request = randomBytes(9).toString("base64url");
     return new Promise((resolve) => {
-      this.pending.set(request, { session: req.sessionId, options: new Set(req.options.map((o) => o.optionId)), resolve });
+      const toolName = (req.toolCall._meta as { claudeCode?: { toolName?: unknown } } | undefined)?.claudeCode?.toolName;
+      this.pending.set(request, {
+        session: req.sessionId,
+        options: new Set(req.options.map((o) => o.optionId)),
+        kinds: new Map(req.options.map((o) => [o.optionId, o.kind])),
+        toolCallId: req.toolCall.toolCallId,
+        ...(typeof toolName === "string" ? { toolName } : {}),
+        resolve,
+      });
       signal.addEventListener("abort", () => {
         if (this.pending.delete(request)) {
           resolve({ outcome: "cancelled" });

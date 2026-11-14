@@ -2,7 +2,7 @@
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
 import { checkAccess, clusterHealth, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
-import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { ClicklandSettingsStore } from "./clickland-settings";
@@ -84,6 +84,14 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "agent:mode": async ({ session, mode }) => (await agent.setMode(session, mode), { ok: true }),
     "agent:config": async ({ session, config, value }) => (await agent.setConfig(session, config, value), { ok: true }),
     "agent:answer": async ({ request, option }) => (agent.answer(request, option), { ok: true }),
+    // Links in an answer open in your browser, https only. Only our own page reaches IPC (checked below), so a view
+    // in a subframe can't use this; window.open is denied for everyone (security.ts).
+    "link:open": async ({ url }) => {
+      const u = httpsLink(url);
+      if (!u) throw ipcError(400, "Landlens opens https links only.");
+      await shell.openExternal(u);
+      return { opened: true };
+    },
     "agent:close": async ({ session }) => (await agent.close(session), { ok: true }),
     // Graphs (docs/metrics.md). The Clickland key comes in with configure and test; nothing sends it back.
     "metrics:series": (req) => metrics.service.series(req),
@@ -96,6 +104,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:save": async (input) => mcp.save(input),
     "mcp:test": (req) => mcp.test(req),
     "mcp:enable": async ({ id, context, enabled }) => mcp.enable(id, context, enabled),
+    "mcp:auto-run": async ({ id, enabled, context }) => mcp.autoRun(id, enabled, context),
     "mcp:remove": async ({ id }) => (mcp.remove(id), { ok: true }),
     "mcp:preset": () => mcp.preset(),
     "mcp:calls": async () => ({ calls: mcp.calls() }),
@@ -124,5 +133,15 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
 }
 
 const isSecrets = (t: ResourceType) => t.group === "" && t.resource === "secrets";
+
+/** An https address with no user info, as a string, or undefined. */
+export function httpsLink(raw: string): string | undefined {
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" && !u.username && !u.password ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const ipcError = (status: number, message: string) => new Error(JSON.stringify({ status, message }));

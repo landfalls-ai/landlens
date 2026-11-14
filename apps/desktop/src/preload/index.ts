@@ -6,9 +6,9 @@ import { contextBridge, ipcRenderer } from "electron";
 const CHANNELS: readonly Channel[] = [
   "catalog:list", "cluster:connect", "cluster:disconnect", "cluster:discovery", "cluster:access",
   "cluster:health", "resource:get", "resource:events", "watch:subscribe", "watch:unsubscribe",
-  "agent:start", "agent:prompt", "agent:cancel", "agent:mode", "agent:config", "agent:answer", "agent:close",
+  "agent:start", "agent:prompt", "agent:cancel", "agent:mode", "agent:config", "agent:answer", "agent:close", "link:open",
   "metrics:series", "metrics:settings", "metrics:configure", "metrics:test", "metrics:disconnect",
-  "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:remove", "mcp:preset", "mcp:calls", "mcp:try",
+  "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:auto-run", "mcp:remove", "mcp:preset", "mcp:calls", "mcp:try",
   "mcp:app-open", "mcp:app-call", "mcp:app-close", "mcp:app-link",
 ];
 const PUSH: readonly PushChannel[] = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "mcp:call"];

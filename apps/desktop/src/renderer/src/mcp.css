@@ -59,3 +59,5 @@
 .tool-with-app + .tool, .tool + .tool-with-app, .tool-with-app + .tool-with-app { border-top: 1px solid var(--line); }
 .tool-app { padding: 0 8px 8px; }
 .tool-app .app-frame { box-shadow: none; border-radius: var(--r-2); }
+.mcp-auto { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 8px 16px 0; }
+.mcp-auto .tone-warn { display: inline-flex; align-items: center; gap: 4px; }

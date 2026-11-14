@@ -87,4 +87,31 @@ describe("the Settings test", () => {
     expect(none.steps.at(-1)).toMatchObject({ ok: false, detail: expect.stringContaining("“nope”") });
     expect((await service({}).test({})).ok).toBe(false);
   });
+
+  it("sends the stored key only to the origin it was saved for: another address needs it typed again", async () => {
+    const f = fakeClickland({ series: { "k8s.node.cpu.usage": [node] } });
+    const elsewhere = await service({ key: true, fetchImpl: f.fetchImpl }).test({ url: "https://collector.example" });
+    expect(elsewhere).toEqual({ ok: false, steps: [{ name: "Settings", ok: false, detail: expect.stringContaining("Type it again") }] });
+    expect(f.calls).toEqual([]); // nothing was sent anywhere
+    // The same origin (another path) is the same Clickland; a typed key may go anywhere the contract allows.
+    expect((await service({ key: true, fetchImpl: f.fetchImpl }).test({ url: "http://127.0.0.1:4710/" })).ok).toBe(true);
+    expect(f.calls.every((c) => c.url.startsWith("http://127.0.0.1:4710/"))).toBe(true);
+    const typed = fakeClickland({ series: { "k8s.node.cpu.usage": [node] } });
+    expect((await service({ key: true, fetchImpl: typed.fetchImpl }).test({ url: "https://collector.example", key: KEY })).ok).toBe(true);
+  });
+});
+
+describe("the metrics tool's reads", () => {
+  it("reads the cluster with the read it is given (the session's token), not the sidecar", async () => {
+    const read: string[] = [];
+    const s = await service({ served: true }).series({ handle: "hhhhhhhhhhhh", scope: "pod", namespace: "shop", name: "api-1", range: "1h" }, {
+      read: async (path) => {
+        read.push(path);
+        return { spec: { containers: [{ name: "api", resources: { requests: { cpu: "50m" } } }] } };
+      },
+    });
+    expect(s.source).toBe("metrics-server");
+    expect(read).toEqual(["/api/v1/namespaces/shop/pods/api-1"]);
+    expect(s.cpu.request).toBeCloseTo(0.05);
+  });
 });

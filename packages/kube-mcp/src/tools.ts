@@ -207,8 +207,11 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
     },
     annotations: READ_ONLY,
     _meta: { ui: { resourceUri: APP_URI.metrics } },
-  }, run(async (a: { scope?: MetricsScopeName; namespace?: string; name?: string; range?: "1h" | "6h" | "24h" }) => {
-    if (!cluster.metrics) throw new KubeError(503, "Landlens has no metrics source for this session.");
+  }, run(async (a: { scope?: MetricsScopeName; namespace?: string; name?: string; range?: "1h" | "6h" | "24h" }, c) => {
+    // c is the session's cluster tagged with this call: what metrics reads from the cluster (requests, limits,
+    // allocatable, a workload's pods) goes through the front door with the session's token, under this call.
+    const source = c.metrics ?? cluster.metrics;
+    if (!source) throw new KubeError(503, "Landlens has no metrics source for this session.");
     const scope = a.scope ?? "cluster";
     const range = a.range ?? "1h";
     if (scope !== "cluster" && scope !== "node" && !a.namespace) throw new KubeError(400, `The ${scope} scope needs a namespace.`);
@@ -217,7 +220,7 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
     if (limit?.length && (scope === "cluster" || scope === "node" || !limit.includes(a.namespace!))) {
       throw new KubeError(403, `This session may only read namespaces ${limit.join(", ")}.`);
     }
-    const series = await cluster.metrics({ scope, range, ...(a.namespace && scope !== "cluster" && scope !== "node" ? { namespace: a.namespace } : {}), ...(a.name && scope !== "cluster" && scope !== "namespace" ? { name: a.name } : {}) });
+    const series = await source({ scope, range, ...(a.namespace && scope !== "cluster" && scope !== "node" ? { namespace: a.namespace } : {}), ...(a.name && scope !== "cluster" && scope !== "namespace" ? { name: a.name } : {}) });
     const what = scope === "cluster" ? `the cluster ${cluster.context}` : scope === "namespace" ? `namespace ${a.namespace}` : `${scope} ${a.namespace ? `${a.namespace}/` : ""}${a.name}`;
     return { text: metricsText(what, range, series), data: { context: cluster.context, scope, range, ...(a.namespace ? { namespace: a.namespace } : {}), ...(a.name ? { name: a.name } : {}), series: thin(series) } };
   }));
@@ -415,16 +418,23 @@ function workloadStatus(o: KubeObject): { text: string; tone: Tone } | undefined
 const cores = (v: number) => (v < 1 ? `${Math.round(v * 1000)}m` : `${Math.round(v * 100) / 100}`);
 const bytes = (v: number) => (v >= 2 ** 30 ? `${(v / 2 ** 30).toFixed(1)}Gi` : `${Math.round(v / 2 ** 20)}Mi`);
 
+/** A series key as the model may read it: a Kubernetes name (or "other"); anything else is not repeated. */
+const keyText = (k: string) => (/^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/.test(k) ? k : "(unnamed)");
+const finite = (v: number | undefined): v is number => typeof v === "number" && Number.isFinite(v);
+/** Most series lines per panel the model gets. */
+const MAX_TEXT_SERIES = 40;
+
 /** The model's view of a metrics series: per series latest, mean and max, and the reference lines. */
 function metricsText(what: string, range: string, s: MetricsSeries): string {
   if (s.source === "none") return `No CPU or memory data for ${what}: ${s.reasons.map((r) => r.message).join(" ")}`;
   const panel = (name: string, p: MetricsSeries["cpu"], fmt: (v: number) => string) => {
-    const lines = p.series.map((l) => {
+    const lines = p.series.slice(0, MAX_TEXT_SERIES).map((l) => {
       const v = l.points.map((x) => x[1]).filter((x) => Number.isFinite(x));
-      if (!v.length) return `  ${l.key}: no samples`;
-      return `  ${l.key}: latest ${fmt(v[v.length - 1]!)}, mean ${fmt(v.reduce((a, b) => a + b, 0) / v.length)}, max ${fmt(Math.max(...v))}`;
+      if (!v.length) return `  ${keyText(l.key)}: no samples`;
+      return `  ${keyText(l.key)}: latest ${fmt(v[v.length - 1]!)}, mean ${fmt(v.reduce((a, b) => a + b, 0) / v.length)}, max ${fmt(Math.max(...v))}`;
     });
-    const refs = [p.request !== undefined ? `request ${fmt(p.request)}` : "", p.limit !== undefined ? `limit ${fmt(p.limit)}` : "", p.allocatable !== undefined ? `allocatable ${fmt(p.allocatable)}` : ""].filter(Boolean);
+    if (p.series.length > MAX_TEXT_SERIES) lines.push(`  … and ${p.series.length - MAX_TEXT_SERIES} more`);
+    const refs = [finite(p.request) ? `request ${fmt(p.request)}` : "", finite(p.limit) ? `limit ${fmt(p.limit)}` : "", finite(p.allocatable) ? `allocatable ${fmt(p.allocatable)}` : ""].filter(Boolean);
     return `${name}${refs.length ? ` (${refs.join(", ")})` : ""}:\n${lines.length ? lines.join("\n") : "  no samples"}`;
   };
   const source = s.source === "clickland" ? "Clickland" : "metrics-server, sampled live";

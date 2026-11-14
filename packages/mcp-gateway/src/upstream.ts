@@ -96,6 +96,11 @@ export type RemoteSpec = {
   url: string;
   /** Added to every request; from the store, decrypted in main. */
   headers?: Record<string, string>;
+  /**
+   * Set when you let this server's read-only tools run without asking: the hash of the tool listing you saw then
+   * (approval.ts listingHash). Absent: every tool asks.
+   */
+  pin?: string;
 };
 
 /** fetch, refusing redirects (a redirect would carry the header elsewhere). */
@@ -127,7 +132,9 @@ export async function testRemote(spec: RemoteSpec): Promise<{ ok: boolean; steps
     try {
       await up.connect(client);
       const v = client.getServerVersion();
-      server = v ? `${v.name} ${v.version}` : undefined;
+      // The server names itself; only a plain name and version are repeated to the page.
+      const plain = (x: unknown) => typeof x === "string" && /^[A-Za-z0-9 ._@\/+-]{1,64}$/.test(x);
+      server = v && plain(v.name) && plain(v.version) ? `${v.name} ${v.version}` : undefined;
       steps.push({ name: "initialize", ok: true, detail: `${server ?? "answered"} in ${Date.now() - started} ms` });
     } catch (err) {
       steps.push({ name: "initialize", ok: false, detail: describeError(err) });
@@ -149,15 +156,36 @@ export async function testRemote(spec: RemoteSpec): Promise<{ ok: boolean; steps
   }
 }
 
-/** An error as a person reads it, without echoing headers. */
+/**
+ * An error as a person reads it: one of a fixed set of sentences, never the server's own words. Test and the call
+ * log show this to the page and the model, and the address may be one the page chose, so nothing a server sent back
+ * (an error body, a reason phrase) passes through; main's own log gets rawError.
+ */
 export function describeError(err: unknown): string {
   const e = err as { message?: string; code?: unknown; cause?: { code?: string; message?: string } };
+  const msg = String(e?.message ?? err);
+  const cause = String(e?.cause?.code ?? e?.cause?.message ?? "");
+  const code = typeof e?.code === "number" ? e.code : undefined;
+  const all = `${msg} ${cause}`;
+  if (/redirect/i.test(all)) return "The server redirected; Landlens doesn't follow redirects. Use the final URL.";
+  if (/ECONNREFUSED/.test(all)) return "Nothing is listening at that address.";
+  if (/ENOTFOUND|EAI_AGAIN/.test(all)) return "That host name doesn't resolve.";
+  if (/CERT|SSL|TLS|self[- ]signed/i.test(cause) || /certificate/i.test(all)) return "The server's TLS certificate wasn't accepted.";
+  if (/ECONNRESET|socket hang up|other side closed/i.test(all)) return "The server closed the connection.";
+  if (/timed? ?out|TimeoutError|ETIMEDOUT/i.test(all) || code === -32001) return "The server didn't answer in time.";
+  // The SDK's StreamableHTTPError carries the HTTP status as its code.
+  const status = code !== undefined && code >= 100 && code < 600 ? String(code) : (/HTTP (\d{3})/.exec(msg)?.[1] ?? /\b(401|403|404|405|406|415|429|500|502|503|504)\b/.exec(msg)?.[1]);
+  if (status === "401") return "The server refused the credentials (401).";
+  if (status === "403") return "The server refused (403).";
+  if (status === "404") return "Nothing at that path (404). Check the address.";
+  if (status) return `The server answered HTTP ${status}.`;
+  return "The server's answer wasn't a valid MCP response.";
+}
+
+/** The error's own text, for main's log only (never the page or the model); bearer values cut. */
+export function rawError(err: unknown): string {
+  const e = err as { message?: string; cause?: { code?: string; message?: string } };
   const cause = e?.cause?.code ?? e?.cause?.message;
   const msg = String(e?.message ?? err).replace(/Bearer\s+\S+/gi, "Bearer …");
-  if (/redirect/i.test(msg) || /redirect/i.test(String(cause ?? ""))) return "The server redirected; Landlens doesn't follow redirects. Use the final URL.";
-  if (/ECONNREFUSED/.test(String(cause ?? msg))) return "Nothing is listening at that address.";
-  if (/401|Unauthorized/i.test(msg)) return "The server refused the credentials (401).";
-  if (/403|Forbidden/i.test(msg)) return "The server refused (403).";
-  if (/timed? ?out/i.test(msg)) return "The server didn't answer in time.";
-  return (cause ? `${msg} (${cause})` : msg).slice(0, 300);
+  return (cause ? `${msg} (${cause})` : msg).slice(0, 500);
 }

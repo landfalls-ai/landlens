@@ -2,7 +2,7 @@
 // sandbox and a CSP with 'unsafe-eval' (docs/research/lens-architecture.md). Landlens runs an AI agent with access to
 // clusters, so the renderer gets none of that: sandboxed, isolated, no Node, a strict CSP, no navigation, no new
 // windows, no permissions, and it can only call the IPC channels the preload bridge lists.
-import { app, protocol, session, shell, type BrowserWindowConstructorOptions, type WebContents } from "electron";
+import { app, protocol, session, type BrowserWindowConstructorOptions, type WebContents } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { APP_SCHEME, type AppViews } from "./app-views";
@@ -81,12 +81,13 @@ export function hardenContents(contents: WebContents) {
     if (!isAppUrl(url)) event.preventDefault();
   });
   contents.on("will-attach-webview", (event) => event.preventDefault());
-  contents.setWindowOpenHandler(({ url, referrer }) => {
-    // Links to the web open in the user's browser; nothing opens inside Landlens. A view never opens anything this
-    // way (its sandbox has no popups; it asks with ui/open-link, which shows you the host first).
-    if (/^https:\/\//.test(url) && !referrer.url.startsWith(`${APP_SCHEME}:`)) void shell.openExternal(url);
-    return { action: "deny" };
-  });
+  // Nothing opens through window.open, from the page or any frame: the handler can't tell which frame asked (a view
+  // sends no referrer, and neither do the page's own links), so it opens nothing. Links in answers go through the
+  // link:open channel, which only our own page can call; a view asks with ui/open-link, which shows you the host.
+  contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // No WebRTC over UDP outside a proxy (there is none), so no ICE candidate gathering can reach the network from the
+  // page or a view, whatever a view's script does with RTCPeerConnection.
+  contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
 }
 
 /** Must run before app is ready. */

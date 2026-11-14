@@ -49,8 +49,11 @@ export async function startClusterSession(deps: {
   frontDoor: FrontDoor;
   clusters: ClusterManager;
   mcp: SessionMcp;
-  /** CPU and memory for the cluster, from Landlens's metrics source, for the metrics tool. */
-  metrics?: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0]) => Promise<MetricsSeries>;
+  /**
+   * CPU and memory for the cluster, from Landlens's metrics source, for the metrics tool. `read` goes through the
+   * front door with the session's token, for what the series reads from the cluster itself.
+   */
+  metrics?: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>) => Promise<MetricsSeries>;
   /** Parent folder for session working folders. */
   sessionsDir: string;
   home: string;
@@ -77,7 +80,7 @@ export async function startClusterSession(deps: {
     context: c.info.context,
     types: async () => types,
     ...(req.namespaces?.length ? { namespaces: req.namespaces } : {}),
-    ...(deps.metrics ? { metrics: (r) => deps.metrics!(req.handle, r) } : {}),
+    ...(deps.metrics ? { metrics: (r, read) => deps.metrics!(req.handle, r, read) } : {}),
   });
   let mcp: Awaited<ReturnType<SessionMcp["open"]>>;
   try {

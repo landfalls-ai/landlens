@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@landlens/contracts": "workspace:*",
-    "@landlens/kube": "workspace:*"
+    "@landlens/kube": "workspace:*",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

@@ -57,7 +57,10 @@ async function start() {
       return { context: c.info.context, get: (path) => c.client.json(path) };
     },
   });
-  const series = (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">) => metrics.series({ handle, ...r });
+  // For the metrics tool: `read` is the session's own front-door token (its policy, scrubbing and audit), so what the
+  // series reads from the cluster is read as the session. The usage numbers are Clickland's or the shared sampler's.
+  const series = (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">, read?: (path: string) => Promise<any>) =>
+    metrics.series({ handle, ...r }, read ? { read } : {});
   mcp = new McpService({
     store: new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage),
     clickland: settings,
@@ -85,6 +88,7 @@ async function start() {
     push: send as ConstructorParameters<typeof AgentService>[0]["push"],
     mcp: mcp.forSessions(),
     onToolCall: (u) => gateway.card(u),
+    onPermit: (p) => gateway.permit(p.session, p),
     metrics: series,
     log: (l) => console.log(l),
   });

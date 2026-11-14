@@ -1,7 +1,10 @@
 // Launches the built app against the OrbStack cluster and walks the wave-1 path:
 // pick a cluster → pods appear live → filter → open a pod → its YAML; plus the renderer's security posture.
 // LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e  (screenshots go to $LANDLENS_SHOTS)
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { createSocket } from "node:dgram";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Frame, type Page } from "playwright-core";
@@ -233,61 +236,141 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
   }, 90_000);
 
   it("keeps a view off the network, away from the page and window.landlens, and where it was loaded", async () => {
-    const view = await viewWith(page, ".verdict");
-    const url = view.url();
-    const probe = await view.evaluate(async () => {
-      const g = globalThis as any;
-      const violations: string[] = [];
-      g.document.addEventListener("securitypolicyviolation", (e: any) => violations.push(e.effectiveDirective));
-      const tryFetch = (u: string) => fetch(u).then(() => "reached", () => "blocked");
-      let parent = "";
-      try {
-        parent = typeof g.parent.document;
-      } catch {
-        parent = "blocked";
-      }
-      let storage = "";
-      try {
-        storage = typeof g.localStorage;
-      } catch {
-        storage = "blocked";
-      }
-      const img = await new Promise<string>((r) => {
-        const i = new g.Image();
-        i.onload = () => r("loaded");
-        i.onerror = () => r("blocked");
-        i.src = "https://example.com/x.png";
-      });
-      const out = {
-        landlens: typeof g.landlens,
-        parentLandlens: (() => { try { return typeof g.parent.landlens; } catch { return "blocked"; } })(),
-        origin: g.origin,
-        parent,
-        storage,
-        local: await tryFetch("http://127.0.0.1:9/"),
-        web: await tryFetch("https://example.com/"),
-        img,
-        popup: g.open("https://example.com") === null ? "blocked" : "opened",
-      };
-      await new Promise((r) => setTimeout(r, 100));
-      return { ...out, violations: [...new Set(violations)].sort() };
+    // A listener of the test's own on loopback, HTTP and UDP: any request that reaches it is a hit, whatever the view
+    // gets back. It answers every request with a real image and open CORS, so only Landlens's rules can stop a probe.
+    const hits: string[] = [];
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+    const http = createServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { "Access-Control-Allow-Origin": "*", "Content-Type": "image/png" });
+      res.end(png);
     });
-    expect(probe).toMatchObject({ landlens: "undefined", parentLandlens: "blocked", origin: "null", parent: "blocked", storage: "blocked", local: "blocked", web: "blocked", img: "blocked", popup: "blocked" });
-    expect(probe.violations).toEqual(expect.arrayContaining(["connect-src", "img-src"]));
-    // It can't navigate itself elsewhere: main cancels it (the frame is left on Chromium's error page) and the
-    // address never loads.
-    const frames = page.frames().length;
-    await view.evaluate(() => { (globalThis as any).location.href = "https://example.com/"; }).catch(() => {});
-    await page.waitForTimeout(800);
-    const urls = page.frames().map((f) => f.url());
-    expect(urls.some((u) => u.startsWith("https://example.com")), urls.join(", ")).toBe(false);
-    expect(urls.filter((u) => !u.startsWith("file:") && !u.startsWith("landlens-app:") && !u.startsWith("chrome-error:")), urls.join(", ")).toEqual([]);
-    expect(page.frames().length).toBe(frames);
-    expect(url).toMatch(/^landlens-app:\/\/view\/[0-9a-f]{32}$/);
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
+    const udp = createSocket("udp4");
+    const udpHits: number[] = [];
+    udp.on("message", (m) => udpHits.push(m.length));
+    await new Promise<void>((r) => udp.bind(0, "127.0.0.1", r));
+    const port = (http.address() as AddressInfo).port;
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      const view = await viewWith(page, ".verdict");
+      const url = view.url();
+      const probe = await view.evaluate(async ({ base, port, udpPort }) => {
+        const g = globalThis as any;
+        const violations: { directive: string; blocked: string }[] = [];
+        g.document.addEventListener("securitypolicyviolation", (e: any) => violations.push({ directive: e.effectiveDirective, blocked: String(e.blockedURI) }));
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        const tryIt = async (fn: () => Promise<unknown>) => { try { await fn(); return "reached"; } catch { return "blocked"; } };
+        let parent = "";
+        try { parent = typeof g.parent.document; } catch { parent = "blocked"; }
+        let storage = "";
+        try { storage = typeof g.localStorage; } catch { storage = "blocked"; }
+        const img = await new Promise<string>((r) => {
+          const i = new g.Image();
+          i.onload = () => r("loaded");
+          i.onerror = () => r("blocked");
+          i.src = `${base}/img.png`;
+        });
+        const out: Record<string, unknown> = {
+          landlens: typeof g.landlens,
+          parentLandlens: (() => { try { return typeof g.parent.landlens; } catch { return "blocked"; } })(),
+          origin: g.origin,
+          parent,
+          storage,
+          noCors: await tryIt(() => fetch(`${base}/no-cors`, { mode: "no-cors" })),
+          cors: await tryIt(() => fetch(`${base}/cors`)),
+          img,
+          beacon: (() => { try { return g.navigator.sendBeacon(`${base}/beacon`, "x") ? "queued" : "refused"; } catch { return "blocked"; } })(),
+          popup: g.open(`${base}/popup`) === null ? "blocked" : "opened",
+        };
+        try { new g.EventSource(`${base}/sse`); } catch { /* blocked */ }
+        try { new g.WebSocket(`ws://127.0.0.1:${port}/ws`); } catch { /* blocked */ }
+        const link = g.document.createElement("link");
+        link.rel = "prefetch";
+        link.href = `${base}/prefetch`;
+        g.document.head.append(link);
+        const bg = g.document.createElement("div");
+        bg.style.backgroundImage = `url(${base}/bg.png)`;
+        bg.style.width = "4px";
+        bg.style.height = "4px";
+        g.document.body.append(bg);
+        // WebRTC: ICE gathering with a STUN server on the test's UDP port.
+        const candidates: string[] = [];
+        try {
+          const pc = new g.RTCPeerConnection({ iceServers: [{ urls: `stun:127.0.0.1:${udpPort}` }] });
+          pc.onicecandidate = (e: any) => e.candidate && candidates.push(String(e.candidate.candidate));
+          pc.createDataChannel("probe");
+          await pc.setLocalDescription(await pc.createOffer());
+          await sleep(2000);
+          pc.close();
+          out.webrtc = "ran";
+        } catch (e) {
+          out.webrtc = `blocked (${(e as Error).name})`;
+        }
+        await sleep(300);
+        return { ...out, candidates, violations };
+      }, { base, port, udpPort: (udp.address() as AddressInfo).port });
+      await page.waitForTimeout(500);
+      if (shots) writeFileSync(resolve(shots, "view-probe.json"), JSON.stringify(probe, null, 2));
+      expect(probe).toMatchObject({ landlens: "undefined", parentLandlens: "blocked", origin: "null", parent: "blocked", storage: "blocked", noCors: "blocked", cors: "blocked", img: "blocked", popup: "blocked" });
+      // Nothing reached the test's listener, by any route, and nothing gathered a network candidate.
+      expect(hits, JSON.stringify(probe)).toEqual([]);
+      expect(udpHits).toEqual([]);
+      expect(probe.candidates.filter((c) => / udp | tcp /.test(` ${c} `) && !/\.local /.test(c)), String(probe.candidates)).toEqual([]);
+      // Each probe was stopped by the CSP itself, one violation per address (not a set that one probe could fill).
+      const by = (d: string, path: string) => probe.violations.some((v) => v.directive === d && v.blocked.startsWith(`${base}${path}`));
+      for (const path of ["/no-cors", "/cors", "/beacon", "/sse"]) expect(by("connect-src", path), `${path}: ${JSON.stringify(probe.violations)}`).toBe(true);
+      expect(by("img-src", "/img.png")).toBe(true);
+      expect(by("img-src", "/bg.png")).toBe(true);
+      expect(probe.violations.some((v) => v.directive === "connect-src" && v.blocked.startsWith(`ws://127.0.0.1:${port}`))).toBe(true);
+      expect(url).toMatch(/^landlens-app:\/\/view\/[0-9a-f]{32}$/);
+    } finally {
+      http.close();
+      udp.close();
+    }
+
+    // It can't navigate itself elsewhere. Each probe gets a fresh view (a cancelled navigation leaves the frame on
+    // Chromium's error page). Another landlens-app: address passes the page's frame-src, so only main's
+    // will-frame-navigate stops it; data: and the web are stopped by both.
+    const kube = page.getByRole("region", { name: "MCP server landlens-kube" });
+    for (const target of [`landlens-app://view/${"0".repeat(32)}`, "data:text/html,<p>moved</p>", "https://example.com/"]) {
+      await kube.getByRole("button", { name: "Close preview" }).click();
+      await kube.getByRole("button", { name: "Preview cluster_overview" }).click();
+      const view = await viewWith(page, ".verdict");
+      const frames = page.frames().length;
+      await view.evaluate((t) => { (globalThis as any).location.href = t; }, target).catch(() => {});
+      await page.waitForTimeout(800);
+      const urls = page.frames().map((f) => f.url());
+      const scheme = target.slice(0, target.indexOf(":") + 1);
+      expect(urls.some((u) => u === target || (scheme !== "landlens-app:" && u.startsWith(scheme))), `${target}: ${urls.join(", ")}`).toBe(false);
+      expect(urls.filter((u) => !u.startsWith("file:") && !/^landlens-app:\/\/view\/[0-9a-f]{32}$/.test(u) && !u.startsWith("chrome-error:")), urls.join(", ")).toEqual([]);
+      expect(page.frames().length).toBe(frames);
+    }
     // And main serves a view only at a live view's own address.
     const other = await page.evaluate(() => fetch("landlens-app://view/" + "0".repeat(32)).then((r) => r.status, () => "blocked"));
     expect(other).toBe("blocked"); // the page's own CSP: connect-src 'self'
-  }, 60_000);
+    await kube.getByRole("button", { name: "Close preview" }).click();
+    await kube.getByRole("button", { name: "Preview cluster_overview" }).click();
+    await viewWith(page, ".verdict");
+  }, 90_000);
+
+  it("opens links only through main, https only, and never through window.open", async () => {
+    await app.evaluate(({ shell }) => {
+      const g = globalThis as any;
+      g.__opened = [];
+      shell.openExternal = async (u: string) => void g.__opened.push(u);
+    });
+    const r = await page.evaluate(async () => {
+      const g = globalThis as any;
+      const popup = g.open("https://example.com/from-window-open") === null ? "denied" : "opened";
+      const ok = await g.landlens.invoke("link:open", { url: "https://example.com/from-answer" });
+      const plain = await g.landlens.invoke("link:open", { url: "http://example.com/" }).then(() => "opened", (e: Error) => e.message);
+      return { popup, ok, plain };
+    });
+    expect(r).toEqual({ popup: "denied", ok: { opened: true }, plain: "Landlens opens https links only." });
+    await page.waitForTimeout(300);
+    expect(await app.evaluate(() => (globalThis as any).__opened)).toEqual(["https://example.com/from-answer"]);
+  });
 
   it("logs the calls, with the front-door requests behind each landlens-kube call", async () => {
     await page.getByRole("tab", { name: /Calls/ }).click();
@@ -404,11 +487,18 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await dialog.getByRole("button", { name: "Save" }).click();
       const panel = page.getByRole("region", { name: "MCP server clickland" });
       await panel.waitFor();
-      await expect(panel.getByRole("switch").isChecked()).resolves.toBe(true);
+      await expect(panel.getByRole("switch", { name: "Use clickland on orbstack" }).isChecked()).resolves.toBe(true);
+      // A remote server's own "read-only" is only its claim: nothing runs without asking until you say so.
+      const auto = panel.getByRole("switch", { name: "Run clickland's read-only tools without asking" });
+      await expect(auto.isChecked()).resolves.toBe(false);
       // The header never comes back to the page.
       expect(JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:servers", { context: "orbstack" })))).not.toContain(key);
       await panel.getByRole("button", { name: "Test" }).click();
       await panel.getByRole("list", { name: "clickland tools" }).waitFor({ timeout: 20_000 });
+      expect(await panel.locator(".mcp-tool .badge", { hasText: "Read-only" }).count()).toBe(0);
+      await auto.click();
+      await expect.poll(() => auto.isChecked()).toBe(true);
+      expect(await panel.locator(".mcp-tool .badge", { hasText: "Read-only" }).count()).toBeGreaterThan(0);
       await panel.getByRole("button", { name: "Preview list_services" }).click();
       const before = viewFrames(page).length;
       await expect.poll(() => viewFrames(page).length, { timeout: 30_000 }).toBeGreaterThan(before);

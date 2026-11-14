@@ -16,6 +16,14 @@ export type MetricsDeps = {
   sampler?: SamplerOptions;
 };
 
+const originOf = (u: string) => {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return "";
+  }
+};
+
 const REASON: Record<ClicklandError["kind"], MetricsReason["code"]> = {
   unreachable: "clickland-unreachable",
   unauthorized: "clickland-unauthorized",
@@ -33,7 +41,11 @@ export class MetricsService {
     return (this.deps.now ?? Date.now)();
   }
 
-  async series(req: MetricsRequest): Promise<MetricsSeries> {
+  /**
+   * `read`, when given, is how the series reads the cluster itself (requests, limits, allocatable, a workload's
+   * pods): the metrics tool passes its session's front-door token. The IDE's charts read through the sidecar.
+   */
+  async series(req: MetricsRequest, opts: { read?: Get } = {}): Promise<MetricsSeries> {
     const cluster = this.deps.cluster(req.handle);
     const { config, clusterName } = this.deps.clickland();
     const reasons: MetricsReason[] = [];
@@ -52,7 +64,7 @@ export class MetricsService {
     const served = await sampler.available();
     if (served.ok) {
       await sampler.touch();
-      const out = await liveSeries(cluster.get, sampler.samples(this.now() - RANGE_MS[req.range]), req, sampler.intervalMs / 1000, this.now());
+      const out = await liveSeries(opts.read ?? cluster.get, sampler.samples(this.now() - RANGE_MS[req.range]), req, sampler.intervalMs / 1000, this.now());
       const span = RANGE_MS[req.range] > 3_600_000 ? " (at most the last hour)" : "";
       out.reasons = [...reasons, { code: "live-only", message: `Sampled from metrics-server every ${sampler.intervalMs / 1000}s since Landlens opened this view${span}.` }];
       return out;
@@ -62,17 +74,24 @@ export class MetricsService {
     return { source: "none", reasons, step: 0, from: to - RANGE_MS[req.range], to, by: "container", cpu: { series: [] }, memory: { series: [] } };
   }
 
-  /** The Settings dialog's check: health, then one query for this cluster, with the given or the stored settings. */
+  /**
+   * The Settings dialog's check: health, then one query for this cluster, with the given or the stored settings. A
+   * stored key is only sent to the origin it was saved for; another address needs the key typed again. What comes
+   * back is reported in Landlens's own words, never the answer's text, since the page chose the address.
+   */
   async test(input: { handle?: string; url?: string; key?: string; cluster?: string }): Promise<ClicklandTest> {
     const stored = this.deps.clickland();
     const url = input.url ?? stored.config?.url;
+    if (input.key === undefined && input.url && stored.config && originOf(input.url) !== originOf(stored.config.url)) {
+      return { ok: false, steps: [{ name: "Settings", ok: false, detail: "The stored key is only sent to the address it was saved for. Type it again to test this address." }] };
+    }
     const key = input.key ?? stored.config?.key;
     if (!url || !key) return { ok: false, steps: [{ name: "Settings", ok: false, detail: "Give Clickland's address and a key with the read scope." }] };
     const client = new ClicklandClient({ url, key }, this.deps.fetch);
     const steps: ClicklandTest["steps"] = [];
     try {
       const h = await client.health();
-      steps.push({ name: "Health", ok: h.status === "ok", detail: `${h.status}${h.version ? ` · version ${h.version}` : ""}` });
+      steps.push({ name: "Health", ok: h.status === "ok", detail: `${h.status === "ok" ? "ok" : "not ok"}${h.version ? ` · version ${h.version}` : ""}` });
     } catch (err) {
       return { ok: false, steps: [{ name: "Health", ok: false, detail: (err as Error).message }] };
     }

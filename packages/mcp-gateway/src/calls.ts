@@ -1,5 +1,6 @@
 // The call log: every MCP call through the gateway, newest last, kept in memory (the last 500). What's logged is
 // scrubbed the way tool results are; the full result of an app tool is kept apart, for its view, and never logged.
+import { randomBytes } from "node:crypto";
 import type { McpCall, McpFrontDoorRequest, McpToolResult } from "@landlens/contracts";
 import { redactObject, redactText } from "@landlens/kube-mcp";
 
@@ -10,11 +11,19 @@ export const MAX_APP_RESULTS = 50;
 /** Front-door requests kept per call. */
 export const MAX_REQUESTS = 100;
 
-let seq = 0;
-/** "c" and base-36: what the front door accepts in X-Landlens-Call. */
-export const newCallId = () => `c${Date.now().toString(36)}${(++seq).toString(36)}`;
+/**
+ * "c" and 20 random base-36 digits (about 103 bits): what the front door accepts in X-Landlens-Call. Random, so no one
+ * else holding a front-door token can guess a running call's id to file requests under it.
+ */
+export const newCallId = () => {
+  const bytes = randomBytes(20);
+  let id = "c";
+  for (const b of bytes) id += (b % 36).toString(36);
+  return id;
+};
 
-export type AppResult = { args: Record<string, unknown>; result: McpToolResult };
+/** An app tool's full result, for its view, and the address of the remote server that answered (for its HTML). */
+export type AppResult = { args: Record<string, unknown>; result: McpToolResult; url?: string };
 
 export class CallLog {
   private readonly calls: McpCall[] = [];

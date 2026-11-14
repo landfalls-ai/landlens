@@ -30,15 +30,19 @@ export function frontDoorCluster(opts: {
   context: string;
   types: () => Promise<ResourceType[]>;
   namespaces?: string[];
-  metrics?: AgentCluster["metrics"];
+  /**
+   * Landlens's metrics source. `read` GETs JSON through this cluster (the front door, this session's token, tagged
+   * with the call), for what the series needs from the cluster itself: requests, limits, allocatable, a workload's
+   * pods. The usage numbers come from Clickland or the shared metrics-server sampler.
+   */
+  metrics?: (req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read: (path: string) => Promise<any>) => Promise<MetricsSeries>;
   /** Tags every request for the front door's audit (see withCall). */
   callId?: string;
 }): AgentCluster {
-  return {
+  const self: AgentCluster = {
     context: opts.context,
     types: opts.types,
     ...(opts.namespaces ? { namespaces: opts.namespaces } : {}),
-    ...(opts.metrics ? { metrics: opts.metrics } : {}),
     withCall: (callId) => frontDoorCluster({ ...opts, callId }),
     get: (path, accept = "application/json") =>
       new Promise((resolve, reject) => {
@@ -57,6 +61,8 @@ export function frontDoorCluster(opts: {
         req.end();
       }),
   };
+  if (opts.metrics) self.metrics = (req) => opts.metrics!(req, (path) => getJson(self, path));
+  return self;
 }
 
 export async function getJson(c: AgentCluster, path: string): Promise<any> {

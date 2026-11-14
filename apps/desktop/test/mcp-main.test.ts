@@ -1,12 +1,15 @@
 import { McpServerInput } from "@landlens/contracts";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AppViews, viewCsp, VIEW_HEADERS } from "../src/main/app-views";
-import type { Crypto } from "../src/main/clickland-settings";
+import { ClicklandSettingsStore, type Crypto } from "../src/main/clickland-settings";
 import { CSP_PROD } from "../src/main/csp";
-import { McpServerStore } from "../src/main/mcp-store";
+import { McpService } from "../src/main/mcp";
+import { DRIFT_NOTE, McpServerStore } from "../src/main/mcp-store";
 
 const SECRET = "Bearer k_live_abcdefghijklmnopqrstuvwxyz";
 const fake = (available = true): Crypto => ({
@@ -31,6 +34,7 @@ describe("the MCP server store", () => {
     expect(s.remotesFor("orbstack")).toEqual([]);
     s.enable(saved.id, "orbstack", true);
     expect(s.remotesFor("orbstack")).toEqual([{ id: saved.id, name: "clickland", url: "http://127.0.0.1:4730/api/mcp", headers: { Authorization: SECRET } }]);
+    expect(s.info(saved.id).autoRun).toBe(false); // nothing it says about itself runs without asking by default
     expect(s.remotesFor("other")).toEqual([]);
   });
 
@@ -42,6 +46,46 @@ describe("the MCP server store", () => {
     s.save({ id: a.id, name: "a", url: "https://mcp.example.com/mcp", header: { name: "X-Other" } });
     expect(s.headerValue(a.id)).toBeUndefined();
     expect(() => s.save({ name: "a", url: "https://x.example.com/mcp" })).toThrow(/already a server named a/);
+  });
+
+  it("binds a stored value to its origin: another path keeps it, another host or port drops it", () => {
+    const { s } = store();
+    const a = s.save({ name: "a", url: "https://mcp.example.com/mcp", header: { name: "Authorization", value: SECRET } });
+    s.save({ id: a.id, name: "a", url: "https://mcp.example.com/v2/mcp", header: { name: "Authorization" } });
+    expect(s.headerValue(a.id)).toBe(SECRET);
+    for (const elsewhere of ["https://evil.example/mcp", "https://mcp.example.com:8443/v2/mcp", "http://127.0.0.1:4730/mcp"]) {
+      const b = s.save({ name: `b${elsewhere.length}`, url: "https://mcp.example.com/mcp", header: { name: "Authorization", value: SECRET } });
+      const moved = s.save({ id: b.id, name: b.name, url: elsewhere, header: { name: "Authorization" } });
+      expect(s.headerValue(moved.id)).toBeUndefined();
+      expect(s.info(moved.id).header).toEqual({ name: "Authorization", stored: false });
+    }
+  });
+
+  it("runs read-only tools without asking only once you turn it on for the listing you saw, and stops when it changes", () => {
+    const { s } = store();
+    const a = s.save({ name: "a", url: "https://mcp.example.com/mcp", header: { name: "Authorization", value: SECRET } });
+    s.enable(a.id, "orbstack", true);
+    expect(() => s.setAutoRun(a.id, true)).toThrow(/Test it first/);
+    s.status(a.id, { status: "ready", tools: [{ name: "list", readOnly: true, visibility: ["model"], required: [] }], listing: "h1" });
+    expect(s.setAutoRun(a.id, true, "orbstack")).toMatchObject({ autoRun: true, enabled: true });
+    expect(s.remotesFor("orbstack")[0]).toMatchObject({ pin: "h1" });
+    // The same listing again changes nothing; another one turns it off and says why.
+    s.status(a.id, { status: "ready", listing: "h1" });
+    expect(s.info(a.id).autoRun).toBe(true);
+    s.status(a.id, { status: "ready", listing: "h2" });
+    expect(s.info(a.id)).toMatchObject({ autoRun: false, autoRunNote: DRIFT_NOTE });
+    expect(s.remotesFor("orbstack")[0]!.pin).toBeUndefined();
+    s.setAutoRun(a.id, true);
+    expect(s.remotesFor("orbstack")[0]).toMatchObject({ pin: "h2" });
+    expect(s.info(a.id).autoRunNote).toBeUndefined();
+    // A session that saw another listing does the same.
+    s.drifted(a.id);
+    expect(s.info(a.id)).toMatchObject({ autoRun: false, autoRunNote: DRIFT_NOTE });
+    // A new address or credential means you haven't seen its tools yet.
+    s.setAutoRun(a.id, true);
+    s.save({ id: a.id, name: "a", url: "https://mcp.example.com/other", header: { name: "Authorization" } });
+    expect(s.info(a.id).autoRun).toBe(false);
+    expect(() => s.setAutoRun(a.id, true)).toThrow(/Test it first/);
   });
 
   it("won't store a header it can't encrypt", () => {
@@ -81,6 +125,8 @@ describe("MCP App views on landlens-app:", () => {
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("frame-src 'none'");
     expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain("webrtc 'block'");
+    expect(r.headers["X-DNS-Prefetch-Control"]).toBe("off");
     expect(csp).not.toMatch(/unsafe-eval|https?:|\*/);
     for (const bad of [`${url}?x=1`, `${url}/`, url.replace("view", "other"), "landlens-app://view/" + "0".repeat(32), "https://view/" + v.id, "nonsense"]) {
       expect(views.respond("GET", bad).status).toBe(404);
@@ -114,5 +160,69 @@ describe("MCP App views on landlens-app:", () => {
     expect(CSP_PROD).toContain("script-src 'self';");
     expect(CSP_PROD).toContain("connect-src 'self';");
     expect(CSP_PROD).not.toContain("unsafe-eval");
+  });
+});
+
+describe("McpService", () => {
+  const service = (asked: { n: number; answer: () => Promise<boolean> }) => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
+    const svc = new McpService({
+      store: st,
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: () => (asked.n++, asked.answer()), openExternal: async () => {} },
+    });
+    return { st, svc };
+  };
+
+  it("Test never sends a stored header value to another origin or under another header name", async () => {
+    const seen: { url: string; auth?: string; other?: string }[] = [];
+    const srv = createServer((req, res) => {
+      seen.push({ url: req.url ?? "", ...(req.headers.authorization ? { auth: String(req.headers.authorization) } : {}), ...(req.headers["x-other"] ? { other: String(req.headers["x-other"]) } : {}) });
+      res.writeHead(401).end();
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    try {
+      const { st, svc } = service({ n: 0, answer: async () => false });
+      const a = st.save({ name: "a", url: `${base}/mcp`, header: { name: "Authorization", value: SECRET } });
+      const moved = await svc.test({ id: a.id, url: "http://localhost:1/mcp" });
+      expect(moved).toMatchObject({ ok: false, steps: [{ name: "header", ok: false }] });
+      const renamed = await svc.test({ id: a.id, header: { name: "X-Other" } });
+      expect(renamed.ok).toBe(false);
+      expect(seen).toEqual([]);
+      // The same origin, another path: the stored value goes, and the page hears only Landlens's own words.
+      const same = await svc.test({ id: a.id, url: `${base}/v2/mcp` });
+      expect(same.steps[0]).toMatchObject({ ok: false, detail: "The server refused the credentials (401)." });
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((x) => x.auth === SECRET && x.url === "/v2/mcp" && !x.other)).toBe(true);
+      // A test of another address doesn't change what's saved.
+      expect(st.info(a.id).status).toBe("unknown");
+    } finally {
+      srv.close();
+    }
+  });
+
+  it("asks about one view link at a time, at most three a minute per view", async () => {
+    let release: (v: boolean) => void = () => {};
+    const asked = { n: 0, answer: () => new Promise<boolean>((r) => (release = r)) };
+    const { svc } = service(asked);
+    const v = svc.views.add({ call: "c1", server: "s", tool: "t", html: "", csp: "" });
+    const first = svc.viewLink(v.id, "https://example.com/a");
+    await expect(svc.viewLink(v.id, "https://example.com/b")).rejects.toMatchObject({ status: 429 });
+    release(false);
+    expect(await first).toBe(false);
+    asked.answer = async () => false;
+    expect(await svc.viewLink(v.id, "https://example.com/c")).toBe(false);
+    expect(await svc.viewLink(v.id, "https://example.com/d")).toBe(false);
+    await expect(svc.viewLink(v.id, "https://example.com/e")).rejects.toMatchObject({ status: 429 });
+    expect(asked.n).toBe(3);
+    await expect(svc.viewLink(v.id, "http://example.com/")).rejects.toMatchObject({ status: 429 });
+    const w = svc.views.add({ call: "c2", server: "s", tool: "t", html: "", csp: "" });
+    await expect(svc.viewLink(w.id, "http://example.com/")).rejects.toMatchObject({ status: 400 });
   });
 });

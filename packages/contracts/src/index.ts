@@ -210,6 +210,8 @@ export const channels = {
   "agent:mode": z.object({ session: SessionId, mode: z.string().min(1).max(64) }),
   "agent:config": z.object({ session: SessionId, config: z.string().min(1).max(64), value: z.string().min(1).max(200) }),
   "agent:answer": z.object({ request: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/), option: z.string().max(200).nullable() }),
+  // A link in an answer: main opens https links in your browser. Nothing opens through window.open.
+  "link:open": z.object({ url: z.string().min(1).max(2000) }),
   "agent:close": z.object({ session: SessionId }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
@@ -221,6 +223,7 @@ export const channels = {
   "mcp:save": McpServerInput,
   "mcp:test": z.object({ id: McpServerId.optional(), url: McpUrl.optional(), header: z.object({ name: McpHeaderName, value: McpHeaderValue.optional() }).optional() }),
   "mcp:enable": z.object({ id: McpServerId, context: z.string().min(1).max(253), enabled: z.boolean() }),
+  "mcp:auto-run": z.object({ id: McpServerId, enabled: z.boolean(), context: z.string().min(1).max(253).optional() }),
   "mcp:remove": z.object({ id: McpServerId }),
   "mcp:preset": z.object({ preset: z.literal("clickland") }),
   "mcp:calls": z.object({}),
@@ -250,6 +253,7 @@ export type Responses = {
   "agent:mode": { ok: true };
   "agent:config": { ok: true };
   "agent:answer": { ok: true };
+  "link:open": { opened: boolean };
   "agent:close": { ok: true };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
@@ -260,6 +264,7 @@ export type Responses = {
   "mcp:save": McpServerInfo;
   "mcp:test": McpTest;
   "mcp:enable": McpServerInfo;
+  "mcp:auto-run": McpServerInfo;
   "mcp:remove": { ok: true };
   "mcp:preset": McpServerInfo;
   "mcp:calls": { calls: McpCall[] };
@@ -294,6 +299,14 @@ export type McpServerInfo = {
   header?: { name: string; stored: boolean };
   /** Used by agent sessions on the asked cluster (the built-in always is). */
   enabled: boolean;
+  /**
+   * "Run read-only tools without asking": its tools that say they only read run in agent sessions without a prompt,
+   * while its listing is the one you saw when you turned this on. Off for every server you add; the built-in is
+   * always on.
+   */
+  autoRun: boolean;
+  /** Why auto-run was turned off (its tools changed). */
+  autoRunNote?: string;
   appOrigins: string[];
   /** From the last listing; absent until the server answered once. */
   tools?: McpToolInfo[];

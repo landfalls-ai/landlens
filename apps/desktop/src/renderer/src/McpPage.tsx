@@ -101,8 +101,9 @@ function Servers(props: {
     <>
       <div className="mcp-intro">
         <p className="dim">
-          Every MCP call an agent session makes goes through Landlens's gateway on <span className="mono">{new URL(s.gateway).host}</span>: logged
-          under Calls, read-only tools run without asking, the rest ask you in the dock. Remote servers' keys stay encrypted in the main process.
+          Every MCP call an agent session makes goes through Landlens's gateway on <span className="mono">{new URL(s.gateway).host}</span> and is logged
+          under Calls. landlens-kube's tools run without asking; a remote server's tools ask you in the dock unless you let its read-only tools run.
+          Remote servers' keys stay encrypted in the main process.
         </p>
         <button className="secondary" onClick={props.onAdd}><Ic icon={Plus} size={14} />Add server</button>
       </div>
@@ -156,6 +157,10 @@ function ServerPanel(props: {
     setBusy(true);
     api.invoke("mcp:enable", { id: srv.id, context: props.context, enabled: !srv.enabled }).then(props.onChanged, (e: ApiError) => props.onError(e.message)).finally(() => setBusy(false));
   };
+  const toggleAuto = () => {
+    setBusy(true);
+    api.invoke("mcp:auto-run", { id: srv.id, enabled: !srv.autoRun, context: props.context }).then(props.onChanged, (e: ApiError) => props.onError(e.message)).finally(() => setBusy(false));
+  };
   const remove = () => {
     if (!window.confirm(`Remove ${srv.name}? Agent sessions you start from now on won't have it.`)) return;
     api.invoke("mcp:remove", { id: srv.id }).then(props.onChanged, (e: ApiError) => props.onError(e.message));
@@ -191,6 +196,20 @@ function ServerPanel(props: {
         {tools.length ? <span className="dim small">{tools.length} tools, {ro} read-only</span> : null}
         {srv.detail ? <span className="tone-bad small">{srv.detail}</span> : null}
       </div>
+      {!srv.builtin ? (
+        <div className="mcp-auto">
+          <label className="switch">
+            <input type="checkbox" role="switch" checked={srv.autoRun} disabled={busy || (!srv.autoRun && !tools.length)} onChange={toggleAuto} aria-label={`Run ${srv.name}'s read-only tools without asking`} />
+            <span>Run read-only tools without asking</span>
+          </label>
+          <span className="dim small">
+            {srv.autoRun
+              ? `The ${ro} tools that say they only read, as listed below; if ${srv.name} changes its tools, they ask again.`
+              : tools.length ? "Off: every tool asks you in the dock. That a tool only reads is the server's own claim." : "Test it first, to see the tools you'd allow."}
+          </span>
+          {srv.autoRunNote ? <span className="tone-warn small" role="status"><Ic icon={CircleAlert} size={13} /> {srv.autoRunNote}</span> : null}
+        </div>
+      ) : null}
       {test === "running" ? <p className="test-line dim mcp-test"><span className="spinner" />Testing…</p> : test ? <TestSteps test={test} inPanel /> : null}
       {tools.length ? (
         <ul className="ov-list mcp-tools" aria-label={`${srv.name} tools`}>
@@ -217,6 +236,8 @@ function ToolRow(props: { tool: McpToolInfo; server: McpServerInfo; handle: stri
   const calls = useMcpCalls();
   const live = typeof tried === "object" ? calls.find((c) => c.id === tried.id) ?? tried : tried;
   const canTry = t.readOnly && t.required.length === 0 && (props.server.builtin || props.server.enabled);
+  // Only landlens-kube's tools, and a remote's read-only ones you let run, skip the ask.
+  const runsFree = t.readOnly && props.server.autoRun;
   const appOnly = !t.visibility.includes("model");
   const run = () => {
     setTried("running");
@@ -230,10 +251,10 @@ function ToolRow(props: { tool: McpToolInfo; server: McpServerInfo; handle: stri
           {t.description ? <div className="ov-detail" title={t.description}>{t.description}</div> : null}
         </div>
         {t.app ? <span className="chip" title={t.app}><Ic icon={LayoutPanelTop} size={11} />{appOnly ? "view only" : "view"}</span> : null}
-        {t.readOnly ? (
+        {runsFree ? (
           <span className="badge muted" title="Runs without asking"><Ic icon={Eye} size={13} />Read-only</span>
         ) : (
-          <span className="badge warn" title="Claude Code asks you first"><Ic icon={CircleAlert} size={13} />Asks first</span>
+          <span className="badge warn" title={t.readOnly ? "Says it only reads; Claude Code still asks you first" : "Claude Code asks you first"}><Ic icon={CircleAlert} size={13} />Asks first</span>
         )}
         {canTry ? (
           <button className="secondary mcp-try" onClick={run} disabled={live === "running"} aria-label={`Preview ${t.name}`}>

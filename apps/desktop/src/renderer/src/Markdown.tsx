@@ -2,6 +2,7 @@
 // links. It builds React elements from text, never HTML, so nothing the agent writes can run in the page.
 import { Check, Copy } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
+import { api } from "./api";
 import { Ic } from "./icons";
 import { copyText } from "./present";
 
@@ -104,7 +105,18 @@ function Link({ url, text }: { url: string; text: string }) {
   }
   return (
     <>
-      <a href={url} title={url} target="_blank" rel="noreferrer">{text}</a>
+      {/* Main opens it (link:open, https only); window.open is denied for every frame. */}
+      <a
+        href={url}
+        title={url}
+        rel="noreferrer"
+        onClick={(e) => {
+          e.preventDefault();
+          void api.invoke("link:open", { url }).catch(() => {});
+        }}
+      >
+        {text}
+      </a>
       {text !== url && text !== host ? <span className="link-host"> ({host})</span> : null}
     </>
   );

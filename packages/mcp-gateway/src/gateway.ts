@@ -15,10 +15,10 @@ import { APP_HTML, CALL_META, type AgentCluster } from "@landlens/kube-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { appMayCall, isReadOnly, modelMayCall, preAllowed, toolUi } from "./approval.js";
+import { appMayCall, drifted, isReadOnly, modelMayCall, preAllowed, toolUi, type ListedServer } from "./approval.js";
 import { CallLog, newCallId } from "./calls.js";
 import { Pairing, TOOL_USE_META } from "./pairing.js";
-import { BuiltinUpstream, describeError, RemoteUpstream, type RemoteSpec, type Upstream } from "./upstream.js";
+import { BuiltinUpstream, describeError, rawError, RemoteUpstream, type RemoteSpec, type Upstream } from "./upstream.js";
 
 const MAX_BODY = 1_000_000;
 export const APP_MIME = "text/html;profile=mcp-app";
@@ -51,6 +51,10 @@ export type SessionInit = {
 /** Asked before an app's view (or you) runs a tool that doesn't say it only reads. */
 export type Approver = (q: { label: string; server: string; tool: string; args: Record<string, unknown>; origin: Origin }) => Promise<boolean>;
 
+/** The most permission answers and card names a session or the gateway remembers. */
+const MAX_PERMITS = 200;
+const MAX_CARD_NAMES = 2000;
+
 export class GatewaySession {
   /** The ACP session id, once Claude Code made it; "console" for yours. */
   acpSession: string | undefined;
@@ -58,6 +62,10 @@ export class GatewaySession {
   readonly upstreams = new Map<string, Upstream>();
   /** Permission rules Claude Code gets: what runs without asking. */
   allow: string[] = [];
+  /** Your yes in the dock to one tool call (its ACP toolCallId → `mcp__<server>__<tool>`, if known). */
+  private readonly once = new Map<string, string | undefined>();
+  /** Tools you said "don't ask again" for in this session. */
+  private readonly always = new Set<string>();
 
   constructor(readonly gateway: McpGateway, readonly token: string, readonly init: SessionInit) {
     this.upstreams.set(BUILTIN_MCP_SERVER, new BuiltinUpstream(BUILTIN_MCP_SERVER, init.cluster));
@@ -81,6 +89,37 @@ export class GatewaySession {
     this.acpSession = acpSession;
   }
 
+  /** You allowed a tool call in the dock (Claude Code's permission request, answered through main). */
+  permit(toolCallId: string, rule: string | undefined, always: boolean) {
+    if (always && rule) this.always.add(rule);
+    else {
+      this.once.set(toolCallId, rule);
+      while (this.once.size > MAX_PERMITS) this.once.delete(this.once.keys().next().value!);
+    }
+  }
+
+  /**
+   * Whether you allowed this call: a "don't ask again" for the tool, or a yes to this very tool call (by its tool_use
+   * id; if Claude Code stopped sending that, the oldest unused yes for the same tool). A yes is used up by its call.
+   */
+  takePermit(rule: string, toolUseId: string | undefined): boolean {
+    if (this.always.has(rule)) return true;
+    if (toolUseId) {
+      if (!this.once.has(toolUseId)) return false;
+      const named = this.once.get(toolUseId);
+      if (named !== undefined && named !== rule) return false;
+      this.once.delete(toolUseId);
+      return true;
+    }
+    for (const [id, named] of this.once) {
+      if (named === rule) {
+        this.once.delete(id);
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Call a tool as an app's view or as you; the agent's calls come in over HTTP. */
   call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you", onCall?: (id: string) => void): Promise<CallToolResult> {
     return this.gateway.run(this, server, tool, args, origin, onCall ? { onCall } : {});
@@ -102,12 +141,19 @@ export class McpGateway {
   private readonly sessions = new Map<string, GatewaySession>(); // sha256(token) hex → session
   private readonly apps = new Map<string, AppResource>();
   private readonly toolsOf = new Map<string, Tool>(); // `${server}\0${tool}` → last listing, for the log's app field
+  /** ACP toolCallId → the tool's name (`mcp__<server>__<tool>`), from the dock's cards, for permission answers. */
+  private readonly cardNames = new Map<string, string>();
 
-  constructor(private readonly opts: { approve?: Approver; log?: (line: string) => void } = {}) {}
+  constructor(private readonly opts: {
+    approve?: Approver;
+    log?: (line: string) => void;
+    /** A remote server's listing changed since you let its read-only tools run without asking: they ask again. */
+    onDrift?: (server: RemoteSpec) => void;
+  } = {}) {}
 
   async start(): Promise<void> {
     const server = createServer((req, res) => void this.handle(req, res).catch((err) => {
-      this.opts.log?.(`[mcp] ${describeError(err)}`);
+      this.opts.log?.(`[mcp] ${rawError(err)}`);
       if (!res.headersSent) deny(res, 500, "internal error");
     }));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -134,23 +180,30 @@ export class McpGateway {
 
   /**
    * Open a session: its token, its upstreams, and the permission rules for Claude Code. Remote servers are listed
-   * now so their read-only tools can run without asking; one that doesn't answer is still served, with every tool
-   * asking.
+   * now; the read-only tools of one you opted in run without asking only if this listing is the one you pinned, and
+   * the session keeps this listing for its life. One that doesn't answer is still served, with every tool asking.
    */
   async open(init: SessionInit): Promise<GatewaySession> {
     for (const r of init.remotes) if (r.name === BUILTIN_MCP_SERVER || !/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(r.name)) throw new Error(`Landlens: bad MCP server name ${r.name}`);
     const token = randomBytes(32).toString("hex");
     const session = new GatewaySession(this, token, init);
     this.sessions.set(hash(token).toString("hex"), session);
-    const listed = await Promise.all([...session.upstreams.values()].map(async (u) => {
+    const listed = await Promise.all([...session.upstreams.values()].map(async (u): Promise<ListedServer | undefined> => {
+      const pin = init.remotes.find((r) => r.name === u.name)?.pin;
       try {
-        return { name: u.name, tools: await this.listTools(u) };
+        return { name: u.name, tools: await this.listTools(u), ...(pin ? { pin } : {}) };
       } catch (err) {
-        this.opts.log?.(`[mcp] ${init.label}: ${u.name} didn't list its tools: ${describeError(err)}`);
-        return { name: u.name, tools: [] };
+        this.opts.log?.(`[mcp] ${init.label}: ${u.name} didn't list its tools: ${rawError(err)}`);
+        return undefined; // nothing runs without asking, and nothing is said to have changed
       }
     }));
-    session.allow = preAllowed(listed);
+    const answered = listed.filter((l): l is ListedServer => !!l);
+    session.allow = preAllowed(answered);
+    for (const name of drifted(answered)) {
+      this.opts.log?.(`[mcp] ${init.label}: ${name}'s tools changed since you allowed its read-only tools; they ask again`);
+      const spec = init.remotes.find((r) => r.name === name);
+      if (spec) this.opts.onDrift?.(spec);
+    }
     return session;
   }
 
@@ -160,15 +213,36 @@ export class McpGateway {
     if (s.acpSession) this.pairing.forget(s.acpSession);
   }
 
-  /** The front door's audit trail: requests made for a gateway call are added to it. */
+  /**
+   * The front door's audit trail: requests made for a gateway call are added to it. Any holder of a front-door token
+   * can send X-Landlens-Call (the agent's shell has its session's token), so a request is filed under a call only if
+   * that call is a landlens-kube call still running, and the request came with the same session's token (the audit
+   * label of a session's front-door token is the session's label). Call ids are random, so they can't be guessed.
+   */
   onAudit(e: AuditEntry) {
     if (!e.call) return;
+    const c = this.log.get(e.call);
+    if (!c || c.server !== BUILTIN_MCP_SERVER || c.status !== "running" || c.label !== e.label) return;
     this.log.request(e.call, { at: e.at, method: e.method, path: e.path, allowed: e.allowed, ...(e.status !== undefined ? { status: e.status } : {}), ...(e.reason ? { reason: e.reason } : {}) });
   }
 
   /** The dock saw an ACP tool call: pair it with its gateway call. */
   card(u: { session: string; toolCallId: string; toolName?: string; title?: string; rawInput?: unknown }) {
+    if (u.toolName) {
+      this.cardNames.set(u.toolCallId, u.toolName);
+      while (this.cardNames.size > MAX_CARD_NAMES) this.cardNames.delete(this.cardNames.keys().next().value!);
+    }
     this.pairing.card(u);
+  }
+
+  /**
+   * You answered Claude Code's permission request in the dock with a yes. The gateway lets a proxied tool that isn't
+   * pre-allowed run only after such a yes, so a Claude Code that skipped the ask still can't run it.
+   */
+  permit(acpSession: string, p: { toolCallId: string; toolName?: string; always: boolean }) {
+    const s = [...this.sessions.values()].find((x) => x.init.origin === "agent" && x.acpSession === acpSession);
+    const name = p.toolName ?? this.cardNames.get(p.toolCallId);
+    s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, p.always);
   }
 
   async listTools(u: Upstream): Promise<Tool[]> {
@@ -209,6 +283,10 @@ export class McpGateway {
     if (!t) return refuse(`${server} has no tool named ${tool}.`);
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
+      const rule = `mcp__${server}__${tool}`;
+      if (server !== BUILTIN_MCP_SERVER && !s.allow.includes(rule) && !s.takePermit(rule, toolUseId)) {
+        return refuse(`${server} · ${tool} needs your yes in the dock first, and Landlens didn't see one.`);
+      }
       this.pairing.call({ id, session: s.id, server, tool, args, ...(toolUseId ? { toolUseId } : {}) });
     } else if (origin === "app") {
       if (!appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
@@ -225,7 +303,8 @@ export class McpGateway {
       const result = await up.call(tool, args, server === BUILTIN_MCP_SERVER ? { [CALL_META]: id } : undefined);
       const status = result.isError ? "error" : "ok";
       if (app && !result.isError) {
-        this.log.keepResult(id, { args, result: result as McpToolResult });
+        const url = s.init.remotes.find((r) => r.name === server)?.url;
+        this.log.keepResult(id, { args, result: result as McpToolResult, ...(url ? { url } : {}) });
         void this.appResource(s, server, app).catch(() => {}); // warm the view's HTML
       }
       this.log.finish(id, { status, result: result as McpToolResult, ...(app && !result.isError ? { app } : {}) });
@@ -239,23 +318,24 @@ export class McpGateway {
 
   /**
    * A view's HTML and what it declares. landlens-kube's are part of Landlens; a remote server's is read through the
-   * session (or from the last read, if the session has ended) and must be an MCP App document of at most 5 MB.
+   * session (or, once the session has ended, from the last read of the same address) and must be an MCP App document
+   * of at most 5 MB. The cache is keyed by the server's address and the view's URI, never by the server's name, so a
+   * server renamed, re-pointed or replaced under the same name never gets another's HTML.
    */
-  async appResource(s: GatewaySession | undefined, server: string, uri: string): Promise<AppResource> {
+  async appResource(s: GatewaySession | undefined, server: string, uri: string, callUrl?: string): Promise<AppResource> {
     if (server === BUILTIN_MCP_SERVER) {
       const html = APP_HTML[uri];
       if (!html) throw new Error(`Landlens: no view ${uri}`);
       return { html, csp: { connectDomains: [], resourceDomains: [], frameDomains: [], baseUriDomains: [] }, prefersBorder: false };
     }
     const up = s && !s.closed ? s.upstreams.get(server) : undefined;
-    const key = `${server}\0${up ? (s!.init.remotes.find((r) => r.name === server)?.url ?? "") : ""}\0${uri}`;
-    const cached = [...this.apps.entries()].find(([k]) => k.startsWith(`${server}\0`) && k.endsWith(`\0${uri}`))?.[1];
-    if (!up) {
-      if (cached) return cached;
-      throw new Error("Landlens: the session that made this call has ended.");
-    }
+    const live = up ? s!.init.remotes.find((r) => r.name === server)?.url : undefined;
+    const url = callUrl ?? live;
+    if (!url) throw new Error("Landlens: the session that made this call has ended.");
+    const key = `${url}\0${uri}`;
     const hit = this.apps.get(key);
     if (hit) return hit;
+    if (!up || live !== url) throw new Error("Landlens: the session that made this call has ended.");
     const r = await up.read(uri);
     const c = r.contents.find((x) => x.uri === uri) ?? r.contents[0];
     if (!c || !("text" in c) || typeof c.text !== "string") throw new Error(`Landlens: ${server} sent no HTML for ${uri}.`);
@@ -318,7 +398,7 @@ export class McpGateway {
       try {
         return { tools: (await this.listTools(up)).filter(modelMayCall) };
       } catch (err) {
-        this.opts.log?.(`[mcp] ${session.label}: ${name} didn't list its tools: ${describeError(err)}`);
+        this.opts.log?.(`[mcp] ${session.label}: ${name} didn't list its tools: ${rawError(err)}`);
         return { tools: [] };
       }
     });

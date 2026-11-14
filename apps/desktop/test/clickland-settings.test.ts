@@ -30,10 +30,16 @@ describe("Clickland settings", () => {
     expect(s.config()).toEqual({ url: "http://127.0.0.1:4710", key: KEY });
   });
 
-  it("keeps the key when only the address changes, and forgets it on clear", () => {
+  it("keeps the key for the same origin, drops it when the address moves to another origin, and forgets it on clear", () => {
     const { s } = store();
     s.set({ url: "http://127.0.0.1:4710", key: KEY });
-    s.set({ url: "https://clickland.example" });
+    s.set({ url: "http://127.0.0.1:4710/" });
+    expect(s.config()).toEqual({ url: "http://127.0.0.1:4710/", key: KEY });
+    expect(s.keyOrigin()).toBe("http://127.0.0.1:4710");
+    // Another origin: the stored key doesn't follow; it has to be typed again.
+    expect(s.set({ url: "https://clickland.example" })).toMatchObject({ hasKey: false, url: "https://clickland.example" });
+    expect(s.config()).toBeUndefined();
+    s.set({ url: "https://clickland.example", key: KEY });
     expect(s.config()).toEqual({ url: "https://clickland.example", key: KEY });
     expect(s.clear()).toMatchObject({ hasKey: false, url: "https://clickland.example" });
     expect(s.config()).toBeUndefined();

@@ -27,6 +27,8 @@ export type View = {
   csp: string;
   /** Tool calls from this view in the current minute, to keep a runaway view from flooding the gateway. */
   calls: { minute: number; count: number };
+  /** Link dialogs it asked for in the current minute. */
+  links: { minute: number; count: number };
 };
 
 /** An https origin, exactly; anything else a resource declares is dropped. */
@@ -53,6 +55,9 @@ export function viewCsp(declared: AppResource["csp"], allowed: string[]): string
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
+    // WebRTC isn't fetch: connect-src doesn't cover ICE (STUN/TURN). CSP3's webrtc directive blocks it where the
+    // engine knows it; the window's WebRTC IP policy (security.ts) keeps UDP off where it doesn't.
+    "webrtc 'block'",
   ].join("; ");
 }
 
@@ -62,6 +67,7 @@ export const VIEW_HEADERS = {
   "X-Content-Type-Options": "nosniff",
   "Cache-Control": "no-store",
   "Referrer-Policy": "no-referrer",
+  "X-DNS-Prefetch-Control": "off",
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=(), display-capture=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), fullscreen=()",
 } as const;
@@ -69,8 +75,8 @@ export const VIEW_HEADERS = {
 export class AppViews {
   private readonly views = new Map<string, View>();
 
-  add(v: Omit<View, "id" | "calls">): View {
-    const view: View = { ...v, id: randomBytes(16).toString("hex"), calls: { minute: 0, count: 0 } };
+  add(v: Omit<View, "id" | "calls" | "links">): View {
+    const view: View = { ...v, id: randomBytes(16).toString("hex"), calls: { minute: 0, count: 0 }, links: { minute: 0, count: 0 } };
     this.views.set(view.id, view);
     while (this.views.size > MAX_VIEWS) this.views.delete(this.views.keys().next().value!);
     return view;
@@ -91,6 +97,15 @@ export class AppViews {
     const minute = Math.floor(now / 60_000);
     if (v.calls.minute !== minute) v.calls = { minute, count: 0 };
     return ++v.calls.count <= 60;
+  }
+
+  /** At most three link dialogs a minute per view. */
+  allowLink(id: string, now = Date.now()): boolean {
+    const v = this.views.get(id);
+    if (!v) return false;
+    const minute = Math.floor(now / 60_000);
+    if (v.links.minute !== minute) v.links = { minute, count: 0 };
+    return ++v.links.count <= 3;
   }
 
   /** The frame's address for a view. */

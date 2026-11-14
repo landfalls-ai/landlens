@@ -9,7 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { McpGateway, testRemote, type GatewaySession } from "../src/index.js";
+import { listingHash, McpGateway, newCallId, testRemote, type GatewaySession, type RemoteSpec } from "../src/index.js";
 
 const types: ResourceType[] = [
   { group: "", version: "v1", resource: "pods", kind: "Pod", namespaced: true, verbs: ["get", "list"], shortNames: ["po"] },
@@ -53,6 +53,11 @@ function fakeRemote(seen: string[]) {
       res.writeHead(307, { Location: "http://127.0.0.1:1/mcp" });
       return res.end();
     }
+    if (req.url === "/relay") {
+      // A page could point Test anywhere; whatever comes back must not be repeated to it.
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      return res.end("RELAYED-BODY from somewhere the page can't reach");
+    }
     seen.push(String(req.headers["x-api-key"] ?? ""));
     if (req.headers["x-api-key"] !== "k_secret") {
       res.writeHead(401).end();
@@ -75,6 +80,8 @@ const asked: string[] = [];
 let gateway: McpGateway;
 let session: GatewaySession;
 const events: McpCall[] = [];
+const drifts: string[] = [];
+let pin = "";
 
 const connect = async (url: string, token: string) => {
   const c = new Client({ name: "claude-code-test", version: "0" });
@@ -86,16 +93,18 @@ beforeAll(async () => {
   remote = fakeRemote(seen);
   await new Promise<void>((r) => remote.listen(0, "127.0.0.1", r));
   remoteUrl = `http://127.0.0.1:${(remote.address() as AddressInfo).port}/mcp`;
-  gateway = new McpGateway({ approve: async (q) => { asked.push(`${q.server}/${q.tool}`); return approvals; } });
+  gateway = new McpGateway({ approve: async (q) => { asked.push(`${q.server}/${q.tool}`); return approvals; }, onDrift: (s) => drifts.push(s.name) });
   await gateway.start();
   gateway.log.subscribe((c) => events.push(c));
+  // What the MCP page showed after Test, pinned when you turned on "Run read-only tools without asking".
+  pin = listingHash((await testRemote({ name: "fake", url: remoteUrl, headers: { "X-Api-Key": "k_secret" } })).tools!);
   session = await gateway.open({
     label: "agent 1 · orbstack", context: "orbstack", origin: "agent",
     cluster: fakeCluster((call, path) => {
       audited.push({ ...(call ? { call } : {}), path });
       gateway.onAudit({ at: new Date().toISOString(), label: "agent 1 · orbstack", method: "GET", cluster: "h", path, allowed: true, status: 200, ...(call ? { call } : {}) });
     }),
-    remotes: [{ name: "fake", url: remoteUrl, headers: { "X-Api-Key": "k_secret" } }],
+    remotes: [{ name: "fake", url: remoteUrl, headers: { "X-Api-Key": "k_secret" }, pin }],
   });
   session.bind("acp-1");
 });
@@ -118,8 +127,53 @@ describe("the MCP gateway", () => {
     expect(JSON.stringify(servers)).not.toContain("k_secret");
   });
 
-  it("lets only the built-in server and read-only, model-visible tools run without asking", () => {
+  it("lets only the built-in server and, for a server you opted in, its read-only, model-visible tools run without asking", () => {
     expect(session.allow).toEqual(["mcp__landlens-kube", "mcp__fake__list_things"]);
+    expect(drifts).toEqual([]);
+  });
+
+  it("pre-allows nothing of a remote server you didn't opt in, or whose listing changed since you did", async () => {
+    const spec: RemoteSpec = { name: "fake", url: remoteUrl, headers: { "X-Api-Key": "k_secret" } };
+    const off = await gateway.open({ label: "agent 7 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [spec] });
+    expect(off.allow).toEqual(["mcp__landlens-kube"]);
+    await off.close();
+    const changed = await gateway.open({ label: "agent 8 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [{ ...spec, pin: "0".repeat(64) }] });
+    expect(changed.allow).toEqual(["mcp__landlens-kube"]);
+    expect(drifts).toEqual(["fake"]);
+    await changed.close();
+    drifts.length = 0;
+    // One that doesn't answer isn't said to have changed: it just asks.
+    const down = await gateway.open({ label: "agent 9 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [{ ...spec, url: "http://127.0.0.1:1/mcp", pin }] });
+    expect(down.allow).toEqual(["mcp__landlens-kube"]);
+    expect(drifts).toEqual([]);
+    await down.close();
+  });
+
+  it("runs an agent's call to a tool that isn't pre-allowed only after your yes in the dock, once per yes", async () => {
+    const c = await connect(`${gateway.url}/fake`, session.token);
+    const call = (id?: string) => c.callTool({ name: "delete_thing", arguments: { id: "9" }, ...(id ? { _meta: { "claudecode/toolUseId": id } } : {}) }) as Promise<any>;
+    const no = await call("toolu_skip");
+    expect(no.isError).toBe(true);
+    expect(no.content[0].text).toContain("needs your yes in the dock");
+    gateway.card({ session: "acp-1", toolCallId: "toolu_yes", toolName: "mcp__fake__delete_thing" });
+    gateway.permit("acp-1", { toolCallId: "toolu_yes", always: false });
+    expect((await call("toolu_yes")).isError).toBeFalsy();
+    expect((await call("toolu_yes")).isError).toBe(true); // a yes is used up by its call
+    // A yes for one tool doesn't run another.
+    gateway.card({ session: "acp-1", toolCallId: "toolu_other", toolName: "mcp__fake__list_things" });
+    gateway.permit("acp-1", { toolCallId: "toolu_other", always: false });
+    expect((await call("toolu_other")).isError).toBe(true);
+    // Without a tool_use id (an older Claude Code), the oldest unused yes for the same tool.
+    gateway.permit("acp-1", { toolCallId: "toolu_noid", toolName: "mcp__fake__delete_thing", always: false });
+    expect((await call()).isError).toBeFalsy();
+    expect((await call()).isError).toBe(true);
+    // "Don't ask again" holds for the session; another session's answers don't count.
+    gateway.permit("acp-2", { toolCallId: "toolu_x", toolName: "mcp__fake__delete_thing", always: true });
+    expect((await call("toolu_y")).isError).toBe(true);
+    gateway.permit("acp-1", { toolCallId: "toolu_x", toolName: "mcp__fake__delete_thing", always: true });
+    expect((await call("toolu_y")).isError).toBeFalsy();
+    expect((await call()).isError).toBeFalsy();
+    await c.close();
   });
 
   it("proxies a remote server under its own name, with its header, and hides app-only tools from the model", async () => {
@@ -160,6 +214,36 @@ describe("the MCP gateway", () => {
     expect(call.requests.map((q) => q.path).some((p) => p.startsWith("/api/v1/namespaces/landlens-dev/events"))).toBe(true);
   });
 
+  it("files a front-door request under a call only for that session's token, a landlens-kube call, while it runs", async () => {
+    const done = gateway.log.list().find((x) => x.tool === "get_events")!;
+    const before = done.requests.length;
+    const plant = (call: string, label: string) => gateway.onAudit({ at: new Date().toISOString(), label, method: "GET", cluster: "h", path: "/planted", allowed: true, status: 200, call });
+    plant(done.id, "agent 1 · orbstack"); // finished
+    const remoteCall = gateway.log.list().find((x) => x.server === "fake")!;
+    plant(remoteCall.id, "agent 1 · orbstack"); // not landlens-kube
+    expect(gateway.log.get(done.id)!.requests.length).toBe(before);
+    expect(gateway.log.get(remoteCall.id)!.requests).toEqual([]);
+    // While a call runs, a request made with another token (another label) isn't filed under it.
+    let running = "";
+    const slow = gateway.open({
+      label: "agent 5 · orbstack", context: "orbstack", origin: "agent", remotes: [],
+      cluster: { ...fakeCluster(() => {}), withCall: (id) => ({ ...fakeCluster(() => {}), get: async (path) => {
+        running = id;
+        plant(id, "agent 6 · orbstack");
+        plant(id, "agent 5 · orbstack");
+        return { status: 200, text: JSON.stringify({ items: [] }) };
+      } }) },
+    });
+    const s5 = await slow;
+    await s5.call("landlens-kube", "get_events", { namespace: "x" }, "app");
+    expect(gateway.log.get(running)!.requests.map((r) => r.path)).toEqual(["/planted"]);
+    await s5.close();
+    // Ids are random, in the format the front door accepts.
+    const ids = new Set(Array.from({ length: 200 }, () => newCallId()));
+    expect(ids.size).toBe(200);
+    for (const id of ids) expect(id).toMatch(/^c[0-9a-z]{20}$/);
+  });
+
   it("asks you before a view runs a tool that doesn't say it only reads, and refuses model-only tools to views", async () => {
     expect((await session.call("fake", "refresh", {}, "app")).isError).toBeFalsy();
     approvals = false;
@@ -168,7 +252,7 @@ describe("the MCP gateway", () => {
     expect(asked).toEqual(["fake/delete_thing"]);
     approvals = true;
     expect((await session.call("fake", "delete_thing", { id: "1" }, "app")).isError).toBeFalsy();
-    expect(gateway.log.list().filter((c) => c.origin === "app").map((c) => c.status)).toEqual(["ok", "refused", "ok"]);
+    expect(gateway.log.list().filter((c) => c.origin === "app" && c.label === "agent 1 · orbstack").map((c) => c.status)).toEqual(["ok", "refused", "ok"]);
   });
 
   it("runs only read-only tools for you from the MCP page", async () => {
@@ -186,6 +270,12 @@ describe("the MCP gateway", () => {
     const v = await gateway.appResource(session, "fake", "ui://fake/view");
     expect(v).toMatchObject({ html: "<!doctype html><p>view</p>", prefersBorder: true, csp: { connectDomains: ["https://api.example.com"] } });
     await expect(gateway.appResource(session, "fake", "ui://fake/plain")).rejects.toThrow(/isn't an MCP App view/);
+    // After the session ends, a call's view comes from the cache of the address that call used, never by name.
+    expect(await gateway.appResource(undefined, "fake", "ui://fake/view", remoteUrl)).toBe(v);
+    await expect(gateway.appResource(undefined, "fake", "ui://fake/view", "https://elsewhere.example/mcp")).rejects.toThrow(/ended/);
+    await expect(gateway.appResource(undefined, "fake", "ui://fake/view")).rejects.toThrow(/ended/);
+    const kept = gateway.log.list().find((c) => c.tool === "list_things" && c.status === "ok")!;
+    expect(gateway.log.result(kept.id)?.url).toBe(remoteUrl);
   });
 
   it("refuses callers without the session token, browsers, other host names and unknown servers", async () => {
@@ -214,5 +304,18 @@ describe("the MCP gateway", () => {
     const moved = await testRemote({ name: "fake", url: remoteUrl.replace(/\/mcp$/, "/redirect"), headers: { "X-Api-Key": "k_secret" } });
     expect(moved.ok).toBe(false);
     expect(moved.steps[0]!.detail).toMatch(/redirect/i);
+  });
+
+  it("never repeats what a tested address answered: fixed sentences only", async () => {
+    const r = await testRemote({ name: "test", url: remoteUrl.replace(/\/mcp$/, "/relay") });
+    expect(r.ok).toBe(false);
+    expect(r.steps[0]!.detail).toBe("The server answered HTTP 500.");
+    expect(JSON.stringify(r)).not.toContain("RELAYED");
+    const free = createServer();
+    await new Promise<void>((r) => free.listen(0, "127.0.0.1", r));
+    const port = (free.address() as AddressInfo).port;
+    await new Promise((r) => free.close(r));
+    const none = await testRemote({ name: "test", url: `http://127.0.0.1:${port}/mcp` });
+    expect(none.steps[0]!.detail).toBe("Nothing is listening at that address.");
   });
 });
