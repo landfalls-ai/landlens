@@ -36,3 +36,11 @@ const bridge: LandlensBridge = {
 };
 
 contextBridge.exposeInMainWorld("landlens", bridge);
+
+// The platform as data, for the CSS (macOS draws its traffic lights over the page). No new power: an attribute.
+// (The preload is compiled without the DOM library; these are the two globals it touches.)
+declare const document: { documentElement: { setAttribute(name: string, value: string): void } | null };
+declare const window: { addEventListener(type: string, listener: () => void): void };
+const markPlatform = () => document.documentElement?.setAttribute("data-platform", process.platform);
+markPlatform();
+window.addEventListener("DOMContentLoaded", markPlatform);

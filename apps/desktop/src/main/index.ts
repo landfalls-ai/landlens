@@ -1,6 +1,6 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
 import { ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, nativeTheme } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentService } from "./agent";
@@ -57,10 +57,13 @@ async function start() {
   win = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 960,
+    minWidth: 1024,
     minHeight: 600,
     title: "Landlens",
-    backgroundColor: "#0e1217",
+    // No flash before the page paints: the window is the page's base colour (--bg-0) in the system's theme.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0B0C0F" : "#F3F4F6",
+    // On macOS the page draws its own title bar: the traffic lights sit in the sidebar's top strip.
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 16, y: 16 } } : {}),
     show: false,
     webPreferences: secureWebPreferences(join(__dirname, "../preload/index.js")),
   });
