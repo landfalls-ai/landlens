@@ -74,7 +74,8 @@ button.row:hover { background: var(--color-background-ghost); }
 .section { font-size: 11.5px; font-weight: var(--font-weight-medium); color: var(--color-text-tertiary); margin: 2px 0 -4px; }
 .btn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--border-radius-sm); font-weight: var(--font-weight-medium); font-size: var(--font-text-sm-size); background: var(--color-background-secondary); box-shadow: inset 0 0 0 1px var(--color-border-primary); }
 .btn:hover { background: var(--color-background-ghost); }
-.btn.primary { background: var(--color-background-inverse); color: var(--color-text-inverse); box-shadow: none; }
+.btn.primary { background: var(--color-background-info); color: var(--color-text-info); box-shadow: inset 0 0 0 1px var(--color-border-info); }
+.btn.primary:hover { filter: brightness(1.12); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .empty { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); padding: 4px 2px; }
 .well { margin: 0; font: 11.5px/1.6 var(--font-mono); white-space: pre-wrap; word-break: break-word; color: var(--color-text-secondary); background: var(--color-background-tertiary); border-radius: var(--border-radius-md); box-shadow: inset 0 0 0 1px var(--color-border-secondary); max-height: 340px; overflow: auto; padding: 6px 0; }

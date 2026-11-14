@@ -499,10 +499,14 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     const object = await viewWith(page, "button:has-text('Open in Landlens')");
     expect(await dock.locator(".tool-app iframe").count()).toBeGreaterThanOrEqual(2);
     await page.waitForTimeout(500);
-    await dock.locator(".tool-app").first().scrollIntoViewIfNeeded();
+    // Each view's own frame element, so the shot shows that card (the first test's log view is above them).
+    await (await health.frameElement()).evaluate((el: any) => el.scrollIntoView({ block: "center" }));
+    await page.waitForTimeout(300);
     await shot(page, "40-dock-health-card");
     await shot(page, "41-light-dock-health-card", "light");
-    await dock.locator(".tool-app").last().scrollIntoViewIfNeeded();
+    await page.emulateMedia({ colorScheme: "dark" });
+    await (await object.frameElement()).evaluate((el: any) => el.scrollIntoView({ block: "center" }));
+    await page.waitForTimeout(300);
     await shot(page, "42-dock-object-card");
     await shot(page, "43-light-dock-object-card", "light");
     expect(await health.evaluate(() => (globalThis as any).document.documentElement.getAttribute("data-theme"))).toBe("light");
