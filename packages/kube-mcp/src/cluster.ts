@@ -2,7 +2,7 @@
 // every read is checked by the same policy and lands in the same audit trail as the agent's kubectl.
 import { request } from "node:https";
 import type { MetricsRange, MetricsScope, MetricsSeries, ResourceType } from "@landlens/contracts";
-import { apiPath, KubeError, toKubeError } from "@landlens/kube";
+import { apiPath, KubeError, toKubeError, type Outcome, type ProposedChange, type Send } from "@landlens/kube";
 
 export type AgentCluster = {
   /** e.g. "orbstack" */
@@ -18,6 +18,11 @@ export type AgentCluster = {
   withCall?(callId: string): AgentCluster;
   /** CPU and memory over time from Landlens's metrics source (Clickland, else metrics-server), when main offers it. */
   metrics?(req: { scope: MetricsScope; namespace?: string; name?: string; range: MetricsRange }): Promise<MetricsSeries>;
+  /**
+   * Propose a change: Landlens's approval broker dry-runs it, asks the person and applies it only on their yes. Only
+   * there in sessions main gives write tools to. `signal` withdraws it (the call was cancelled).
+   */
+  propose?(change: ProposedChange, signal?: AbortSignal): Promise<Outcome>;
 };
 
 /** The header a gateway call's id travels in to the front door. The front door reads it and never forwards it. */
@@ -38,11 +43,13 @@ export function frontDoorCluster(opts: {
   metrics?: (req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read: (path: string) => Promise<any>) => Promise<MetricsSeries>;
   /** Tags every request for the front door's audit (see withCall). */
   callId?: string;
+  propose?: AgentCluster["propose"];
 }): AgentCluster {
   const self: AgentCluster = {
     context: opts.context,
     types: opts.types,
     ...(opts.namespaces ? { namespaces: opts.namespaces } : {}),
+    ...(opts.propose ? { propose: opts.propose } : {}),
     withCall: (callId) => frontDoorCluster({ ...opts, callId }),
     get: (path, accept = "application/json") =>
       new Promise((resolve, reject) => {
@@ -104,3 +111,31 @@ const SHORT: Record<string, string> = {
 };
 
 export const pathFor = apiPath;
+
+/**
+ * Any request through the front door with a token, for the approval broker's dry runs and approved writes (its own
+ * token, which only main holds). Answers the status, the body and the API server's warnings.
+ */
+export function frontDoorSend(opts: { url: string; certificate: string; token: string }): Send {
+  return (r) =>
+    new Promise((resolve, reject) => {
+      const headers: Record<string, string> = { Authorization: `Bearer ${opts.token}`, Accept: "application/json" };
+      if (r.contentType) headers["Content-Type"] = r.contentType;
+      // Node sends a DELETE's body without a length unless told; the API server then reads no body.
+      if (r.body !== undefined) headers["Content-Length"] = String(Buffer.byteLength(r.body));
+      const req = request(opts.url + r.path, { method: r.method, ca: opts.certificate, headers, timeout: 30_000 }, (res) => {
+        let text = "";
+        const raw = res.headers.warning;
+        const warnings = (Array.isArray(raw) ? raw : raw ? [raw] : []).flatMap(splitWarnings);
+        res.setEncoding("utf8").on("data", (d) => (text += d)).on("end", () => resolve({ status: res.statusCode ?? 0, text, warnings }));
+      });
+      req.on("timeout", () => req.destroy(new Error("the cluster took longer than 30 s")));
+      req.on("error", reject);
+      req.end(r.body);
+    });
+}
+
+/** `299 - "message", 299 - "other"` → the messages. */
+function splitWarnings(h: string): string[] {
+  return [...h.matchAll(/\d{3} \S+ "((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]!.replace(/\\(.)/g, "$1"));
+}

@@ -2,13 +2,26 @@
 
 What Landlens can't do yet, and why. Each item names the wave that lifts it ([plan.md](plan.md)).
 
-- **The agent only reads.** It proposes changes as commands or YAML; you apply them. Writes behind your approval,
-  with a diff and a server-side dry run, are wave 3. So are session history and resume, Claude's slash commands in the
-  dock, and other ACP agents.
-- **The agent runs without your Claude Code setup.** It uses your login, but none of your settings, CLAUDE.md, skills,
-  plugins, hooks or MCP servers: they would run outside the sandbox, beside a session that can read your cluster. It
-  has no web tools and no edits. Your Claude Code routed to Bedrock or Vertex won't start, because Landlens doesn't
-  hand on cloud credentials. A way to bring in chosen skills is wave 3.
+- **The agent changes the cluster only through its six write tools**, each behind your approval: `patch`, `scale`,
+  `rollout_restart`, `rollout_undo`, `apply_manifest` (server-side apply only, up to 10 documents) and `delete` (one
+  object). No exec, no port-forward, no Helm, never Secrets, and nothing that carries a value it saw redacted, so a
+  change to an env value it can't see has to be yours. Its own kubectl stays read-only.
+- **Changes aren't kept.** A resumed session shows a write tool call as its row and result, not as a change card, and
+  a change waiting when Landlens quits is gone (nothing was applied). The audit trail and History's count of applied
+  changes stay.
+- **The approval card is the renderer's.** A compromised renderer could approve a change it was shown; the renderer
+  is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. A native confirmation
+  for danger changes is not built.
+- **Dry runs trust the API server.** An aggregated API server that ignored `dryRun` would apply at the dry run. The
+  agent's commands in the "/" menu are Claude Code's own (with no settings loaded, its built-ins), sent as messages.
+- **Claude Code is the only agent.** Its sandbox fences only Claude Code; another ACP agent (Codex, Gemini CLI) would
+  need Landlens's own sandbox for its process, with network to its model provider, so cluster data could leave by a
+  path Landlens doesn't control. Deferred until that sandbox exists.
+- **The agent runs without most of your Claude Code setup.** It uses your login and the skills you turn on (copied
+  into its folder; none with links, over 500 files or over 5 MB), but none of your settings, CLAUDE.md, plugins,
+  hooks or MCP servers: they would run outside the sandbox, beside a session that can read your cluster. It has no
+  web tools and no edits. Your Claude Code routed to Bedrock or Vertex won't start, because Landlens doesn't hand on
+  cloud credentials.
 - **The agent has no internet**, in its shell or otherwise: the sandbox sends both proxies to the front door, which
   refuses them, and Claude's web tools are off.
 - **The agent's reads are scrubbed and capped**: env values, `last-applied-configuration` and credential-shaped text

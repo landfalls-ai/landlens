@@ -95,7 +95,8 @@ describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
         "9. ls -la ~",
         "10. curl -sS -m 5 -x \"$ALL_PROXY\" -o /dev/null -w '%{http_code}' https://example.com",
         "11. kubectl get configmap orders-api-config -n landlens-dev -o yaml",
-        "Then 12: use your WebFetch tool to fetch https://example.com (if you have no such tool, say so).",
+        "12. mkdir -p .landlens/landlens-skills/hooks && echo $((6*7))-plugin-written",
+        "Then 13: use your WebFetch tool to fetch https://example.com (if you have no such tool, say so).",
       ].join("\n"),
     }]);
     expect(res.stopReason).toBe("end_turn");
@@ -142,7 +143,10 @@ describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
     // 11: what kubectl reads is scrubbed by the front door, like the MCP tools' output.
     expect(outputOf("configmap")).toContain("DATABASE_HOST");
     expect(outputOf("configmap")).not.toContain("last-applied-configuration");
-    // 12: there is no web tool.
+    // 12: the skills plugin's folder is Landlens's: the shell can't write there (the arithmetic only shows if it ran).
+    expect(outputOf("mkdir")).not.toContain("42-plugin-written");
+    expect([...commands].some((c) => c.includes("mkdir"))).toBe(true);
+    // 13: there is no web tool.
     expect(outputs).not.toContain("Example Domain");
     // Nothing this session did reached the cluster without its token.
     expect(audit.filter((a) => a.label !== session.label && a.label !== "unknown")).toEqual([]);

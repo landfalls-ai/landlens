@@ -15,7 +15,8 @@
     "@agentclientprotocol/sdk": "2.7.0",
     "@landlens/contracts": "workspace:*",
     "@landlens/kube": "workspace:*",
-    "@landlens/kube-mcp": "workspace:*"
+    "@landlens/kube-mcp": "workspace:*",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@landlens/mcp-gateway": "workspace:*",

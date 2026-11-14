@@ -4,6 +4,7 @@ import { MetricsService } from "@landlens/metrics";
 import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { AgentHistory, AgentSettings } from "./agent-history";
 import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
 import { registerIpc } from "./ipc";
@@ -90,6 +91,8 @@ async function start() {
     onToolCall: (u) => gateway.card(u),
     onPermit: (p) => gateway.permit(p.session, p),
     metrics: series,
+    history: new AgentHistory(join(app.getPath("userData"), "agent-history.json")),
+    settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
     log: (l) => console.log(l),
   });
   registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp);

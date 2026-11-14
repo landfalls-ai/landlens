@@ -1,0 +1,19 @@
+/* The Agent page: your skills for agent sessions (designer's spec, D72–D76). */
+/* -- Agent page -- */
+.agent-note { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); font-size: var(--t-12); color: var(--ink-2); }
+.agent-note .ic { color: var(--ok-text); margin-top: 1px; }
+.agent-note b { color: var(--ink); font-weight: 500; }
+.skill-list { list-style: none; margin: 0; padding: 4px 6px 6px; }
+.skill-row { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 12px; padding: 8px 10px; border-radius: var(--r-3); }
+.skill-row + .skill-row { margin-top: 1px; }
+.skill-row:hover { background: var(--hover); }
+.skill-name { font: 500 var(--t-125) var(--mono); display: flex; align-items: center; gap: 8px; }
+.skill-desc { font-size: var(--t-12); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-row.off .skill-name { color: var(--ink-2); }
+.skill-name .badge { font-family: var(--font); }
+.agent-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 10px 16px 0; }
+.agent-fence { margin: 10px 16px 14px; }
+.agent-fence-title { font-size: var(--t-115); font-weight: 500; color: var(--ink-2); margin-bottom: 2px; }
+.agent-fence li .ic { color: var(--ok-text); }
+.agent-fence li.limit .ic { color: var(--warn-text); }
+.agent-fence li b { font-weight: 500; color: var(--ink); }

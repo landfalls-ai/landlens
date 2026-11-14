@@ -1,0 +1,145 @@
+/* =====================================================================================================
+   Wave 3: the change card, the slash menu, history (designer's spec, D1–D71)
+   ===================================================================================================== */
+
+/* -- change card -- */
+.change { margin: 4px; border-radius: var(--r-4); background: var(--bg-2); display: grid; grid-template-columns: minmax(0, 1fr);
+  --change-ring: var(--accent-line); --change-halo: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--change-ring), 0 0 0 4px var(--change-halo); }
+.change.danger { --change-ring: var(--bad-line); --change-halo: var(--bad-soft); }
+.change-head { display: grid; gap: 4px; padding: 12px 12px 0; }
+.change-eyebrow { display: flex; align-items: center; gap: 6px; font-size: var(--t-115); font-weight: 500; color: var(--accent); min-width: 0; white-space: nowrap; }
+.change.danger .change-eyebrow { color: var(--bad-text); }
+.change-expiry { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+.change-expiry.soon { color: var(--warn-text); font-weight: 500; }
+.change-title { font-size: var(--t-13); font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.change-risks { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 12px 0; }
+.change-reason { margin: 10px 12px 0; padding-left: 10px; border-left: 2px solid var(--line-2); display: grid; gap: 2px; }
+.change-reason-by { font-size: var(--t-115); font-weight: 500; color: var(--ink-3); }
+.change-reason-text { font-size: var(--t-125); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.change-reason.open .change-reason-text { display: block; max-height: 160px; overflow-y: auto; }
+.change-reason .link-btn { justify-self: start; font-size: var(--t-115); }
+.change-ops { margin-top: 10px; border-top: 1px solid var(--line); }
+.change-op + .change-op { border-top: 1px solid var(--line); }
+.change-op-head { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px 0 12px; min-width: 0; font-size: var(--t-125); }
+.change-op-head > .ic { color: var(--ink-3); }
+.change-op-head .chev { transition: transform var(--dur-2) var(--ease); }
+.change-op.open .change-op-head .chev { transform: rotate(90deg); }
+.change-verb.delete { color: var(--bad-text); border-color: var(--bad-line); }
+.change-kind { color: var(--ink-2); flex: none; }
+.change-obj { display: inline-flex; align-items: center; gap: 4px; min-width: 0; font: var(--t-12) var(--mono); color: var(--ink); border-radius: var(--r-1); }
+.change-obj span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-obj .ic { color: var(--ink-3); }
+.change-obj:hover span { text-decoration: underline; } .change-obj:hover .ic { color: var(--accent); }
+.change-counts { margin-left: auto; flex: none; display: inline-flex; gap: 6px; font: 500 var(--t-11) var(--mono); font-variant-numeric: tabular-nums; }
+.change-counts .add { color: var(--ok-text); } .change-counts .del { color: var(--bad-text); }
+.change-whole { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--bg-0); font-size: var(--t-12); color: var(--ink-2); }
+.change-whole .link-btn { margin-left: auto; font-size: var(--t-115); flex: none; }
+
+.diff-wrap { position: relative; }
+.diff { margin: 0; padding: 6px 0; background: var(--bg-0); border-top: 1px solid var(--line); font: var(--t-115)/1.6 var(--mono); white-space: pre; overflow-x: auto; color: var(--ink-2); tab-size: 2; }
+.diff.capped { max-height: 320px; overflow-y: hidden; }
+.diff-in { display: inline-flex; flex-direction: column; min-width: 100%; } /* flex drops the newlines between lines; textContent stays the diff */
+.diff .dl { display: block; position: relative; padding: 0 12px 0 52px; }
+.diff .dl::before { content: attr(data-n); position: absolute; top: 0; left: 0; width: 30px; text-align: right; color: var(--ink-4); user-select: none; }
+.diff .dl::after { content: attr(data-t); position: absolute; top: 0; left: 38px; width: 8px; user-select: none; }
+.diff .dl.add { background: var(--diff-add); color: var(--ink); box-shadow: inset 2px 0 0 var(--ok); }
+.diff .dl.add::after { color: var(--ok-text); }
+.diff.create .dl.add { background: none; } /* a create is all "+": keep the edge, drop the tint */
+.diff .dl.del { background: var(--diff-del); box-shadow: inset 2px 0 0 var(--bad); }
+.diff .dl.del::after { color: var(--bad-text); }
+.diff .k { color: var(--code-key); } .diff .s { color: var(--code-str); } .diff .n { color: var(--code-num); }
+.diff .fold { display: block; padding: 1px 12px 1px 52px; margin: 2px 0; color: var(--ink-3); background: var(--bg-1); font: var(--t-11)/1.7 var(--font); }
+.diff-more { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; display: flex; align-items: flex-end; justify-content: center; gap: 6px; padding-bottom: 8px; background: linear-gradient(transparent, var(--bg-0) 72%); pointer-events: none; }
+.diff-more button { pointer-events: auto; height: 24px; font-size: var(--t-12); }
+.diff-wide { position: absolute; top: 5px; right: 6px; z-index: 1; background: var(--bg-0); }
+
+.change-warn { display: flex; gap: 7px; align-items: flex-start; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--warn-soft); font-size: var(--t-12); }
+.change-warn .ic { color: var(--warn-text); margin-top: 2px; }
+.change-warn b { font-weight: 500; display: block; }
+.change-warn span { color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* Sticky: Approve and Reject stay in reach while a long diff scrolls under them. The foot redraws the card's ring on
+   its three outer sides and covers the body's 10px bottom padding, so nothing shows beside or below it when stuck. */
+.change-foot { position: sticky; bottom: 0; z-index: 2; padding: 9px 12px 12px; background: var(--bg-2); border-top: 1px solid var(--line); border-radius: 0 0 var(--r-4) var(--r-4); display: grid; gap: 8px;
+  box-shadow: inset 1px 0 0 var(--change-ring), inset -1px 0 0 var(--change-ring), inset 0 -1px 0 var(--change-ring), 0 10px 0 var(--bg-0); }
+.change-fact { display: flex; align-items: center; gap: 6px; font-size: var(--t-115); color: var(--ink-3); }
+.change-fact .ic { color: var(--ok-text); }
+.change-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.change-actions button { height: 28px; padding: 0 10px; }
+.change-actions .push { margin-left: auto; }
+button.danger { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-2); font-weight: 500; white-space: nowrap; background: var(--bad-soft); color: var(--bad-text); box-shadow: inset 0 0 0 1px var(--bad-line); }
+button.danger:hover { background: color-mix(in srgb, var(--bad) 22%, transparent); }
+button.danger.solid { background: var(--bad-fill); color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 1px 2px rgba(0,0,0,.3); }
+.change-confirm { display: grid; gap: 8px; padding: 10px; border-radius: var(--r-3); background: var(--bad-soft); box-shadow: inset 0 0 0 1px var(--bad-line); }
+.change-confirm p { font-size: var(--t-125); }
+.change-confirm p b { font-weight: 600; }
+.change-applying { display: flex; align-items: center; gap: 8px; height: 28px; color: var(--accent); font-size: var(--t-125); }
+
+/* after-states: a .tool-group with one .tool row and a verdict line */
+.change-done .tool-verdict { cursor: pointer; }
+.change-done.rejected .tool-status, .change-done.expired .tool-status, .change-done.withdrawn .tool-status { color: var(--ink-3); }
+.change-done.failed { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 30%, transparent); }
+.change-done .change-error { padding: 8px 10px 10px 31px; display: grid; gap: 6px; font-size: var(--t-12); color: var(--ink-2); }
+.change-done .change-error .tool-io { border: 0; border-radius: var(--r-2); color: var(--bad-text); }
+.change-quote::before { content: "\201C"; } .change-quote::after { content: "\201D"; }
+
+/* composer while a change waits */
+.composer-hint { display: flex; align-items: center; gap: 6px; font-size: var(--t-115); color: var(--ink-3); margin: -2px 0 -2px; }
+.change-jump { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 2px); z-index: 4; height: 26px; padding: 0 10px; border-radius: 13px; display: inline-flex; align-items: center; gap: 6px; background: var(--bg-3); color: var(--accent); font-size: var(--t-12); font-weight: 500; box-shadow: inset 0 0 0 1px var(--accent-line), var(--shadow-2); white-space: nowrap; }
+
+/* -- slash menu -- */
+.slash-menu { position: absolute; left: 14px; right: 14px; bottom: calc(100% - 4px); z-index: 5; background: var(--bg-2); border-radius: 10px; box-shadow: var(--shadow-2); padding: 4px; max-height: 276px; overflow-y: auto; display: grid; gap: 1px; }
+.slash-opt { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: var(--r-2); min-width: 0; }
+.slash-opt > .ic { color: var(--ink-3); }
+.slash-opt.on { background: var(--sel); }
+.slash-opt.on > .ic { color: var(--accent); }
+.slash-name { font: 500 var(--t-12) var(--mono); color: var(--ink); flex: none; }
+.slash-name b { font-weight: 500; color: var(--accent); }
+.slash-hint { font: var(--t-115) var(--mono); color: var(--ink-4); flex: none; }
+.slash-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-12); color: var(--ink-3); }
+.slash-foot { display: flex; align-items: center; gap: 10px; padding: 6px 8px 4px; margin-top: 3px; border-top: 1px solid var(--line); font-size: var(--t-11); color: var(--ink-3); }
+.slash-foot span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* -- history panel -- */
+.dock-panel { position: absolute; inset: 56px 0 0 0; z-index: 3; background: var(--bg-0); display: flex; flex-direction: column; min-height: 0; }
+.hist-tools { display: flex; gap: 8px; padding: 12px 14px 4px; }
+.hist-tools .field { flex: 1; }
+.hist-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0 8px 8px; list-style: none; }
+.hist-label { font-size: var(--t-115); font-weight: 500; color: var(--ink-3); padding: 10px 8px 4px; }
+.hist-row { display: flex; align-items: center; gap: 6px; padding: 0 6px 0 0; border-radius: var(--r-3); min-width: 0; }
+.hist-row:hover, .hist-row:focus-within { background: var(--hover); }
+.hist-row.on { background: var(--sel); }
+.hist-open { flex: 1; min-width: 0; display: grid; gap: 2px; padding: 8px; border-radius: var(--r-3); }
+.hist-title { display: flex; align-items: center; gap: 6px; font-weight: 500; min-width: 0; }
+.hist-title span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-meta { display: flex; gap: 5px; font-size: var(--t-115); color: var(--ink-3); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.hist-meta .sep { opacity: .5; }
+.hist-meta .chg { color: var(--ink-2); }
+.hist-del { opacity: 0; }
+.hist-row:hover .hist-del, .hist-row:focus-within .hist-del { opacity: 1; }
+.hist-confirm { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line-2); font-size: var(--t-125); }
+.hist-confirm span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-confirm button { height: 26px; }
+.hist-foot { display: flex; align-items: center; gap: 8px; padding: 8px 14px 12px; border-top: 1px solid var(--line); font-size: var(--t-115); color: var(--ink-3); }
+.hist-foot .link-btn { margin-left: auto; font-size: var(--t-115); flex: none; }
+.hist-empty { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; padding: 24px 28px; text-align: center; color: var(--ink-3); }
+.hist-empty strong { color: var(--ink); font-weight: 500; }
+.hist-empty p { font-size: var(--t-12); max-width: 280px; }
+
+/* -- dock head: agent name as a menu button -- */
+.dock-agent { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; border-radius: var(--r-1); }
+.dock-agent .ic { color: var(--ink-3); }
+.agent-menu { top: 50px; left: 12px; width: 264px; }
+.agent-menu .cluster-option small { color: var(--ink-3); font-size: var(--t-115); }
+.agent-menu hr { border: 0; border-top: 1px solid var(--line); margin: 3px 0; }
+
+/* A decided change's static row: the look of a .tool summary, not a toggle. */
+.change-done .tool-summary-static { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; min-width: 0; font-size: 12.5px; }
+.change-done .tool-summary-static .tool-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.change-shown { border-top: 1px solid var(--line); padding-bottom: 8px; }
+.change-shown .change-reason { margin-bottom: 4px; }
+.change-last { padding: 8px 12px 0; font-size: var(--t-115); }
+.slash-menu .menu-label { font-size: 11.5px; color: var(--ink-3); font-weight: 500; padding: 6px 8px 4px; }
+.slash-mark { width: 14px; height: 14px; flex: none; opacity: .8; }
+.dock-input { position: relative; }

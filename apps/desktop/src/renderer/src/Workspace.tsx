@@ -11,6 +11,7 @@ import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
 import { JumpPalette } from "./JumpPalette";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
+import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, SECTIONS, type NavItem } from "./kinds";
 import { Overview } from "./Overview";
 import { splitByShape } from "./present";
@@ -37,6 +38,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [userRail, setUserRail] = useState<boolean>();
   const [jump, setJump] = useState(false);
   const [mcpTab, setMcpTab] = useState<McpTab>("servers");
+  const [agentTab, setAgentTab] = useState<AgentTab>("skills");
   const [mcpCall, setMcpCall] = useState<string>();
   const [claude, setClaude] = useState<string>();
   const [width, setWidth] = useState({ app: window.innerWidth, main: window.innerWidth - 232 });
@@ -61,8 +63,9 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     return () => ro.disconnect();
   }, []);
 
-  const list = current !== "overview" && current !== "mcp" ? current : undefined;
+  const list = current !== "overview" && current !== "mcp" && current !== "agent" ? current : undefined;
   const mcp = current === "mcp";
+  const agentPage = current === "agent";
   const namespaces = useWatch({ handle: cluster.handle, group: "", version: "v1", resource: "namespaces" });
   const scoped = list?.type.namespaced && namespace ? namespace : undefined;
   const watch = useWatch(list ? { handle: cluster.handle, group: list.type.group, version: list.type.version, resource: list.type.resource, ...(scoped ? { namespace: scoped } : {}) } : undefined);
@@ -160,7 +163,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.kind === "Pod" && worst.reason === "CrashLoopBackOff" ? `Why is ${splitByShape(worst.name).base} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
-  const label = list?.label ?? (mcp ? "MCP" : "Overview");
+  const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : "Overview");
 
   return (
     <div ref={app} className={"app" + (rail ? " sidebar-rail" : "") + (narrow ? " narrow" : "") + (dock ? " with-dock" : "") + (drawer ? " with-drawer" : "")}>
@@ -181,9 +184,9 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : mcp ? { hideCount: true } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : mcp || agentPage ? { hideCount: true } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => { setNamespace(ns); setSelected(undefined); } } } : {})}
+          {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => { setNamespace(ns); setSelected(undefined); } } } : {})}
           {...(list ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
           {...(dock ? {} : { onAsk: () => setDock(true) })}
         />
@@ -199,6 +202,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             onConnectClickland={() => setSettings(true)}
             version={metricsVersion}
           />
+        ) : agentPage ? (
+          <AgentPage tab={agentTab} onTab={setAgentTab} />
         ) : !list ? (
           <Overview
             handle={cluster.handle}
@@ -248,7 +253,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
         )}
         <StatusBar
           server={cluster.server}
-          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : "Checking health every 10s"}
+          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : agentPage ? "Agent settings" : "Checking health every 10s"}
           {...(claude ? { claude } : {})}
           bad={bad}
           warn={warn}
@@ -282,6 +287,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           {...(suggestion ? { suggestion } : {})}
           onActivity={setClaude}
           onOpenObject={go}
+          onOpenSettings={() => pick("agent")}
         />
       ) : null}
       {settings ? (

@@ -40,6 +40,8 @@ export type AuditEntry = {
   reason?: string;
   /** The MCP gateway call this request was made for (X-Landlens-Call), when the caller said. */
   call?: string;
+  /** A write sent with dryRun=All: checked by the API server, not stored. */
+  dryRun?: true;
 };
 
 /** A gateway call id, as the MCP tools send it; anything else in the header is ignored. */
@@ -148,6 +150,7 @@ export class FrontDoor {
 
   private audit(req: IncomingMessage, c: { label: string; handle: string; path: string }, allowed: boolean, status?: number, reason?: string) {
     const call = req.headers["x-landlens-call"];
+    const dryRun = new URL(c.path, "http://x").searchParams.getAll("dryRun").includes("All");
     this.onAudit({
       at: new Date().toISOString(),
       label: c.label,
@@ -158,6 +161,7 @@ export class FrontDoor {
       ...(status !== undefined ? { status } : {}),
       ...(reason ? { reason } : {}),
       ...(typeof call === "string" && CALL_ID.test(call) ? { call } : {}),
+      ...(dryRun ? { dryRun: true as const } : {}),
     });
   }
 

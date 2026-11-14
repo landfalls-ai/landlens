@@ -27,7 +27,7 @@ export function JumpPalette(props: {
       { key: "overview", label: "Overview", hint: "Page", resource: "overview", go: () => props.onPick("overview") },
       ...props.nav.map((n) => ({ key: `k:${n.type.group}/${n.type.resource}`, label: n.label, hint: n.section === "core" ? "Kind" : n.section, resource: n.type.resource, go: () => props.onPick(n) })),
     ].filter((e) => !f || e.label.toLowerCase().includes(f));
-    const cur = props.current && props.current !== "overview" && props.current !== "mcp" ? props.current : undefined;
+    const cur = props.current && props.current !== "overview" && props.current !== "mcp" && props.current !== "agent" ? props.current : undefined;
     const objects: Entry[] = !f || !cur ? [] : props.items
       .filter((o) => o.metadata.name.toLowerCase().includes(f))
       .slice(0, 40)

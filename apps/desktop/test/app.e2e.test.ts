@@ -1,6 +1,7 @@
 // Launches the built app against the OrbStack cluster and walks the wave-1 path:
 // pick a cluster → pods appear live → filter → open a pod → its YAML; plus the renderer's security posture.
 // LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e  (screenshots go to $LANDLENS_SHOTS)
+import { execFileSync } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -45,11 +46,34 @@ async function viewWith(page: Page, selector: string, timeout = 30_000): Promise
   }
 }
 
+/** Wait until the dock's composer takes a message; if it never does, fail with what the dock says. */
+async function ready(page: Page) {
+  const dock = page.getByRole("complementary", { name: "Claude Code" });
+  const box = dock.getByRole("combobox", { name: "Message Claude Code" });
+  try {
+    await expect.poll(() => box.isEnabled({ timeout: 2_000 }).catch(() => false), { timeout: 90_000 }).toBe(true);
+  } catch (err) {
+    await shot(page, "agent-not-ready");
+    const text = (await dock.innerText().catch(() => "(no dock)")).slice(0, 3000);
+    throw new Error(`the dock never took a message; it says:\n${text}`, { cause: err });
+  }
+  return box;
+}
+
 describe.runIf(run)("Landlens app on OrbStack", () => {
   let app: ElectronApplication;
   let page: Page;
 
   beforeAll(async () => {
+    // The scenario's pod must have crashed at least once (a run that just re-created it leaves a fresh pod).
+    const restarts = () => {
+      try {
+        return Number(execFileSync("kubectl", ["--context", "orbstack", "-n", "landlens-dev", "get", "pods", "-l", "app=orders-api", "-o", "jsonpath={.items[0].status.containerStatuses[0].restartCount}"], { encoding: "utf8" }) || 0);
+      } catch {
+        return 0;
+      }
+    };
+    for (let i = 0; i < 60 && restarts() < 1; i++) await new Promise((r) => setTimeout(r, 2_000));
     app = await electron.launch({
       executablePath: require("electron") as unknown as string,
       args: [resolve(__dirname, "..")],
@@ -58,7 +82,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     });
     page = await app.firstWindow();
     await page.setViewportSize({ width: 1440, height: 880 });
-  }, 60_000);
+  }, 180_000);
 
   afterAll(async () => {
     await app?.close();
@@ -532,8 +556,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await page.locator(".drawer").getByRole("button", { name: /Ask Claude/ }).click();
     const dock = page.getByRole("complementary", { name: "Claude Code" });
     await dock.locator(".ctx-chip", { hasText: "orders-api" }).waitFor();
-    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
-    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    const box = await ready(page);
     await shot(page, "07-agent-dock-ready");
     await box.fill("Why is this pod crashlooping? Keep the answer short.");
     await box.press("Enter");
@@ -562,7 +585,9 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     const tools = await dock.locator(".tool").count();
     // What it read beyond the attached pod (its YAML and events go with "Ask Claude") is on screen as cards.
     expect(tools).toBeGreaterThanOrEqual(1);
-    const failed = await dock.locator(".tool-failed").evaluateAll((els) => els.map((e) => (e as unknown as { innerText: string }).innerText));
+    // A failed card is a bug, unless it's Landlens refusing Secrets: the agent sometimes looks, and is told no.
+    const failed = (await dock.locator(".tool-failed").evaluateAll((els) => els.map((e) => (e as unknown as { innerText: string }).innerText)))
+      .filter((t) => !/\bsecrets\b/.test(t));
     expect(failed, failed.join("\n---\n")).toEqual([]);
     await dock.locator(".tool summary").first().click();
     await shot(page, "11-agent-tool-card");
@@ -577,8 +602,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
 
   it.runIf(claude)("shows cluster_overview's health card and describe's object card inline in the dock, dark and light", async () => {
     const dock = page.getByRole("complementary", { name: "Claude Code" });
-    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
-    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    const box = await ready(page);
     await box.fill("Call the cluster_overview tool, then the describe tool for pod orders-api in namespace landlens-dev (use list_resources first if you need its full name). Answer in one sentence.");
     await box.press("Enter");
     const stop = dock.getByRole("button", { name: "Stop" });
@@ -615,7 +639,13 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await shot(page, "43-light-dock-object-card", "light");
     expect(await health.evaluate(() => (globalThis as any).document.documentElement.getAttribute("data-theme"))).toBe("light");
     await page.emulateMedia({ colorScheme: "dark" });
-    // "Open in Landlens" takes the main view to the pod.
+    // "Open in Landlens" takes the main view to the pod. The dock caps a tall view until "Show all".
+    const expanded = await (await object.frameElement()).evaluate((el: any) => {
+      const more = el.closest(".app-frame")?.querySelector(".app-fade button");
+      more?.click();
+      return !!more;
+    });
+    if (expanded) await page.waitForTimeout(300);
     await object.locator("button", { hasText: "Open in Landlens" }).click();
     await expect.poll(async () => (await page.locator(".drawer").textContent().catch(() => "")) ?? "", { timeout: 30_000 }).toContain("orders-api");
     await shot(page, "44-open-in-landlens");
@@ -628,4 +658,82 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await expect.poll(() => drawer.textContent()).toContain("Dock card");
     await shot(page, "45-mcp-agent-call-detail");
   }, 360_000);
+
+  it.runIf(claude)("proposes the crashloop fix as a diff: a rejected change never applies, an approved one fixes the deployment", async () => {
+    // Back to the broken scenario (a past run may have fixed it): only in landlens-dev.
+    const kubectl = (...args: string[]) => execFileSync("kubectl", ["--context", "orbstack", "-n", "landlens-dev", ...args], { encoding: "utf8" });
+    const scenario = resolve(__dirname, "../../../deploy/scenarios/crashloop.yaml");
+    kubectl("delete", "deployment", "orders-api", "--ignore-not-found", "--wait=true");
+    kubectl("apply", "-f", scenario);
+    const env = () => kubectl("get", "deployment", "orders-api", "-o", "jsonpath={.spec.template.spec.containers[0].env}");
+    const dock = page.getByRole("complementary", { name: "Claude Code" });
+    const box = await ready(page);
+    const stop = dock.getByRole("button", { name: "Stop" });
+    /** Send a message and answer the agent until it finishes; `onChange` decides each change card that appears. */
+    const turn = async (text: string, onChange: (card: ReturnType<typeof dock.locator>) => Promise<void>) => {
+      await box.fill(text);
+      await box.press("Enter");
+      await stop.waitFor({ timeout: 30_000 });
+      const deadline = Date.now() + 300_000;
+      while (await stop.count()) {
+        if (Date.now() > deadline) throw new Error(`the agent did not finish in 5 minutes; the dock says:\n${await dock.innerText()}`);
+        const card = dock.locator("section.change").first();
+        if (await card.count()) await onChange(card);
+        const ask = dock.locator(".ask button.primary").first();
+        if (await ask.count()) await ask.click();
+        await page.waitForTimeout(500);
+      }
+    };
+    const fix = "The orders-api deployment in namespace landlens-dev crash-loops because DATABASE_URL is not set. Propose the fix with the patch tool: " +
+      "add the env var DATABASE_URL=postgres://orders-db.landlens-dev.svc.cluster.local:5432/orders to its api container. Propose exactly one change, then stop.";
+
+    // 1. Rejected with a note: nothing reaches the deployment, and the agent hears why.
+    let seen = 0;
+    await turn(fix, async (card) => {
+      if (seen++) return;
+      await card.locator(".diff").first().waitFor();
+      expect(await card.locator(".diff").first().innerText()).toContain("DATABASE_URL");
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, "50-change-card");
+      await shot(page, "51-light-change-card", "light");
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.setViewportSize({ width: 1024, height: 700 });
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, "52-1024-change-card");
+      await page.setViewportSize({ width: 1440, height: 880 });
+      await card.getByRole("button", { name: "Reject with a note" }).click();
+      await box.fill("Not yet. Wait until I ask again.");
+      await dock.getByRole("button", { name: /Reject with note/ }).click();
+    });
+    expect(seen).toBeGreaterThanOrEqual(1);
+    await dock.locator(".change-done.rejected").first().waitFor();
+    await shot(page, "53-change-rejected");
+    expect(env()).not.toContain("DATABASE_URL");
+
+    // 2. Approved: Landlens applies exactly the diff, and the deployment recovers.
+    let approved = 0;
+    await turn("Propose that same fix again now; I'll approve it.", async (card) => {
+      if (approved) return;
+      await card.locator(".diff").first().waitFor();
+      // Nothing is approved unseen: a capped diff or closed operation is shown first.
+      const reveal = card.getByRole("button", { name: "Show all of it to approve" });
+      if (await reveal.count()) await reveal.click();
+      await card.getByRole("button", { name: /^Approve/ }).click();
+      approved++;
+    });
+    expect(approved).toBe(1);
+    await dock.locator(".change-done.applied").first().waitFor({ timeout: 30_000 });
+    await shot(page, "54-change-applied");
+    expect(env()).toContain("DATABASE_URL");
+    await expect.poll(() => kubectl("get", "deployment", "orders-api", "-o", "jsonpath={.status.availableReplicas}"), { timeout: 120_000, interval: 2_000 }).toBe("1");
+    // The changes are on the history entry for this session.
+    await dock.getByRole("button", { name: /History/ }).click();
+    const row = dock.getByRole("list", { name: /Past sessions/ }).locator(".hist-row.on");
+    await expect.poll(() => row.innerText()).toContain("1 change");
+    await shot(page, "55-history");
+    await page.keyboard.press("Escape");
+    // Leave the scenario broken again for the next run.
+    kubectl("delete", "deployment", "orders-api", "--wait=true");
+    kubectl("apply", "-f", scenario);
+  }, 900_000);
 });

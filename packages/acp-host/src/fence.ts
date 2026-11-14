@@ -56,6 +56,11 @@ export type FenceInput = {
   userKubeconfigs?: string[];
   /** Proxied MCP tools that only read (`mcp__<server>__<tool>`), from the gateway. */
   mcpAllow?: string[];
+  /**
+   * A plugin Landlens built in the session folder holding only the skills you chose (skills.ts): loaded by path, so
+   * it needs none of your settings, and it holds no hooks or MCP servers. With it the session gets the Skill tool.
+   */
+  skillsPlugin?: string;
 };
 
 /** A proxied tool rule: one named tool on one remote server, never a whole server, never Landlens's own names. */
@@ -72,9 +77,11 @@ export function sessionOptions(i: FenceInput) {
   const kubeconfigs = (i.userKubeconfigs ?? []).filter((k) => k.startsWith("/"));
   return {
     // Nothing of yours loads: settings, CLAUDE.md, hooks, plugins, skills and MCP servers from ~/.claude or a project.
+    // Skills you chose come in Landlens's own plugin, by path.
     settingSources: [] as string[],
     strictMcpConfig: true,
-    tools: AGENT_TOOLS,
+    tools: i.skillsPlugin && inside(i.skillsPlugin, i.cwd) ? [...AGENT_TOOLS, "Skill"] : AGENT_TOOLS,
+    ...(i.skillsPlugin && inside(i.skillsPlugin, i.cwd) ? { plugins: [{ type: "local" as const, path: i.skillsPlugin }] } : {}),
     disallowedTools: AGENT_DISALLOWED,
     env: {
       KUBECONFIG: i.kubeconfig,
@@ -94,7 +101,8 @@ export function sessionOptions(i: FenceInput) {
         denyRead: [home, ...credentials, ...kubeconfigs],
         allowRead: [i.cwd, ...toolDirs],
         allowWrite: [i.cwd],
-        denyWrite: [i.kubeconfig],
+        // The skills plugin is Landlens's, built before the session starts: the agent can read it, not change it.
+        denyWrite: [i.kubeconfig, `${i.cwd}/.landlens`],
       },
       network: { httpProxyPort: i.frontDoorPort, socksProxyPort: i.frontDoorPort, allowLocalBinding: false, strictAllowlist: true },
       credentials: { envVars: HIDDEN_ENV.map((name) => ({ name, mode: "deny" as const })) },
@@ -108,6 +116,7 @@ export function sessionOptions(i: FenceInput) {
           ...CREDENTIAL_PATHS.flatMap((p) => [`Read(~/${p})`, `Read(~/${p}/**)`, `Edit(~/${p}/**)`]),
           ...kubeconfigs.map((k) => `Read(/${k})`),
           `Edit(/${i.kubeconfig})`,
+          `Edit(/${i.cwd}/.landlens/**)`,
           ...KUBECTL_WRITES.map((v) => `Bash(kubectl ${v}:*)`),
           "Bash(kubectl --kubeconfig:*)", "Bash(kubectl --context:*)", "Bash(kubectl --token:*)", "Bash(kubectl --as:*)",
           "Bash(helm install:*)", "Bash(helm upgrade:*)", "Bash(helm uninstall:*)", "Bash(helm rollback:*)",

@@ -27,19 +27,34 @@ export const VIEW_CAP = 320;
  * Consecutive tool calls render as one bordered list. Only the newest view stays open: earlier ones fold to their tool
  * row and a one-line verdict, so a few tool calls don't push Claude's answer out of the dock.
  */
-export function Transcript({ items, busy, views, onOpenObject }: { items: Item[]; busy: boolean } & Views) {
+export function Transcript({ items, busy, views, onOpenObject, change }: {
+  items: Item[];
+  busy: boolean;
+  /** A write tool's change, drawn in place of its tool row and ending the group around it (wave 3, D4). */
+  change?: (toolCallId: string) => ReactNode | undefined;
+} & Views) {
   const out: ReactNode[] = [];
   let newest: string | undefined;
   for (const it of items) if (it.type === "tool" && it.tool.status === "completed" && views?.get(it.tool.id)) newest = it.tool.id;
+  let group: Tool[] = [];
+  const flush = (key: string) => {
+    if (group.length) out.push(<div key={key} className="tool-group">{group.map((t) => <ToolRow key={t.id} tool={t} newest={t.id === newest} {...(views ? { views } : {})} {...(onOpenObject ? { onOpenObject } : {})} />)}</div>);
+    group = [];
+  };
   for (let i = 0; i < items.length; i++) {
     const it = items[i]!;
     if (it.type === "tool") {
-      const group: Tool[] = [];
-      while (i < items.length && items[i]!.type === "tool") group.push((items[i++] as { tool: Tool }).tool);
-      i--;
-      out.push(<div key={`g${i}`} className="tool-group">{group.map((t) => <ToolRow key={t.id} tool={t} newest={t.id === newest} {...(views ? { views } : {})} {...(onOpenObject ? { onOpenObject } : {})} />)}</div>);
-    } else out.push(<Entry key={i} item={it} streaming={busy && i === items.length - 1} />);
+      const node = change?.(it.tool.id);
+      if (node) {
+        flush(`g${i}`);
+        out.push(<div key={`c${it.tool.id}`}>{node}</div>);
+      } else group.push(it.tool);
+      continue;
+    }
+    flush(`g${i}`);
+    out.push(<Entry key={i} item={it} streaming={busy && i === items.length - 1} />);
   }
+  flush("g-end");
   // Sent, and nothing back yet: say it's working rather than leave a gap under the question.
   const last = items[items.length - 1];
   if (busy && (!last || last.type === "user")) {

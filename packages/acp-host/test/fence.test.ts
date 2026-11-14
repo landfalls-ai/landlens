@@ -27,7 +27,7 @@ describe("the session fence", () => {
     expect(opts.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(["/Users/me", "/Users/me/.kube", "/Users/me/.orbstack", "/Volumes/work/prod.yaml"]));
     expect(opts.sandbox.filesystem.allowRead).toEqual(["/tmp/s1", "/Users/me/.nvm/versions/node/v22/bin"]);
     expect(opts.sandbox.filesystem.allowWrite).toEqual(["/tmp/s1"]);
-    expect(opts.sandbox.filesystem.denyWrite).toEqual(["/tmp/s1/kubeconfig"]);
+    expect(opts.sandbox.filesystem.denyWrite).toEqual(["/tmp/s1/kubeconfig", "/tmp/s1/.landlens"]);
     expect(opts.sandbox.network).toEqual({ httpProxyPort: 51234, socksProxyPort: 51234, allowLocalBinding: false, strictAllowlist: true });
     expect(opts.sandbox.credentials.envVars.map((v) => v.name)).toContain("ANTHROPIC_API_KEY");
   });
@@ -62,8 +62,17 @@ describe("the standing rules", () => {
     const p = clusterSystemPrompt({ context: "orbstack", server: "https://127.0.0.1:26443", version: "v1.36", namespaces: ["landlens-dev"] });
     expect(p).toContain('"orbstack"');
     expect(p).toContain("only the namespaces landlens-dev");
-    expect(p).toMatch(/cannot read Secrets, change anything/);
+    expect(p).toMatch(/cannot read Secrets/);
+    expect(p).toMatch(/kubectl cannot change anything/);
     expect(p).toMatch(/propose the exact change/);
+    expect(p).not.toMatch(/write tools/);
+  });
+
+  it("name the write tools and the approval when the session has them", () => {
+    const p = clusterSystemPrompt({ context: "orbstack", server: "https://127.0.0.1:26443", version: "v1.36", writes: true });
+    expect(p).toMatch(/landlens-kube write tools \(patch, scale/);
+    expect(p).toMatch(/returns only once they approve or reject it/);
+    expect(p).not.toMatch(/the person applies it/);
   });
 
   it("take only a version from the cluster's version string", () => {
@@ -74,5 +83,23 @@ describe("the standing rules", () => {
   it("build k8s:// URIs that can't be confused", () => {
     expect(objectUri("orbstack", "Pod", "a/b", "ns")).toBe("k8s://orbstack/ns/Pod/a%2Fb");
     expect(objectUri("ctx", "Node", "n1")).toBe("k8s://ctx/_cluster/Node/n1");
+  });
+});
+
+describe("chosen skills", () => {
+  const base = { home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234, path: "/usr/bin", userKubeconfigs: [] };
+  it("load as one local plugin in the session folder, with the Skill tool, and nothing else of your setup", () => {
+    const o = sessionOptions({ ...base, skillsPlugin: "/tmp/s1/.landlens/landlens-skills" });
+    expect(o.tools).toContain("Skill");
+    expect(o.plugins).toEqual([{ type: "local", path: "/tmp/s1/.landlens/landlens-skills" }]);
+    expect(o.settingSources).toEqual([]);
+    expect(o.sandbox.filesystem.denyWrite).toContain("/tmp/s1/.landlens");
+  });
+
+  it("are ignored when the plugin isn't inside the session folder", () => {
+    const o = sessionOptions({ ...base, skillsPlugin: "/Users/me/.claude/plugins/x" });
+    expect(o.tools).not.toContain("Skill");
+    expect("plugins" in o).toBe(false);
+    expect(sessionOptions(base).tools).not.toContain("Skill");
   });
 });

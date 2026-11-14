@@ -3,7 +3,8 @@
 // runs on this machine), with the header you stored for it added here, in main; redirects are refused, so the
 // header can't follow one to another host.
 import type { AgentCluster } from "@landlens/kube-mcp";
-import { kubeMcpServer } from "@landlens/kube-mcp";
+import { kubeMcpServer, WRITE_CALL_TIMEOUT_MS, WRITE_TOOLS } from "@landlens/kube-mcp";
+import { BUILTIN_MCP_SERVER } from "@landlens/contracts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -63,7 +64,9 @@ abstract class ClientUpstream implements Upstream {
 
   async call(name: string, args: Record<string, unknown>, meta?: Record<string, unknown>): Promise<CallToolResult> {
     const c = await this.conn;
-    return (await c.callTool({ name, arguments: args, ...(meta ? { _meta: meta } : {}) }, undefined, { timeout: CALL_TIMEOUT })) as CallToolResult;
+    // A write tool waits for the person's answer (the broker's 15 minutes), so it isn't cut off at the usual limit.
+    const timeout = this.name === BUILTIN_MCP_SERVER && WRITE_TOOLS.includes(name) ? WRITE_CALL_TIMEOUT_MS : CALL_TIMEOUT;
+    return (await c.callTool({ name, arguments: args, ...(meta ? { _meta: meta } : {}) }, undefined, { timeout })) as CallToolResult;
   }
 
   async read(uri: string): Promise<ReadResourceResult> {

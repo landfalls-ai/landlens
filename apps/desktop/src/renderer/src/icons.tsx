@@ -1,7 +1,7 @@
 // One icon per resource kind, so the sidebar, the drawer, the overview and the dock agree; and the one way icons are
 // drawn: lucide-react, inline SVG, stroke 1.75, aria-hidden, currentColor.
 import {
-  Box, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
+  Bot, Box, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
   KeyRound, Layers, LayoutGrid, Link, Lock, Play, Plug, Scale, Server, Shapes, Share2, Shield, User, Waypoints,
   type LucideIcon,
 } from "lucide-react";
@@ -12,6 +12,7 @@ export type { LucideIcon };
 const BY_RESOURCE: Record<string, LucideIcon> = {
   overview: LayoutGrid,
   mcp: Plug,
+  agent: Bot,
   pods: Box,
   deployments: Layers,
   statefulsets: Database,
