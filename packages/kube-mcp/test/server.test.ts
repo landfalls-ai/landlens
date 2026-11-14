@@ -1,9 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ResourceType } from "@landlens/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { APP_URI } from "../src/apps.js";
 import type { AgentCluster } from "../src/cluster.js";
-import { McpHost } from "../src/server.js";
+import { kubeMcpServer } from "../src/server.js";
+import { CALL_META } from "../src/tools.js";
 
 const now = new Date().toISOString();
 const types: ResourceType[] = [
@@ -68,23 +70,26 @@ function fakeCluster(): AgentCluster & { paths: string[] } {
   };
 }
 
-let host: McpHost;
 let cluster: ReturnType<typeof fakeCluster>;
 let client: Client;
-const calls: { label: string; tool?: string; status: number }[] = [];
+const tagged: string[] = [];
 
 beforeAll(async () => {
-  host = new McpHost((e) => calls.push(e));
-  await host.start();
   cluster = fakeCluster();
-  const token = host.addSession(cluster, "agent 1");
+  cluster.withCall = (id) => { tagged.push(id); return cluster; };
+  cluster.metrics = async (req) => ({
+    source: "metrics-server", from: 0, to: 60_000, step: 60, by: "node", reasons: [],
+    cpu: { series: [{ key: req.name ?? "orbstack", points: [[0, 0.2], [60_000, 0.25]] }], allocatable: 4 },
+    memory: { series: [{ key: req.name ?? "orbstack", points: [[0, 2 ** 29], [60_000, 2 ** 29]] }] },
+  } as any);
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await kubeMcpServer(cluster).connect(a);
   client = new Client({ name: "test", version: "0" });
-  await client.connect(new StreamableHTTPClientTransport(new URL(host.url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
+  await client.connect(b);
 });
 
 afterAll(async () => {
   await client?.close();
-  await host?.stop();
 });
 
 const call = async (name: string, args: Record<string, unknown> = {}) => {
@@ -96,7 +101,7 @@ describe("landlens-kube MCP server", () => {
   it("lists read-only tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ["api_resources", "cluster_overview", "describe", "get_events", "get_logs", "get_resource", "list_resources", "rollout_history", "top"]);
+      ["api_resources", "cluster_overview", "describe", "get_events", "get_logs", "get_resource", "list_resources", "metrics", "rollout_history", "top"]);
     expect(tools.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false)).toBe(true);
   });
 
@@ -141,18 +146,45 @@ describe("landlens-kube MCP server", () => {
     expect(cluster.paths.some((p) => p.includes(".."))).toBe(false);
   });
 
-  it("records tool calls for the session", () => {
-    expect(calls.some((c) => c.label === "agent 1" && c.tool === "describe" && c.status === 200)).toBe(true);
+  it("marks the app tools and serves their views", async () => {
+    const { tools } = await client.listTools();
+    const ui = (n: string) => (tools.find((t) => t.name === n)?._meta as any)?.ui?.resourceUri;
+    expect(ui("cluster_overview")).toBe(APP_URI.health);
+    expect(ui("describe")).toBe(APP_URI.object);
+    expect(ui("get_logs")).toBe(APP_URI.logs);
+    expect(ui("metrics")).toBe(APP_URI.metrics);
+    expect(ui("get_resource")).toBeUndefined();
+    for (const uri of Object.values(APP_URI)) {
+      const r = await client.readResource({ uri });
+      const c = r.contents[0] as any;
+      expect(c.mimeType).toBe("text/html;profile=mcp-app");
+      expect(c.text).toMatch(/^<!doctype html>/i);
+      expect(c.text).not.toMatch(/<script[^>]+src=|<link[^>]+href=/);
+      expect(c.text.replaceAll("http://www.w3.org/2000/svg", "")).not.toMatch(/https?:\/\//);
+    }
   });
 
-  it("refuses callers without the session token, browsers, and other host names", async () => {
-    const post = (headers: Record<string, string>) =>
-      fetch(host.url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", ...headers }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
-    expect((await post({})).status).toBe(401);
-    expect((await post({ Authorization: `Bearer ${"f".repeat(64)}` })).status).toBe(401);
-    const token = host.addSession(fakeCluster(), "agent 2");
-    expect((await post({ Authorization: `Bearer ${token}`, Origin: "https://evil.example" })).status).toBe(403);
-    host.removeSession(token);
-    expect((await post({ Authorization: `Bearer ${token}` })).status).toBe(401);
+  it("gives the view structured data beside the same text", async () => {
+    const r: any = await client.callTool({ name: "cluster_overview", arguments: {} });
+    expect(r.content[0].text).toContain("CrashLoopBackOff");
+    expect(r.structuredContent.health.problems[0]).toMatchObject({ kind: "Pod", name: "orders-api-7d9f-x1", tone: "bad" });
+    const d: any = await client.callTool({ name: "describe", arguments: { kind: "po", name: "orders-api-7d9f-x1", namespace: "landlens-dev" } });
+    expect(d.structuredContent).toMatchObject({ kind: "Pod", name: "orders-api-7d9f-x1", namespace: "landlens-dev" });
+    expect(JSON.stringify(d.structuredContent)).not.toContain("hunter2");
+    const l: any = await client.callTool({ name: "get_logs", arguments: { name: "orders-api-7d9f-x1", namespace: "landlens-dev", previous: true } });
+    expect(l.structuredContent.hits).toEqual([1]);
+    expect(JSON.stringify(l.structuredContent)).not.toContain("a".repeat(20));
+  });
+
+  it("charts metrics from the session's source", async () => {
+    const r: any = await client.callTool({ name: "metrics", arguments: { scope: "pod", namespace: "landlens-dev", name: "orders-api-7d9f-x1" } });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0].text).toMatch(/CPU/);
+    expect(r.structuredContent).toMatchObject({ scope: "pod", name: "orders-api-7d9f-x1", range: "1h" });
+  });
+
+  it("tags the front-door requests of a call with its id", async () => {
+    await client.callTool({ name: "get_events", arguments: { namespace: "landlens-dev" }, _meta: { [CALL_META]: "c42" } });
+    expect(tagged).toContain("c42");
   });
 });

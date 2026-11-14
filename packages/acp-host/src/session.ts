@@ -1,11 +1,13 @@
 // One agent session on one cluster: its own read-only front-door token, its own tool kubeconfig and working folder,
-// its own MCP token, the fence, and the standing rules. Closing it revokes both tokens at once.
+// its own session on the MCP gateway (Landlens's cluster tools and the remote servers turned on for the cluster),
+// the fence, and the standing rules. Closing it revokes both at once.
 import { randomBytes } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NewSessionResponse } from "@agentclientprotocol/sdk";
 import { agentReadOnlyPolicy, toolKubeconfig, type ClusterManager, type FrontDoor } from "@landlens/kube";
-import { frontDoorCluster, MCP_SERVER_NAME, type AgentCluster, type McpHost } from "@landlens/kube-mcp";
+import type { MetricsSeries } from "@landlens/contracts";
+import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
 import { sessionOptions } from "./fence.js";
 import type { AcpHost } from "./host.js";
 import { clusterSystemPrompt } from "./prompt.js";
@@ -27,13 +29,28 @@ export type ClusterSession = {
   close(): Promise<void>;
 };
 
+/** The MCP gateway as a session sees it (the desktop's McpGateway, through its store of servers). */
+export interface SessionMcp {
+  open(s: { label: string; context: string; handle: string; cluster: AgentCluster }): Promise<{
+    /** Every MCP server the session gets: all on the gateway, each with the session's token. */
+    servers: { name: string; url: string; headers: { name: string; value: string }[] }[];
+    /** Tools that run without asking (`mcp__landlens-kube`, and proxied tools that only read). */
+    allow: string[];
+    /** Tell the gateway Claude Code's id for the session, so the call log and the dock agree. */
+    bind(sessionId: string): void;
+    close(): Promise<void>;
+  }>;
+}
+
 let counter = 0;
 
 export async function startClusterSession(deps: {
   host: AcpHost;
   frontDoor: FrontDoor;
   clusters: ClusterManager;
-  mcp: McpHost;
+  mcp: SessionMcp;
+  /** CPU and memory for the cluster, from Landlens's metrics source, for the metrics tool. */
+  metrics?: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0]) => Promise<MetricsSeries>;
   /** Parent folder for session working folders. */
   sessionsDir: string;
   home: string;
@@ -60,11 +77,19 @@ export async function startClusterSession(deps: {
     context: c.info.context,
     types: async () => types,
     ...(req.namespaces?.length ? { namespaces: req.namespaces } : {}),
+    ...(deps.metrics ? { metrics: (r) => deps.metrics!(req.handle, r) } : {}),
   });
-  const mcpToken = deps.mcp.addSession(cluster, label);
+  let mcp: Awaited<ReturnType<SessionMcp["open"]>>;
+  try {
+    mcp = await deps.mcp.open({ label, context: c.info.context, handle: req.handle, cluster });
+  } catch (err) {
+    deps.frontDoor.revokeToken(token);
+    rmSync(cwd, { recursive: true, force: true });
+    throw err;
+  }
   const revoke = () => {
     deps.frontDoor.revokeToken(token);
-    deps.mcp.removeSession(mcpToken);
+    void mcp.close();
     rmSync(cwd, { recursive: true, force: true });
   };
 
@@ -72,17 +97,18 @@ export async function startClusterSession(deps: {
   try {
     response = await deps.host.newSession({
       cwd,
-      mcpServers: [{ type: "http", name: MCP_SERVER_NAME, url: deps.mcp.url, headers: [{ name: "Authorization", value: `Bearer ${mcpToken}` }] }],
+      mcpServers: mcp.servers.map((m) => ({ type: "http" as const, ...m })),
       systemPrompt: {
         mode: "append",
         content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}) }) }],
       },
-      _meta: { claudeCode: { options: sessionOptions({ home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), ...(deps.userKubeconfigs ? { userKubeconfigs: deps.userKubeconfigs } : {}) }) } },
+      _meta: { claudeCode: { options: sessionOptions({ home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), mcpAllow: mcp.allow, ...(deps.userKubeconfigs ? { userKubeconfigs: deps.userKubeconfigs } : {}) }) } },
     } as Parameters<AcpHost["newSession"]>[0]);
   } catch (err) {
     revoke();
     throw err;
   }
+  mcp.bind(response.sessionId);
 
   const close = async () => {
     revoke();

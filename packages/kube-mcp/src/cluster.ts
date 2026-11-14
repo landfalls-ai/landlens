@@ -1,7 +1,7 @@
 // How the MCP tools reach the cluster: through the front door, with the agent session's own read-only token, so
 // every read is checked by the same policy and lands in the same audit trail as the agent's kubectl.
 import { request } from "node:https";
-import type { ResourceType } from "@landlens/contracts";
+import type { MetricsRange, MetricsScope, MetricsSeries, ResourceType } from "@landlens/contracts";
 import { apiPath, KubeError, toKubeError } from "@landlens/kube";
 
 export type AgentCluster = {
@@ -11,7 +11,17 @@ export type AgentCluster = {
   types(): Promise<ResourceType[]>;
   /** Namespaces the session is limited to, if any. */
   namespaces?: string[];
+  /**
+   * The same cluster, with every request tagged with one gateway call's id (X-Landlens-Call), so the front door's
+   * audit can say which MCP call asked for what.
+   */
+  withCall?(callId: string): AgentCluster;
+  /** CPU and memory over time from Landlens's metrics source (Clickland, else metrics-server), when main offers it. */
+  metrics?(req: { scope: MetricsScope; namespace?: string; name?: string; range: MetricsRange }): Promise<MetricsSeries>;
 };
+
+/** The header a gateway call's id travels in to the front door. The front door reads it and never forwards it. */
+export const CALL_HEADER = "X-Landlens-Call";
 
 export function frontDoorCluster(opts: {
   url: string; // the front door's cluster URL: https://127.0.0.1:<port>/c/<handle>
@@ -20,16 +30,23 @@ export function frontDoorCluster(opts: {
   context: string;
   types: () => Promise<ResourceType[]>;
   namespaces?: string[];
+  metrics?: AgentCluster["metrics"];
+  /** Tags every request for the front door's audit (see withCall). */
+  callId?: string;
 }): AgentCluster {
   return {
     context: opts.context,
     types: opts.types,
     ...(opts.namespaces ? { namespaces: opts.namespaces } : {}),
+    ...(opts.metrics ? { metrics: opts.metrics } : {}),
+    withCall: (callId) => frontDoorCluster({ ...opts, callId }),
     get: (path, accept = "application/json") =>
       new Promise((resolve, reject) => {
+        const headers: Record<string, string> = { Authorization: `Bearer ${opts.token}`, Accept: accept };
+        if (opts.callId) headers[CALL_HEADER] = opts.callId;
         const req = request(
           opts.url + path,
-          { method: "GET", ca: opts.certificate, headers: { Authorization: `Bearer ${opts.token}`, Accept: accept }, timeout: 30_000 },
+          { method: "GET", ca: opts.certificate, headers, timeout: 30_000 },
           (res) => {
             let text = "";
             res.setEncoding("utf8").on("data", (d) => (text += d)).on("end", () => resolve({ status: res.statusCode ?? 0, text }));

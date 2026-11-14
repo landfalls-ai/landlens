@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 describe("preload bridge", () => {
   const src = readFileSync(resolve(__dirname, "../src/preload/index.ts"), "utf8");
   it("lists exactly the contract's channels", () => {
-    const listed = [...src.matchAll(/"([a-z]+:[a-z]+)"/g)].map((m) => m[1]);
+    const listed = [...src.matchAll(/"([a-z]+:[a-z-]+)"/g)].map((m) => m[1]);
     expect(new Set(listed)).toEqual(new Set([...Object.keys(channels), ...pushChannels]));
   });
 

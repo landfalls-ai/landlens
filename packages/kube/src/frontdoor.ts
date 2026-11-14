@@ -38,7 +38,12 @@ export type AuditEntry = {
   allowed: boolean;
   status?: number;
   reason?: string;
+  /** The MCP gateway call this request was made for (X-Landlens-Call), when the caller said. */
+  call?: string;
 };
+
+/** A gateway call id, as the MCP tools send it; anything else in the header is ignored. */
+const CALL_ID = /^c[0-9a-z]{1,24}$/;
 
 const PREFIX = /^\/c\/([A-Za-z0-9_-]{8,64})(\/.*)$/;
 const hash = (t: string) => createHash("sha256").update(t).digest();
@@ -142,6 +147,7 @@ export class FrontDoor {
   }
 
   private audit(req: IncomingMessage, c: { label: string; handle: string; path: string }, allowed: boolean, status?: number, reason?: string) {
+    const call = req.headers["x-landlens-call"];
     this.onAudit({
       at: new Date().toISOString(),
       label: c.label,
@@ -151,6 +157,7 @@ export class FrontDoor {
       allowed,
       ...(status !== undefined ? { status } : {}),
       ...(reason ? { reason } : {}),
+      ...(typeof call === "string" && CALL_ID.test(call) ? { call } : {}),
     });
   }
 
@@ -164,6 +171,7 @@ export class FrontDoor {
     const headers = { ...req.headers };
     delete headers.authorization;
     delete headers.host;
+    delete headers["x-landlens-call"];
     headers[SIDECAR_HEADER.toLowerCase()] = c.upstream.secret;
     const scrub = !!c.grant.policy.redact;
     if (scrub) {
@@ -207,7 +215,7 @@ export class FrontDoor {
       const lines = [`${req.method} ${c.path} HTTP/1.1`, `Host: ${target.host}`, `${SIDECAR_HEADER}: ${c.upstream.secret}`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const k = req.rawHeaders[i]!;
-        if (/^(host|authorization|cookie|x-landlens-sidecar|impersonate-.*)$/i.test(k)) continue;
+        if (/^(host|authorization|cookie|x-landlens-.*|impersonate-.*)$/i.test(k)) continue;
         lines.push(`${k}: ${req.rawHeaders[i + 1]}`);
       }
       up.write(lines.join("\r\n") + "\r\n\r\n");

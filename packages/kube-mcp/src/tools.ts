@@ -1,16 +1,28 @@
 // The agent's cluster tools: read-only, redacted, and phrased the way kubectl prints so Claude reads them easily.
 // Every call goes through the front door with the session's own token (cluster.ts), so the policy and the audit
 // trail apply to these exactly as to the agent's kubectl.
-import type { KubeObject, ResourceType } from "@landlens/contracts";
+//
+// Four of them have an MCP App (apps.ts): cluster_overview, metrics, describe and get_logs. Their text result is what
+// it always was, for the model; the view gets the same facts as structuredContent, which the gateway keeps for the view
+// and doesn't hand to Claude Code (docs/mcp.md).
+import type { KubeObject, MetricsSeries, ResourceType } from "@landlens/contracts";
 import { clusterHealth, healthText, KubeError } from "@landlens/kube";
-import { age, nodeStatus, podReady, podRestarts, podStatus } from "@landlens/kube/status";
+import { age, nodeStatus, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { stringify } from "yaml";
 import { z } from "zod";
+import { APP_URI, registerApps } from "./apps.js";
 import { getJson, getText, pathFor, resolveKind, type AgentCluster } from "./cluster.js";
 import { capResult, redactObject, redactText } from "./redact.js";
 
-type Result = { content: { type: "text"; text: string }[]; isError?: boolean };
+type Result = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
+/** What a tool body returns: its text, and for an app tool the data its view draws. */
+type Out = string | { text: string; data: Record<string, unknown> };
+
+/** The `_meta` key the gateway puts a call's id in, so the tools can tag their front-door requests with it. */
+export const CALL_META = "landlens/callId";
+const CALL_ID = /^c[0-9a-z]{1,24}$/;
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 
@@ -20,10 +32,19 @@ const failure = (err: unknown): Result => {
   return { isError: true, content: [{ type: "text", text: redactText(message) }] };
 };
 
-/** Run a tool body; Kubernetes and Landlens refusals come back as tool errors Claude can read and act on. */
-const run = <A>(fn: (args: A) => Promise<string>) => async (args: A): Promise<Result> => {
+type Extra = { _meta?: Record<string, unknown> };
+
+/**
+ * Run a tool body on the cluster as this call sees it (tagged with the gateway's call id when there is one). Kubernetes
+ * and Landlens refusals come back as tool errors Claude can read and act on.
+ */
+const runner = (cluster: AgentCluster) => <A>(fn: (args: A, c: AgentCluster) => Promise<Out>) => async (args: A, extra?: Extra): Promise<Result> => {
+  const id = extra?._meta?.[CALL_META];
+  const c = typeof id === "string" && CALL_ID.test(id) && cluster.withCall ? cluster.withCall(id) : cluster;
   try {
-    return text(await fn(args));
+    const out = await fn(args, c);
+    if (typeof out === "string") return text(out);
+    return { ...text(out.text), structuredContent: redactObject(out.data) as Record<string, unknown> };
   } catch (err) {
     return failure(err);
   }
@@ -45,12 +66,15 @@ const Kind = z.string().min(1).max(120).describe('A kind as kubectl takes it: "p
 const Namespace = z.string().max(63).optional().describe("Namespace; omit for all namespaces or cluster-scoped kinds");
 
 export function registerTools(server: McpServer, cluster: AgentCluster) {
+  const run = runner(cluster);
   const kind = async (k: string) => resolveKind(await cluster.types(), k);
   const limitNote = cluster.namespaces?.length ? ` This session may only read namespaces ${cluster.namespaces.join(", ")}.` : "";
+  registerApps(server);
 
   server.registerTool("api_resources", {
     title: "API resources",
     description: "The kinds this cluster serves (like kubectl api-resources): name, short names, group/version, scope." + limitNote,
+    inputSchema: {},
     annotations: READ_ONLY,
   }, run(async () => {
     const types = await cluster.types();
@@ -70,12 +94,12 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
       limit: z.number().int().min(1).max(500).optional().describe("Default 100"),
     },
     annotations: READ_ONLY,
-  }, run(async (a: { kind: string; namespace?: string; labelSelector?: string; fieldSelector?: string; limit?: number }) => {
+  }, run(async (a: { kind: string; namespace?: string; labelSelector?: string; fieldSelector?: string; limit?: number }, c) => {
     const t = await kind(a.kind);
     const q = new URLSearchParams({ limit: String(a.limit ?? 100) });
     if (a.labelSelector) q.set("labelSelector", a.labelSelector);
     if (a.fieldSelector) q.set("fieldSelector", a.fieldSelector);
-    const list = await getJson(cluster, `${pathFor(t, t.namespaced ? a.namespace : undefined)}?${q}`);
+    const list = await getJson(c, `${pathFor(t, t.namespaced ? a.namespace : undefined)}?${q}`);
     const items: KubeObject[] = list.items ?? [];
     const more = list.metadata?.continue ? `\n(more than ${items.length}; narrow with a namespace or selector)` : "";
     return `${t.kind} (${items.length})\n${rowsFor(t, items, Date.now())}${more}`;
@@ -86,29 +110,31 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
     description: "One object as YAML (managed fields, last-applied and env values removed; credentials scrubbed).",
     inputSchema: { kind: Kind, name: z.string().min(1).max(253), namespace: Namespace },
     annotations: READ_ONLY,
-  }, run(async (a: { kind: string; name: string; namespace?: string }) => {
+  }, run(async (a: { kind: string; name: string; namespace?: string }, c) => {
     const t = await kind(a.kind);
-    return yaml(await getJson(cluster, pathFor(t, t.namespaced ? a.namespace : undefined, a.name)));
+    return yaml(await getJson(c, pathFor(t, t.namespaced ? a.namespace : undefined, a.name)));
   }));
 
-  server.registerTool("describe", {
+  registerAppTool(server, "describe", {
     title: "Describe",
     description: "One object with what explains it (like kubectl describe): its state, its owners up to the Deployment, " +
       "container states and last exits for pods, and its recent events. Start here for a failing workload.",
     inputSchema: { kind: Kind, name: z.string().min(1).max(253), namespace: Namespace },
     annotations: READ_ONLY,
-  }, run(async (a: { kind: string; name: string; namespace?: string }) => {
+    _meta: { ui: { resourceUri: APP_URI.object } },
+  }, run(async (a: { kind: string; name: string; namespace?: string }, c) => {
     const t = await kind(a.kind);
     const ns = t.namespaced ? a.namespace : undefined;
-    const o: KubeObject = await getJson(cluster, pathFor(t, ns, a.name));
+    const o: KubeObject = await getJson(c, pathFor(t, ns, a.name));
     const now = Date.now();
     const parts = [`${t.kind} ${ns ? `${ns}/` : ""}${o.metadata.name} (created ${ago(o.metadata.creationTimestamp, now)} ago)`];
     if (t.resource === "pods" && !t.group) parts.push(describePod(o));
-    const owners = await ownerChain(cluster, o, ns);
+    const owners = await ownerChain(c, o, ns);
     if (owners.length) parts.push("Owners:\n" + owners.map((s) => `  ${s}`).join("\n"));
-    parts.push("Events:\n" + indent(await eventsText(cluster, { uid: o.metadata.uid, namespace: ns }, now)));
+    const events = await recentEvents(c, { uid: o.metadata.uid, namespace: ns });
+    parts.push("Events:\n" + indent(eventsTable(events, now)));
     parts.push("Object:\n" + indent(yaml(o)));
-    return parts.join("\n\n");
+    return { text: parts.join("\n\n"), data: objectCard(cluster.context, t, o, owners, events, now) };
   }));
 
   server.registerTool("get_events", {
@@ -122,10 +148,10 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
       limit: z.number().int().min(1).max(200).optional(),
     },
     annotations: READ_ONLY,
-  }, run(async (a: { namespace?: string; kind?: string; name?: string; warningsOnly?: boolean; limit?: number }) =>
-    eventsText(cluster, a, Date.now())));
+  }, run(async (a: { namespace?: string; kind?: string; name?: string; warningsOnly?: boolean; limit?: number }, c) =>
+    eventsTable(await recentEvents(c, a), Date.now())));
 
-  server.registerTool("get_logs", {
+  registerAppTool(server, "get_logs", {
     title: "Pod logs",
     description: "A container's log tail. Use previous: true to read the run before the last restart (why it crashed).",
     inputSchema: {
@@ -137,34 +163,75 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
       sinceSeconds: z.number().int().min(1).optional(),
     },
     annotations: READ_ONLY,
-  }, run(async (a: { name: string; namespace: string; container?: string; previous?: boolean; tailLines?: number; sinceSeconds?: number }) => {
+    _meta: { ui: { resourceUri: APP_URI.logs } },
+  }, run(async (a: { name: string; namespace: string; container?: string; previous?: boolean; tailLines?: number; sinceSeconds?: number }, c) => {
     const q = new URLSearchParams({ tailLines: String(a.tailLines ?? 200) });
     if (a.container) q.set("container", a.container);
     if (a.previous) q.set("previous", "true");
     if (a.sinceSeconds) q.set("sinceSeconds", String(a.sinceSeconds));
     const pods = { group: "", version: "v1", resource: "pods" };
-    const log = await getText(cluster, `${pathFor(pods, a.namespace, a.name)}/log?${q}`);
-    return log.trim() ? log : "(empty log)";
+    const log = await getText(c, `${pathFor(pods, a.namespace, a.name)}/log?${q}`);
+    const shown = log.trim() ? log : "(empty log)";
+    const lines = capResult(redactText(log)).replace(/\n$/, "").split("\n").slice(-2000);
+    return {
+      text: shown,
+      data: {
+        context: cluster.context, pod: a.name, namespace: a.namespace, ...(a.container ? { container: a.container } : {}), previous: !!a.previous,
+        lines: log.trim() ? lines : [], hits: lines.flatMap((l, i) => (FAILURE_LINE.test(l) ? [i] : [])),
+      },
+    };
   }));
 
-  server.registerTool("cluster_overview", {
+  registerAppTool(server, "cluster_overview", {
     title: "Cluster overview",
     description: "What is wrong right now, problems first: crash-looping, pending, image-pull and OOM-killed pods, " +
       "deployments short of replicas, nodes not ready, and recent warning events." + limitNote,
     inputSchema: { namespace: Namespace },
     annotations: READ_ONLY,
-  }, run(async (a: { namespace?: string }) => overview(cluster, a.namespace)));
+    _meta: { ui: { resourceUri: APP_URI.health } },
+  }, run(async (a: { namespace?: string }, c) => {
+    const h = await clusterHealth((path) => getJson(c, path), { ...(a.namespace ? { namespace: a.namespace } : {}) });
+    return { text: healthText(h), data: { context: cluster.context, ...(a.namespace ? { namespace: a.namespace } : {}), health: h } };
+  }));
+
+  registerAppTool(server, "metrics", {
+    title: "CPU and memory over time",
+    description: "CPU and memory usage over the last 1h, 6h or 24h for the cluster, a node, a namespace, a pod, or a " +
+      "Deployment, StatefulSet or DaemonSet, with requests and limits; from Clickland when Landlens has it, else " +
+      "metrics-server sampled while Landlens is open. Use it to see whether a workload is near its limits or was killed for memory." + limitNote,
+    inputSchema: {
+      scope: z.enum(["cluster", "node", "namespace", "pod", "deployment", "statefulset", "daemonset"]).optional().describe("Default cluster"),
+      namespace: z.string().max(63).optional().describe("Needed for namespace, pod and workload scopes"),
+      name: z.string().max(253).optional().describe("The node, pod or workload; not for cluster or namespace"),
+      range: z.enum(["1h", "6h", "24h"]).optional().describe("Default 1h"),
+    },
+    annotations: READ_ONLY,
+    _meta: { ui: { resourceUri: APP_URI.metrics } },
+  }, run(async (a: { scope?: MetricsScopeName; namespace?: string; name?: string; range?: "1h" | "6h" | "24h" }) => {
+    if (!cluster.metrics) throw new KubeError(503, "Landlens has no metrics source for this session.");
+    const scope = a.scope ?? "cluster";
+    const range = a.range ?? "1h";
+    if (scope !== "cluster" && scope !== "node" && !a.namespace) throw new KubeError(400, `The ${scope} scope needs a namespace.`);
+    if (scope !== "cluster" && scope !== "namespace" && !a.name) throw new KubeError(400, `The ${scope} scope needs a name.`);
+    const limit = cluster.namespaces;
+    if (limit?.length && (scope === "cluster" || scope === "node" || !limit.includes(a.namespace!))) {
+      throw new KubeError(403, `This session may only read namespaces ${limit.join(", ")}.`);
+    }
+    const series = await cluster.metrics({ scope, range, ...(a.namespace && scope !== "cluster" && scope !== "node" ? { namespace: a.namespace } : {}), ...(a.name && scope !== "cluster" && scope !== "namespace" ? { name: a.name } : {}) });
+    const what = scope === "cluster" ? `the cluster ${cluster.context}` : scope === "namespace" ? `namespace ${a.namespace}` : `${scope} ${a.namespace ? `${a.namespace}/` : ""}${a.name}`;
+    return { text: metricsText(what, range, series), data: { context: cluster.context, scope, range, ...(a.namespace ? { namespace: a.namespace } : {}), ...(a.name ? { name: a.name } : {}), series: thin(series) } };
+  }));
 
   server.registerTool("top", {
     title: "Resource usage",
     description: "CPU and memory now, from metrics-server (like kubectl top).",
     inputSchema: { what: z.enum(["pods", "nodes"]), namespace: Namespace },
     annotations: READ_ONLY,
-  }, run(async (a: { what: "pods" | "nodes"; namespace?: string }) => {
+  }, run(async (a: { what: "pods" | "nodes"; namespace?: string }, c) => {
     const t = { group: "metrics.k8s.io", version: "v1beta1", resource: a.what };
     let list: any;
     try {
-      list = await getJson(cluster, pathFor(t, a.what === "pods" ? a.namespace : undefined));
+      list = await getJson(c, pathFor(t, a.what === "pods" ? a.namespace : undefined));
     } catch (err) {
       if (err instanceof KubeError && err.status === 404) return "metrics-server is not installed in this cluster.";
       throw err;
@@ -183,11 +250,11 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
     description: "A Deployment's revisions (its ReplicaSets): revision, age, images, ready replicas.",
     inputSchema: { name: z.string().min(1).max(253), namespace: z.string().min(1).max(63) },
     annotations: READ_ONLY,
-  }, run(async (a: { name: string; namespace: string }) => {
-    const d = await getJson(cluster, pathFor({ group: "apps", version: "v1", resource: "deployments" }, a.namespace, a.name));
+  }, run(async (a: { name: string; namespace: string }, c) => {
+    const d = await getJson(c, pathFor({ group: "apps", version: "v1", resource: "deployments" }, a.namespace, a.name));
     const sel = Object.entries(d.spec?.selector?.matchLabels ?? {}).map(([k, v]) => `${k}=${v}`).join(",");
     const q = new URLSearchParams({ limit: "100", ...(sel ? { labelSelector: sel } : {}) });
-    const rs = await getJson(cluster, `${pathFor({ group: "apps", version: "v1", resource: "replicasets" }, a.namespace)}?${q}`);
+    const rs = await getJson(c, `${pathFor({ group: "apps", version: "v1", resource: "replicasets" }, a.namespace)}?${q}`);
     const now = Date.now();
     const mine = (rs.items ?? []).filter((r: any) => (r.metadata.ownerReferences ?? []).some((o: any) => o.uid === d.metadata.uid));
     mine.sort((x: any, y: any) => rev(y) - rev(x));
@@ -274,11 +341,10 @@ async function ownerChain(cluster: AgentCluster, o: KubeObject, ns: string | und
   return out;
 }
 
-async function eventsText(
+async function recentEvents(
   cluster: AgentCluster,
   a: { namespace?: string; kind?: string; name?: string; uid?: string; warningsOnly?: boolean; limit?: number },
-  now: number,
-): Promise<string> {
+): Promise<any[]> {
   const fields: string[] = [];
   if (a.uid) fields.push(`involvedObject.uid=${a.uid}`);
   if (a.kind) fields.push(`involvedObject.kind=${a.kind}`);
@@ -286,8 +352,12 @@ async function eventsText(
   if (a.warningsOnly) fields.push("type=Warning");
   const q = new URLSearchParams({ limit: "500", ...(fields.length ? { fieldSelector: fields.join(",") } : {}) });
   const list = await getJson(cluster, `${pathFor({ group: "", version: "v1", resource: "events" }, a.namespace)}?${q}`);
-  const when = (e: any) => Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp ?? 0);
-  const events = [...(list.items ?? [])].sort((x, y) => when(y) - when(x)).slice(0, a.limit ?? 50);
+  return [...(list.items ?? [])].sort((x, y) => when(y) - when(x)).slice(0, a.limit ?? 50);
+}
+
+const when = (e: any) => Date.parse(e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp ?? 0);
+
+function eventsTable(events: any[], now: number): string {
   return table(["AGE", "TYPE", "REASON", "OBJECT", "COUNT", "MESSAGE"], events.map((e: any) => [
     age(when(e), now), e.type ?? "", e.reason ?? "",
     `${e.involvedObject?.kind ?? ""}/${e.involvedObject?.namespace ? `${e.involvedObject.namespace}/` : ""}${e.involvedObject?.name ?? ""}`,
@@ -295,8 +365,81 @@ async function eventsText(
   ]));
 }
 
-async function overview(cluster: AgentCluster, namespace?: string): Promise<string> {
-  return healthText(await clusterHealth((path) => getJson(cluster, path), { ...(namespace ? { namespace } : {}) }));
+type MetricsScopeName = "cluster" | "node" | "namespace" | "pod" | "deployment" | "statefulset" | "daemonset";
+
+/** Lines that look like the failure, for the log view (the dock's tool well marks the same). */
+export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fatal:|error:|OOMKilled|Killed)\b|\b(ERR|CRIT|SEVERE)\b/;
+
+/** What the object view draws: the facts describe prints, as data. */
+function objectCard(context: string, t: ResourceType, o: KubeObject, owners: string[], events: any[], now: number): Record<string, unknown> {
+  const pod = t.resource === "pods" && !t.group;
+  const s: any = o.status ?? {};
+  const st = pod ? podStatus(o) : workloadStatus(o);
+  const statuses = new Map<string, any>((s.containerStatuses ?? []).map((c: any) => [c.name, c]));
+  return {
+    context,
+    kind: t.kind,
+    group: t.group,
+    version: t.version,
+    resource: t.resource,
+    ...(o.metadata.namespace ? { namespace: o.metadata.namespace } : {}),
+    name: o.metadata.name,
+    age: ago(o.metadata.creationTimestamp, now),
+    ...(st ? { status: st } : {}),
+    ...(pod ? { ready: podReady(o).text, restarts: podRestarts(o).text, node: o.spec?.nodeName ?? null } : {}),
+    owners,
+    containers: pod ? (o.spec?.containers ?? []).map((c: any) => {
+      const cs = statuses.get(c.name);
+      const state = cs?.state ? Object.keys(cs.state)[0] : "unknown";
+      const last = cs?.lastState?.terminated;
+      return {
+        name: c.name, image: c.image, state, reason: cs?.state?.waiting?.reason ?? cs?.state?.terminated?.reason ?? null,
+        ready: !!cs?.ready, restarts: cs?.restartCount ?? 0,
+        ...(last ? { lastExit: { reason: last.reason ?? null, code: last.exitCode ?? null, message: last.message ?? null } } : {}),
+      };
+    }) : [],
+    conditions: (s.conditions ?? []).map((c: any) => ({ type: c.type, ok: c.status === "True", reason: c.reason ?? null })),
+    events: events.slice(0, 6).map((e: any) => ({ age: age(when(e), now), type: e.type ?? "", reason: e.reason ?? "", count: e.count ?? 1, message: String(e.message ?? "").replace(/\s+/g, " ").trim() })),
+  };
+}
+
+function workloadStatus(o: KubeObject): { text: string; tone: Tone } | undefined {
+  const s: any = o.status ?? {};
+  const want = o.spec?.replicas;
+  if (typeof want !== "number") return undefined;
+  const ready = s.readyReplicas ?? s.availableReplicas ?? 0;
+  if (want === 0) return { text: "Scaled to zero", tone: "muted" };
+  return ready >= want ? { text: "Available", tone: "ok" } : { text: ready === 0 ? "Unavailable" : "Progressing", tone: ready === 0 ? "bad" : "warn" };
+}
+
+const cores = (v: number) => (v < 1 ? `${Math.round(v * 1000)}m` : `${Math.round(v * 100) / 100}`);
+const bytes = (v: number) => (v >= 2 ** 30 ? `${(v / 2 ** 30).toFixed(1)}Gi` : `${Math.round(v / 2 ** 20)}Mi`);
+
+/** The model's view of a metrics series: per series latest, mean and max, and the reference lines. */
+function metricsText(what: string, range: string, s: MetricsSeries): string {
+  if (s.source === "none") return `No CPU or memory data for ${what}: ${s.reasons.map((r) => r.message).join(" ")}`;
+  const panel = (name: string, p: MetricsSeries["cpu"], fmt: (v: number) => string) => {
+    const lines = p.series.map((l) => {
+      const v = l.points.map((x) => x[1]).filter((x) => Number.isFinite(x));
+      if (!v.length) return `  ${l.key}: no samples`;
+      return `  ${l.key}: latest ${fmt(v[v.length - 1]!)}, mean ${fmt(v.reduce((a, b) => a + b, 0) / v.length)}, max ${fmt(Math.max(...v))}`;
+    });
+    const refs = [p.request !== undefined ? `request ${fmt(p.request)}` : "", p.limit !== undefined ? `limit ${fmt(p.limit)}` : "", p.allocatable !== undefined ? `allocatable ${fmt(p.allocatable)}` : ""].filter(Boolean);
+    return `${name}${refs.length ? ` (${refs.join(", ")})` : ""}:\n${lines.length ? lines.join("\n") : "  no samples"}`;
+  };
+  const source = s.source === "clickland" ? "Clickland" : "metrics-server, sampled live";
+  const notes = s.reasons.filter((r) => r.code === "live-only").map((r) => r.message);
+  return [`CPU and memory for ${what} over ${range} (from ${source}, one point every ${s.step}s, one series per ${s.by}).`, panel("CPU (cores)", s.cpu, cores), panel("Memory (working set)", s.memory, bytes), ...notes].join("\n");
+}
+
+/** At most 240 points a series, so a 24h chart stays small in the call log and the view. */
+function thin(s: MetricsSeries): MetricsSeries {
+  const cut = (p: MetricsSeries["cpu"]) => ({ ...p, series: p.series.map((l) => {
+    if (l.points.length <= 240) return l;
+    const step = Math.ceil(l.points.length / 240);
+    return { ...l, points: l.points.filter((_, i) => i % step === 0 || i === l.points.length - 1) };
+  }) });
+  return { ...s, cpu: cut(s.cpu), memory: cut(s.memory) };
 }
 
 function cpuMillis(v?: string): number {

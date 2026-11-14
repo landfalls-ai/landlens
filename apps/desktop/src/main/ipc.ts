@@ -6,11 +6,12 @@ import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { ClicklandSettingsStore } from "./clickland-settings";
+import type { McpService } from "./mcp";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService) {
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -29,6 +30,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     },
     "cluster:disconnect": async ({ handle }) => {
       metrics.service.forget(handle);
+      await mcp.forget(handle);
       await hub.stopAll(handle);
       await clusters.disconnect(handle);
       return { ok: true };
@@ -89,6 +91,19 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "metrics:configure": async (input) => metrics.settings.set(input),
     "metrics:test": (input) => metrics.service.test(input),
     "metrics:disconnect": async () => metrics.settings.clear(),
+    // MCP (docs/mcp.md). A server's header value comes in with save and test; nothing sends it back.
+    "mcp:servers": ({ context }) => mcp.servers(context),
+    "mcp:save": async (input) => mcp.save(input),
+    "mcp:test": (req) => mcp.test(req),
+    "mcp:enable": async ({ id, context, enabled }) => mcp.enable(id, context, enabled),
+    "mcp:remove": async ({ id }) => (mcp.remove(id), { ok: true }),
+    "mcp:preset": () => mcp.preset(),
+    "mcp:calls": async () => ({ calls: mcp.calls() }),
+    "mcp:try": ({ handle, server, tool }) => mcp.try(handle, server, tool),
+    "mcp:app-open": ({ call }) => mcp.openView(call),
+    "mcp:app-call": ({ view, name, arguments: args }) => mcp.viewCall(view, name, args ?? {}),
+    "mcp:app-close": async ({ view }) => (mcp.views.close(view), { ok: true }),
+    "mcp:app-link": async ({ view, url }) => ({ opened: await mcp.viewLink(view, url) }),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {

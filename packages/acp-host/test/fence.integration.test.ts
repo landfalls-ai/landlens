@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk";
 import { ClusterManager, FrontDoor, listContexts, loopbackCert, type AuditEntry } from "@landlens/kube";
-import { McpHost } from "@landlens/kube-mcp";
+import { McpGateway } from "@landlens/mcp-gateway";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { agentEnv, claudeAdapterEntry, loginPath, which } from "../src/env.js";
 import { AcpHost } from "../src/host.js";
@@ -22,7 +22,7 @@ const SIDECAR = resolve(__dirname, "../../../sidecar/kube-proxy/bin/landlens-kub
 describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
   let frontDoor: FrontDoor;
   let clusters: ClusterManager;
-  let mcp: McpHost;
+  let mcp: McpGateway;
   let host: AcpHost;
   let session: ClusterSession;
   const audit: AuditEntry[] = [];
@@ -35,7 +35,7 @@ describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
     await frontDoor.start();
     clusters = new ClusterManager({ sidecarBinary: SIDECAR, frontDoor });
     const { handle } = await clusters.connect("orbstack");
-    mcp = new McpHost();
+    mcp = new McpGateway();
     await mcp.start();
     const path = await loginPath();
     const node = which("node", path);
@@ -59,7 +59,7 @@ describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
     );
     await host.start();
     session = await startClusterSession(
-      { host, frontDoor, clusters, mcp, sessionsDir: mkdtempSync(join(tmpdir(), "landlens-sessions-")), home: homedir(), path, userKubeconfigs: process.env.KUBECONFIG?.split(":") ?? [] },
+      { host, frontDoor, clusters, mcp: { open: async (s) => { const g = await mcp.open({ ...s, origin: "agent", remotes: [] }); return { servers: g.servers(), allow: g.allow, bind: (id) => g.bind(id), close: () => g.close() }; } }, sessionsDir: mkdtempSync(join(tmpdir(), "landlens-sessions-")), home: homedir(), path, userKubeconfigs: process.env.KUBECONFIG?.split(":") ?? [] },
       { handle },
     );
   }, 120_000);

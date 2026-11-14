@@ -1,10 +1,11 @@
-// The agent in Electron main: one Claude Code process (through claude-agent-acp) for the window, one MCP server for
-// its cluster tools, and a session per cluster. Updates and permission requests go to the dock; answers come back.
+// The agent in Electron main: one Claude Code process (through claude-agent-acp) for the window, and a session per
+// cluster, each with its own session on the MCP gateway (main/mcp.ts). Updates and permission requests go to the dock;
+// answers come back. Tool calls in the updates are handed to the gateway too, to pair dock cards with logged calls.
 import { randomBytes } from "node:crypto";
 import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ResourceRef } from "@landlens/contracts";
-import { AcpHost, agentEnv, claudeAdapterEntry, loginPath, objectUri, resourceBlock, startClusterSession, which, type ClusterSession } from "@landlens/acp-host";
+import { AcpHost, agentEnv, claudeAdapterEntry, loginPath, objectUri, resourceBlock, startClusterSession, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
 import { apiPath, type ClusterManager, type FrontDoor } from "@landlens/kube";
-import { getJson, McpHost, redactObject, redactText } from "@landlens/kube-mcp";
+import { getJson, redactObject, redactText } from "@landlens/kube-mcp";
 import type { ContentBlock, NewSessionResponse, RequestPermissionOutcome, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { mkdirSync } from "node:fs";
 import { delimiter } from "node:path";
@@ -23,14 +24,23 @@ const MODES = new Set(["default", "plan"]);
 
 export class AgentService {
   private host: AcpHost | undefined;
-  private mcp: McpHost | undefined;
   private starting: Promise<AcpHost> | undefined;
   private path = "";
   private readonly sessions = new Map<string, ClusterSession>();
   private readonly pending = new Map<string, { session: string; options: Set<string>; resolve: (o: RequestPermissionOutcome) => void }>();
 
   constructor(
-    private readonly deps: { frontDoor: FrontDoor; clusters: ClusterManager; sessionsDir: string; push: Push; log?: (l: string) => void },
+    private readonly deps: {
+      frontDoor: FrontDoor;
+      clusters: ClusterManager;
+      sessionsDir: string;
+      push: Push;
+      mcp: SessionMcp;
+      /** A tool call seen in a session's updates, for pairing with the gateway's call log. */
+      onToolCall?: (u: { session: string; toolCallId: string; toolName?: string; title?: string; rawInput?: unknown }) => void;
+      metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
+      log?: (l: string) => void;
+    },
   ) {
     // A cluster that goes away takes its agent sessions with it.
     deps.clusters.onGone((handle) => {
@@ -46,17 +56,25 @@ export class AgentService {
       this.path = await loginPath();
       const node = which("node", this.path);
       if (!node) throw Object.assign(new Error("Landlens needs Node.js to run Claude Code; none was found on your login shell's PATH."), { status: 424 });
-      if (!this.mcp) {
-        this.mcp = new McpHost((e) => this.deps.log?.(`[mcp] ${e.label} ${e.tool ?? ""} ${e.status}`));
-        await this.mcp.start();
-      }
       const host = new AcpHost(
         { title: AGENT_TITLE, command: node, args: [claudeAdapterEntry()], env: { CLAUDE_AGENT_ACP_PROTOCOL: "v1" } },
         {
           cwd: this.deps.sessionsDir,
           env: agentEnv(process.env, { PATH: this.path }),
           events: {
-            update: (n) => this.deps.push("agent:update", { session: n.sessionId, update: n.update as AgentUpdate["update"] }),
+            update: (n) => {
+              const u = n.update as { sessionUpdate?: string; toolCallId?: string; title?: string; rawInput?: unknown; _meta?: { claudeCode?: { toolName?: unknown } } };
+              if ((u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update") && typeof u.toolCallId === "string") {
+                const toolName = u._meta?.claudeCode?.toolName;
+                this.deps.onToolCall?.({
+                  session: n.sessionId, toolCallId: u.toolCallId,
+                  ...(typeof toolName === "string" ? { toolName } : {}),
+                  ...(typeof u.title === "string" ? { title: u.title } : {}),
+                  ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
+                });
+              }
+              this.deps.push("agent:update", { session: n.sessionId, update: n.update as AgentUpdate["update"] });
+            },
             permission: (req, signal) => this.ask(req, signal),
             exit: ({ code, stderr }) => {
               // Claude Code has gone: its sessions' tokens must not outlive it.
@@ -83,7 +101,8 @@ export class AgentService {
   async start(handle: string, namespaces?: string[]): Promise<AgentSessionInfo> {
     const host = await this.ensure();
     const s = await startClusterSession({
-      host, frontDoor: this.deps.frontDoor, clusters: this.deps.clusters, mcp: this.mcp!,
+      host, frontDoor: this.deps.frontDoor, clusters: this.deps.clusters, mcp: this.deps.mcp,
+      ...(this.deps.metrics ? { metrics: this.deps.metrics } : {}),
       sessionsDir: this.deps.sessionsDir, home: homedir(), path: this.path,
       userKubeconfigs: process.env.KUBECONFIG?.split(delimiter).filter(Boolean) ?? [],
     }, { handle, ...(namespaces?.length ? { namespaces } : {}) });
@@ -185,7 +204,6 @@ export class AgentService {
   async stop() {
     await this.closeAll();
     await this.host?.stop();
-    await this.mcp?.stop();
   }
 
   private ask(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionOutcome> {

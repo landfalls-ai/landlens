@@ -3,11 +3,11 @@
 // LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/kube-mcp test:integration
 import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { agentReadOnlyPolicy, ClusterManager, FrontDoor, loopbackCert, type AuditEntry } from "@landlens/kube";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { frontDoorCluster } from "../src/cluster.js";
-import { McpHost } from "../src/server.js";
+import { kubeMcpServer } from "../src/server.js";
 
 const run = (process.env.LANDLENS_INTEGRATION ?? "").split(",").includes("orbstack");
 const SIDECAR = resolve(__dirname, "../../../sidecar/kube-proxy/bin/landlens-kube-proxy");
@@ -15,7 +15,6 @@ const SIDECAR = resolve(__dirname, "../../../sidecar/kube-proxy/bin/landlens-kub
 describe.runIf(run)("landlens-kube tools on OrbStack", () => {
   let frontDoor: FrontDoor;
   let clusters: ClusterManager;
-  let mcp: McpHost;
   let client: Client;
   const audit: AuditEntry[] = [];
 
@@ -26,16 +25,14 @@ describe.runIf(run)("landlens-kube tools on OrbStack", () => {
     const { handle } = await clusters.connect("orbstack");
     const types = await clusters.discovery(handle);
     const token = frontDoor.issueToken({ label: "agent test", policy: agentReadOnlyPolicy(), clusters: [handle] });
-    mcp = new McpHost();
-    await mcp.start();
-    const mcpToken = mcp.addSession(frontDoorCluster({ url: frontDoor.clusterUrl(handle), certificate: frontDoor.certificate, token, context: "orbstack", types: async () => types }), "agent test");
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await kubeMcpServer(frontDoorCluster({ url: frontDoor.clusterUrl(handle), certificate: frontDoor.certificate, token, context: "orbstack", types: async () => types })).connect(a);
     client = new Client({ name: "test", version: "0" });
-    await client.connect(new StreamableHTTPClientTransport(new URL(mcp.url), { requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } } }));
+    await client.connect(b);
   }, 60_000);
 
   afterAll(async () => {
     await client?.close();
-    await mcp?.stop();
     await clusters?.disconnectAll();
     await frontDoor?.stop();
   });

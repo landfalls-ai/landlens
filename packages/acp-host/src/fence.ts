@@ -2,7 +2,8 @@
 // session/new (the adapter hands these to the Claude Agent SDK as query options).
 //
 // 1. Nothing of yours runs beside it: no settings files, plugins, hooks or MCP servers of your own (they would run
-//    outside the sandbox), only Landlens's cluster tools, and only the built-in tools in AGENT_TOOLS (no web tools).
+//    outside the sandbox), only Landlens's MCP gateway (its cluster tools, and the remote servers you turned on for
+//    the cluster, proxied and logged in main), and only the built-in tools in AGENT_TOOLS (no web tools).
 // 2. Its KUBECONFIG names only the front door, with the session's read-only token in an environment variable.
 // 3. Its Bash runs in Claude Code's sandbox: it can read nothing in your home folder but the session's own folder and
 //    the tool folders on PATH, nor any kubeconfig of yours; it can't run unsandboxed, can write only to the session
@@ -10,8 +11,9 @@
 //    loopback port for an external proxy; naming the front door as both the HTTP and the SOCKS proxy is how kubectl
 //    reaches it, and why anything else that tries the network reaches only the front door, which refuses it.)
 // 4. Its file tools can't read outside the session folder at all (blockReadsOutsideWorkingDirectories).
-// 5. Permission rules refuse the obvious ways to write with kubectl or Helm and let Landlens's read-only cluster tools
-//    run without a prompt. They match command prefixes only, so they are a courtesy, not the control.
+// 5. Permission rules refuse the obvious ways to write with kubectl or Helm and let Landlens's read-only cluster tools,
+//    and proxied tools that say they only read, run without a prompt; any other MCP tool asks. The kubectl rules
+//    match command prefixes only, so they are a courtesy, not the control.
 // The front door then refuses writes, Secrets and exec for that token, and scrubs what it returns, whatever gets through.
 
 /** The MCP server name Landlens registers its cluster tools under (kube-mcp's MCP_SERVER_NAME). */
@@ -52,7 +54,12 @@ export type FenceInput = {
   frontDoorPort: number;
   /** Your kubeconfig files ($KUBECONFIG), wherever they are; ~/.kube/config is covered by the home folder. */
   userKubeconfigs?: string[];
+  /** Proxied MCP tools that only read (`mcp__<server>__<tool>`), from the gateway. */
+  mcpAllow?: string[];
 };
+
+/** A proxied tool rule: one named tool on one remote server, never a whole server, never Landlens's own names. */
+const MCP_RULE = /^mcp__(?!landlens)[a-z][a-z0-9-]{0,30}[a-z0-9]__[A-Za-z0-9_-]{1,64}$/;
 
 export function sessionOptions(i: FenceInput) {
   const home = i.home.replace(/\/+$/, "");
@@ -94,8 +101,9 @@ export function sessionOptions(i: FenceInput) {
     },
     settings: {
       permissions: {
-        // Landlens's own cluster tools are read-only and go through the front door: no prompt for each one.
-        allow: [`mcp__${MCP_SERVER}`],
+        // Landlens's own cluster tools are read-only and go through the front door: no prompt for each one. A proxied
+        // tool runs without one only if its server says it only reads; the rest ask, and the dock shows the ask.
+        allow: [`mcp__${MCP_SERVER}`, ...(i.mcpAllow ?? []).filter((r) => MCP_RULE.test(r))],
         deny: [
           ...CREDENTIAL_PATHS.flatMap((p) => [`Read(~/${p})`, `Read(~/${p}/**)`, `Edit(~/${p}/**)`]),
           ...kubeconfigs.map((k) => `Read(/${k})`),

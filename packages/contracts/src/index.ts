@@ -150,6 +150,47 @@ export const ClicklandSettingsInput = z.object({
   cluster: z.object({ context: z.string().min(1).max(253), name: ClicklandClusterName }).optional(),
 });
 
+// MCP (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers it serves (the built-in
+// landlens-kube and remote servers you add), the call log, and MCP Apps (tool views in a sandboxed frame).
+
+/** The built-in server's name; no remote server may take it or anything starting with "landlens". */
+export const BUILTIN_MCP_SERVER = "landlens-kube";
+/** How a remote server is named in Claude Code (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */
+export const McpServerName = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/, "2–32 lowercase letters, digits and dashes, starting with a letter")
+  .refine((n) => !n.startsWith("landlens"), "names starting with landlens are Landlens's own");
+export const McpServerId = z.string().regex(/^s_[A-Za-z0-9_-]{8,32}$/, "not a server id");
+/** https anywhere, or plain http only to this machine, with no user info or fragment. */
+export const McpUrl = z
+  .string()
+  .max(500)
+  .refine((u) => {
+    const m = /^(https?):\/\/([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:\d{1,5})?(\/[A-Za-z0-9._~\/%-]*)?(\?[A-Za-z0-9._~=&%-]*)?$/.exec(u);
+    if (!m) return false;
+    return m[1] === "https" || ["127.0.0.1", "localhost", "[::1]"].includes(m[2]!.toLowerCase());
+  }, "https, or http to this machine (127.0.0.1, localhost)");
+/** A header Landlens adds to every request to that server (e.g. Authorization). Never one MCP or HTTP itself owns. */
+export const McpHeaderName = z
+  .string()
+  .regex(/^[A-Za-z0-9-]{1,64}$/, "not a header name")
+  .refine((h) => !/^(host|cookie|origin|referer|connection|content-(length|type|encoding)|transfer-encoding|accept|mcp-session-id|mcp-protocol-version|last-event-id|x-landlens-.*)$/i.test(h), "Landlens sets this header itself");
+export const McpHeaderValue = z.string().min(1).max(4096).regex(/^[\x20-\x7e]+$/, "printable ASCII only");
+/** Origins a remote server's views may reach, if its resource declares them too: https only, exact host. */
+export const McpAppOrigin = z.string().max(200).regex(/^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/, "an https origin, like https://api.example.com");
+export const McpToolName = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.-]+$/, "not a tool name");
+export const McpCallId = z.string().regex(/^c[0-9a-z]{1,24}$/, "not a call id");
+export const McpViewId = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/, "not a view id");
+export const McpServerInput = z.object({
+  /** Absent: a new server. */
+  id: McpServerId.optional(),
+  name: McpServerName,
+  url: McpUrl,
+  /** Absent: no header. `value` absent: keep the stored value. */
+  header: z.object({ name: McpHeaderName, value: McpHeaderValue.optional() }).optional(),
+  appOrigins: z.array(McpAppOrigin).max(10).optional(),
+});
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -175,6 +216,20 @@ export const channels = {
   "metrics:configure": ClicklandSettingsInput,
   "metrics:test": z.object({ handle: Handle.optional(), url: ClicklandUrl.optional(), key: ClicklandKey.optional(), cluster: ClicklandClusterName.optional() }),
   "metrics:disconnect": z.object({}),
+  // MCP (docs/mcp.md). Header values come in with save and test; nothing sends them back.
+  "mcp:servers": z.object({ context: z.string().min(1).max(253).optional() }),
+  "mcp:save": McpServerInput,
+  "mcp:test": z.object({ id: McpServerId.optional(), url: McpUrl.optional(), header: z.object({ name: McpHeaderName, value: McpHeaderValue.optional() }).optional() }),
+  "mcp:enable": z.object({ id: McpServerId, context: z.string().min(1).max(253), enabled: z.boolean() }),
+  "mcp:remove": z.object({ id: McpServerId }),
+  "mcp:preset": z.object({ preset: z.literal("clickland") }),
+  "mcp:calls": z.object({}),
+  /** Run one read-only tool that needs no arguments, as you, to see what it returns and its app. */
+  "mcp:try": z.object({ handle: Handle, server: z.string().min(1).max(32), tool: McpToolName }),
+  "mcp:app-open": z.object({ call: McpCallId }),
+  "mcp:app-call": z.object({ view: McpViewId, name: McpToolName, arguments: z.record(z.string(), z.unknown()).optional() }),
+  "mcp:app-close": z.object({ view: McpViewId }),
+  "mcp:app-link": z.object({ view: McpViewId, url: z.string().min(1).max(2000) }),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -201,6 +256,100 @@ export type Responses = {
   "metrics:configure": ClicklandSettings;
   "metrics:test": ClicklandTest;
   "metrics:disconnect": ClicklandSettings;
+  "mcp:servers": McpServers;
+  "mcp:save": McpServerInfo;
+  "mcp:test": McpTest;
+  "mcp:enable": McpServerInfo;
+  "mcp:remove": { ok: true };
+  "mcp:preset": McpServerInfo;
+  "mcp:calls": { calls: McpCall[] };
+  "mcp:try": McpCall;
+  "mcp:app-open": McpAppView;
+  "mcp:app-call": McpToolResult;
+  "mcp:app-close": { ok: true };
+  "mcp:app-link": { opened: boolean };
+};
+
+/** A tool as the MCP page shows it. */
+export type McpToolInfo = {
+  name: string;
+  title?: string;
+  description?: string;
+  /** The server says it only reads (annotations.readOnlyHint). Only these run without asking. */
+  readOnly: boolean;
+  /** Its app's `ui://` resource, if it has one. */
+  app?: string;
+  /** Who may call it: the model, its app, or both (MCP Apps `_meta.ui.visibility`). */
+  visibility: ("model" | "app")[];
+  /** Arguments it requires. */
+  required: string[];
+};
+export type McpServerInfo = {
+  /** "landlens-kube" for the built-in server, else its stored id. */
+  id: string;
+  name: string;
+  builtin: boolean;
+  url: string;
+  /** The header Landlens adds, and whether a value is stored. The value itself never leaves main. */
+  header?: { name: string; stored: boolean };
+  /** Used by agent sessions on the asked cluster (the built-in always is). */
+  enabled: boolean;
+  appOrigins: string[];
+  /** From the last listing; absent until the server answered once. */
+  tools?: McpToolInfo[];
+  status: "ready" | "unknown" | "failed";
+  detail?: string;
+};
+export type McpServers = {
+  /** The gateway's loopback address. */
+  gateway: string;
+  servers: McpServerInfo[];
+  canStore: boolean;
+  /** Servers Landlens knows how to add in one step, when they answer. */
+  presets: { id: "clickland"; name: string; url: string; reachable: boolean; hasKey: boolean; added: boolean }[];
+};
+export type McpTest = { ok: boolean; steps: { name: string; ok: boolean; detail: string }[]; tools?: McpToolInfo[] };
+/** A front-door request behind a landlens-kube call, from the front door's audit. */
+export type McpFrontDoorRequest = { at: string; method: string; path: string; allowed: boolean; status?: number; reason?: string };
+/** One MCP call through the gateway: by an agent session, by an app's view, or by you (Preview). */
+export type McpCall = {
+  id: string;
+  /** The ACP session id, or "console" for Preview. */
+  session: string;
+  /** "agent 2 · orbstack", "you · orbstack". */
+  label: string;
+  server: string;
+  tool: string;
+  origin: "agent" | "app" | "you";
+  /** Scrubbed like a tool result. */
+  args: unknown;
+  startedAt: number;
+  endedAt?: number;
+  ms?: number;
+  /** refused: Landlens refused it before it reached the server (visibility, approval, ended session). */
+  status: "running" | "ok" | "error" | "refused";
+  /** The result's text, scrubbed and cut to 2,000 characters. */
+  preview?: string;
+  error?: string;
+  /** The dock's tool card this call belongs to (ACP toolCallId), once paired. */
+  toolCallId?: string;
+  /** The tool's app resource, when the call returned and its view can be opened. */
+  app?: string;
+  /** For landlens-kube: what it asked the front door. */
+  requests: McpFrontDoorRequest[];
+};
+export type McpToolResult = { content: unknown[]; structuredContent?: Record<string, unknown>; isError?: boolean; _meta?: Record<string, unknown> };
+/** A view ready to load: the frame's address on the sandbox origin, and what the host hands the view. */
+export type McpAppView = {
+  view: string;
+  url: string;
+  server: string;
+  tool: McpToolInfo;
+  input: Record<string, unknown>;
+  result: McpToolResult;
+  prefersBorder?: boolean;
+  /** The CSP the view runs under, for the record. */
+  csp: string;
 };
 
 /** [time in ms, value]. CPU in cores, memory in bytes. */
@@ -328,7 +477,7 @@ export type AgentStatus =
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */
-export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status"] as const;
+export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "mcp:call"] as const;
 export type PushChannel = (typeof pushChannels)[number];
 
 /** An error crossing IPC keeps a Kubernetes-like status code so the UI can say "no access" vs "failed". */

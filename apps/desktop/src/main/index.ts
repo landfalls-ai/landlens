@@ -1,13 +1,15 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
 import { ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
 import { MetricsService } from "@landlens/metrics";
-import { app, BrowserWindow, nativeTheme, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
 import { registerIpc } from "./ipc";
-import { DEV_URL, hardenApp, hardenSession, RENDERER_INDEX, secureWebPreferences } from "./security";
+import { McpService } from "./mcp";
+import { McpServerStore } from "./mcp-store";
+import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
 
@@ -33,7 +35,9 @@ let shutdown: (() => Promise<void>) | undefined;
 async function start() {
   hardenSession();
   const binary = sidecarBinary();
-  const frontDoor = new FrontDoor(await loopbackCert(binary));
+  let mcp: McpService | undefined;
+  // The front door's audit trail: the MCP call log files each landlens-kube call's requests under it.
+  const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => mcp?.onAudit(e));
   await frontDoor.start();
   const clusters = new ClusterManager({
     sidecarBinary: binary,
@@ -42,15 +46,9 @@ async function start() {
   });
   const hub = new WatchHub(clusters);
   let win: BrowserWindow | undefined;
-  const agent = new AgentService({
-    frontDoor,
-    clusters,
-    sessionsDir: join(app.getPath("userData"), "agent-sessions"),
-    push: ((channel: string, payload: unknown) => {
-      if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
-    }) as ConstructorParameters<typeof AgentService>[0]["push"],
-    log: (l) => console.log(l),
-  });
+  const send = (channel: string, payload: unknown) => {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+  };
   const settings = new ClicklandSettingsStore(join(app.getPath("userData"), "clickland.json"), safeStorage);
   const metrics = new MetricsService({
     clickland: () => ({ config: settings.config(), clusterName: (context) => settings.clusterName(context) }),
@@ -59,10 +57,43 @@ async function start() {
       return { context: c.info.context, get: (path) => c.client.json(path) };
     },
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings });
+  const series = (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">) => metrics.series({ handle, ...r });
+  mcp = new McpService({
+    store: new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage),
+    clickland: settings,
+    frontDoor,
+    clusters,
+    metrics: series,
+    push: (call) => send("mcp:call", call),
+    ask: {
+      confirm: async ({ message, detail, yes }) => {
+        const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
+        const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+        return r.response === 0;
+      },
+      openExternal: (url) => shell.openExternal(url),
+    },
+    log: (l) => console.log(l),
+  });
+  await mcp.start();
+  registerAppProtocol(mcp.views);
+  const gateway = mcp.gateway;
+  const agent = new AgentService({
+    frontDoor,
+    clusters,
+    sessionsDir: join(app.getPath("userData"), "agent-sessions"),
+    push: send as ConstructorParameters<typeof AgentService>[0]["push"],
+    mcp: mcp.forSessions(),
+    onToolCall: (u) => gateway.card(u),
+    metrics: series,
+    log: (l) => console.log(l),
+  });
+  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp);
+  const service = mcp;
   shutdown = async () => {
     metrics.stopAll();
     await agent.stop();
+    await service.stop();
     await hub.stopAll();
     await clusters.disconnectAll();
     await frontDoor.stop();

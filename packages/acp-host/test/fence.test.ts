@@ -40,6 +40,14 @@ describe("the session fence", () => {
     expect(opts.settings.permissions.blockReadsOutsideWorkingDirectories).toBe(true);
     expect(opts.allowDangerouslySkipPermissions).toBe(false);
   });
+
+  it("lets a proxied MCP tool run without asking only when named alone, never a whole server or Landlens's names", () => {
+    const o = sessionOptions({
+      home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234, path: "/usr/bin",
+      mcpAllow: ["mcp__clickland__list_services", "mcp__clickland", "mcp__landlens-x__a", "Bash(rm:*)", "mcp__clickland__*", "mcp__a__b c"],
+    });
+    expect(o.settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__clickland__list_services"]);
+  });
 });
 
 describe("the Claude Code process's environment", () => {

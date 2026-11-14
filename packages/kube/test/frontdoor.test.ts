@@ -40,9 +40,9 @@ afterEach(async () => {
 });
 
 /** HTTPS to the front door, trusting only its certificate. */
-const call = (path: string, token?: string, method = "GET") =>
+const call = (path: string, token?: string, method = "GET", extra: Record<string, string> = {}) =>
   new Promise<{ status: number; json: () => Promise<any> }>((ok, fail) => {
-    const req = httpsRequest(door.url + path, { method, ca: tls.ca, headers: token ? { Authorization: `Bearer ${token}` } : {} }, (res) => {
+    const req = httpsRequest(door.url + path, { method, ca: tls.ca, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra } }, (res) => {
       let body = "";
       res.setEncoding("utf8").on("data", (d) => (body += d)).on("end", () => ok({ status: res.statusCode!, json: async () => JSON.parse(body) }));
     });
@@ -68,6 +68,15 @@ describe("FrontDoor", () => {
     expect(seen[0]!.headers["x-landlens-sidecar"]).toBe(SECRET);
     expect(seen[0]!.headers.authorization).toBeUndefined();
     expect(audit.at(-1)).toMatchObject({ label: "agent 1", allowed: true, status: 200, path: "/api/v1/namespaces/a/pods" });
+  });
+
+  it("files a request under the MCP call that made it, and doesn't forward the call header", async () => {
+    const token = door.issueToken({ label: "agent 1", policy: agentReadOnlyPolicy(), clusters: [HANDLE] });
+    await call(`/c/${HANDLE}/api/v1/pods`, token, "GET", { "X-Landlens-Call": "cmh2k9x1" });
+    expect(audit.at(-1)).toMatchObject({ allowed: true, call: "cmh2k9x1" });
+    expect(seen[0]!.headers["x-landlens-call"]).toBeUndefined();
+    await call(`/c/${HANDLE}/api/v1/pods`, token, "GET", { "X-Landlens-Call": "not a call; DROP" });
+    expect(audit.at(-1)!.call).toBeUndefined();
   });
 
   it("enforces the token's policy before anything reaches the cluster", async () => {
