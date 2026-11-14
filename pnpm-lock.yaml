@@ -113,6 +113,9 @@ importers:
       '@landlens/kube-mcp':
         specifier: workspace:*
         version: link:../kube-mcp
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
     devDependencies:
       '@landlens/mcp-gateway':
         specifier: workspace:*

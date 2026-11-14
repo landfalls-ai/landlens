@@ -6,6 +6,8 @@ import { App } from "./App";
 import "./styles.css";
 import "./charts.css";
 import "./mcp.css";
+import "./dock3.css";
+import "./agent.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -10,3 +10,5 @@ export * from "./tool-kubeconfig.js";
 export * from "./watch.js";
 export * from "./redact.js";
 export * from "./health.js";
+export * from "./changes.js";
+export * from "./diff.js";

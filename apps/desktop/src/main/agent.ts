@@ -2,20 +2,23 @@
 // cluster, each with its own session on the MCP gateway (main/mcp.ts). Updates and permission requests go to the dock;
 // answers come back. Tool calls in the updates are handed to the gateway too, to pair dock cards with logged calls.
 import { randomBytes } from "node:crypto";
-import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ResourceRef } from "@landlens/contracts";
-import { AcpHost, agentEnv, claudeAdapterEntry, loginPath, objectUri, resourceBlock, startClusterSession, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
-import { apiPath, type ClusterManager, type FrontDoor } from "@landlens/kube";
+import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentSettingsInfo, AgentStatus, AgentUpdate, ResourceRef } from "@landlens/contracts";
+import { AcpHost, agentEnv, claudeAdapterEntry, listSkills, loginPath, objectUri, resourceBlock, startClusterSession, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
+import { AgentHistory, AgentSettings } from "./agent-history";
+import { apiPath, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { getJson, redactObject, redactText } from "@landlens/kube-mcp";
 import type { ContentBlock, NewSessionResponse, RequestPermissionOutcome, RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { mkdirSync } from "node:fs";
 import { delimiter } from "node:path";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { stringify } from "yaml";
 
 type Push = {
   (channel: "agent:update", payload: AgentUpdate): void;
   (channel: "agent:permission", payload: AgentPermissionRequest): void;
   (channel: "agent:status", payload: AgentStatus): void;
+  (channel: "agent:change", payload: AgentChange): void;
 };
 
 const AGENT_TITLE = "Claude Code";
@@ -36,6 +39,8 @@ export class AgentService {
     toolName?: string;
     resolve: (o: RequestPermissionOutcome) => void;
   }>();
+  /** Changes the agent proposed that wait for your decision, by change id. */
+  private readonly changes = new Map<string, { session: string; resolve: (d: ChangeDecision) => void; reject: (e: Error) => void }>();
 
   constructor(
     private readonly deps: {
@@ -49,6 +54,11 @@ export class AgentService {
       /** You said yes to a permission request: the MCP gateway runs a proxied tool that asks only after this. */
       onPermit?: (p: { session: string; toolCallId: string; toolName?: string; always: boolean }) => void;
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
+      /** Past sessions and your chosen skills (agent-history.ts). */
+      history?: AgentHistory;
+      settings?: AgentSettings;
+      /** Where your Claude Code skills are; ~/.claude/skills by default. */
+      skillsDir?: string;
       log?: (l: string) => void;
     },
   ) {
@@ -94,6 +104,10 @@ export class AgentService {
                 p.resolve({ outcome: "cancelled" });
                 this.pending.delete(id);
               }
+              for (const [id, c] of this.changes) {
+                c.reject(new Error("withdrawn"));
+                this.changes.delete(id);
+              }
               this.deps.push("agent:status", { state: "stopped", message: `${AGENT_TITLE} exited (${code ?? "signal"})${stderr ? `: ${stderr}` : ""}` });
             },
             log: (l) => this.deps.log?.(`[agent] ${l}`),
@@ -109,15 +123,79 @@ export class AgentService {
   }
 
   async start(handle: string, namespaces?: string[]): Promise<AgentSessionInfo> {
+    return this.open({ handle, ...(namespaces?.length ? { namespaces } : {}) });
+  }
+
+  /** Resume a session from the history on a connected cluster with the same context. */
+  async resume(handle: string, session: string): Promise<AgentSessionInfo> {
+    const e = this.deps.history?.get(session);
+    if (!e) throw Object.assign(new Error("Landlens has no such session in its history"), { status: 404 });
+    if (this.sessions.has(session)) throw Object.assign(new Error("that session is already open"), { status: 409 });
+    const c = this.deps.clusters.get(handle);
+    if (c.info.context !== e.context) {
+      throw Object.assign(new Error(`that session was on ${e.context}; connect to it to resume`), { status: 409 });
+    }
+    return this.open({ handle, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), resume: { sessionId: session, cwd: e.cwd } });
+  }
+
+  private async open(req: Parameters<typeof startClusterSession>[1]): Promise<AgentSessionInfo> {
     const host = await this.ensure();
     const s = await startClusterSession({
       host, frontDoor: this.deps.frontDoor, clusters: this.deps.clusters, mcp: this.deps.mcp,
       ...(this.deps.metrics ? { metrics: this.deps.metrics } : {}),
       sessionsDir: this.deps.sessionsDir, home: homedir(), path: this.path,
       userKubeconfigs: process.env.KUBECONFIG?.split(delimiter).filter(Boolean) ?? [],
-    }, { handle, ...(namespaces?.length ? { namespaces } : {}) });
+      changes: {
+        ask: (change, signal) => this.askChange(change, signal),
+        update: (change) => {
+          if (change.state === "applied" || change.state === "rejected") this.deps.history?.changed(change.session, change.state);
+          this.deps.push("agent:change", change);
+        },
+      },
+      skills: this.chosenSkills(),
+      ...(this.deps.log ? { log: this.deps.log } : {}),
+    }, req);
     this.sessions.set(s.id, s);
+    this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
     return info(s, s.response);
+  }
+
+  history(context?: string): AgentHistoryEntry[] {
+    return this.deps.history?.list(context) ?? [];
+  }
+
+  /** Forget a past session: out of the list, and Claude Code deletes its transcript where it can. */
+  async forget(session: string) {
+    if (this.sessions.has(session)) throw Object.assign(new Error("close the session first"), { status: 409 });
+    if (!this.deps.history?.forget(session)) throw Object.assign(new Error("Landlens has no such session in its history"), { status: 404 });
+    if (this.host?.running) await this.host.deleteSession(session);
+  }
+
+  private get skillsDir() {
+    return this.deps.skillsDir ?? join(homedir(), ".claude", "skills");
+  }
+
+  private chosenSkills() {
+    const chosen = new Set(this.deps.settings?.skills() ?? []);
+    return chosen.size ? listSkills(this.skillsDir).filter((s) => chosen.has(s.name)) : [];
+  }
+
+  settings(): AgentSettingsInfo {
+    const chosen = new Set(this.deps.settings?.skills() ?? []);
+    const skills = listSkills(this.skillsDir);
+    return {
+      skillsDir: this.skillsDir.replace(homedir(), "~"),
+      skills: skills.map((s) => ({ name: s.name, description: s.description, chosen: chosen.has(s.name) })),
+      missing: [...chosen].filter((n) => !skills.some((s) => s.name === n)),
+    };
+  }
+
+  /** The skills new sessions get; a running session keeps what it started with. */
+  setSkills(names: string[]) {
+    const known = new Set(listSkills(this.skillsDir).map((s) => s.name));
+    const unknown = names.filter((n) => !known.has(n));
+    if (unknown.length) throw Object.assign(new Error(`no skill named ${unknown.join(", ")} in ${this.skillsDir}`), { status: 400 });
+    this.deps.settings?.setSkills(names);
   }
 
   private session(id: string): ClusterSession {
@@ -128,6 +206,7 @@ export class AgentService {
 
   async prompt(id: string, text: string, context: ResourceRef[] = []): Promise<{ stopReason: string }> {
     const s = this.session(id);
+    this.deps.history?.prompted(id, text);
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;
     for (const ref of context) {
@@ -162,8 +241,34 @@ export class AgentService {
     await this.host?.cancel(id);
   }
 
-  /** Answer every open question of a session with "cancelled". */
+  /** Show a proposed change in the dock and wait for your decision (agent:decide). */
+  private askChange(change: AgentChange, signal: AbortSignal): Promise<ChangeDecision> {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(new Error("withdrawn"));
+      this.changes.set(change.id, { session: change.session, resolve, reject });
+      signal.addEventListener("abort", () => {
+        if (this.changes.delete(change.id)) reject(new Error("withdrawn"));
+      }, { once: true });
+      this.deps.push("agent:change", change);
+    });
+  }
+
+  /** Your decision on a change. Only a change that is waiting can be decided, and only once. */
+  decide(change: string, decision: "approve" | "reject", note?: string) {
+    const c = this.changes.get(change);
+    if (!c) throw Object.assign(new Error("that change was already decided, expired or withdrawn"), { status: 404 });
+    this.changes.delete(change);
+    c.resolve({ decision, ...(note?.trim() ? { note: note.trim() } : {}) });
+  }
+
+  /** Answer every open question of a session with "cancelled", and withdraw its waiting changes. */
   private withdrawAsks(id: string) {
+    for (const [cid, c] of this.changes) {
+      if (c.session === id) {
+        this.changes.delete(cid);
+        c.reject(new Error("withdrawn"));
+      }
+    }
     for (const [rid, p] of this.pending) {
       if (p.session === id) {
         p.resolve({ outcome: "cancelled" });

@@ -111,6 +111,7 @@ export const AccessCheck = z.object({
 export type AccessCheck = z.infer<typeof AccessCheck>;
 
 /** An ACP session id, as the agent made it. */
+export const ChangeId = z.string().regex(/^ch[A-Za-z0-9_-]{8,32}$/, "not a change id");
 export const SessionId = z.string().min(1).max(128).regex(/^[A-Za-z0-9_.:-]+$/, "not a session id");
 
 // Graphs (docs/metrics.md): CPU and memory over time, from Clickland when it is connected and answers, else from
@@ -219,6 +220,15 @@ export const channels = {
   // A link in an answer: main opens https links in your browser. Nothing opens through window.open.
   "link:open": z.object({ url: z.string().min(1).max(2000) }),
   "agent:close": z.object({ session: SessionId }),
+  // Wave 3: your decision on a change the agent proposed (agent:change). The note goes back to the agent.
+  "agent:decide": z.object({ change: ChangeId, decision: z.enum(["approve", "reject"]), note: z.string().max(2000).optional() }),
+  // Wave 3: past sessions (Claude Code keeps the transcripts; Landlens the list), resume one, forget one.
+  "agent:history": z.object({ context: z.string().min(1).max(253).optional() }),
+  "agent:resume": z.object({ handle: Handle, session: SessionId }),
+  "agent:forget": z.object({ session: SessionId }),
+  // Wave 3: which of your Claude Code skills agent sessions get.
+  "agent:settings": z.object({}),
+  "agent:skills": z.object({ chosen: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).max(50) }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -261,6 +271,12 @@ export type Responses = {
   "agent:answer": { ok: true };
   "link:open": { opened: boolean };
   "agent:close": { ok: true };
+  "agent:decide": { ok: true };
+  "agent:history": { sessions: AgentHistoryEntry[] };
+  "agent:resume": AgentSessionInfo;
+  "agent:forget": { ok: true };
+  "agent:settings": AgentSettingsInfo;
+  "agent:skills": { ok: true };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;
@@ -489,6 +505,71 @@ export type AgentPermissionRequest = {
   options: { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" }[];
 };
 
+/** What a change does to one object. */
+export type ChangeVerb = "create" | "update" | "patch" | "delete";
+/** Why a change deserves a second look; the dock shows these as tags, the loud ones first. */
+export type ChangeRisk = "deletes" | "rbac" | "namespace" | "cluster-scoped" | "scales-to-zero" | "changes-image" | "restarts-pods";
+/** One line of a unified diff; "…" stands for a run of unchanged lines (its text says how many). */
+export type DiffLine = { t: " " | "+" | "-" | "…"; text: string; oldNo?: number; newNo?: number };
+export type ChangeOperation = {
+  verb: ChangeVerb;
+  kind: string;
+  group: string;
+  namespace?: string;
+  name: string;
+  /** The object as it is against what the dry run says it will be, as YAML without status or server bookkeeping. */
+  diff: { lines: DiffLine[]; added: number; removed: number };
+  /** The API server's warnings from the dry run. */
+  warnings: string[];
+  risk: ChangeRisk[];
+};
+export type ChangeState = "waiting" | "applying" | "applied" | "rejected" | "failed" | "expired" | "withdrawn";
+/**
+ * A change the agent proposed through a landlens-kube write tool, dry-run on the API server and waiting for you
+ * (agent:change, sent again on every state change). Nothing is applied before you approve; what is applied is exactly
+ * what the dry run checked, or nothing (the object changed since: a conflict).
+ */
+export type AgentChange = {
+  id: string;
+  session: string;
+  /** The MCP gateway's call id, which the dock pairs with Claude Code's tool call. */
+  call?: string;
+  tool: string;
+  title: string;
+  /** The agent's own words for why. Untrusted text. */
+  reason: string;
+  operations: ChangeOperation[];
+  createdAt: string;
+  expiresAt: string;
+  state: ChangeState;
+  /** What happened, in a line: applied results, the API's error, your note. */
+  result?: string;
+};
+
+/** A past agent session, as the dock's history lists it. */
+export type AgentHistoryEntry = {
+  session: string;
+  agent: string;
+  context: string;
+  namespaces?: string[];
+  /** Your first prompt, shortened; empty until you send one. */
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  prompts: number;
+  /** Changes applied and rejected in it. */
+  applied: number;
+  rejected: number;
+};
+
+export type AgentSettingsInfo = {
+  /** Where your skills are read from (~/.claude/skills). */
+  skillsDir: string;
+  skills: { name: string; description: string; chosen: boolean }[];
+  /** Chosen skills that are gone from the folder. */
+  missing: string[];
+};
+
 export type AgentStatus =
   | { state: "starting" | "ready" }
   | { state: "stopped"; message: string }
@@ -496,7 +577,7 @@ export type AgentStatus =
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */
-export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "mcp:call"] as const;
+export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call"] as const;
 export type PushChannel = (typeof pushChannels)[number];
 
 /** An error crossing IPC keeps a Kubernetes-like status code so the UI can say "no access" vs "failed". */

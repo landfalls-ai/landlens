@@ -84,6 +84,12 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "agent:mode": async ({ session, mode }) => (await agent.setMode(session, mode), { ok: true }),
     "agent:config": async ({ session, config, value }) => (await agent.setConfig(session, config, value), { ok: true }),
     "agent:answer": async ({ request, option }) => (agent.answer(request, option), { ok: true }),
+    "agent:decide": async ({ change, decision, note }) => (agent.decide(change, decision, note), { ok: true }),
+    "agent:history": async ({ context }) => ({ sessions: agent.history(context) }),
+    "agent:resume": async ({ handle, session }) => agent.resume(handle, session),
+    "agent:forget": async ({ session }) => (await agent.forget(session), { ok: true }),
+    "agent:settings": async () => agent.settings(),
+    "agent:skills": async ({ chosen }) => (agent.setSkills(chosen), { ok: true }),
     // Links in an answer open in your browser, https only. Only our own page reaches IPC (checked below), so a view
     // in a subframe can't use this; window.open is denied for everyone (security.ts).
     "link:open": async ({ url }) => {

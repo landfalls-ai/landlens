@@ -2,8 +2,11 @@
 
 Landlens runs **your own Claude Code** beside the cluster you are looking at. Open the dock with **Ask Claude** (⌘J) in
 the toolbar, on any object's details or on a problem in the Overview (both attach that object), and ask. Claude Code reads the cluster, shows
-each thing it read as a card, and answers with the cause, the evidence and a proposed fix. In this wave it can only
-read: no changes, no Secrets, no exec. Writes behind your approval are wave 3.
+each thing it read as a card, and answers with the cause, the evidence and a proposed fix. It can propose that fix as
+a change: Landlens dry-runs it on the API server and shows you the diff in the dock, and nothing reaches the cluster
+until you approve it ([Changes behind your approval](#changes-behind-your-approval)). It never sees or changes
+Secrets and can't exec. Past sessions are kept per cluster and can be resumed; the composer has slash commands; and
+you choose which of your Claude Code skills a session gets.
 
 ## What you see
 
@@ -15,6 +18,8 @@ read: no changes, no Secrets, no exec. Writes behind your approval are wave 3.
 | The plan, as a checklist | `plan` |
 | "Run a shell command?" with the command and Claude Code's own choices (Yes / Yes, and don't ask again for … / No); Enter picks the first, Esc rejects, when the composer is empty | `session/request_permission` |
 | Mode (Manual or Plan) and model pickers, in the composer's foot | the session's modes and config options |
+| A change card: the agent's reason, each operation with its diff, risk tags, Approve / Reject / Reject with a note | the `landlens-kube` write tools, through Landlens's approval broker (not ACP) |
+| A "/" menu: Landlens's commands, then the agent's | `available_commands_update` |
 | Stop | `session/cancel` |
 
 "Ask Claude" on an object attaches its YAML and its last 15 events to your message as an embedded resource
@@ -30,13 +35,16 @@ narrows to make room.
 
 - One Claude Code process for the window: Landlens starts `claude-agent-acp` (pinned, 0.107.0) with the `node` from
   your login shell's PATH and speaks ACP v1 to it over stdio. It uses your Claude Code login, and nothing else of
-  your Claude Code: no settings, CLAUDE.md, skills, plugins, hooks or MCP servers. Those run outside the sandbox (an
+  your Claude Code: no settings, CLAUDE.md, plugins, hooks or MCP servers, and only the skills you turn on
+  ([Skills](#skills)). Those run outside the sandbox (an
   MCP server or a hook is a process of yours with your full environment), so one of them could read what the
   session can't. Its environment is an allowlist, not Landlens's own. Landlens offers it no file system and no
   terminals (the adapter doesn't use them).
-- One session per dock: its own working folder under Landlens's app data, its own read-only front-door token, its
-  own tool kubeconfig and its own MCP token. Closing the dock, disconnecting the cluster, reloading the window, or
-  Claude Code exiting ends the session, revokes both tokens and removes the folder.
+- One session per dock: its own working folder under Landlens's app data, its own read-only front-door token, a
+  second token only Landlens's main process holds for dry runs and approved changes, its own tool kubeconfig and its
+  own MCP token. Closing the dock, disconnecting the cluster, reloading the window, or Claude Code exiting ends the
+  session, withdraws any change still waiting, revokes the tokens and removes the folder. Resume makes the same
+  folder again (Claude Code files a transcript under its working folder).
 - Every session starts in **Manual** mode (`default`); bypass is disabled for the session. You can switch to Plan;
   main refuses any other mode.
 - The standing rules (appended to Claude Code's system prompt) name the cluster, say what the session can and can't
@@ -65,9 +73,76 @@ the dock shows inline under the tool's card; the model still gets the same text.
 | `rollout_history` | A Deployment's ReplicaSets by revision, with images |
 | `metrics` | CPU and memory over 1h, 6h or 24h for the cluster, a node, a namespace, a pod or a workload, with requests and limits, from Landlens's metrics source (Clickland, else metrics-server) |
 
-All are marked read-only, and Landlens pre-allows them (`mcp__landlens-kube`), so they don't prompt. `cluster_overview`,
+All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`), so they don't prompt; the
+write tools below don't prompt in Claude Code either, because Landlens asks you itself, with the diff. `cluster_overview`,
 `describe`, `get_logs` and `metrics` have views (health card, object card with Open in Landlens, log view, charts).
 A proxied server's tools run without a prompt only if they say they only read; the rest ask.
+
+## Changes behind your approval
+
+Six more `landlens-kube` tools change the cluster. Each takes a `reason` (shown to you as plain text) and returns only
+once you decide.
+
+| Tool | What it proposes |
+|---|---|
+| `patch` | Some fields of one object: strategic merge (the default for built-in kinds), merge or JSON patch |
+| `scale` | The replicas of a Deployment, StatefulSet or ReplicaSet |
+| `rollout_restart` | New pods for a Deployment, StatefulSet or DaemonSet (the `restartedAt` annotation, as kubectl does) |
+| `rollout_undo` | A Deployment's pod template back to an earlier revision's, read from its ReplicaSet |
+| `apply_manifest` | Up to 10 YAML documents, as server-side apply (field manager `landlens-agent`) |
+| `delete` | One object, in the background |
+
+The approval broker (`packages/kube/src/changes.ts`), in main, for each proposal:
+
+1. **Refuses** what can never be approved: Secrets; anything carrying a value the agent saw as `<redacted>` or cut
+   short (it would write the marker over the real value); objects outside the session's namespaces; more than 10
+   operations; a manifest whose kind, name or namespace don't match the call.
+2. **Reads** each object as it is now and builds the exact request, pinned to that version: `resourceVersion` in a
+   patch or apply, a `test` operation in a JSON patch, `uid` and `resourceVersion` preconditions on a delete.
+3. **Dry-runs** it on the API server (`dryRun=All`; for a delete, in the DeleteOptions body, because the API server
+   ignores the query when a DELETE has one) and diffs the object before and after. A change that would change nothing
+   is refused.
+4. **Asks you** in the dock: the change card shows the reason, each operation with its diff, risk tags (deletes, RBAC,
+   namespaces, cluster-scoped objects, scaling to zero, a new image, restarting pods) and the dry run's warnings.
+   Danger (deletes, RBAC, cluster-scoped) takes a second click, and Enter never approves it.
+5. **On Approve**, sends exactly the requests it dry-ran. If the object changed since, the API server answers 409 and
+   nothing is applied; the agent is told to look again. **On Reject**, nothing is sent; your note, if any, goes to the
+   agent. A change waits 15 minutes, then expires; Stop, closing the dock or ending the session withdraws it.
+
+Dry runs and changes go through the front door with the session's second token, so they're in the same audit trail
+(dry runs marked `dryRun`). That token's policy (`write`) allows only resource requests: no exec, attach,
+port-forward, proxy or non-resource writes, and no Secrets. The agent never holds it: its own token, its kubectl and
+the MCP gateway stay read-only, so `kubectl delete` in its shell is refused whatever mode it is in.
+
+Checked live (`packages/kube-mcp/test/writes.integration.test.ts`, OrbStack, `landlens-dev`): an approved scale is
+one dry-run PATCH and one PATCH; a rejected one only the dry run; an object changed during the question fails with
+409; restart then undo restores the template with its env values; a rejected delete leaves the ConfigMap, an approved
+one removes it; Secrets, other namespaces and redacted values are refused before anything is sent. End to end
+(`apps/desktop/test/app.e2e.test.ts`), Claude Code proposes the crashloop fix, a rejection leaves the deployment as it
+was, and an approval makes it available.
+
+## History and resume
+
+A session is listed under **History** (the dock's clock button, or `/history`) once you've asked something: its
+title is your first message, with when, how many messages and how many changes were applied. Claude Code keeps the
+transcript in its own store; Landlens keeps the list (`agent-history.json` in its app data, 200 sessions at most) and
+the session's folder. **Resume** opens the session again with fresh tokens and replays it into the dock
+(`session/load`); a write tool call shows as its row and result, not as a change card. Delete one session or all of a
+cluster's; the agent also deletes its transcript where it supports that (`session/delete`).
+
+## Slash commands
+
+Type `/` in an empty composer. Landlens's own commands come first and run at once: `/new`, `/history`, `/resume`,
+`/settings` (the Agent page). Then the agent's own commands, as it announces them; picking one sends it as the
+message. An agent command with one of Landlens's names isn't listed.
+
+## Skills
+
+The **Agent** page lists your Claude Code skills (`~/.claude/skills`) with a switch each. The ones you turn on are
+copied into each new session's folder as a local plugin (`.landlens/landlens-skills`) and loaded with the Skill tool;
+nothing else of your setup is. They run inside the session's sandbox, so a skill that needs the internet or your
+files fails there. A skill with links, more than 500 files or more than 5 MB is left out. The Agents tab shows the
+agent and its fence; Claude Code is the only one offered ([limitations](limitations.md)).
 
 ## What the agent sees
 
@@ -83,7 +158,8 @@ Claude Code also has its own shell, and Landlens can't see inside it. So each se
 `_meta.claudeCode.options` (`packages/acp-host/src/fence.ts`):
 
 1. **Nothing of yours beside it.** No settings files, hooks, plugins or MCP servers (`settingSources: []`,
-   `strictMcpConfig`), and only the built-in tools Bash, Read, Grep, Glob, TodoWrite and ExitPlanMode: no web, no edits.
+   `strictMcpConfig`), and only the built-in tools Bash, Read, Grep, Glob, TodoWrite and ExitPlanMode (and Skill, when
+   you've turned skills on): no web, no edits.
 2. **Its kubectl reaches only the front door.** `KUBECONFIG` is the session's tool kubeconfig (read-only): the front
    door with its CA pinned, and an exec plugin that reads the session token from `LANDLENS_TOKEN`.
 3. **Its shell runs in Claude Code's sandbox** (macOS Seatbelt): it can read nothing in your home folder but the
@@ -137,5 +213,9 @@ ConfigMap with the exact commands, and said it couldn't check the Secret because
 | `packages/kube-mcp/src/server.ts`, `tools.ts`, `apps/` | The built-in MCP server, its tools and their views |
 | `packages/mcp-gateway/src/` | The gateway every MCP call goes through ([mcp.md](mcp.md)) |
 | `packages/kube/src/redact.ts`, `frontdoor.ts` (`scrubResponse`) | What the agent may see, and where it is enforced |
-| `apps/desktop/src/main/agent.ts` | `AgentService`: the host, the sessions, the dock's channels |
-| `apps/desktop/src/renderer/src/AgentDock.tsx`, `Markdown.tsx` | The dock |
+| `packages/kube/src/changes.ts`, `diff.ts` | The approval broker: checks, preconditions, dry run, diff, apply |
+| `packages/kube-mcp/src/writes.ts` | The write tools and what they tell the agent |
+| `packages/acp-host/src/skills.ts` | Your skills, and the plugin a session gets |
+| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings |
+| `apps/desktop/src/renderer/src/AgentDock.tsx`, `ChangeCard.tsx`, `HistoryPanel.tsx`, `SlashMenu.tsx`, `Markdown.tsx` | The dock |
+| `apps/desktop/src/renderer/src/AgentPage.tsx` | The Agent page: skills and agents |

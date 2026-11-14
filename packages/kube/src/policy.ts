@@ -19,8 +19,11 @@ export type ParsedRequest =
     };
 
 export type Policy = {
-  /** "full": anything the user's RBAC allows. "read": get/list/watch only. */
-  access: "full" | "read";
+  /**
+   * "full": anything the user's RBAC allows. "read": get/list/watch only. "write": reads and object changes, but no
+   * exec/attach/port-forward/proxy and no non-resource writes (the approval broker's token).
+   */
+  access: "full" | "read" | "write";
   /** Resources this token may never touch, as `resource` or `resource.group` (e.g. "secrets"). */
   deniedResources?: string[];
   /** If set, namespaced requests must be in one of these namespaces, and all-namespace reads are refused. */
@@ -155,13 +158,16 @@ export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf =
   if (req.kind === "nonResource") {
     if (policy.access === "full") return { allow: true };
     if (req.verb === "get" && isReadableNonResource(req.path)) return { allow: true };
-    return { allow: false, reason: `read-only token: ${req.verb} on ${req.path} is not allowed` };
+    return { allow: false, reason: `this token may not ${req.verb} ${req.path}` };
   }
   const k = key(req.resource, req.group);
   const top = req.subresource?.split("/")[0];
 
   if (policy.deniedResources?.some((d) => d === k || d === req.resource && !req.group)) {
     return { allow: false, reason: `this token may not access ${k}` };
+  }
+  if (policy.access === "write" && top && CONNECT_SUBRESOURCES.has(top)) {
+    return { allow: false, reason: `this token may not open ${top} into ${k}` };
   }
   if (policy.access === "read") {
     if (req.verb === "create" && REVIEW_RESOURCES.has(k)) return { allow: true };
@@ -200,6 +206,16 @@ const CLUSTER_SCOPED_CORE = new Set([
   "certificatesigningrequests.certificates.k8s.io", "flowschemas.flowcontrol.apiserver.k8s.io",
   "prioritylevelconfigurations.flowcontrol.apiserver.k8s.io",
 ]);
+
+/**
+ * The approval broker's token for one agent session (changes.ts): only main holds it, and it sends only the requests
+ * you approved and their dry runs. Never Secrets, never a channel into a container, the session's namespaces only.
+ */
+export const agentApprovedPolicy = (namespaces?: string[]): Policy => ({
+  access: "write",
+  deniedResources: ["secrets"],
+  ...(namespaces?.length ? { namespaces } : {}),
+});
 
 /** The policy every agent session gets. */
 export const agentReadOnlyPolicy = (namespaces?: string[]): Policy => ({

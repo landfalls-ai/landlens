@@ -1,6 +1,7 @@
 // Launches the built app against the OrbStack cluster and walks the wave-1 path:
 // pick a cluster → pods appear live → filter → open a pod → its YAML; plus the renderer's security posture.
 // LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e  (screenshots go to $LANDLENS_SHOTS)
+import { execFileSync } from "node:child_process";
 import { createSocket } from "node:dgram";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -628,4 +629,80 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await expect.poll(() => drawer.textContent()).toContain("Dock card");
     await shot(page, "45-mcp-agent-call-detail");
   }, 360_000);
+
+  it.runIf(claude)("proposes the crashloop fix as a diff: a rejected change never applies, an approved one fixes the deployment", async () => {
+    // Back to the broken scenario (a past run may have fixed it): only in landlens-dev.
+    const kubectl = (...args: string[]) => execFileSync("kubectl", ["--context", "orbstack", "-n", "landlens-dev", ...args], { encoding: "utf8" });
+    const scenario = resolve(__dirname, "../../../deploy/scenarios/crashloop.yaml");
+    kubectl("delete", "deployment", "orders-api", "--ignore-not-found", "--wait=true");
+    kubectl("apply", "-f", scenario);
+    const env = () => kubectl("get", "deployment", "orders-api", "-o", "jsonpath={.spec.template.spec.containers[0].env}");
+    const dock = page.getByRole("complementary", { name: "Claude Code" });
+    const box = dock.getByRole("textbox", { name: "Message Claude Code" });
+    await expect.poll(() => box.isEnabled(), { timeout: 90_000 }).toBe(true);
+    const stop = dock.getByRole("button", { name: "Stop" });
+    /** Send a message and answer the agent until it finishes; `onChange` decides each change card that appears. */
+    const turn = async (text: string, onChange: (card: ReturnType<typeof dock.locator>) => Promise<void>) => {
+      await box.fill(text);
+      await box.press("Enter");
+      await stop.waitFor({ timeout: 30_000 });
+      const deadline = Date.now() + 300_000;
+      while (await stop.count()) {
+        if (Date.now() > deadline) throw new Error(`the agent did not finish in 5 minutes; the dock says:\n${await dock.innerText()}`);
+        const card = dock.locator("section.change").first();
+        if (await card.count()) await onChange(card);
+        const ask = dock.locator(".ask button.primary").first();
+        if (await ask.count()) await ask.click();
+        await page.waitForTimeout(500);
+      }
+    };
+    const fix = "The orders-api deployment in namespace landlens-dev crash-loops because DATABASE_URL is not set. Propose the fix with the patch tool: " +
+      "add the env var DATABASE_URL=postgres://orders-db.landlens-dev.svc.cluster.local:5432/orders to its api container. Propose exactly one change, then stop.";
+
+    // 1. Rejected with a note: nothing reaches the deployment, and the agent hears why.
+    let seen = 0;
+    await turn(fix, async (card) => {
+      if (seen++) return;
+      await card.locator(".diff").first().waitFor();
+      expect(await card.locator(".diff").first().innerText()).toContain("DATABASE_URL");
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, "50-change-card");
+      await shot(page, "51-light-change-card", "light");
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.setViewportSize({ width: 1024, height: 700 });
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, "52-1024-change-card");
+      await page.setViewportSize({ width: 1440, height: 880 });
+      await card.getByRole("button", { name: "Reject with a note" }).click();
+      await box.fill("Not yet. Wait until I ask again.");
+      await dock.getByRole("button", { name: /Reject with note/ }).click();
+    });
+    expect(seen).toBeGreaterThanOrEqual(1);
+    await dock.locator(".change-done.rejected").first().waitFor();
+    await shot(page, "53-change-rejected");
+    expect(env()).not.toContain("DATABASE_URL");
+
+    // 2. Approved: Landlens applies exactly the diff, and the deployment recovers.
+    let approved = 0;
+    await turn("Propose that same fix again now; I'll approve it.", async (card) => {
+      if (approved) return;
+      await card.locator(".diff").first().waitFor();
+      await card.getByRole("button", { name: /^Approve/ }).click();
+      approved++;
+    });
+    expect(approved).toBe(1);
+    await dock.locator(".change-done.applied").first().waitFor({ timeout: 30_000 });
+    await shot(page, "54-change-applied");
+    expect(env()).toContain("DATABASE_URL");
+    await expect.poll(() => kubectl("get", "deployment", "orders-api", "-o", "jsonpath={.status.availableReplicas}"), { timeout: 120_000, interval: 2_000 }).toBe("1");
+    // The changes are on the history entry for this session.
+    await dock.getByRole("button", { name: /History/ }).click();
+    const row = dock.getByRole("list", { name: /Past sessions/ }).locator(".hist-row.on");
+    await expect.poll(() => row.innerText()).toContain("1 change");
+    await shot(page, "55-history");
+    await page.keyboard.press("Escape");
+    // Leave the scenario broken again for the next run.
+    kubectl("delete", "deployment", "orders-api", "--wait=true");
+    kubectl("apply", "-f", scenario);
+  }, 900_000);
 });

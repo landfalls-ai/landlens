@@ -3,14 +3,15 @@
 // the fence, and the standing rules. Closing it revokes both at once.
 import { randomBytes } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { NewSessionResponse } from "@agentclientprotocol/sdk";
-import { agentReadOnlyPolicy, toolKubeconfig, type ClusterManager, type FrontDoor } from "@landlens/kube";
-import type { MetricsSeries } from "@landlens/contracts";
-import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
+import { agentApprovedPolicy, agentReadOnlyPolicy, ChangeBroker, toolKubeconfig, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
+import type { AgentChange, MetricsSeries } from "@landlens/contracts";
+import { frontDoorCluster, frontDoorSend, type AgentCluster } from "@landlens/kube-mcp";
 import { sessionOptions } from "./fence.js";
 import type { AcpHost } from "./host.js";
 import { clusterSystemPrompt } from "./prompt.js";
+import { buildSkillsPlugin, type SkillInfo } from "./skills.js";
 
 export type ClusterSession = {
   id: string;
@@ -60,14 +61,52 @@ export async function startClusterSession(deps: {
   path: string;
   /** Your kubeconfig files ($KUBECONFIG), so the fence can deny them wherever they are. */
   userKubeconfigs?: string[];
-}, req: { handle: string; namespaces?: string[] }): Promise<ClusterSession> {
+  /**
+   * Where the agent's proposed changes go for your decision. Without it the session has no write tools: it only
+   * reads.
+   */
+  changes?: {
+    ask(change: AgentChange, signal: AbortSignal): Promise<ChangeDecision>;
+    update(change: AgentChange): void;
+  };
+  /** Your skills chosen for agent sessions (skills.ts). */
+  skills?: SkillInfo[];
+  log?: (l: string) => void;
+}, req: {
+  handle: string;
+  namespaces?: string[];
+  /** Resume an earlier session: Claude Code replays its history; it gets new tokens and the same folder path. */
+  resume?: { sessionId: string; cwd: string };
+}): Promise<ClusterSession> {
   const c = deps.clusters.get(req.handle);
   const types = await deps.clusters.discovery(req.handle); // also gives the front door the kinds' scope
   const label = `agent ${++counter} · ${c.info.context}`;
-  const cwd = join(deps.sessionsDir, `${Date.now()}-${randomBytes(4).toString("hex")}`);
+  const cwd = req.resume ? resumeDir(deps.sessionsDir, req.resume.cwd) : join(deps.sessionsDir, `${Date.now()}-${randomBytes(4).toString("hex")}`);
   mkdirSync(cwd, { recursive: true, mode: 0o700 });
+  const skillsPlugin = deps.skills?.length ? buildSkillsPlugin(cwd, deps.skills, deps.log) : undefined;
 
   const token = deps.frontDoor.issueToken({ label, policy: agentReadOnlyPolicy(req.namespaces), clusters: [req.handle] });
+  // The approval broker's own token: never handed to Claude Code; it sends dry runs and the changes you approve.
+  const approved = deps.changes ? deps.frontDoor.issueToken({ label: `${label} · approved`, policy: agentApprovedPolicy(req.namespaces), clusters: [req.handle] }) : undefined;
+  let sessionId = "";
+  let broker: ChangeBroker | undefined;
+  const changes = deps.changes;
+  const propose: AgentCluster["propose"] = approved && changes
+    ? (change, signal) => {
+        broker ??= new ChangeBroker({
+          session: sessionId,
+          send: frontDoorSend({ url: deps.frontDoor.clusterUrl(req.handle), certificate: deps.frontDoor.certificate, token: approved }),
+          ...(req.namespaces?.length ? { namespaces: req.namespaces } : {}),
+          ask: (c, s) => changes.ask(c, s),
+          update: (c) => changes.update(c),
+        });
+        return broker.propose(change, signal);
+      }
+    : undefined;
+  const revokeTokens = () => {
+    deps.frontDoor.revokeToken(token);
+    if (approved) deps.frontDoor.revokeToken(approved);
+  };
   const kubeconfig = join(cwd, "kubeconfig");
   writeFileSync(kubeconfig, toolKubeconfig(
     { url: deps.frontDoor.url, certificate: deps.frontDoor.certificate },
@@ -81,37 +120,52 @@ export async function startClusterSession(deps: {
     types: async () => types,
     ...(req.namespaces?.length ? { namespaces: req.namespaces } : {}),
     ...(deps.metrics ? { metrics: (r, read) => deps.metrics!(req.handle, r, read) } : {}),
+    ...(propose ? { propose } : {}),
   });
   let mcp: Awaited<ReturnType<SessionMcp["open"]>>;
   try {
     mcp = await deps.mcp.open({ label, context: c.info.context, handle: req.handle, cluster });
   } catch (err) {
-    deps.frontDoor.revokeToken(token);
+    revokeTokens();
     rmSync(cwd, { recursive: true, force: true });
     throw err;
   }
   const revoke = () => {
-    deps.frontDoor.revokeToken(token);
+    revokeTokens();
     void mcp.close();
     rmSync(cwd, { recursive: true, force: true });
   };
 
   let response: NewSessionResponse;
+  const params = {
+    cwd,
+    mcpServers: mcp.servers.map((m) => ({ type: "http" as const, ...m })),
+    systemPrompt: {
+      mode: "append",
+      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes }) }],
+    },
+    _meta: { claudeCode: { options: sessionOptions({
+      home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), mcpAllow: mcp.allow,
+      ...(deps.userKubeconfigs ? { userKubeconfigs: deps.userKubeconfigs } : {}),
+      ...(skillsPlugin ? { skillsPlugin } : {}),
+    }) } },
+  };
   try {
-    response = await deps.host.newSession({
-      cwd,
-      mcpServers: mcp.servers.map((m) => ({ type: "http" as const, ...m })),
-      systemPrompt: {
-        mode: "append",
-        content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}) }) }],
-      },
-      _meta: { claudeCode: { options: sessionOptions({ home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), mcpAllow: mcp.allow, ...(deps.userKubeconfigs ? { userKubeconfigs: deps.userKubeconfigs } : {}) }) } },
-    } as Parameters<AcpHost["newSession"]>[0]);
+    if (req.resume) {
+      // The same fence as a new session: the adapter builds the resumed session from these options too.
+      sessionId = req.resume.sessionId;
+      mcp.bind(sessionId);
+      const loaded = await deps.host.loadSession({ ...params, sessionId } as Parameters<AcpHost["loadSession"]>[0]);
+      response = { ...loaded, sessionId } as NewSessionResponse;
+    } else {
+      response = await deps.host.newSession(params as Parameters<AcpHost["newSession"]>[0]);
+    }
   } catch (err) {
     revoke();
     throw err;
   }
   mcp.bind(response.sessionId);
+  sessionId = response.sessionId;
 
   const close = async () => {
     revoke();
@@ -137,4 +191,13 @@ export async function startClusterSession(deps: {
     revoke,
     close,
   };
+}
+
+/** A resumed session's folder must be one Landlens made: directly in the sessions folder, named as it names them. */
+function resumeDir(sessionsDir: string, cwd: string): string {
+  const dir = resolve(cwd);
+  if (dirname(dir) !== resolve(sessionsDir) || !/^\d{10,16}-[0-9a-f]{8}$/.test(basename(dir))) {
+    throw Object.assign(new Error("that session's folder isn't one of Landlens's"), { status: 400 });
+  }
+  return dir;
 }

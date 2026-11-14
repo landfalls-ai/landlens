@@ -56,6 +56,11 @@ export type FenceInput = {
   userKubeconfigs?: string[];
   /** Proxied MCP tools that only read (`mcp__<server>__<tool>`), from the gateway. */
   mcpAllow?: string[];
+  /**
+   * A plugin Landlens built in the session folder holding only the skills you chose (skills.ts): loaded by path, so
+   * it needs none of your settings, and it holds no hooks or MCP servers. With it the session gets the Skill tool.
+   */
+  skillsPlugin?: string;
 };
 
 /** A proxied tool rule: one named tool on one remote server, never a whole server, never Landlens's own names. */
@@ -72,9 +77,11 @@ export function sessionOptions(i: FenceInput) {
   const kubeconfigs = (i.userKubeconfigs ?? []).filter((k) => k.startsWith("/"));
   return {
     // Nothing of yours loads: settings, CLAUDE.md, hooks, plugins, skills and MCP servers from ~/.claude or a project.
+    // Skills you chose come in Landlens's own plugin, by path.
     settingSources: [] as string[],
     strictMcpConfig: true,
-    tools: AGENT_TOOLS,
+    tools: i.skillsPlugin && inside(i.skillsPlugin, i.cwd) ? [...AGENT_TOOLS, "Skill"] : AGENT_TOOLS,
+    ...(i.skillsPlugin && inside(i.skillsPlugin, i.cwd) ? { plugins: [{ type: "local" as const, path: i.skillsPlugin }] } : {}),
     disallowedTools: AGENT_DISALLOWED,
     env: {
       KUBECONFIG: i.kubeconfig,

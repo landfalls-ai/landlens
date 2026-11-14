@@ -5,7 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
-  ContentBlock, InitializeResponse, NewSessionRequest, NewSessionResponse, PromptResponse, RequestPermissionOutcome,
+  ContentBlock, InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptResponse, RequestPermissionOutcome,
   RequestPermissionRequest, SessionNotification,
 } from "@agentclientprotocol/sdk";
 
@@ -102,6 +102,27 @@ export class AcpHost {
       res.modes = { ...res.modes!, currentModeId: "default" };
     }
     return res;
+  }
+
+  /**
+   * An earlier session, its history replayed as session updates before this answers; switched to "default" mode like
+   * a new one. Needs the agent's loadSession capability.
+   */
+  async loadSession(req: LoadSessionRequest): Promise<LoadSessionResponse> {
+    if (!this.init?.agentCapabilities?.loadSession) throw new Error(`${this.agent.title} can't resume sessions`);
+    const res = await this.agentCx.request(acp.methods.agent.session.load, req);
+    const current = res.modes?.currentModeId;
+    if (current && !SAFE_START_MODES.has(current) && res.modes?.availableModes.some((m) => m.id === "default")) {
+      await this.setMode(req.sessionId, "default");
+      res.modes = { ...res.modes!, currentModeId: "default" };
+    }
+    return res;
+  }
+
+  /** Forget a session's transcript, where the agent can. */
+  async deleteSession(sessionId: string): Promise<void> {
+    if (!this.init?.agentCapabilities?.sessionCapabilities?.delete) return;
+    await this.agentCx.request(acp.methods.agent.session.delete, { sessionId }).catch(() => {});
   }
 
   prompt(sessionId: string, prompt: ContentBlock[]): Promise<PromptResponse> {

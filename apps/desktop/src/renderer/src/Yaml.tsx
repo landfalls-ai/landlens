@@ -34,13 +34,13 @@ function Line({ text }: { text: string }) {
   return (
     <span className={"l" + (redacted ? " redacted-line" : "")}>
       {redacted ? <Ic icon={Lock} size={10} className="lock" /> : null}
-      {tokens(text)}
+      {yamlTokens(text)}
       {"\n"}
     </span>
   );
 }
 
-function tokens(line: string): ReactNode {
+export function yamlTokens(line: string): ReactNode {
   if (/^\s*#/.test(line)) return <span className="c">{line}</span>;
   const k = KEY.exec(line);
   if (k) {

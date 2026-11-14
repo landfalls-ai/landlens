@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentReadOnlyPolicy, authorize, isCanonicalPath, parseRequest, type Policy } from "../src/policy.js";
+import { agentApprovedPolicy, agentReadOnlyPolicy, authorize, isCanonicalPath, parseRequest, type Policy } from "../src/policy.js";
 
 const agent = agentReadOnlyPolicy();
 const ide: Policy = { access: "full" };
@@ -120,5 +120,31 @@ describe("isCanonicalPath", () => {
       "/api/v1/./secrets", "api/v1/pods", "/api\\v1", "/api/v1/pods#x", "/api/v1/pods\u0000", "/api/v1/po ds", "/api/v1/pods?x=\n"])
       expect(isCanonicalPath(p), JSON.stringify(p)).toBe(false);
     expect(isCanonicalPath("/api/v1/namespaces/a/pods?labelSelector=app%3Dx")).toBe(true);
+  });
+});
+
+describe("the approval broker's write policy", () => {
+  const approved = agentApprovedPolicy(["landlens-dev"]);
+  it("reads, dry-runs and changes objects in its namespaces", () => {
+    expect(allowed(approved, "GET", "/apis/apps/v1/namespaces/landlens-dev/deployments/d")).toBe(true);
+    expect(allowed(approved, "PATCH", "/apis/apps/v1/namespaces/landlens-dev/deployments/d?dryRun=All")).toBe(true);
+    expect(allowed(approved, "PATCH", "/apis/apps/v1/namespaces/landlens-dev/deployments/d")).toBe(true);
+    expect(allowed(approved, "POST", "/api/v1/namespaces/landlens-dev/configmaps")).toBe(true);
+    expect(allowed(approved, "DELETE", "/api/v1/namespaces/landlens-dev/configmaps/c")).toBe(true);
+  });
+
+  it("never touches Secrets or other namespaces", () => {
+    expect(allowed(approved, "GET", "/api/v1/namespaces/landlens-dev/secrets/s")).toBe(false);
+    expect(allowed(approved, "PATCH", "/api/v1/namespaces/landlens-dev/secrets/s")).toBe(false);
+    expect(allowed(approved, "PATCH", "/apis/apps/v1/namespaces/kube-system/deployments/coredns")).toBe(false);
+  });
+
+  it("never opens a channel into a container or a service, and writes no non-resource path", () => {
+    expect(allowed(approved, "POST", "/api/v1/namespaces/landlens-dev/pods/p1/exec?command=sh")).toBe(false);
+    expect(allowed(approved, "GET", "/api/v1/namespaces/landlens-dev/pods/p1/attach")).toBe(false);
+    expect(allowed(approved, "POST", "/api/v1/namespaces/landlens-dev/pods/p1/portforward")).toBe(false);
+    expect(allowed(approved, "GET", "/api/v1/namespaces/landlens-dev/services/s:80/proxy/")).toBe(false);
+    expect(allowed(approved, "POST", "/version")).toBe(false);
+    expect(allowed(approved, "GET", "/metrics")).toBe(false);
   });
 });

@@ -15,6 +15,7 @@ import { z } from "zod";
 import { APP_URI, registerApps } from "./apps.js";
 import { getJson, getText, pathFor, resolveKind, type AgentCluster } from "./cluster.js";
 import { capResult, redactObject, redactText } from "./redact.js";
+import { registerWriteTools } from "./writes.js";
 
 type Result = { content: { type: "text"; text: string }[]; structuredContent?: Record<string, unknown>; isError?: boolean };
 /** What a tool body returns: its text, and for an app tool the data its view draws. */
@@ -70,6 +71,7 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
   const kind = async (k: string) => resolveKind(await cluster.types(), k);
   const limitNote = cluster.namespaces?.length ? ` This session may only read namespaces ${cluster.namespaces.join(", ")}.` : "";
   registerApps(server);
+  registerWriteTools(server, cluster);
 
   server.registerTool("api_resources", {
     title: "API resources",
