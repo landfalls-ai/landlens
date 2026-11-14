@@ -6,9 +6,12 @@ The land family's Kubernetes IDE, designed from a reverse-engineering study of
 [ACP](https://agentclientprotocol.com) client, so your own Claude Code runs inside the IDE, sees the cluster you are
 looking at, and helps you debug it and suggests what to do.
 
-Status: **study done, plan approved; wave 1 (the shell) in progress.** Start at [docs/research.md](docs/research.md), then [docs/plan.md](docs/plan.md).
+Status: **wave 1 (the shell) done; wave 2 (the agent) next.** Connect to a cluster from your kubeconfig and browse
+live workloads, network, config, storage, access and cluster objects. Start at [docs/research.md](docs/research.md), then [docs/plan.md](docs/plan.md).
 
 ```bash
+pnpm install && pnpm dev        # run Landlens (needs Go for the credential sidecar)
+
 scripts/fetch-upstream.sh       # OpenLens, Freelens, ACP spec, ACP TypeScript SDK, claude-agent-acp into upstream/ (pinned)
 scripts/fetch-tools.sh          # the Craft Anything CLI, checksum and signature checked
 scripts/study-freelens-app.sh   # static Craft Anything study of the released Freelens app into study/freelens-app/

@@ -16,6 +16,10 @@ suggestions. The study and the approved plan are in `docs/`; the code is being b
 
 ## Layout
 
+- `apps/desktop` (Electron main, preload, sandboxed React renderer), `packages/contracts` (typed IPC),
+  `packages/kube` (catalog, sidecar, front door, policies, watches), `sidecar/kube-proxy` (Go credential holder).
+  `docs/architecture.md` has the code map; `docs/security.md` every security rule and its test.
+
 - `upstream/` (git-ignored): the open-source projects we study, pinned by `scripts/fetch-upstream.sh`: OpenLens
   (lensapp/lens, MIT, last open-source commit), Freelens (MIT), the ACP spec, the ACP TypeScript SDK and
   claude-agent-acp (all Apache-2.0). Read them freely; never edit them. Learn from them; don't copy their code.
@@ -31,6 +35,16 @@ suggestions. The study and the approved plan are in `docs/`; the code is being b
 - Docs move with the code: each change updates its page, `docs/limitations.md` and `docs/roadmap.md` when it adds or
   closes something, and gets a row in `docs/history.md`.
 - Mobile-first artifacts: the user reviews on a phone; one column, cards not wide tables.
+
+## Checking a change
+
+```bash
+pnpm typecheck && pnpm test                    # unit tests, including the Go sidecar
+pnpm test:integration                           # against OrbStack (LANDLENS_INTEGRATION=orbstack)
+pnpm --filter @landlens/desktop test:e2e        # the built app, driven by Playwright, on OrbStack
+```
+
+A change to the front door, policies, IPC or the renderer's privileges updates `docs/security.md` and its tests.
 
 ## Local only
 

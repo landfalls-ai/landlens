@@ -1,0 +1,19 @@
+{
+  "name": "landlens",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Landlens: the land family's Kubernetes IDE, with your Claude Code in the agent dock over ACP.",
+  "packageManager": "pnpm@10.28.2",
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "build:sidecar": "cd sidecar/kube-proxy && go build -trimpath -o bin/landlens-kube-proxy .",
+    "dev": "pnpm build:sidecar && pnpm --filter @landlens/desktop dev",
+    "build": "pnpm build:sidecar && pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm build:sidecar && pnpm -r test && (cd sidecar/kube-proxy && go test ./...)",
+    "test:integration": "pnpm build:sidecar && LANDLENS_INTEGRATION=${LANDLENS_INTEGRATION:-orbstack} pnpm -r test:integration"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  }
+}

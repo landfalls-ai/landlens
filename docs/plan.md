@@ -26,7 +26,7 @@ Three rules hold in every wave:
 ┌──────────────────────── Electron main (Node) ────────────────────────┐
 │ kubeconfig catalog ─► per cluster: Go sidecar (client-go, your creds) │
 │                                   ▲                                    │
-│  front door (127.0.0.1, HTTP/2, tokens: IDE = full, agent = read-only) │
+│  front door (127.0.0.1, TLS, tokens: IDE = full, agent = read-only)    │
 │        ▲            ▲                    │                             │
 │        │      agent's kubectl       watch hub (list+watch, bookmarks)  │
 │        │      (generated kubeconfig)     ▼                             │
@@ -53,7 +53,7 @@ Three rules hold in every wave:
 | Package | What |
 |---|---|
 | `apps/desktop` | Electron main, preload, renderer (React 19, Vite via electron-vite), packaging |
-| `packages/kube` | kubeconfig catalog, the front door (token, HTTP/2, verb policy per token), list+watch stores with bookmarks and paginated lists, the resource registry (discovery + CRDs), RBAC checks |
+| `packages/kube` | kubeconfig catalog, the front door (TLS, token, verb policy per token), list+watch stores with bookmarks and paginated lists, the resource registry (discovery + CRDs), RBAC checks |
 | `sidecar/kube-proxy` (Go) | One child process per connected cluster: client-go with the user's kubeconfig (exec plugins, OIDC, client certs work as in kubectl), loopback only, answers only the front door |
 | `packages/kube-mcp` | `landlens-kube`: the cluster MCP server the agent gets. Read tools, write tools that wait for approval, redaction |
 | `packages/acp-host` | ACP client over `@agentclientprotocol/sdk`: agent registry, process lifetime, sessions, permissions, fs and terminals |
@@ -66,8 +66,9 @@ Taken from OpenLens and Freelens (`research/lens-architecture.md`), with their h
 
 - **Credentials stay in a Go sidecar**, one per connected cluster, as in OpenLens (`lens-k8s-proxy`). The renderer,
   the agent and every spawned tool never see a token or a client key.
-- **A front door in main** on 127.0.0.1 (HTTP/2, since Chromium's six connections per host starved Lens's watches)
-  forwards to the sidecars. Every request needs a token: OpenLens had none, and its cluster ids were guessable, so any
+- **A front door in main** on 127.0.0.1 (TLS, since kubectl only sends credentials over TLS) forwards to the
+  sidecars. The renderer never uses it: it gets cluster data from main over IPC, so Chromium's six-connections-per-host
+  limit, which made Freelens move to HTTP/2, doesn't apply. Every request needs a token: OpenLens had none, and its cluster ids were guessable, so any
   local process could use the user's credentials; Freelens added one per run.
 - **Tokens carry a policy.** The IDE's token may do what the user's RBAC allows. Each agent session gets its own token
   that allows only `get`, `list` and `watch` (and never Secrets), for one context and optionally a few namespaces.

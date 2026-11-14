@@ -2,6 +2,10 @@
 
 | Page | What it covers |
 |---|---|
+| [architecture.md](architecture.md) | The processes, a request end to end, the front door, the code map |
+| [security.md](security.md) | Every security rule and how it is checked |
+| [development.md](development.md) | Setup, running, every test command |
+| [limitations.md](limitations.md) and [roadmap.md](roadmap.md) | What's missing, and the waves |
 | [research.md](research.md) | The findings in one page, and the decisions they lead to |
 | [research/lens-architecture.md](research/lens-architecture.md) | OpenLens and Freelens inside: processes, DI, cluster auth and the proxy, the Kubernetes data layer, security, size |
 | [research/lens-features.md](research/lens-features.md) | Every OpenLens feature: what the user sees, how it works, what Landlens takes |
