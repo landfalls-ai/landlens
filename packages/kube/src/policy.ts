@@ -23,7 +23,9 @@ export type Policy = {
    * "full": anything the user's RBAC allows. "read": get/list/watch only. "write": exactly what the approval broker
    * sends (one object's get, patch and delete, creates, ReplicaSet lists): no subresources, no non-resource writes.
    */
-  access: "full" | "read" | "write";
+  access: "full" | "read" | "write" | "exec";
+  /** For "exec": the one pod whose exec this token may open (a pod shell's token; nothing else, not even a read). */
+  pod?: { namespace: string; name: string };
   /** Resources this token may never touch, as `resource` or `resource.group` (e.g. "secrets"). */
   deniedResources?: string[];
   /** If set, namespaced requests must be in one of these namespaces, and all-namespace reads are refused. */
@@ -162,6 +164,11 @@ export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf =
   }
   const k = key(req.resource, req.group);
   const top = req.subresource?.split("/")[0];
+  if (policy.access === "exec") {
+    const p = policy.pod;
+    const ok = !!p && k === "pods" && req.subresource === "exec" && req.namespace === p.namespace && req.name === p.name;
+    return ok ? { allow: true } : { allow: false, reason: "this token may only open a shell in its own pod" };
+  }
 
   if (policy.deniedResources?.some((d) => d === k || d === req.resource && !req.group)) {
     return { allow: false, reason: `this token may not access ${k}` };

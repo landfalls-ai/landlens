@@ -54,6 +54,8 @@ export class FrontDoor {
   private server: Server | undefined;
   private readonly upstreams = new Map<string, Upstream>();
   private readonly grants = new Map<string, TokenGrant>(); // sha256(token) hex → grant
+  /** Each grant's open connections (streams, watches, exec, port-forward): revoking a token closes them too. */
+  private readonly open = new Map<TokenGrant, Set<() => void>>();
   private port = 0;
 
   constructor(
@@ -106,7 +108,24 @@ export class FrontDoor {
   }
 
   revokeToken(token: string) {
-    this.grants.delete(hash(token).toString("hex"));
+    const k = hash(token).toString("hex");
+    const grant = this.grants.get(k);
+    this.grants.delete(k);
+    if (!grant) return;
+    const closers = this.open.get(grant);
+    this.open.delete(grant);
+    for (const close of closers ?? []) close();
+  }
+
+  /** Close this connection when its token is revoked; returns the function to call when it ends by itself. */
+  private track(grant: TokenGrant, close: () => void): () => void {
+    let set = this.open.get(grant);
+    if (!set) this.open.set(grant, (set = new Set()));
+    set.add(close);
+    return () => {
+      set!.delete(close);
+      if (!set!.size && this.open.get(grant) === set) this.open.delete(grant);
+    };
   }
 
   /** Look up a grant by token without a timing side channel on the token's bytes. */
@@ -184,6 +203,11 @@ export class FrontDoor {
       headers.accept = jsonAccept(req.headers.accept);
     }
     const who = { label: c.grant.label, handle: c.handle, path: c.path };
+    const untrack = this.track(c.grant, () => {
+      up.destroy();
+      res.destroy();
+    });
+    res.on("close", untrack);
     const up = httpRequest(target, { method: req.method, headers }, (upRes) => {
       this.audit(req, who, true, upRes.statusCode);
       if (!scrub || req.method === "HEAD") {
@@ -235,6 +259,7 @@ export class FrontDoor {
       socket.pipe(up);
     });
     const close = () => {
+      untrack();
       if (!audited) {
         audited = true;
         this.audit(req, who, true, 502);
@@ -242,6 +267,7 @@ export class FrontDoor {
       up.destroy();
       socket.destroy();
     };
+    const untrack = this.track(c.grant, close);
     up.on("error", close).on("close", close);
     socket.on("error", close).on("close", close);
   }

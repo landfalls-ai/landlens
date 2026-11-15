@@ -166,4 +166,21 @@ describe("the approval broker's write policy", () => {
     // Without a namespace limit, a cluster-scoped object can be changed (the broker marks it danger).
     expect(allowed(agentApprovedPolicy(), "PATCH", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/x")).toBe(true);
   });
+
+  it("lets a pod shell's token open that pod's exec and nothing else", () => {
+    const shell: Policy = { access: "exec", pod: { namespace: "shop", name: "web-1" } };
+    expect(allowed(shell, "GET", "/api/v1/namespaces/shop/pods/web-1/exec?container=app&command=sh")).toBe(true);
+    expect(allowed(shell, "POST", "/api/v1/namespaces/shop/pods/web-1/exec?command=sh")).toBe(true);
+    for (const [m, p] of [
+      ["GET", "/api/v1/namespaces/shop/pods/web-2/exec?command=sh"],
+      ["GET", "/api/v1/namespaces/other/pods/web-1/exec?command=sh"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/attach"],
+      ["POST", "/api/v1/namespaces/shop/pods/web-1/portforward"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1"],
+      ["GET", "/api/v1/namespaces/shop/secrets"],
+      ["DELETE", "/api/v1/namespaces/shop/pods/web-1"],
+      ["POST", "/apis/apps/v1/namespaces/shop/deployments"],
+    ] as const) expect(allowed(shell, m, p), `${m} ${p}`).toBe(false);
+    expect(allowed({ access: "exec" }, "GET", "/api/v1/namespaces/shop/pods/web-1/exec?command=sh")).toBe(false);
+  });
 });

@@ -38,7 +38,8 @@ followed stream: one long request with `follow=true`, not Lens's poll every ten 
   timestamps. Each pod's lines carry its name's last five characters in a chart colour, with a legend (D17). The
   picker narrows to one pod.
 - **Search** (⌘F or the button): plain text, case-insensitive, or `/…/` as a regex; "3 of 17", Enter and ⇧Enter step;
-  searching pauses following (D14).
+  searching pauses following (D14). A regex that could backtrack without end is refused ("Can't run this regex"),
+  and a search that runs too long stops ("Search stopped: too slow").
 - **Previous** shows the run before the last restart, once the container has restarted (D16). For a workload, pick a
   pod first.
 - Wrap (on in the drawer, off in the panel), timestamps (your local time, the full time on hover), Download (what is
@@ -66,11 +67,14 @@ a focused row), and, in part 4, the palette.
   else sh.
 - **Every shell runs as you.** A strip above it says which container, pod, namespace and shell, with an amber **Runs
   as you** badge and "Claude Code can't see or type here" (D8). The exec goes through the front door with a token
-  issued for that terminal alone, labelled `you · <context> · shell <namespace>/<pod>`, so it is in the audit trail
-  and the cluster's RBAC for you applies. The token is revoked when the shell ends. If your role can't create
+  issued for that terminal alone, labelled `you · <context> · shell <namespace>/<pod>` and good only for that pod's
+  exec, so it is in the audit trail and the cluster's RBAC for you applies. The token is revoked, and anything it
+  opened closed, when the shell ends, the tab closes, or the page reloads. If your role can't create
   `pods/exec` in the namespace, the Shell buttons are disabled and say so.
-- **Pasting more than one line asks first** (D9): "Paste 14 lines into app? Each line runs in the pod as you."
-  Enter pastes, Esc cancels. A local terminal never asks.
+- **A paste that would run something asks first** (D9): any line break (a lone carriage return too) or other control
+  character: "Paste 14 lines into app? Each line runs in the pod as you.", with its first three lines shown, control
+  characters made visible. Escape characters are removed from every paste into a pod. Enter pastes, Esc cancels. A
+  local terminal never asks.
 - **When a shell ends,** the output stays, greyed, and a bar says what happened (D10, D11): "The shell exited
   (code 3) at 04:19:37" with **Reconnect**, "Connection lost" with **New session**, or "The pod is gone" with **Open
   shell in the new pod** when one with the same labels runs the same container. A new session keeps the old output
@@ -88,9 +92,10 @@ channel 4; the exit read from the status channel).
 
 Your login shell, in your home folder, through node-pty (D21). `KUBECONFIG` points at a file Landlens writes for
 this terminal: one cluster (the one you are on), reached through the front door, with a token issued for this
-terminal (`you · <context> · terminal`) in the shell's environment (`LANDLENS_TOKEN`, read by an exec credential
-plugin, as the agent's fence does). The file and its cache folder are removed and the token revoked when the shell
-exits or the tab closes. The strip says "zsh on this Mac · kubectl points at orbstack through Landlens".
+terminal (`you · <context> · terminal`) in a 0400 file beside it, read by an exec credential plugin; it is not in the
+shell's environment, where another process of yours could read it. The folder is removed and the token revoked when
+the shell exits or the tab closes (and swept when Landlens starts). The shell is your account's login shell, or
+`$SHELL`, if `/etc/shells` lists it. The strip says "zsh on this Mac · kubectl points at orbstack through Landlens".
 
 Your shell's startup files run as usual, so one that sets `KUBECONFIG` itself wins; Landlens's own variables
 (`ELECTRON_*`, `LANDLENS_*` other than the token, `VITE_*`, `NODE_OPTIONS`, `CHROME_*`) are removed from its

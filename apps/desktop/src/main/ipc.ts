@@ -127,6 +127,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "terminal:local": async ({ handle }, event) => workbench.openLocal({ handle }, event.sender),
     "terminal:input": async ({ terminal, data }, event) => (workbench.input(terminal, data, event.sender), { ok: true }),
     "terminal:resize": async ({ terminal, cols, rows }, event) => (workbench.resize(terminal, cols, rows, event.sender), { ok: true }),
+    "terminal:ack": async ({ terminal, chars }, event) => (workbench.ack(terminal, chars, event.sender), { ok: true }),
     "terminal:close": async ({ terminal }, event) => (workbench.close(terminal, event.sender), { ok: true }),
     "edit:review": (r, event) => workbench.reviewEdit(r, event.sender),
     "edit:create": (r, event) => workbench.reviewCreate(r, event.sender),

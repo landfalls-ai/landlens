@@ -8,10 +8,13 @@ type Sink<T> = (e: T) => void;
 function hub<T extends Record<K, string>, K extends string>(channel: "logs:lines" | "logs:end" | "terminal:data" | "terminal:status", key: K, keep: number) {
   const sinks = new Map<string, Sink<T>>();
   const early = new Map<string, T[]>();
+  // Ids whose view has gone: their late pushes are dropped, not kept for 30 seconds (the last 1,000 ids).
+  const gone = new Set<string>();
   api.on(channel, (e: T) => {
     const id = e[key];
     const s = sinks.get(id);
     if (s) return s(e);
+    if (gone.has(id)) return;
     const list = early.get(id) ?? [];
     if (list.length < keep) list.push(e);
     early.set(id, list);
@@ -22,7 +25,10 @@ function hub<T extends Record<K, string>, K extends string>(channel: "logs:lines
     for (const e of early.get(id) ?? []) sink(e);
     early.delete(id);
     return () => {
-      if (sinks.get(id) === sink) sinks.delete(id);
+      if (sinks.get(id) !== sink) return;
+      sinks.delete(id);
+      gone.add(id);
+      if (gone.size > 1000) gone.delete(gone.values().next().value!);
     };
   };
 }

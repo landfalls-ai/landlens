@@ -51,8 +51,8 @@ export const XTerm = forwardRef<XTermHandle, {
   dead?: boolean;
   /** Shown once, before the first output. */
   banner?: string;
-  /** Asked before a paste goes in; return false to hold it (the caller pastes later, or not). */
-  onPaste?: (text: string) => boolean;
+  /** Asked before a paste goes in: return the text to paste now, or false to hold it (the caller pastes later, or not). */
+  onPaste?: (text: string) => string | false;
   onSelection?: (text: string) => void;
   /** Each piece of output as it is written (the tab reads the start of a session, to tell "no shell" apart). */
   onOutput?: (text: string) => void;
@@ -96,6 +96,13 @@ export const XTerm = forwardRef<XTermHandle, {
       fontFamily: getComputedStyle(host).getPropertyValue("--mono").trim() || "monospace",
       fontSize: 12.5, lineHeight: 1.2, cursorBlink: true, scrollback: 10_000, allowProposedApi: true,
       macOptionIsMeta: true, theme: terminalTheme(host), drawBoldTextInBrightColors: false,
+      // OSC 8 links a program prints: https only, opened by main (which shows the host), never xterm's confirm().
+      linkHandler: {
+        allowNonHttpProtocols: false,
+        activate: (_e, uri) => {
+          if (/^https:\/\//i.test(uri)) void api.invoke("link:open", { url: uri }).catch(() => {});
+        },
+      },
     });
     const f = new FitAddon();
     const s = new SearchAddon();
@@ -111,12 +118,15 @@ export const XTerm = forwardRef<XTermHandle, {
     t.attachCustomKeyEventHandler((e) => !((e.metaKey || e.ctrlKey) && PASS.test(e.key) && (e.metaKey || e.key === "`")));
     const sel = t.onSelectionChange(() => cb.current.onSelection?.(t.getSelection()));
     // A paste is the textarea's paste event: catch it first, so a multi-line paste into a pod can ask.
+    // With onPaste (a pod), main pastes what onPaste approves, never the clipboard's raw text.
     const onPasteEvent = (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!bound.current) return e.preventDefault(), e.stopImmediatePropagation();
-      if (cb.current.onPaste && !cb.current.onPaste(text)) {
+      if (cb.current.onPaste) {
         e.preventDefault();
         e.stopImmediatePropagation();
+        const ok = cb.current.onPaste(text);
+        if (ok !== false) t.paste(ok);
       }
     };
     host.addEventListener("paste", onPasteEvent, true);
@@ -155,8 +165,20 @@ export const XTerm = forwardRef<XTermHandle, {
   useEffect(() => {
     const t = term.current;
     if (!terminal || !t) return;
+    // Tell main what has been drawn, in batches, so a container that prints without end waits for the screen.
+    let drawn = 0;
+    let ackTimer: ReturnType<typeof setTimeout> | undefined;
+    const ack = () => {
+      ackTimer = undefined;
+      if (drawn) void api.invoke("terminal:ack", { terminal, chars: drawn }).catch(() => {});
+      drawn = 0;
+    };
     const offData = onTerminalData(terminal, (e) => {
-      t.write(e.data);
+      t.write(e.data, () => {
+        drawn += e.data.length;
+        if (drawn >= 64 * 1024) ack();
+        else ackTimer ??= setTimeout(ack, 50);
+      });
       cb.current.onOutput?.(e.data);
     });
     const offStatus = onTerminalStatus(terminal, (s) => cb.current.onStatus(s));
@@ -165,6 +187,7 @@ export const XTerm = forwardRef<XTermHandle, {
     return () => {
       offData();
       offStatus();
+      if (ackTimer) clearTimeout(ackTimer);
     };
   }, [terminal]);
 

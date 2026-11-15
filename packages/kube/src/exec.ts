@@ -29,6 +29,9 @@ export type ExecExit = { ended: "exit" | "lost" | "refused"; code?: number; stat
 export type ExecSession = {
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  /** Stop and start reading the container's output (flow control: the window is behind). */
+  pause(): void;
+  resume(): void;
   close(): void;
 };
 
@@ -116,6 +119,8 @@ export function openExec(t: ExecTarget, on: { open(): void; data(text: string): 
     write(data) {
       if (ws.readyState === WebSocket.OPEN) ws.send(Buffer.concat([Buffer.from([0]), Buffer.from(data, "utf8")]));
     },
+    pause: () => ws.pause(),
+    resume: () => ws.resume(),
     resize(cols, rows) {
       size = [Math.max(1, Math.min(1000, Math.floor(cols))), Math.max(1, Math.min(1000, Math.floor(rows)))];
       sendSize();

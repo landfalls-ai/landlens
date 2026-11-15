@@ -5,6 +5,7 @@ import type { ClusterInfo, KubeObject, TerminalStatus } from "@landlens/contract
 import { ArrowDown, ArrowUp, CircleX, Copy, RotateCw, Search, Sparkles, SquareTerminal, Unplug, User, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AskContext } from "./AgentDock";
+import { pasteCheck } from "./logRows";
 import { api, useWatch, type ApiError } from "./api";
 import { matches, type ShellTarget } from "./benchState";
 import { Ic, MOD } from "./icons";
@@ -51,7 +52,7 @@ export function TerminalView(props: {
   const [state, setState] = useState<"starting" | "open" | "ended">("starting");
   const [end, setEnd] = useState<End>();
   const [error, setError] = useState<string>();
-  const [paste, setPaste] = useState<string>();
+  const [paste, setPaste] = useState<ReturnType<typeof pasteCheck>>();
   const [sel, setSel] = useState("");
   const [find, setFind] = useState<string>();
   const [found, setFound] = useState<{ index: number; count: number }>();
@@ -131,17 +132,18 @@ export function TerminalView(props: {
     setTimeout(() => xterm.current?.focus(), 0);
   };
 
-  // A multi-line paste into a pod asks first (D9); a local terminal never does.
-  const onPaste = (text: string) => {
-    if (!pod) return true;
-    const lines = text.replace(/\r?\n$/, "").split(/\r?\n/);
-    if (lines.length < 2) return true;
-    setPaste(text);
+  // A paste into a pod loses its escape characters, and one with a line break or a control character asks first
+  // (D9, pasteCheck); a local terminal pastes as your own terminal would.
+  const onPaste = (text: string): string | false => {
+    if (!pod) return text;
+    const c = pasteCheck(text);
+    if (!c.ask) return c.clean;
+    setPaste(c);
     setTimeout(() => pasteBtn.current?.focus(), 0);
     return false;
   };
   const doPaste = (yes: boolean) => {
-    if (yes && paste) xterm.current?.paste(paste);
+    if (yes && paste) xterm.current?.paste(paste.clean);
     setPaste(undefined);
     xterm.current?.focus();
   };
@@ -247,7 +249,11 @@ export function TerminalView(props: {
             if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), doPaste(false));
           }}>
           <Ic icon={SquareTerminal} size={14} />
-          <span className="msg"><b>Paste {paste.replace(/\r?\n$/, "").split(/\r?\n/).length} lines into {pod?.container}?</b><small>Each line runs in the pod as you.</small></span>
+          <span className="msg">
+            <b>Paste {paste.lines === 1 ? "1 line" : `${paste.lines} lines`} into {pod?.container}?</b>
+            <small>{paste.lines === 1 ? "It runs in the pod as you as soon as it lands." : "Each line runs in the pod as you."}</small>
+            <code className="paste-preview">{paste.preview.join("\n")}{paste.lines > 3 ? `\n… ${paste.lines - 3} more` : ""}</code>
+          </span>
           <button className="primary" ref={pasteBtn} onClick={() => doPaste(true)}>Paste<kbd>⏎</kbd></button>
           <button className="secondary" onClick={() => doPaste(false)}>Cancel<kbd>Esc</kbd></button>
         </div>

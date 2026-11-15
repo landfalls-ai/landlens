@@ -98,7 +98,9 @@ export function sessionOptions(i: FenceInput) {
       autoAllowBashIfSandboxed: true, // reads inside the sandbox run without a prompt; the fence holds regardless
       allowUnsandboxedCommands: false, // no dangerouslyDisableSandbox escape
       filesystem: {
-        denyRead: [home, ...credentials, ...kubeconfigs],
+        // Other terminals' devices too: the shell could otherwise open a local terminal's pty and race it for the keys
+        // you type (security review, wave 4 part 1, finding 11; writing to one is already refused).
+        denyRead: [home, ...credentials, ...kubeconfigs, "/dev/ttys*"],
         allowRead: [i.cwd, ...toolDirs],
         allowWrite: [i.cwd],
         // The skills plugin is Landlens's, built before the session starts: the agent can read it, not change it.

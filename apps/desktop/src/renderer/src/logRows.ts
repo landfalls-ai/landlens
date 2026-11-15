@@ -56,13 +56,45 @@ export function ansi(text: string): { text: string; cls?: string }[] {
   if (at < text.length) out.push({ text: text.slice(at), ...(cls() ? { cls: cls()! } : {}) });
   return out;
 }
+// Everything else a container can write that isn't text: OSC ended by ESC \, DCS/SOS/PM/APC strings, CSI with
+// intermediate bytes, two-byte escapes, a lone ESC; then C0 controls but tab, DEL and C1 (security review, wave 4
+// part 1, finding 7). Bidi controls become visible marks, so copied text reads as it looks.
 // eslint-disable-next-line no-control-regex
-export const plain = (t: string) => t.replace(ESC, "");
+const ESC_ANY = /\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b[PX^_][\s\S]*?\x1b\\|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[ -/]*[0-~]|\x1b/g;
+// eslint-disable-next-line no-control-regex
+const CONTROLS = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/g;
+const BIDI = /[؜‎‏‪-‮⁦-⁩]/g;
+const bidiMark = (c: string) => `<U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}>`;
+/** One line as plain text: for Copy, Download and Ask Claude. */
+export const plain = (t: string) => t.replace(ESC, "").replace(ESC_ANY, "").replace(CONTROLS, "").replace(BIDI, bidiMark);
 
-/** Plain text, case-insensitive; `/…/` is a regex. */
+/**
+ * What a paste into a pod would send, and whether to ask first (D9; security review, wave 4 part 1, finding 3). Escape
+ * characters are removed, so the text can't end bracketed paste early (`ESC[201~`) or send keys. It asks when the
+ * text holds a line break of any kind (a lone CR is Enter too) or any other control character but tab, since either
+ * runs something the moment it lands.
+ */
+export function pasteCheck(text: string): { clean: string; ask: boolean; lines: number; preview: string[] } {
+  // eslint-disable-next-line no-control-regex
+  const clean = text.replace(/[\x1b\x9b]/g, "");
+  const parts = clean.replace(/(\r\n|\r|\n)$/, "").split(/\r\n|\r|\n/);
+  // eslint-disable-next-line no-control-regex
+  const ask = /[\x00-\x08\x0a-\x1f\x7f-\x9f]/.test(clean);
+  // eslint-disable-next-line no-control-regex
+  const visible = (l: string) => l.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, (c) => (c === "\x7f" ? "^?" : `^${String.fromCharCode(c.charCodeAt(0) + 64)}`)).replace(/[\x80-\x9f]/g, "�");
+  const preview = parts.slice(0, 3).map((l) => { const v = visible(l); return v.length > 100 ? `${v.slice(0, 100)}…` : v; });
+  return { clean, ask, lines: parts.length, preview };
+}
+
+/**
+ * Plain text, case-insensitive; `/…/` is a regex. A regex with a quantified group that itself repeats (`(a+)+`,
+ * `(\w*)*`, `(x|y+){2,}`) or a backreference is refused: on a line a container wrote to make it backtrack, it could
+ * freeze the window (security review, wave 4 part 1, finding 6). `findHits` also cuts lines and stops on a budget.
+ */
 export function matcher(q: string): RegExp | undefined {
   if (!q) return undefined;
   const re = /^\/(.+)\/$/.exec(q);
+  if (re && (/\([^)]*[+*}][^)]*\)\s*[+*{?]/.test(re[1]!) || /\\[1-9]|\\k</.test(re[1]!))) return undefined;
   try {
     return new RegExp(re ? re[1]! : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
   } catch {
@@ -70,3 +102,22 @@ export function matcher(q: string): RegExp | undefined {
   }
 }
 
+
+/** How much of a line search reads, and how long one search may run before it stops. */
+export const SEARCH_LINE = 2048;
+export const SEARCH_BUDGET_MS = 60;
+
+/** The rows that match, or `slow` when the search ran past its budget (the rows found so far are kept). */
+export function findHits(rows: { text: string; mark?: unknown }[], re: RegExp | undefined, now: () => number = () => performance.now()): { hits: number[]; slow: boolean } {
+  if (!re) return { hits: [], slow: false };
+  const start = now();
+  const hits: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    if (r.mark) continue;
+    re.lastIndex = 0;
+    if (re.test(plain(r.text.length > SEARCH_LINE ? r.text.slice(0, SEARCH_LINE) : r.text))) hits.push(i);
+    if ((i & 255) === 255 && now() - start > SEARCH_BUDGET_MS) return { hits, slow: true };
+  }
+  return { hits, slow: false };
+}

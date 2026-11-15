@@ -265,6 +265,8 @@ export const channels = {
   "terminal:local": z.object({ handle: Handle }),
   "terminal:input": z.object({ terminal: StreamId, data: z.string().max(65_536) }),
   "terminal:resize": z.object({ terminal: StreamId, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
+  /** The window drew this much of a terminal's output (flow control). */
+  "terminal:ack": z.object({ terminal: StreamId, chars: z.number().int().min(1).max(64 * 1024 * 1024) }),
   "terminal:close": z.object({ terminal: StreamId }),
   // Your edits (docs/workbench.md): dry-run first, then apply exactly what was dry-run.
   "edit:review": z.object({
@@ -331,6 +333,7 @@ export type Responses = {
   "terminal:local": { terminal: string; label: string; shell: string };
   "terminal:input": { ok: true };
   "terminal:resize": { ok: true };
+  "terminal:ack": { ok: true };
   "terminal:close": { ok: true };
   "edit:review": EditReview;
   "edit:create": EditReview;

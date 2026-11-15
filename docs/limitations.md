@@ -67,14 +67,19 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   cluster returns it. Only what the agent reads is scrubbed.
 - **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its
   connections allows but doesn't defend against a compromised user account ([security.md](security.md)).
-- **A local terminal's token is in its shell's environment** (`LANDLENS_TOKEN`), readable by anything that shell
-  runs, and it is full access to that cluster as you, until the terminal ends. Each terminal gets its own, revoked
-  when it closes ([security.md](security.md#terminals)). A startup file that sets `KUBECONFIG` wins over Landlens's.
+- **A local terminal's token is in a file** (0400, in a 0700 folder under Landlens's data) that any process of yours
+  outside the agent's sandbox can read, like your kubeconfig, and it is full access to that cluster as you until the
+  terminal ends. Each terminal gets its own, revoked when it closes ([security.md](security.md#terminals)). A startup
+  file that sets `KUBECONFIG` wins over Landlens's. A pod shell's token is narrower: that pod's exec only.
+- **Flow control** covers terminals (paused past 2 MB undrawn) and a log's read rate, not a log view's drawing: a
+  container that logs 2 M characters a second still keeps the window busy. Log search's regex guard is a pattern
+  check plus a time budget, not a separate thread: a regex it doesn't recognise as risky can still stall one search.
+  The transcript shows the chip, not the quoted text that was sent.
 - **Logs and terminals** ([workbench.md](workbench.md)): the drawer and a panel tab each open their own stream (the
   design shares one, counted in main); Download saves what is shown, not the whole log from the API; the view draws
   the last 2,000 lines of the 10,000 it keeps, without virtual scrolling; a workload follows its newest ten pods and
   doesn't add pods that start later until you reopen it; pod colours run out after four (the rest share one).
-  Shells: no debug containers for images without a shell; paste into a pod asks only for more than one line; the
+  Shells: no debug containers for images without a shell; the
   shell picker offers a workload's pods, but the palette entry (⌘K "shell …") comes with part 4; "Open shell in the new
   pod" matches pods by labels, so it can offer a pod of a different rollout. Input typed while a new session starts
   is dropped. The panel's height is kept for the window, not across restarts.

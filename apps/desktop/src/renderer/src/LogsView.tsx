@@ -11,7 +11,7 @@ import { Ic, MOD } from "./icons";
 import { copyText, duration } from "./present";
 import { onLogEnd, onLogLines } from "./streams";
 import { capForAsk } from "./TerminalView";
-import { ansi, matcher, mergeRows, plain, tsKey, type Row } from "./logRows";
+import { ansi, findHits, matcher, mergeRows, plain, tsKey, type Row } from "./logRows";
 
 const TAIL = 500;
 const KEEP = 10_000;
@@ -174,7 +174,15 @@ export function LogsView(props: {
 
   const all = rows.current;
   const re = useMemo(() => matcher(query ?? ""), [query]);
-  const hits = useMemo(() => (re ? all.flatMap((r, i) => (!r.mark && (re.lastIndex = 0, re.test(plain(r.text))) ? [i] : [])) : []), [re, all, version]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A search that ran past its budget stops for this query, rather than run again on every new line.
+  const slowQuery = useRef<string | undefined>(undefined);
+  const found = useMemo(() => {
+    if (!re || slowQuery.current === query) return { hits: [], slow: !!re };
+    const f = findHits(all, re);
+    if (f.slow) slowQuery.current = query ?? undefined;
+    return f;
+  }, [re, all, version]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hits = found.hits;
   const curRow = hits.length ? all[hits[Math.min(cur, hits.length - 1)]!] : undefined;
   const from = Math.max(0, all.length - show);
   const visible = all.slice(from);
@@ -312,7 +320,7 @@ export function LogsView(props: {
                 if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), closeFind());
               }} />
           </label>
-          <span className="find-count" aria-live="polite">{query ? (hits.length ? `${Math.min(cur, hits.length - 1) + 1} of ${hits.length}` : re ? "No matches" : "Not a regex") : ""}</span>
+          <span className="find-count" aria-live="polite">{query ? (found.slow ? "Search stopped: too slow" : hits.length ? `${Math.min(cur, hits.length - 1) + 1} of ${hits.length}` : re ? "No matches" : /^\/.+\/$/.test(query) ? "Can't run this regex" : "Not a regex") : ""}</span>
           <button className="icon-btn" aria-label="Previous match" onClick={() => setCur((c) => (hits.length ? (c + hits.length - 1) % hits.length : 0))}><Ic icon={ArrowUp} size={13} /></button>
           <button className="icon-btn" aria-label="Next match" onClick={() => setCur((c) => (hits.length ? (c + 1) % hits.length : 0))}><Ic icon={ArrowDown} size={13} /></button>
           <button className="icon-btn" aria-label="Close search" onClick={closeFind}><Ic icon={X} size={13} /></button>

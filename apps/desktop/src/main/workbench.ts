@@ -5,12 +5,12 @@
 // the front door with a token issued for that terminal alone ("you · <context> · shell <pod>"): every shell is in the
 // audit trail, and the token is revoked when the shell ends. It is your access, never the agent's.
 import { randomBytes } from "node:crypto";
-import { accessSync, chmodSync, constants, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import type { EditReview, LogsEnd, LogsPush, Request, TerminalData, TerminalStatus } from "@landlens/contracts";
-import { AUTO_SHELL, EditBroker, followLogs, openExec, TOKEN_ENV, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor, type Send } from "@landlens/kube";
+import { AUTO_SHELL, EditBroker, followLogs, openExec, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor, type Send } from "@landlens/kube";
 import { frontDoorSend } from "@landlens/kube-mcp";
 import type { IPty } from "node-pty";
 import type { WebContents } from "electron";
@@ -23,7 +23,30 @@ type Push = {
 };
 
 type Owned = { wc: WebContents; handle: string; stop(): void };
-type Terminal = Owned & { session: Pick<ExecSession, "write" | "resize"> };
+type Terminal = Owned & { session: Pick<ExecSession, "write" | "resize">; flow: Flow };
+
+/**
+ * Flow control for a terminal's output (security review, wave 4 part 1, finding 9): what main sent and the window
+ * hasn't drawn yet. Past HIGH the source (the pod's WebSocket, the pty) pauses; under LOW it resumes. Messages are at
+ * most CHUNK characters.
+ */
+const HIGH = 2 * 1024 * 1024, LOW = 512 * 1024, CHUNK = 256 * 1024;
+export class Flow {
+  private unacked = 0;
+  private paused = false;
+  constructor(private readonly src: { pause(): void; resume(): void }) {}
+  sent(n: number) {
+    this.unacked += n;
+    if (!this.paused && this.unacked > HIGH) (this.paused = true, this.src.pause());
+  }
+  ack(n: number) {
+    this.unacked = Math.max(0, this.unacked - n);
+    if (this.paused && this.unacked < LOW) (this.paused = false, this.src.resume());
+  }
+  get isPaused() {
+    return this.paused;
+  }
+}
 
 const SHELLS = { auto: AUTO_SHELL, bash: ["bash", "-il"], sh: ["sh", "-i"] } as const;
 /** Terminal output is sent at most this often, in one message. */
@@ -46,6 +69,8 @@ export class WorkbenchService {
     push?: Push;
   }) {
     deps.clusters.onGone((handle) => this.stopCluster(handle));
+    // A crash leaves terminal folders (a kubeconfig and a token file each): sweep them at start.
+    rmSync(join(deps.dataDir, "terminals"), { recursive: true, force: true });
   }
 
   private send: Push = ((wc: WebContents, channel: string, payload: unknown) => {
@@ -53,15 +78,23 @@ export class WorkbenchService {
     if (!wc.isDestroyed()) wc.send(channel, payload);
   }) as Push;
 
-  /** Everything a window opened ends with it. */
+  /**
+   * Everything a window opened ends with its page: when the window goes, and when the page reloads or its renderer
+   * crashes, since no tab is left to show or close what it opened (and a live terminal holds a token).
+   */
   private own(wc: WebContents) {
     if (this.watched.has(wc)) return;
     this.watched.add(wc);
-    wc.once("destroyed", () => {
+    const end = () => {
       for (const [k, v] of this.logs) if (v.wc === wc) this.closeLogs(k);
       for (const [k, v] of this.terminals) if (v.wc === wc) this.closeTerminal(k);
       for (const [k, v] of this.reviews) if (v.wc === wc) this.discardEdit(k, wc);
+    };
+    wc.on("did-start-navigation", (d: { isMainFrame: boolean; isSameDocument: boolean }) => {
+      if (d.isMainFrame && !d.isSameDocument) end();
     });
+    wc.on("render-process-gone", end);
+    wc.once("destroyed", () => (end(), this.watched.delete(wc)));
   }
 
   openLogs(r: Request<"logs:open">, wc: WebContents): { stream: string } {
@@ -148,16 +181,24 @@ export class WorkbenchService {
     this.own(wc);
     const terminal = id();
     const label = `you · ${c.info.context} · shell ${r.namespace}/${r.pod}`;
-    const token = this.deps.frontDoor.issueToken({ label, policy: { access: "full" }, clusters: [r.handle] });
+    // Only this pod's exec: a leaked shell token is worth one shell, not the cluster (review, part 1, finding 5).
+    const token = this.deps.frontDoor.issueToken({ label, policy: { access: "exec", pod: { namespace: r.namespace, name: r.pod } }, clusters: [r.handle] });
     let out = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let flow: Flow | undefined;
     const flush = () => {
       timer = undefined;
-      if (out) this.send(wc, "terminal:data", { terminal, data: out });
+      for (let i = 0; i < out.length; i += CHUNK) {
+        const data = out.slice(i, i + CHUNK);
+        this.send(wc, "terminal:data", { terminal, data });
+        flow?.sent(data.length);
+      }
       out = "";
     };
     let ended = false;
-    const session = openExec({
+    let session: ExecSession;
+    try {
+      session = openExec({
       url: this.deps.frontDoor.clusterUrl(r.handle), certificate: this.deps.frontDoor.certificate, token,
       namespace: r.namespace, pod: r.pod, container: r.container, command: [...SHELLS[r.shell ?? "auto"]],
     }, {
@@ -176,8 +217,13 @@ export class WorkbenchService {
         this.send(wc, "terminal:status", { terminal, state: "exited", ...e });
       },
     });
+    } catch (err) {
+      this.deps.frontDoor.revokeToken(token);
+      throw err;
+    }
+    flow = new Flow(session);
     this.terminals.set(terminal, {
-      wc, handle: r.handle, session,
+      wc, handle: r.handle, session, flow,
       stop: () => {
         session.close();
         this.deps.frontDoor.revokeToken(token);
@@ -202,14 +248,17 @@ export class WorkbenchService {
     const dir = join(this.deps.dataDir, "terminals", terminal);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const kubeconfig = join(dir, "kubeconfig");
-    writeFileSync(kubeconfig, toolKubeconfig({ url: this.deps.frontDoor.url, certificate: this.deps.frontDoor.certificate }, [{ handle: r.handle, context: c.info.context }]), { mode: 0o400 });
+    const tokenFile = join(dir, "token");
+    writeFileSync(kubeconfig, toolKubeconfig({ url: this.deps.frontDoor.url, certificate: this.deps.frontDoor.certificate }, [{ handle: r.handle, context: c.info.context }], undefined, { tokenFile }), { mode: 0o400 });
     const token = this.deps.frontDoor.issueToken({ label, policy: { access: "full" }, clusters: [r.handle] });
-    const shell = process.env.SHELL && /^\/[\w/.-]+$/.test(process.env.SHELL) ? process.env.SHELL : "/bin/zsh";
+    // In a file, not the shell's environment: see tool-kubeconfig.ts (security review, wave 4 part 1, finding 1).
+    writeFileSync(tokenFile, token, { mode: 0o400 });
+    const shell = loginShell();
     let pty: IPty;
     try {
       pty = loadPty().spawn(shell, ["-l"], {
         name: "xterm-256color", cols: 100, rows: 30, cwd: homedir(),
-        env: { ...localEnv(process.env), KUBECONFIG: kubeconfig, KUBECACHEDIR: join(dir, "cache"), [TOKEN_ENV]: token, TERM: "xterm-256color", COLORTERM: "truecolor" },
+        env: { ...localEnv(process.env), KUBECONFIG: kubeconfig, KUBECACHEDIR: join(dir, "cache"), TERM: "xterm-256color", COLORTERM: "truecolor" },
       });
     } catch (err) {
       this.deps.frontDoor.revokeToken(token);
@@ -218,9 +267,14 @@ export class WorkbenchService {
     }
     let out = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let flow: Flow | undefined;
     const flush = () => {
       timer = undefined;
-      if (out) this.send(wc, "terminal:data", { terminal, data: out });
+      for (let i = 0; i < out.length; i += CHUNK) {
+        const data = out.slice(i, i + CHUNK);
+        this.send(wc, "terminal:data", { terminal, data });
+        flow?.sent(data.length);
+      }
       out = "";
     };
     let ended = false;
@@ -239,8 +293,9 @@ export class WorkbenchService {
       timer ??= setTimeout(flush, FLUSH_MS);
     });
     pty.onExit(({ exitCode }) => end(exitCode));
+    flow = new Flow({ pause: () => pty.pause(), resume: () => pty.resume() });
     this.terminals.set(terminal, {
-      wc, handle: r.handle,
+      wc, handle: r.handle, flow,
       session: { write: (d) => pty.write(d), resize: (cols, rows) => pty.resize(cols, rows) },
       stop: () => {
         try {
@@ -257,6 +312,10 @@ export class WorkbenchService {
 
   input(terminal: string, data: string, wc: WebContents) {
     this.mine(terminal, wc).session.write(data);
+  }
+
+  ack(terminal: string, chars: number, wc: WebContents) {
+    this.terminals.get(terminal)?.wc === wc && this.terminals.get(terminal)!.flow.ack(chars);
   }
 
   resize(terminal: string, cols: number, rows: number, wc: WebContents) {
@@ -290,6 +349,26 @@ export class WorkbenchService {
 }
 
 /** Your environment, without Landlens's own variables or Electron's. */
+/** Your login shell: the account's, else $SHELL, if /etc/shells lists it; else zsh. */
+export function loginShell(shells = readShells(), account = safeUserShell(), env = process.env.SHELL): string {
+  for (const s of [account, env]) if (s && shells.includes(s)) return s;
+  return "/bin/zsh";
+}
+function readShells(): string[] {
+  try {
+    return readFileSync("/etc/shells", "utf8").split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/"));
+  } catch {
+    return ["/bin/zsh", "/bin/bash", "/bin/sh"];
+  }
+}
+function safeUserShell(): string | undefined {
+  try {
+    return userInfo().shell ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function localEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {

@@ -24,6 +24,9 @@ export const MAX_TAIL = 10_000;
 export const MAX_LINE = 16 * 1024;
 const BATCH_MS = 100;
 const BATCH_LINES = 500;
+/** A batch is sent at 512 K characters too, and a stream is read at most 2 M characters a second. */
+const BATCH_CHARS = 512 * 1024;
+export const RATE = 2 * 1024 * 1024;
 
 export function logPath(r: LogRequest): string {
   const q = new URLSearchParams({ container: r.container, timestamps: "true" });
@@ -47,6 +50,11 @@ export function splitLine(raw: string): LogLine {
 export function followLogs(client: Pick<KubeClient, "request">, r: LogRequest, on: { lines(l: LogLine[]): void; end(e: LogEnd): void }): () => void {
   const abort = new AbortController();
   let pending: LogLine[] = [];
+  let pendingChars = 0;
+  // A container that logs without pause is read at most RATE characters a second: past that the reader waits, and
+  // the API server's stream with it (security review, wave 4 part 1, finding 9).
+  let windowStart = Date.now();
+  let windowChars = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   const flush = () => {
@@ -55,13 +63,17 @@ export function followLogs(client: Pick<KubeClient, "request">, r: LogRequest, o
     if (pending.length) {
       const batch = pending;
       pending = [];
+      pendingChars = 0;
       on.lines(batch);
     }
   };
   const push = (raw: string) => {
     if (!raw) return;
-    pending.push(splitLine(raw.endsWith("\r") ? raw.slice(0, -1) : raw));
-    if (pending.length >= BATCH_LINES) flush();
+    const line = splitLine(raw.endsWith("\r") ? raw.slice(0, -1) : raw);
+    pending.push(line);
+    pendingChars += line.text.length;
+    windowChars += line.text.length;
+    if (pending.length >= BATCH_LINES || pendingChars >= BATCH_CHARS) flush();
     else timer ??= setTimeout(flush, BATCH_MS);
   };
 
@@ -74,6 +86,12 @@ export function followLogs(client: Pick<KubeClient, "request">, r: LogRequest, o
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
+        if (windowChars > RATE) {
+          const wait = windowStart + 1000 - Date.now();
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          if (stopped) break;
+        }
+        if (Date.now() - windowStart >= 1000) (windowStart = Date.now(), windowChars = 0);
         buf += value;
         let nl: number;
         while ((nl = buf.indexOf("\n")) >= 0) {

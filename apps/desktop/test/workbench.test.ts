@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({}));
-import { localEnv, WorkbenchService } from "../src/main/workbench";
+import { Flow, localEnv, loginShell, WorkbenchService } from "../src/main/workbench";
 
 /** A window: sends are recorded; "destroyed" ends what it owns. */
 function window() {
@@ -62,7 +62,7 @@ describe("the workbench service", () => {
     expect(c.aborted).toHaveLength(1);
   });
 
-  it("gives each pod shell its own full-access token, labelled as you, for that cluster, revoked when it ends", async () => {
+  it("gives each pod shell its own token for that pod's exec alone, labelled as you, revoked when it ends", async () => {
     const c = cluster();
     const issue = vi.fn(() => "s".repeat(64));
     const revoke = vi.fn();
@@ -71,7 +71,7 @@ describe("the workbench service", () => {
     const b = window();
     const { terminal, label } = svc.openTerminal({ handle: "h1234567", namespace: "shop", pod: "web-1", container: "app" }, a as any);
     expect(label).toBe("you · orbstack · shell shop/web-1");
-    expect(issue).toHaveBeenCalledWith({ label, policy: { access: "full" }, clusters: ["h1234567"] });
+    expect(issue).toHaveBeenCalledWith({ label, policy: { access: "exec", pod: { namespace: "shop", name: "web-1" } }, clusters: ["h1234567"] });
     // Another window can't type into it, resize it or close it.
     expect(() => svc.input(terminal, "id\n", b as any)).toThrow(/no such terminal/);
     expect(() => svc.resize(terminal, 80, 24, b as any)).toThrow(/no such terminal/);
@@ -100,5 +100,29 @@ describe("the workbench service", () => {
   it("gives a local terminal your environment, not Landlens's or Electron's", () => {
     expect(localEnv({ HOME: "/h", PATH: "/bin", ELECTRON_RUN_AS_NODE: "1", LANDLENS_USER_DATA: "/x", KUBECONFIG: "/k", NODE_OPTIONS: "--x", LANG: "C" }))
       .toEqual({ HOME: "/h", PATH: "/bin", LANG: "C" });
+  });
+
+  it("runs your login shell only if /etc/shells lists it", () => {
+    const shells = ["/bin/zsh", "/bin/bash", "/opt/homebrew/bin/fish"];
+    expect(loginShell(shells, "/opt/homebrew/bin/fish", "/bin/bash")).toBe("/opt/homebrew/bin/fish");
+    expect(loginShell(shells, "", "/bin/bash")).toBe("/bin/bash");
+    expect(loginShell(shells, "/tmp/evil", "/bin/../tmp/evil")).toBe("/bin/zsh");
+  });
+
+  it("pauses a terminal's source while the window is more than 2 MB behind, and resumes under 512 KB", () => {
+    const src = { pause: vi.fn(), resume: vi.fn() };
+    const f = new Flow(src);
+    f.sent(1024 * 1024);
+    f.sent(1024 * 1024);
+    expect(src.pause).not.toHaveBeenCalled();
+    f.sent(1);
+    expect(src.pause).toHaveBeenCalledTimes(1);
+    f.sent(1024 * 1024);
+    expect(src.pause).toHaveBeenCalledTimes(1);
+    f.ack(2 * 1024 * 1024);
+    expect(src.resume).not.toHaveBeenCalled();
+    f.ack(700 * 1024);
+    expect(src.resume).toHaveBeenCalledTimes(1);
+    expect(f.isPaused).toBe(false);
   });
 });

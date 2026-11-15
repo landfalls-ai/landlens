@@ -138,6 +138,51 @@ describe("FrontDoor", () => {
     expect(audit.at(-1)).toMatchObject({ label: "ide", allowed: true, status: 101 });
   });
 
+  it("closes a token's open upgrades and streams when it is revoked", async () => {
+    // The cluster holds both open: an exec that never ends, and a watch that sends one event and waits.
+    const upgraded: { destroy(): void }[] = [];
+    sidecar.on("upgrade", (_req, socket) => {
+      upgraded.push(socket);
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    });
+    sidecar.removeAllListeners("request");
+    sidecar.on("request", (_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"type":"ADDED"}\n');
+    });
+    const token = door.issueToken({ label: "you · terminal", policy: { access: "full" }, clusters: [HANDLE] });
+    const other = door.issueToken({ label: "ide", policy: { access: "full" }, clusters: [HANDLE] });
+    // Each resolves to { closed } once open (a bare promise would be adopted, waiting for the close).
+    const opened = (t: string) => new Promise<{ closed: Promise<void> }>((ok) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
+        s.write(`GET /c/${HANDLE}/api/v1/namespaces/a/pods/p1/exec?command=sh HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${t}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      });
+      const closed = new Promise<void>((done) => s.on("close", () => done()));
+      s.once("data", () => ok({ closed }));
+    });
+    const watch = new Promise<{ closed: Promise<void> }>((ok, fail) => {
+      const req = httpsRequest(door.url + `/c/${HANDLE}/api/v1/pods?watch=true`, { ca: tls.ca, agent: false, headers: { Authorization: `Bearer ${token}` } }, (res) => {
+        const closed = new Promise<void>((done) => res.on("close", () => done()).on("error", () => done()));
+        res.once("data", () => ok({ closed }));
+      });
+      req.on("error", fail);
+      req.end();
+    });
+    const exec = await opened(token);
+    const stream = await watch;
+    const kept = await opened(other);
+    let keptClosed = false;
+    void kept.closed.then(() => (keptClosed = true));
+    door.revokeToken(token);
+    await exec.closed;
+    await stream.closed;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(keptClosed).toBe(false);
+    door.revokeToken(other);
+    await kept.closed;
+    for (const u of upgraded) u.destroy();
+  });
+
   it("refuses an upgrade (exec) for a read-only token", async () => {
     const token = door.issueToken({ label: "agent 1", policy: agentReadOnlyPolicy(), clusters: [HANDLE] });
     const res = await new Promise<string>((resolve) => {
