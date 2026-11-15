@@ -48,6 +48,9 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   count (counting would mean listing every object of the kind). Printer columns read a JSONPath subset; a column
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
   guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
+- **The sidebar is 232px wide, always** ([design.md](design.md#layout)): its sections fold (D139), but it has no drag
+  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 8) moves both
+  to a settings file.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
 - **A failing pod's diagnosis** shows its last output line only when the container left a termination message

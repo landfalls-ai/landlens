@@ -24,7 +24,8 @@ import { holdProblem, type HeldProblem, type Severity } from "./problemRules";
 import { missingChecks } from "@landlens/kube/checks";
 import { splitByShape } from "./present";
 import { ResourceTable, rowTone } from "./ResourceTable";
-import { Sidebar, type Current } from "./Sidebar";
+import { Sidebar, useNavFolds, type Current } from "./Sidebar";
+import { allSections, BADGED } from "./navState";
 import { StatusBar } from "./StatusBar";
 import { Bench } from "./Bench";
 import { useBench } from "./benchState";
@@ -165,6 +166,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const crd = useCrd(cluster.handle, list);
   const { columns, printer } = useColumns(list, crd, watch.items);
   const [pins, togglePin] = usePins(cluster.context);
+  const navFolds = useNavFolds(cluster.context);
 
   const tones = useMemo(() => new Map(list ? watch.items.map((o) => [o.metadata.uid, rowTone(columns, o, now)]) : []), [watch.items, list, columns, now]);
   const shown = useMemo(() => {
@@ -408,12 +410,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         rail={rail}
         badges={{
           problems: h ? badgeFor(h.problems) : undefined,
-          byResource: h ? {
-            pods: badgeFor(h.problems, "Pod"), deployments: badgeFor(h.problems, "Deployment"), statefulsets: badgeFor(h.problems, "StatefulSet"),
-            daemonsets: badgeFor(h.problems, "DaemonSet"), jobs: badgeFor(h.problems, "Job"), nodes: badgeFor(h.problems, "Node"),
-            secrets: badgeFor(h.problems, "Secret"), persistentvolumeclaims: badgeFor(h.problems, "PersistentVolumeClaim"),
-          } : {},
+          byResource: h ? Object.fromEntries(Object.entries(BADGED).map(([resource, kind]) => [resource, badgeFor(h.problems, kind)])) : {},
+          all: h?.problems ?? [],
         }}
+        nav={navFolds}
         onPick={pick}
         onToggle={() => setUserRail(!rail)}
         onSwitch={switchTo}
@@ -674,6 +674,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             newTerminal: () => (bench.openLocal(), focusBench()),
             createYaml: () => setCreating(true),
             toggleSidebar: () => setUserRail(!rail),
+            foldSections: () => navFolds.setSections(allSections(sections.map(([s]) => s)), false),
+            unfoldSections: () => navFolds.setSections(allSections(sections.map(([s]) => s)), true),
             openDock: () => setDock(true),
             showForwards: () => (bench.openForwards(), focusBench()),
             showProblems: () => openProblems(),

@@ -5,8 +5,8 @@
 import type { GcpResource, KubeContext, KubeObject, Problem, SearchEntry } from "@landlens/contracts";
 import { resourceLabel, serviceIcon, shortType } from "./GcpPage";
 import {
-  ArrowRightLeft, Box, ChevronRight, CornerDownLeft, FilePlus2, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
-  CircleX, ExternalLink, Search, Siren, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, Workflow, type LucideIcon,
+  ArrowRightLeft, Box, ChevronRight, CornerDownLeft, FilePlus2, FoldVertical, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
+  CircleX, ExternalLink, Search, Siren, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, UnfoldVertical, Workflow, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
@@ -25,6 +25,8 @@ export type Commands = {
   newTerminal: () => void;
   createYaml: () => void;
   toggleSidebar: () => void;
+  foldSections: () => void;
+  unfoldSections: () => void;
   openDock: () => void;
   showForwards: () => void;
   showProblems: () => void;
@@ -206,6 +208,8 @@ export function JumpPalette(props: {
     { key: "c:problems", group: "Commands", label: "Show problems", icon: Stethoscope, run: () => done(props.commands.showProblems) },
     { key: "c:dock", group: "Commands", label: "Ask Claude", hint: `${MOD}J`, icon: Sparkles, run: () => done(props.commands.openDock) },
     { key: "c:sidebar", group: "Commands", label: "Toggle sidebar", hint: `${MOD}B`, icon: PanelLeft, run: () => done(props.commands.toggleSidebar) },
+    { key: "c:fold", group: "Commands", label: "Fold all sections", hint: "sidebar", icon: FoldVertical, run: () => done(props.commands.foldSections) },
+    { key: "c:unfold", group: "Commands", label: "Unfold all sections", hint: "sidebar", icon: UnfoldVertical, run: () => done(props.commands.unfoldSections) },
     { key: "c:switch", group: "Commands", label: "Switch cluster…", icon: Layers, run: () => (setQ(""), setAt(0), setFocus(undefined), setSwitching(true)) },
     { key: "c:names", group: "Commands", label: "Read names again", hint: "search", icon: RefreshCw, run: () => (index.refresh(), setQ("")) },
     ...pages.map((p): Row => ({ key: `c:${p.key}`, group: "Commands", label: `Go to ${p.label}`, icon: kindIcon(p.resource), run: p.go })),

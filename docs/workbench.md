@@ -213,7 +213,9 @@ Kubernetes serves.
 
 - **One section** (D38), last in the sidebar and closed at first: **Custom resources** with a count, holding
   **Definitions** (the CRD list, moved from Cluster: Name, Group, Kind, Scope, Age), then each API group as a
-  folding sub-heading in mono with its count (`k3s.cattle.io 2`), holding its kinds. Past 12 kinds a filter field
+  folding sub-heading in mono with its count (`k3s.cattle.io 2`), holding its kinds. The section's fold is
+  remembered with the others; the API groups' folds per cluster context (D139,
+  [design.md](design.md#layout)), and ⌥-click on one folds or unfolds them all. Past 12 kinds a filter field
   ("Filter 40 kinds") narrows them by kind, group or resource. In the rail the section is one Shapes icon with a
   flyout listing the same.
 - **Pinned** (D39): a star on a kind's row (on hover) pins it to a Pinned section under Agent; the star there
@@ -290,7 +292,8 @@ pages) and **Clusters** (switch to another context).
   opens a problem's drawer on the Problems page; Tab lists Open, Ask Claude and Open <Kind>. Problems come from the
   report the window already holds: ⌘K reads nothing more for them.
 - **`>`** lists the app's commands: Toggle panel, New local terminal, Create from YAML, Show port forwards, Show
-  problems, Ask Claude, Toggle sidebar, Switch cluster…, Read names again, and the pages.
+  problems, Ask Claude, Toggle sidebar, Fold all sections, Unfold all sections (the sidebar's, D139), Switch cluster…,
+  Read names again, and the pages.
 - **Enter** opens an object in its list's drawer (reading it first, so a name that has gone says so), or runs the
   action: a forward opens the drawer with the first port's Forward focused.
 
