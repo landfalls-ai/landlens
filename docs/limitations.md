@@ -34,8 +34,11 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **macOS only for the fence**: it relies on Claude Code's Seatbelt sandbox. On Linux it would need bubblewrap; the
   session fails rather than run unsandboxed (`failIfUnavailable`).
 - **No `explain` tool yet** (OpenAPI schemas); the agent can run `kubectl explain` instead.
-- **No Helm yet** (wave 4, part 4). Logs, terminals, the YAML editor and port-forward are built
-  ([workbench.md](workbench.md)), and graphs ([metrics.md](metrics.md)).
+- **Helm is read-only** ([workbench.md](workbench.md#helm-releases)): no install, upgrade, rollback or uninstall,
+  and the agent can't read releases (they are Secrets). Only Helm 3's default storage, Secrets, is read: releases
+  kept in ConfigMaps or SQL don't show. Which values are secret is decided by their keys (and credential-shaped
+  text), so a secret under an innocent name shows. Releases are read every 30 seconds, not watched. Logs, terminals,
+  the YAML editor and port-forward are built ([workbench.md](workbench.md)), and graphs ([metrics.md](metrics.md)).
   Kinds without their own columns get name, namespace and age; custom kinds get their CRD's printer columns.
 - **Custom resources** ([workbench.md](workbench.md#custom-resources)): a definition's "Open certificates" has no
   count (counting would mean listing every object of the kind). Printer columns read a JSONPath subset; a column

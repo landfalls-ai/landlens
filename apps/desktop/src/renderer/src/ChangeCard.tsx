@@ -341,7 +341,7 @@ export function Diff({ op, capped, create, onUncap, uncapKbd = false, onWide }: 
   );
 }
 
-function Line({ line }: { line: DiffLine }) {
+export function Line({ line }: { line: DiffLine }) {
   if (line.t === "…") return <span className="fold">{line.text}</span>;
   const cls = line.t === "+" ? "dl add" : line.t === "-" ? "dl del" : "dl";
   const n = line.t === "-" ? line.oldNo : line.newNo ?? line.oldNo;

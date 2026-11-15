@@ -254,6 +254,36 @@ export type ForwardInfo = {
 };
 export type ForwardsPush = { forwards: ForwardInfo[] };
 
+// Helm releases, read-only (wave 4, part 4; D42–D43). Main decodes Helm's release Secrets; the window gets no
+// secret values: secret-looking values are hidden and Secrets in the manifest keep only their keys.
+export type HelmRelease = {
+  name: string; namespace: string; revision: number; status: string;
+  chart: string; chartVersion: string; appVersion: string; updated?: string;
+};
+export type HelmHistoryEntry = {
+  revision: number; status: string; chart: string; chartVersion: string; appVersion: string; updated?: string; description: string;
+};
+export type HelmObjectRef = { kind: string; name: string; namespace?: string; apiVersion?: string };
+export type HelmReleaseDetail = {
+  release: HelmRelease;
+  /** The latest revision (the one shown may be older). */
+  latest: number;
+  description: string;
+  firstDeployed?: string;
+  notes: string;
+  chartDescription: string;
+  /** YAML: the values you set, and with the chart's defaults. */
+  values: { user: string; all: string };
+  /** How many values were hidden as secrets: of yours, and of all (yours over the chart's). */
+  hidden: { user: number; all: number };
+  manifest: string;
+  manifestCut: boolean;
+  /** How many Secret values the manifest hid. */
+  manifestHidden: number;
+  objects: HelmObjectRef[];
+  history: HelmHistoryEntry[];
+};
+
 /** How a session ended: the shell exited, the connection dropped, or the cluster refused it (status says why). */
 export type TerminalEnd = "exit" | "lost" | "refused";
 export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
@@ -325,6 +355,9 @@ export const channels = {
   "forward:remove": z.object({ id: ForwardId }),
   /** Open http(s)://127.0.0.1:<its port>/ in your browser. */
   "forward:open": z.object({ id: ForwardId }),
+  // Helm releases, read-only (wave 4, part 4): decoded in main, as you.
+  "helm:list": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
+  "helm:get": z.object({ handle: Handle, namespace: NamespaceName, name: ObjectName, revision: z.number().int().min(1).max(1_000_000).optional() }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -393,6 +426,8 @@ export type Responses = {
   "forward:resume": ForwardInfo;
   "forward:remove": { ok: true };
   "forward:open": { ok: true };
+  "helm:list": { releases: HelmRelease[]; unreadable: number };
+  "helm:get": HelmReleaseDetail;
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;

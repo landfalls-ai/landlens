@@ -1,9 +1,10 @@
 # The workbench
 
 Wave 4 turns Landlens from a viewer into a place to work: logs that follow, a shell in any container, a terminal on
-your Mac whose kubectl goes through Landlens, a YAML editor, port-forward, and, in the part still to come, CRD
-columns, Helm releases and a full command palette. This page covers what is built (part 1: logs and terminals; part
-2: the YAML editor; part 3: port-forward). The design is Fable's spec for wave 4 (decisions D1–D46, cited below).
+your Mac whose kubectl goes through Landlens, a YAML editor, port-forward, CRD columns, Helm releases and, still to
+come, a full command palette. This page covers what is built (part 1: logs and terminals; part 2: the YAML editor;
+part 3: port-forward; part 4 so far: custom resources and Helm releases). The design is Fable's spec for wave 4
+(decisions D1–D46, cited below).
 
 ## The panel
 
@@ -228,6 +229,36 @@ Code: `apps/desktop/src/renderer/src/printer.ts` (the JSONPath reader, columns, 
 (the CRD read, the columns, pins), `Sidebar.tsx` (the section, the flyout, pins), `kinds.ts` (`CUSTOM`),
 `packages/kube/src/discovery.ts` (`markCustom`).
 
+## Helm releases
+
+Helm's releases, read-only (D42–D43): **Helm releases** is the last item under Workloads.
+
+- **The list** (D42): Name, Namespace, Chart (`name-version`), App version, Revision, Status and Updated, one row per
+  release at its latest revision, in the toolbar's namespace or all of them, filtered by name, namespace or chart.
+  Status is quiet when deployed, red when failed, amber while pending, muted when superseded or uninstalled. It is
+  read on open, every 30 seconds while open, and on the toolbar's Refresh (Helm's releases are Secrets, so they
+  aren't watched). A release Landlens can't decode still lists, without a chart, and the page counts them.
+- **The drawer** (D43): **Overview** (chart, app version, revision, last action, updated and installed, the chart's
+  description, its objects as links to their drawers, and the notes folded); **Values**, *Yours* (what was set at
+  install or upgrade) or *All* (yours over the chart's defaults, merged as Helm does, a `null` removing a default),
+  saying how many values that look secret are hidden; **Manifest** (the rendered YAML, each Secret's keys kept and its
+  values replaced by their size); **History** (every revision with its status, chart, time and description, and
+  *Diff values with current* for the older ones). **Ask Claude** adds the release (chart, revision, status, last
+  action, your values with secrets hidden, its objects) to the dock as quoted data. There is no upgrade, rollback or
+  uninstall.
+- **How it reads them**: main lists Helm's release Secrets (`owner=helm`, type `helm.sh/release.v1`) as you, metadata
+  only, then reads just the latest revision of each (and the one a drawer or diff asks for). It decodes them itself
+  (base64, gzip, JSON), at most 16 MB unpacked, and hides secret values before anything reaches the window: keys that
+  name a secret (`password`, `token`, `apiKey`, `clientSecret`, `privateKey`, `credentials`, `dsn` and their kin,
+  but not pointers like `existingSecret` or `passwordKey`) lose their value, and credential-shaped text anywhere
+  (a URL's password, a bearer token) is scrubbed as in logs. If you can't read Secrets, the page says so.
+
+The scenario is a small chart, `deploy/scenarios/helm/landlens-demo` (a ConfigMap, a Secret, a Deployment and
+notes, with dummy development values), installed twice in `landlens-dev` ([its README](../deploy/scenarios/helm/README.md)).
+
+Code: `packages/kube/src/helm.ts` (decode, list, get, merge, hide), `apps/desktop/src/main/ipc.ts` (`helm:list`,
+`helm:get`), `apps/desktop/src/renderer/src/Helm.tsx` (the page and the drawer).
+
 ## Tests
 
 - `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
@@ -251,6 +282,12 @@ Code: `apps/desktop/src/renderer/src/printer.ts` (the JSONPath reader, columns, 
   `forward.integration.test.ts` (three requests at once through the front door with the forward token and in the
   audit; nothing listening; another port refused with 403; a revoked token with 401; SPDY, tunnelled SPDY and extra
   query keys refused with 403).
+- `packages/kube`: `helm.test.ts` (decoding, gzipped or not, and a decompression bomb refused; the list through
+  metadata, latest revision only, counting the unreadable; values, manifest, objects and history with no secret
+  value in them; which keys are secrets and which point at one; Helm's merge and `__proto__`; an unreadable manifest
+  document dropped) and, on OrbStack, `helm.integration.test.ts` (the demo release listed and read through the front
+  door, with none of its dummy secrets in values, manifest or notes). `apps/desktop/test/helm.e2e.test.ts`: the list,
+  the drawer's four tabs, the values diff, no dummy secret anywhere in the page, Ask Claude and an object's link.
 - `apps/desktop/test/workbench.e2e.test.ts` on OrbStack with `deploy/scenarios/workbench.yaml` (`shop-web`, two
   pods, an `app` container that logs every second and a `sidecar` with no shell): follows a pod's log, searches it,
   opens a shell that runs as you and reconnects after `exit 3`, the no-shell case, a deployment's two pods merged and
@@ -265,11 +302,13 @@ Code: `apps/desktop/src/renderer/src/printer.ts` (the JSONPath reader, columns, 
 
 ```bash
 kubectl --context orbstack apply -f deploy/scenarios/workbench.yaml
+helm --kube-context orbstack -n landlens-dev install landlens-demo deploy/scenarios/helm/landlens-demo
+helm --kube-context orbstack -n landlens-dev upgrade landlens-demo deploy/scenarios/helm/landlens-demo --set message=hi --set replicaCount=2
 LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/kube test:integration
 LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e
 ```
 
 ## Still to come in wave 4
 
-Part 4's rest: Helm releases (read), the full ⌘K palette and Prometheus (D42–D45). See
+Part 4's rest: the full ⌘K palette and Prometheus (D44–D45). See
 [limitations.md](limitations.md) for what parts 1 to 4 leave out.

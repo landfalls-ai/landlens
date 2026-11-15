@@ -57,6 +57,7 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/sidecar.ts` | Start and stop `landlens-kube-proxy`; `loopbackCert` |
 | `packages/kube/src/client.ts` | Requests through a sidecar; API paths; `slim`, `withoutSecretValues` |
 | `packages/kube/src/discovery.ts` | API discovery (aggregated v2, else per group), with each kind a CRD defines marked `custom` |
+| `packages/kube/src/helm.ts` | Helm releases, read-only: lists and decodes Helm's release Secrets as you, merges values as Helm does, hides secret values and Secret data before the window sees them |
 | `packages/kube/src/watch.ts` | `ResourceWatcher`: paginated list, watch with bookmarks, relist on 410, batches |
 | `packages/kube/src/clusters.ts` | `ClusterManager` (connect, discovery, get, events) and `WatchHub` (shared, ref-counted watchers) |
 | `packages/kube/src/access.ts` | SelfSubjectAccessReview |

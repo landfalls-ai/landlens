@@ -16,3 +16,4 @@ export * from "./exec.js";
 export * from "./logs.js";
 export * from "./edits.js";
 export * from "./forward.js";
+export * from "./helm.js";

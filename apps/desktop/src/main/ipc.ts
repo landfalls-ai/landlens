@@ -1,7 +1,7 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, clusterHealth, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { checkAccess, clusterHealth, getRelease, KubeError, listContexts, listReleases, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
@@ -146,6 +146,9 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "forward:resume": ({ id, handle }) => forwards.resume(id, handle),
     "forward:remove": async ({ id }) => (forwards.remove(id), { ok: true }),
     "forward:open": async ({ id }) => (forwards.open(id), { ok: true }),
+    // Helm releases, read as you and decoded here; the window gets no secret values (docs/workbench.md#helm-releases).
+    "helm:list": ({ handle, namespace }) => helmCall(() => listReleases(clusters.get(handle).client, namespace)),
+    "helm:get": ({ handle, namespace, name, revision }) => helmCall(() => getRelease(clusters.get(handle).client, namespace, name, revision)),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {
@@ -178,3 +181,13 @@ export function httpsLink(raw: string): string | undefined {
 }
 
 const ipcError = (status: number, message: string) => new Error(JSON.stringify({ status, message }));
+
+/** Helm reads its releases from Secrets: say so when your role can't list them. */
+async function helmCall<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof KubeError && e.status === 403) throw ipcError(403, "You can't read Secrets here, and Helm keeps its releases in Secrets.");
+    throw e;
+  }
+}

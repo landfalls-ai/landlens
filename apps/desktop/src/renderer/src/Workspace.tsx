@@ -26,6 +26,7 @@ import { logSourceOf } from "./LogsView";
 import { direct } from "./ShellMenu";
 import { copyText } from "./present";
 import { Toolbar, type StatusFilter } from "./Toolbar";
+import { HelmDrawer, HelmPage, useHelmList } from "./Helm";
 import { CreateSheet } from "./CreateSheet";
 import { leaveEdit } from "./editGuard";
 
@@ -55,6 +56,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [mcpTab, setMcpTab] = useState<McpTab>("servers");
   const [agentTab, setAgentTab] = useState<AgentTab>("skills");
   const [mcpCall, setMcpCall] = useState<string>();
+  const [helmPick, setHelmPick] = useState<{ namespace: string; name: string }>();
   const [claude, setClaude] = useState<string>();
   const [width, setWidth] = useState({ app: window.innerWidth, main: window.innerWidth - 232, height: window.innerHeight });
   const bench = useBench();
@@ -84,8 +86,11 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     return () => ro.disconnect();
   }, []);
 
-  const list = current !== "overview" && current !== "mcp" && current !== "agent" ? current : undefined;
+  const list = current !== "overview" && current !== "mcp" && current !== "agent" && current !== "helm" ? current : undefined;
   const mcp = current === "mcp";
+  const helmPage = current === "helm";
+  const helm = useHelmList(cluster.handle, namespace, helmPage);
+  const helmSel = helmPage && helmPick ? helm.releases?.find((r) => r.namespace === helmPick.namespace && r.name === helmPick.name) : undefined;
   const agentPage = current === "agent";
   const namespaces = useWatch({ handle: cluster.handle, group: "", version: "v1", resource: "namespaces" });
   const scoped = list?.type.namespaced && namespace ? namespace : undefined;
@@ -130,6 +135,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     setCurrent(c);
     setSelectedNow(undefined);
     setMcpCall(undefined);
+    setHelmPick(undefined);
     setStatus("all");
   });
   const navItem = (resource: string) => nav.find((n) => n.type.resource === resource && (n.type.group === "" || n.type.group === "apps"));
@@ -171,7 +177,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
 
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
   // the dock alone does, and the drawer floats over the table.
-  const drawer = !!(selected && list) || !!(mcp && mcpCall);
+  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel;
   const narrow = width.app < 1280;
   const autoRail = dock && (drawer || narrow);
   const rail = userRail ?? autoRail;
@@ -221,6 +227,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       if (e.key === "/" && !typing && !mod && filterBox.current) return e.preventDefault(), filterBox.current.focus();
       if (e.key === "Escape" && !jump && !creating && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine") && selected) setSelected(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && mcpCall) setMcpCall(undefined);
+      if (e.key === "Escape" && !jump && !t?.closest(".dock") && helmPick) setHelmPick(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -232,7 +239,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.kind === "Pod" && worst.reason === "CrashLoopBackOff" ? `Why is ${splitByShape(worst.name).base} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
-  const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : "Overview");
+  const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : helmPage ? "Helm releases" : "Overview");
 
   return (
     <div ref={app}
@@ -257,12 +264,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : mcp || agentPage ? { hideCount: true } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage ? { hideCount: true } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
           {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); }) } } : {})}
-          {...(list ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
+          {...(list || helmPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
           {...(dock ? {} : { onAsk: () => setDock(true) })}
-          {...(!mcp && !agentPage ? { onCreate: () => setCreating(true) } : {})}
+          {...(!mcp && !agentPage && !helmPage ? { onCreate: () => setCreating(true) } : {})}
         />
         {mcp ? (
           <McpPage
@@ -278,6 +285,16 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           />
         ) : agentPage ? (
           <AgentPage tab={agentTab} onTab={setAgentTab} />
+        ) : helmPage ? (
+          <HelmPage
+            list={helm}
+            filter={filter}
+            namespace={namespace}
+            now={now}
+            width={width.main}
+            {...(helmSel ? { selected: `${helmSel.namespace}/${helmSel.name}` } : {})}
+            onSelect={(r) => setHelmPick(r ? { namespace: r.namespace, name: r.name } : undefined)}
+          />
         ) : !list ? (
           <Overview
             handle={cluster.handle}
@@ -330,7 +347,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       </main>
       <StatusBar
           server={cluster.server}
-          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : agentPage ? "Agent settings" : "Checking health every 10s"}
+          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : helmPage ? (helm.error ? "Not reading" : "Reading Helm releases every 30s") : agentPage ? "Agent settings" : "Checking health every 10s"}
           {...(claude ? { claude } : {})}
           bad={bad}
           warn={warn}
@@ -365,6 +382,9 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
           {...(show ? { show } : {})}
         />
+      ) : null}
+      {helmSel ? (
+        <HelmDrawer handle={cluster.handle} release={helmSel} now={now} onClose={() => setHelmPick(undefined)} onAsk={ask} onNavigate={go} />
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
       <Bench bench={bench} cluster={cluster} onAsk={ask} appHeight={width.height} />

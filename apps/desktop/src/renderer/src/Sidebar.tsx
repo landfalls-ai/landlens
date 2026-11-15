@@ -8,7 +8,7 @@ import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview" | "mcp" | "agent";
+export type Current = NavItem | "overview" | "mcp" | "agent" | "helm";
 
 /** A kind's key for pins: `group/resource`. */
 export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
@@ -253,6 +253,7 @@ export function Sidebar(props: {
                 <Ic icon={ChevronDown} size={12} />
               </button>
               {open ? (section === CUSTOM ? custom(items) : items.map(kindItem)) : null}
+              {open && section === "Workloads" ? item("helm", "Helm releases", "helm", props.current === "helm", undefined, () => props.onPick("helm")) : null}
             </div>
           );
         })}
