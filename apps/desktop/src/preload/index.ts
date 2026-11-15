@@ -24,16 +24,18 @@ const PUSH: readonly PushChannel[] = [
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */
-function unwrap(err: unknown): Error & { status: number } {
+function unwrap(err: unknown): Error {
   const text = err instanceof Error ? err.message : String(err);
   const m = /(\{"status":\d+,"message":.*\})$/s.exec(text);
   const parsed = m ? (JSON.parse(m[1]!) as { status: number; message: string }) : { status: 500, message: text };
-  return Object.assign(new Error(parsed.message), { status: parsed.status });
+  // contextBridge copies only an Error's message into the page (custom properties such as `status` are dropped), so
+  // the status rides in the message as JSON and the renderer's api.ts reads it back (apiError.ts).
+  return new Error(JSON.stringify({ status: parsed.status, message: parsed.message }));
 }
 
 const bridge: LandlensBridge = {
   async invoke(channel, request) {
-    if (!CHANNELS.includes(channel)) throw Object.assign(new Error(`unknown channel ${channel}`), { status: 400 });
+    if (!CHANNELS.includes(channel)) throw new Error(JSON.stringify({ status: 400, message: `unknown channel ${channel}` }));
     try {
       return await ipcRenderer.invoke(channel, request);
     } catch (err) {

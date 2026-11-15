@@ -1,6 +1,7 @@
 // The renderer's side of IPC: the typed bridge, and a hook that keeps a live list of objects from a watch.
 import type { KubeObject, LandlensBridge, WatchEvent, WatchRequest } from "@landlens/contracts";
 import { useEffect, useState } from "react";
+import { toApiError, type ApiError } from "./apiError";
 
 declare global {
   interface Window {
@@ -8,8 +9,18 @@ declare global {
   }
 }
 
-export const api = window.landlens;
-export type ApiError = Error & { status?: number };
+export type { ApiError } from "./apiError";
+
+// Every invoke rejects with an ApiError whose `status` is main's (403, 404, 409…): the bridge's raw errors carry it
+// only inside their message.
+const bridge = window.landlens;
+export const api: LandlensBridge = {
+  invoke: ((channel: string, request: unknown) =>
+    (bridge.invoke as (c: string, r: unknown) => Promise<unknown>)(channel, request).catch((e: unknown) => {
+      throw toApiError(e);
+    })) as LandlensBridge["invoke"],
+  on: bridge.on,
+};
 
 // One listener for all watch events. Main may send a subscription's first snapshot before invoke() returns its id,
 // so events for ids we don't know yet wait briefly in a buffer.

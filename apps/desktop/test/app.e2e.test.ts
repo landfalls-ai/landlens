@@ -426,7 +426,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       const plain = await g.landlens.invoke("link:open", { url: "http://example.com/" }).then(() => "opened", (e: Error) => e.message);
       return { popup, ok, plain };
     });
-    expect(r).toEqual({ popup: "denied", ok: { opened: true }, plain: "Landlens opens https links only." });
+    expect(r).toEqual({ popup: "denied", ok: { opened: true }, plain: JSON.stringify({ status: 400, message: "Landlens opens https links only." }) });
     await page.waitForTimeout(300);
     expect(await app.evaluate(() => (globalThis as any).__opened)).toEqual(["https://example.com/from-answer"]);
   });

@@ -153,6 +153,14 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     await both(page, "g5-02-cloud-question");
     await ask.getByRole("button", { name: "Connect" }).click();
     await page.getByRole("heading", { name: "Overview" }).waitFor({ timeout: 60_000 });
+    // The ServiceAccount can't list pods across namespaces: the Overview says so and opens one it can read.
+    const needed = page.getByRole("alert").filter({ hasText: "Your account can't read the whole cluster." });
+    await needed.waitFor({ timeout: 30_000 });
+    await both(page, "g5-08-namespace-needed");
+    await needed.getByRole("textbox", { name: "Namespace" }).fill(NS);
+    await needed.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("region", { name: "Verdict" }).waitFor({ timeout: 30_000 });
+    await expect(page.getByRole("combobox", { name: "Namespace" }).inputValue()).resolves.toBe(NS);
     expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).confirmed).toEqual([CONTEXT]);
     // Connected as the ServiceAccount: what its Role allows, and nothing it doesn't.
     const info = (await invoke("cluster:connect", { context: CONTEXT })) as { ok: { handle: string; server: string } };

@@ -93,7 +93,7 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
-  clusters and sessions. The dock shows Claude's Markdown tables as plain lines.
+  clusters and sessions.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
   asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones

@@ -112,6 +112,15 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const main = useRef<HTMLElement>(null);
   const filterBox = useRef<HTMLInputElement>(null);
   const health = useHealth(cluster.handle, namespace);
+  // An account limited to some namespaces can't read the whole cluster (wave 6): open its context's namespace once,
+  // as kubectl would, and keep that namespace in the picker even when the namespace list can't be read.
+  const ctxNamespace = contexts?.find((c) => c.name === cluster.context)?.namespace;
+  const triedCtxNamespace = useRef(false);
+  useEffect(() => {
+    if (namespace || health.error?.status !== 403 || !ctxNamespace || triedCtxNamespace.current) return;
+    triedCtxNamespace.current = true;
+    setNamespace(ctxNamespace);
+  }, [namespace, health.error, ctxNamespace]);
   // Graphs: the Clickland dialog, and a version every chart refetches on when its settings change.
   const [clickland, setClickland] = useState<ClicklandView>();
   const [settings, setSettings] = useState(false);
@@ -368,7 +377,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const warn = (h?.problems.length ?? 0) - bad;
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
-  const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
+  const nsList = useMemo(() => [...new Set([...namespaces.items.map((n) => n.metadata.name), ...(ctxNamespace ? [ctxNamespace] : []), ...(namespace ? [namespace] : [])])].sort(), [namespaces.items, ctxNamespace, namespace]);
   const label = list?.label ?? (mcp ? "MCP" : connPage ? "Connections" : gcpPage ? "Google Cloud" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
 
   return (
@@ -465,6 +474,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             onSettings={() => setSettings(true)}
             health={h}
             error={health.error}
+            scoped={!!namespace}
+            onNamespace={(ns) => (setNamespace(ns), setSelectedNow(undefined))}
             now={now}
             onOpenList={(r, failing) => {
               const n = navItem(r);
