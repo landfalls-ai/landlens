@@ -2,7 +2,8 @@
 // Empty, it shows recent items and the open object's actions. A first word of logs, shell, forward, edit or ask turns
 // object matches into that action; `problems` searches only problems (D61); `>` lists the app's commands. Tab on an object lists its actions; Tab on a shell or logs
 // row of a pod with several containers lists them. Enter goes, Esc steps back or closes.
-import type { KubeContext, KubeObject, Problem, SearchEntry } from "@landlens/contracts";
+import type { GcpResource, KubeContext, KubeObject, Problem, SearchEntry } from "@landlens/contracts";
+import { resourceLabel, serviceIcon, shortType } from "./GcpPage";
 import {
   ArrowRightLeft, Box, ChevronRight, CornerDownLeft, FilePlus2, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
   CircleX, Search, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, type LucideIcon,
@@ -28,7 +29,7 @@ export type Commands = {
   showProblems: () => void;
 };
 
-type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Kinds" | "Clusters" | "Commands" | "Containers";
+type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Kinds" | "Clusters" | "Commands" | "Containers";
 type Row = { key: string; group: Group; label: string; hint?: string; icon: LucideIcon; mono?: boolean; run: () => void; tab?: () => void };
 const PER_GROUP = 6;
 
@@ -96,6 +97,8 @@ export function JumpPalette(props: {
   onAct: (t: Target, verb: Verb, container?: string) => void;
   onSwitch: (context: string) => void;
   commands: Commands;
+  /** The Google Cloud rows the page last read (one project), found by name; no new read. */
+  gcp?: { project: string; items: GcpResource[]; onOpen: (project: string, r: GcpResource) => void };
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -171,6 +174,7 @@ export function JumpPalette(props: {
     { key: "connections", label: "Connections", resource: "connections", go: () => done(() => props.onPick("connections")) },
     { key: "mcp", label: "MCP", resource: "mcp", go: () => done(() => props.onPick("mcp")) },
     { key: "agent", label: "Agent", resource: "agent", go: () => done(() => props.onPick("agent")) },
+    { key: "gcp", label: "Google Cloud", resource: "gcp", go: () => done(() => props.onPick("gcp")) },
   ];
   const commands: Row[] = [
     { key: "c:panel", group: "Commands", label: "Toggle panel", hint: `${MOD}\``, icon: PanelBottom, run: () => done(props.commands.togglePanel) },
@@ -232,14 +236,19 @@ export function JumpPalette(props: {
     const actions = rank(commands, (r) => r.label).slice(0, PER_GROUP).map((r) => ({ ...r, group: "Actions" as Group }));
     const probs = matchProblems(props.problems, text, PER_GROUP).map(problemRow);
     const objs = rank(objects, (t) => t.name, label).slice(0, PER_GROUP).map((t) => objectRow(t));
+    const g = props.gcp;
+    const clouds = g ? rank(g.items, (r) => resourceLabel(r), (r) => r.name).slice(0, PER_GROUP).map((r): Row => ({
+      key: `g:${r.name}`, group: "Google Cloud", label: resourceLabel(r), hint: `${shortType(r.assetType)} · ${g.project}`, icon: serviceIcon(r.assetType), mono: true,
+      run: () => done(() => g.onOpen(g.project, r)),
+    })) : [];
     const kinds: { name: string; alt?: string; row: Row }[] = [
       ...pages.map((p) => ({ name: p.label, row: { key: `p:${p.key}`, group: "Kinds" as Group, label: p.label, hint: "Page", icon: kindIcon(p.resource), run: p.go } })),
       ...props.nav.map((n) => ({ name: n.label, alt: n.type.resource, row: { key: `k:${n.type.group}/${n.type.resource}`, group: "Kinds" as Group, label: n.label, hint: n.section === "core" ? "Kind" : n.section, icon: kindIcon(n.type.resource), run: () => pickKind(n) } })),
     ];
     const ks = rank(kinds, (k) => k.name, (k) => k.alt ?? "").slice(0, PER_GROUP).map((k) => k.row);
     const cls = rank(props.contexts ?? [], (c) => c.name).slice(0, PER_GROUP).map(clusterRow);
-    return [...actions, ...probs, ...objs, ...ks, ...cls];
-  }, [q, focus, pfocus, switching, objects, recent, props.nav, props.contexts, props.open, props.problems]); // eslint-disable-line react-hooks/exhaustive-deps
+    return [...actions, ...probs, ...objs, ...clouds, ...ks, ...cls];
+  }, [q, focus, pfocus, switching, objects, recent, props.nav, props.contexts, props.open, props.problems, props.gcp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setAt(0), [q, focus, pfocus, switching]);
   useEffect(() => {

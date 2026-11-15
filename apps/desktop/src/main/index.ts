@@ -15,6 +15,8 @@ import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
+import { gcpMode, GcpService } from "./gcp";
+import { loginPath, which } from "@landlens/acp-host";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
@@ -88,6 +90,16 @@ async function start() {
     takenNames: () => mcpStore.list().map((s) => s.name),
     log: (l) => console.log(l),
   });
+  // Google Cloud (docs/gcp.md): gcloud's sign-in, read-only. An unpackaged build is off unless it has a loopback fake
+  // (LANDLENS_GCP_ENDPOINT, with LANDLENS_GCLOUD for a fake gcloud) or the person set LANDLENS_GCP_REAL=1.
+  const gcp = new GcpService({
+    file: join(app.getPath("userData"), "gcp.json"),
+    mode: gcpMode(process.env, app.isPackaged),
+    findGcloud: async () => which("gcloud", await loginPath()),
+    loginPath: () => loginPath(),
+    env: process.env,
+    log: (l) => console.log(l),
+  });
   mcp = new McpService({
     store: mcpStore,
     connections,
@@ -142,7 +154,7 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections, gcp);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();

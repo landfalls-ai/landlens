@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, type ApiError } from "./api";
 import { ConnectionsPage } from "./ConnectionsPage";
+import { GcpStandalone } from "./GcpPage";
 import { Ic } from "./icons";
 import { Welcome } from "./Welcome";
 import { Workspace } from "./Workspace";
@@ -14,8 +15,8 @@ export function App() {
   const [cluster, setCluster] = useState<ClusterInfo>();
   const [connecting, setConnecting] = useState<string>();
   const [connectError, setConnectError] = useState<{ context: string; message: string }>();
-  /** Connections opened from Welcome: they work with no cluster connected. */
-  const [connections, setConnections] = useState(false);
+  /** Connections or Google Cloud opened from Welcome: they work with no cluster connected. */
+  const [alone, setAlone] = useState<"connections" | "gcp">();
 
   useEffect(() => {
     api.invoke("catalog:list", {}).then((r) => {
@@ -41,22 +42,23 @@ export function App() {
   };
 
   if (cluster) return <Workspace key={cluster.handle} cluster={cluster} contexts={contexts} onSwitch={(c) => void connect(c)} />;
-  if (connections) {
+  if (alone === "gcp") return <GcpStandalone onBack={() => setAlone(undefined)} />;
+  if (alone === "connections") {
     return (
       <div className="app no-cluster">
         <main className="main standalone">
           <header className="standalone-bar">
-            <button className="secondary" onClick={() => setConnections(false)}><Ic icon={ArrowLeft} size={14} />Clusters</button>
+            <button className="secondary" onClick={() => setAlone(undefined)}><Ic icon={ArrowLeft} size={14} />Clusters</button>
             <h1>Connections</h1>
           </header>
-          <ConnectionsPage />
+          <ConnectionsPage onOpenGcp={() => setAlone("gcp")} />
         </main>
       </div>
     );
   }
   return (
     <div className="app no-cluster">
-      <Welcome onConnections={() => setConnections(true)} contexts={contexts} catalogError={catalogError} connecting={connecting} error={connectError} onConnect={(c) => void connect(c)} />
+      <Welcome onConnections={() => setAlone("connections")} onGcp={() => setAlone("gcp")} contexts={contexts} catalogError={catalogError} connecting={connecting} error={connectError} onConnect={(c) => void connect(c)} />
     </div>
   );
 }

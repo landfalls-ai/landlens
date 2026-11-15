@@ -11,6 +11,7 @@ import "./dock3.css";
 import "./agent.css";
 import "@xterm/xterm/css/xterm.css";
 import "./workbench.css";
+import "./gcp.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

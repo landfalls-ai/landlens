@@ -13,6 +13,7 @@ import { JumpPalette, type Target, type Verb } from "./JumpPalette";
 import { PROMETHEUS_EVENT } from "./MetricsNotice";
 import { ConnectionsPage } from "./ConnectionsPage";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
+import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
@@ -66,6 +67,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [agentTab, setAgentTab] = useState<AgentTab>("skills");
   const [mcpCall, setMcpCall] = useState<string>();
   const [helmPick, setHelmPick] = useState<{ namespace: string; name: string }>();
+  // Google Cloud (docs/gcp.md): the project and type shown, the resource in the drawer, and the rows read (for ⌘K).
+  const [gcpNav, setGcpNav] = useState<GcpNav>({});
+  const [gcpPick, setGcpPick] = useState<GcpPick>();
+  const [gcpRows, setGcpRows] = useState<GcpRows>();
   // The Problems page (D58): its severity filter (preset from the status bar) and the problem in its drawer, held when
   // it leaves the report (D59).
   const [severity, setSeverity] = useState<Severity>("all");
@@ -129,6 +134,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const mcp = current === "mcp";
   const connPage = current === "connections";
   const helmPage = current === "helm";
+  const gcpPage = current === "gcp";
   const helm = useHelmList(cluster.handle, namespace, helmPage);
   const helmSel = helmPage && helmPick ? helm.releases?.find((r) => r.namespace === helmPick.namespace && r.name === helmPick.name) : undefined;
   const agentPage = current === "agent";
@@ -177,7 +183,18 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     setMcpCall(undefined);
     setHelmPick(undefined);
     setProblemSel(undefined);
+    setGcpPick(undefined);
     setStatus("all");
+  });
+  /** A Google Cloud resource from ⌘K: its project on the page, and its drawer. */
+  const openGcp = (project: string, resource: GcpPick["resource"]) => leaveEdit(() => {
+    setCurrent("gcp");
+    setSelectedNow(undefined);
+    setMcpCall(undefined);
+    setHelmPick(undefined);
+    setProblemSel(undefined);
+    setGcpNav((n) => (n.project === project && !n.type ? n : { project }));
+    setGcpPick({ project, resource });
   });
   /** The Problems page, with a severity preset (the status bar) and a problem's drawer open (a row, ⌘K). */
   const openProblems = (opts: { severity?: Severity; problem?: HealthProblem } = {}) => leaveEdit(() => {
@@ -272,7 +289,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
 
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
   // the dock alone does, and the drawer floats over the table.
-  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && problemSel);
+  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && problemSel) || !!(gcpPage && gcpPick);
   const narrow = width.app < 1280;
   const autoRail = dock && (drawer || narrow);
   const rail = userRail ?? autoRail;
@@ -326,6 +343,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       if (e.key === "Escape" && !jump && !creating && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine") && selected) setSelected(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && mcpCall) setMcpCall(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && helmPick) setHelmPick(undefined);
+      if (e.key === "Escape" && !jump && !typing && !t?.closest(".dock, .dialog, .cm-editor") && gcpPick) setGcpPick(undefined);
       if (e.key === "Escape" && !jump && !creating && !typing && !t?.closest(".dock, .drawer .logs") && problemSel) setProblemSel(undefined);
     };
     window.addEventListener("keydown", onKey);
@@ -340,7 +358,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
-  const label = list?.label ?? (mcp ? "MCP" : connPage ? "Connections" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
+  const label = list?.label ?? (mcp ? "MCP" : connPage ? "Connections" : gcpPage ? "Google Cloud" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
 
   return (
     <div ref={app}
@@ -375,12 +393,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && !connPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); setProblemSel(undefined); }) } } : {})}
+          {...(!mcp && !agentPage && !connPage && !gcpPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); setProblemSel(undefined); }) } } : {})}
           {...(list || helmPage || problemsPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
           {...(dock ? {} : { onAsk: () => setDock(true) })}
-          {...(!mcp && !agentPage && !connPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
+          {...(!mcp && !agentPage && !connPage && !gcpPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
         />
         {mcp ? (
           <McpPage
@@ -396,7 +414,11 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             version={metricsVersion}
           />
         ) : connPage ? (
-          <ConnectionsPage context={cluster.context} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} />
+          <ConnectionsPage context={cluster.context} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} onOpenGcp={() => pick("gcp")} />
+        ) : gcpPage ? (
+          <Boundary what="Google Cloud" resetKey="gcp">
+            <GcpPage nav={gcpNav} onNav={setGcpNav} {...(gcpPick ? { selected: gcpPick.resource.name } : {})} onSelect={setGcpPick} onRows={setGcpRows} width={width.main} />
+          </Boundary>
         ) : agentPage ? (
           <AgentPage tab={agentTab} onTab={setAgentTab} />
         ) : helmPage ? (
@@ -479,7 +501,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       </main>
       <StatusBar
           server={cluster.server}
-          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : connPage ? "Connections" : helmPage ? (helm.error ? "Not reading" : "Reading Helm releases every 30s") : agentPage ? "Agent settings" : "Checking health every 10s"}
+          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : connPage ? "Connections" : gcpPage ? "Google Cloud · read-only" : helmPage ? (helm.error ? "Not reading" : "Reading Helm releases every 30s") : agentPage ? "Agent settings" : "Checking health every 10s"}
           {...(claude ? { claude } : {})}
           bad={bad}
           warn={warn}
@@ -537,6 +559,11 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             onNavigate={go}
             onFullLogs={(pod, ns, container) => void reach({ group: "", version: "v1", resource: "pods", kind: "Pod", name: pod, ...(ns ? { namespace: ns } : {}) }, "logs", container)}
           />
+        </Boundary>
+      ) : null}
+      {gcpPage && gcpPick ? (
+        <Boundary what="this resource" resetKey={gcpPick.resource.name}>
+          <GcpDrawer key={gcpPick.resource.name} pick={gcpPick} onClose={() => setGcpPick(undefined)} />
         </Boundary>
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
@@ -598,6 +625,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onOpen={(t) => void reach(t)}
           onAct={(t, verb, container) => void reach(t, verb, container)}
           onSwitch={switchTo}
+          {...(gcpRows ? { gcp: { ...gcpRows, onOpen: openGcp } } : {})}
           commands={{
             togglePanel: () => (bench.open ? bench.setOpen(false) : (bench.setOpen(true), focusBench())),
             newTerminal: () => (bench.openLocal(), focusBench()),

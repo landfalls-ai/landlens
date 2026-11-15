@@ -8,7 +8,7 @@ import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview" | "problems" | "connections" | "mcp" | "agent" | "helm";
+export type Current = NavItem | "overview" | "problems" | "connections" | "mcp" | "agent" | "helm" | "gcp";
 
 /** A kind's key for pins: `group/resource`. */
 export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
@@ -234,6 +234,10 @@ export function Sidebar(props: {
             {pinned.map((n) => item(`pin:${navKey(n)}`, n.label, n.type.resource, props.current === n, props.badges.byResource[n.type.resource], () => props.onPick(n), n))}
           </div>
         ) : null}
+        <div role="group" aria-label="Cloud" style={{ display: "contents" }}>
+          <div className="nav-sec static"><span>Cloud</span></div>
+          {item("gcp", "Google Cloud", "gcp", props.current === "gcp", undefined, () => props.onPick("gcp"))}
+        </div>
         {props.navError ? <p className="small tone-bad">{props.navError}</p> : null}
         {props.sections.map(([section, items]) => {
           if (section === CUSTOM && rail) return <div key={section} role="group" aria-label={section} style={{ display: "contents" }}>{custom(items)}</div>;

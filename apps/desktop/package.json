@@ -20,6 +20,7 @@
     "@landlens/acp-host": "workspace:*",
     "@landlens/connections": "workspace:*",
     "@landlens/contracts": "workspace:*",
+    "@landlens/gcp": "workspace:*",
     "@landlens/kube": "workspace:*",
     "@landlens/kube-mcp": "workspace:*",
     "@landlens/mcp-gateway": "workspace:*",

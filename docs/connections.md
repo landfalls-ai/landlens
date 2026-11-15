@@ -7,7 +7,9 @@ keychain tokens (the fence, [agent.md](agent.md)), so a connection is Landlens's
 Wave 6 is built in parts (the spec's section 8). **Part 1, built 15 November 2026:** signing in and the store
 (`packages/connections`, `apps/desktop/src/main/connections.ts`, the `conn:*` channels). **Part 2, built the same
 day:** the Connections page and the tools in sessions, through the gateway. **Part 3, built the same day:** the
-autonomous mode, below. Not yet built: Google Cloud (parts 4 and 5).
+autonomous mode, below. **Part 4, built the same day:** browsing Google Cloud, in its own page,
+[gcp.md](gcp.md), with a **Google Cloud** card on the Connections page after GitHub and Linear. Not yet built: GKE
+clusters in the catalog and Claude's Google Cloud tools (part 5).
 The security rules are in [security.md](security.md#connections-and-google-cloud).
 
 ## The Connections page

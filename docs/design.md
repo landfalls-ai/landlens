@@ -188,6 +188,21 @@ all N) and Recent warnings; Nodes. It reads
   also has a muted **Routine** badge with a `Zap`; the badges sit right-aligned) and **Check tools**.
   A note that needs you is amber with its icon and **Review tools**; a card whose tools changed gets an amber ring.
   On the MCP page a connection's panel carries its mark, a **From Connections** chip and **Manage in Connections**.
+- **Google Cloud** (`GcpPage.tsx`, `gcp.css`; the sidebar's **Cloud** section after Pinned, `Cloud`; also under
+  Welcome's list, standing alone with a **Clusters** button back): three columns in the main pane. **Projects**
+  (240px, `--bg-0`): two-line items (name, then the id in mono), a filter, **Choose projects…** in the foot. **Types**
+  (260px, `--bg-1`): **All**, then the types under service headers (the service's icon, its name, its host in mono at
+  the right, one line, ellipsis), each type an item with its count in tabular mono; the picked item is `--bg-3` with
+  a hairline ring and an accent icon. **Resources**: the list table (`ResourceTable`; name, type, location, state as a
+  tone pill, created), a 280px filter, a query chip, the count right-aligned. Under 1,100px of main the projects
+  become a select atop the types; under 720px the types become a select (optgroups by service) in the resources
+  header, and the table takes the pane. A project's error sits in the Types column as a bad-tinted box with the
+  sentence. The drawer is the usual `.drawer`: a service tile, "Google Cloud / <project>", **Copy name**, the name, a
+  type chip, location and state; tabs **Summary** (the drawer's key/value grid; labels as `key= value` chips) and
+  **JSON** (the YAML editor's well, read-only, filling the body). States are one `.notice` each with its next step.
+  The chooser is a `.dialog` with a filter and a checklist (checkbox, name, id in mono). On Connections, a **Google
+  Cloud** card after the providers: the state, account, chosen projects as mono chips, **Choose projects…** and
+  **Open Google Cloud**.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
   the call drawer. A view from a server you added (not `landlens-kube`) sits in `.app-third`: a `--line-2` ring, 8px
   inset, and "View from <server>" above, drawn by the page outside the frame, so it never reads as Landlens's own.
@@ -252,7 +267,11 @@ the page.
 The e2e test finds things by role and name, so keep: heading "Pick a cluster"; buttons "Pods", "Deployments",
 "Secrets", "Ask Claude", "Stop", "Send"; combobox "Namespace"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
-`.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Graphs: regions "Usage" and "Nodes", status "Metrics
+`.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's
+complementary "Resources" and Welcome); regions "Projects", "Types", "Resources" and "Google Cloud connection";
+dialog "Choose projects" with its checkboxes named by project id and "Save"; searchbox "Filter resources"; buttons
+"Read again", "Clear the query", "Copy name"; complementary "Google Cloud resource <name>"; the JSON well
+`.gcp-json .cm-content` (label "Resource JSON"); selects "Project" and "Type" when narrow. Graphs: regions "Usage" and "Nodes", status "Metrics
 unavailable", button "Connect Clickland", dialog "Connect Clickland" with fields "Clickland address" and "Clickland
 API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes `.metrics-src`, `.mtab`,
 `.chart-plot`, `.chart-tip` (Overview only), `.chart-now`, `.chart-legend`, `path.edge`, `path.line`, `.test-steps`. MCP: button "MCP"; tabs

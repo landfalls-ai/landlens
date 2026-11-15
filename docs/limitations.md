@@ -81,7 +81,11 @@ person's check reads them), and Ask Claude sends one problem at a time.
   server's listing changes, auto-run turns off and you Test and turn it on again; there is no diff of what changed.
 - **GitHub and Linear go to every cluster's sessions** (one "Give to Claude sessions" switch, no per-cluster choice),
   and a read's arguments reach the vendor without a question ([connections.md](connections.md)). Writes ask unless
-  you turn a connection autonomous for one session; Google Cloud is parts 4 and 5.
+  you turn a connection autonomous for one session.
+- **Google Cloud is browse only, and only by project** ([gcp.md](gcp.md)): at most 20 chosen projects and 5,000
+  resources each (the rest cut), no folders or organisations, no IAM policies or costs, no writes, one Google account
+  (gcloud's current one), and Landlens never runs `gcloud auth login` for you. GKE clusters in the catalog, Claude's
+  Google Cloud tools and Ask Claude from a resource are part 5. Nothing was tried against the real Google APIs.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
   asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones

@@ -2,12 +2,15 @@
 // may do in Claude sessions. One card per provider: who you are, the level (Read only · Ask for writes), whether reads
 // run without asking, whether sessions get it at all, and its tools as the vendor's read-only listing sorts them.
 // Tokens come in here (a pasted one) and never come back: the page knows ConnInfo only.
-import { CONN_NOTES, GITHUB_TOKEN_SHAPE, LINEAR_KEY_SHAPE, type ConnInfo, type ConnList, type ConnMode, type ConnProvider, type McpServerInfo, type McpTest, type McpToolInfo } from "@landlens/contracts";
+import { CONN_NOTES, GITHUB_TOKEN_SHAPE, LINEAR_KEY_SHAPE, type ConnInfo, type ConnList, type ConnMode, type ConnProvider, type GcpStatus, type McpServerInfo, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import { CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, ExternalLink, Eye, KeyRound, ShieldCheck, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, type ApiError } from "./api";
 import { Ic } from "./icons";
 import { copyText } from "./present";
+import { GcpCard } from "./GcpPage";
+
+type Listed = ConnList & { gcp: GcpStatus };
 
 const NAME: Record<ConnProvider, string> = { github: "GitHub", linear: "Linear" };
 const DEVICE_PAGE = "https://github.com/login/device";
@@ -39,19 +42,20 @@ const STATE: Record<ConnInfo["state"], { tone: "ok" | "muted" | "warn" | "bad"; 
 };
 
 /** The connections, loaded once and kept live from main's conn:update pushes. */
-function useConnections(): [ConnList | undefined, (i: ConnInfo) => void, string | undefined] {
-  const [list, setList] = useState<ConnList>();
+function useConnections(): [Listed | undefined, (i: ConnInfo) => void, (s: GcpStatus) => void, string | undefined] {
+  const [list, setList] = useState<Listed>();
   const [error, setError] = useState<string>();
   const put = (i: ConnInfo) => setList((l) => (l ? { ...l, [i.provider]: i } : l));
+  const putGcp = (gcp: GcpStatus) => setList((l) => (l ? { ...l, gcp } : l));
   useEffect(() => {
     void api.invoke("conn:list", {}).then(setList, (e: ApiError) => setError(e.message));
     return api.on("conn:update", (i: ConnInfo) => put(i));
   }, []);
-  return [list, put, error];
+  return [list, put, putGcp, error];
 }
 
-export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => void }) {
-  const [list, put, error] = useConnections();
+export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => void; onOpenGcp?: () => void }) {
+  const [list, put, putGcp, error] = useConnections();
   const [tools, setTools] = useState<Partial<Record<ConnProvider, McpToolInfo[]>>>({});
   // The tool lists come with the MCP page's servers: the connections' last listings, read from main's store.
   const loadTools = () => api.invoke("mcp:servers", props.context ? { context: props.context } : {}).then((s) => {
@@ -82,7 +86,10 @@ export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => voi
         </div>
       ) : null}
       {list ? (
-        (["github", "linear"] as const).map((p) => <ConnCard key={p} info={list[p]} canStore={list.canStore} tools={tools[p]} onInfo={put} onTools={loadTools} />)
+        <>
+          {(["github", "linear"] as const).map((p) => <ConnCard key={p} info={list[p]} canStore={list.canStore} tools={tools[p]} onInfo={put} onTools={loadTools} />)}
+          <GcpCard status={list.gcp} onStatus={putGcp} {...(props.onOpenGcp ? { onOpen: props.onOpenGcp } : {})} />
+        </>
       ) : (
         <>
           <div className="skel" style={{ height: 180 }} />

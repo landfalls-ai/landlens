@@ -78,6 +78,9 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/main/connections.ts` | `ConnectionsService`: sign-in flows per window, pasted tokens, test and pin, disconnect, the connections as gateway upstreams (`remotes()`); the development overrides |
 | `packages/mcp-gateway/src/providers/` | Connections' servers on the gateway: reads by the vendor's read-only listing, what the model gets from them |
 | `apps/desktop/src/renderer/src/ConnectionsPage.tsx` | The Connections page: a card per provider (sign-in, level, switches, tools, drift review) |
+| `packages/gcp/src/` | Google Cloud, read-only: gcloud's account and token (`auth.ts`), the pinned GET client (`client.ts`), projects and Cloud Asset search (`assets.ts`), GKE clusters (`gke.ts`), the error sentences (`errors.ts`) ([gcp.md](gcp.md)) |
+| `apps/desktop/src/main/gcp.ts` | `GcpService`: on or off (`gcpMode`, the development overrides), the chosen projects (`gcp.json`), the caches and read limits, the `gcp:*` answers |
+| `apps/desktop/src/renderer/src/GcpPage.tsx` | The Google Cloud page (projects, types, resources), its drawer, the chooser, the Connections card |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |
 | `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock: session, transcript, composer |
 | `apps/desktop/src/renderer/src/DockParts.tsx` | The dock's tool groups, wells, plan and permission ask |

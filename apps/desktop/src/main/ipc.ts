@@ -12,11 +12,12 @@ import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
 import { flowOwners, type ConnectionsService } from "./connections";
+import type { GcpService } from "./gcp";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -142,7 +143,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:app-link": async ({ view, url }) => ({ opened: await mcp.viewLink(view, url) }),
     // Connections (docs/connections.md). A token comes in on conn:token; nothing sends one back. A sign-in belongs to
     // the window that started it.
-    "conn:list": async () => connections.list(),
+    "conn:list": async () => ({ ...connections.list(), gcp: await gcp.status() }),
     "conn:github-device": async (_r, event) => connections.githubDevice(flowOwner(event.sender)),
     "conn:linear-signin": async ({ mode }, event) => connections.linearSignIn(mode, flowOwner(event.sender)),
     "conn:token": ({ provider, token }) => connections.token(provider, token),
@@ -151,6 +152,14 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "conn:test": ({ provider }) => connections.test(provider),
     "conn:repin": async ({ provider }) => connections.repin(provider),
     "conn:disconnect": ({ provider }) => connections.disconnect(provider),
+    // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
+    "gcp:status": ({ fresh }) => gcp.status(!!fresh),
+    "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),
+    "gcp:choose": ({ projects, agentRead }) => gcp.choose(projects, agentRead),
+    "gcp:types": ({ project, fresh }) => gcp.types(project, !!fresh),
+    "gcp:resources": (r) => gcp.resources(r),
+    "gcp:resource": ({ project, name }) => gcp.resource(project, name),
+    "gcp:clusters": () => gcp.clusters(),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

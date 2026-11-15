@@ -8,6 +8,7 @@
 | [workbench.md](workbench.md) | The panel, followed logs, pod shells that run as you, the local terminal, the YAML editor, port-forward, custom resources, Helm releases, ⌘K search (wave 4) |
 | [doctor.md](doctor.md) | The cluster doctor (wave 5): the rules, grouping by owner, Landlens's first suggestion, certificates, the broken scenarios |
 | [connections.md](connections.md) | GitHub and Linear (wave 6): Landlens's own sign-in (the device flow, Linear's browser sign-in, pasted tokens), what is stored, where a token may go, the OAuth App to register; the Connections page and their tools in Claude sessions; the autonomous mode |
+| [gcp.md](gcp.md) | Google Cloud (wave 6): browsing your chosen projects' resources read-only, through gcloud's sign-in; what Google is asked and the limits, the error sentences, the page, the development overrides and the fakes |
 | [metrics.md](metrics.md) | Graphs: Clickland, then the cluster's Prometheus, then metrics-server, else a reason; setup and the key; what each chart shows |
 | [design.md](design.md) | Iris, the look: direction, tokens, layout and width rules, screens, components, what the tests rely on |
 | [security.md](security.md) | Every security rule and how it is checked |

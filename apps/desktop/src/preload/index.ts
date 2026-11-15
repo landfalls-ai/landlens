@@ -16,6 +16,7 @@ const CHANNELS: readonly Channel[] = [
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
   "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",
   "agent:autonomy",
+  "gcp:status", "gcp:projects", "gcp:choose", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",

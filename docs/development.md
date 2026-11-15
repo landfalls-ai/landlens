@@ -73,6 +73,20 @@ scripts/record-provider-tools.mjs github` (or `linear`) asks for your token with
 read-only endpoint (two `tools/list` calls, nothing written to the provider) and writes the fixture. Only the person
 runs it, with their own token; no test or agent does.
 
+Google Cloud ([gcp.md](gcp.md)): `pnpm test` runs `@landlens/gcp`'s unit tests against
+`packages/gcp/test/fake-gcp.ts` (a loopback server for Resource Manager, Cloud Asset and Kubernetes Engine that
+records every request) and `fake-gcloud.sh`; no test reaches Google, and gcloud needn't be installed. An unpackaged
+build has Google Cloud off unless it reads one of:
+
+| Variable | What |
+|---|---|
+| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the three Google origins become this fake |
+| `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the fake); otherwise it is looked up on the login PATH |
+| `LANDLENS_GCP_REAL=1` | an unpackaged build may reach the real Google Cloud with your gcloud; only the person sets it |
+
+A packaged app reads none of them. The e2e: `pnpm -s build`, then in `apps/desktop`
+`LANDLENS_INTEGRATION=orbstack npx vitest run test/gcp.e2e.test.ts` (screenshots `g4-*` with `LANDLENS_SHOTS`).
+
 ## Where things start
 
 See [architecture.md](architecture.md), "Code map". New IPC: add the channel and its schema to

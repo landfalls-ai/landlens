@@ -68,4 +68,22 @@ describe("IPC contracts", () => {
     // No channel takes an address.
     expect(channels["conn:test"].safeParse({ provider: "github", url: "https://evil.example" }).data).not.toHaveProperty("url");
   });
+  it("hold Google Cloud names to Google's shapes before they reach a path or a query (D87)", () => {
+    const res = channels["gcp:resources"];
+    expect(res.safeParse({ project: "demo-shop", assetType: "compute.googleapis.com/Instance", query: "state:RUNNING", offset: 500 }).success).toBe(true);
+    for (const bad of [
+      { project: "Demo-Shop" }, { project: "demo" }, { project: "demo-shop-" }, { project: "demo-shop/../x" }, { project: "demo-shop:x" },
+      { project: "demo-shop", assetType: "compute.googleapis.com" }, { project: "demo-shop", assetType: "compute.googleapis.com/../x" },
+      { project: "demo-shop", query: "a\nb" }, { project: "demo-shop", query: "x".repeat(501) }, { project: "demo-shop", offset: 5001 },
+    ]) expect(res.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    const one = channels["gcp:resource"];
+    expect(one.safeParse({ project: "demo-shop", name: "//storage.googleapis.com/demo-shop-assets" }).success).toBe(true);
+    for (const name of ['//x/a" OR name:*', "//x/a\\b", "storage.googleapis.com/x", "//x/a\u0007", "//" + "a".repeat(1000)]) {
+      expect(one.safeParse({ project: "demo-shop", name }).success, name.slice(0, 40)).toBe(false);
+    }
+    expect(channels["gcp:choose"].safeParse({ projects: Array.from({ length: 21 }, (_, i) => `project-${i + 10}`) }).success).toBe(false);
+    // No channel takes an address or a token.
+    expect(channels["gcp:status"].safeParse({ endpoint: "http://127.0.0.1:1" }).data).not.toHaveProperty("endpoint");
+    expect(channels["gcp:projects"].safeParse({ token: "ya29.x" }).data).not.toHaveProperty("token");
+  });
 });

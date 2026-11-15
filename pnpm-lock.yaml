@@ -25,6 +25,9 @@ importers:
       '@landlens/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@landlens/gcp':
+        specifier: workspace:*
+        version: link:../../packages/gcp
       '@landlens/kube':
         specifier: workspace:*
         version: link:../../packages/kube
@@ -197,6 +200,28 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+
+  packages/gcp:
+    dependencies:
+      '@landlens/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@landlens/kube':
+        specifier: workspace:*
+        version: link:../kube
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.12
+        version: 4.1.12(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
 
   packages/kube:
     dependencies:

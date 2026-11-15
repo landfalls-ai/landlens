@@ -273,6 +273,47 @@ export const CONN_NOTES = {
 } as const;
 export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
 
+// Google Cloud (docs/gcp.md, wave 6 part 4): browse every resource of the projects you choose, read-only, with
+// gcloud's own sign-in. Landlens stores no Google credential; the token stays in main. Names are held to Google's
+// shapes before they go into a path or a query.
+/** A project id: 6–30 lowercase letters, digits and dashes, starting with a letter, not ending in a dash. */
+export const GcpProjectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, "not a project id");
+/** A Cloud Asset type, such as compute.googleapis.com/Instance. */
+export const GcpAssetType = z.string().regex(/^[a-z0-9.-]{1,80}\/[A-Za-z0-9]{1,80}$/, "not an asset type");
+/** A resource's full name: starts with //, at most 1,000 characters, no quote, backslash or control character. */
+export const GcpResourceName = z.string().max(1000).regex(/^\/\/[^"\\\u0000-\u001f\u007f]+$/, "not a resource name");
+/** A Cloud Asset query typed in the page: one line, at most 500 characters. */
+export const GcpQuery = z.string().min(1).max(500).regex(/^[^\u0000-\u001f\u007f]+$/, "one line");
+/** Where Google Cloud stands: off in a development build, gcloud missing, nobody signed in to gcloud, or ready. */
+export type GcpState = "off-dev" | "missing" | "signed-out" | "ready";
+export type GcpStatus = {
+  state: GcpState;
+  /** gcloud's account, when signed in. */
+  account?: string;
+  /** The projects you chose to browse (ids only). */
+  projects: string[];
+  /** "Claude can read these projects" (part 5): stored, off by default, used by nothing yet. */
+  agentRead: boolean;
+};
+export type GcpProject = { id: string; name: string; number: string };
+/** One resource as Cloud Asset's search returns it: every string cut to 300 characters, at most 20 labels. */
+export type GcpResource = {
+  name: string;
+  assetType: string;
+  displayName?: string;
+  location?: string;
+  state?: string;
+  createTime?: string;
+  updateTime?: string;
+  parent?: string;
+  labels?: Record<string, string>;
+};
+export type GcpTypeCount = { assetType: string; count: number };
+export type GkeCluster = { project: string; location: string; name: string; status: string; version: string; endpoint: string; context: string };
+/** The most resources Landlens reads in one project (10 pages of 500), and the most one gcp:resources answer holds. */
+export const GCP_MAX_RESOURCES = 5000;
+export const GCP_PAGE = 500;
+
 // The autonomous mode (docs/connections.md, D82–D84): per session, per connection, turned on in the dock, never
 // stored. It covers GitHub and Linear writes only; cluster writes always go through the approval broker.
 /** A GitHub repository as `owner/repo`. */
@@ -509,6 +550,14 @@ export const channels = {
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
   "agent:autonomy": AutonomyRequest,
+  // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; no channel takes an address or returns a token.
+  "gcp:status": z.object({ fresh: z.boolean().optional() }),
+  "gcp:projects": z.object({ fresh: z.boolean().optional() }),
+  "gcp:choose": z.object({ projects: z.array(GcpProjectId).max(20), agentRead: z.boolean().optional() }),
+  "gcp:types": z.object({ project: GcpProjectId, fresh: z.boolean().optional() }),
+  "gcp:resources": z.object({ project: GcpProjectId, assetType: GcpAssetType.optional(), query: GcpQuery.optional(), offset: z.number().int().min(0).max(GCP_MAX_RESOURCES).optional() }),
+  "gcp:resource": z.object({ project: GcpProjectId, name: GcpResourceName }),
+  "gcp:clusters": z.object({}),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -581,7 +630,7 @@ export type Responses = {
   "mcp:app-call": McpToolResult;
   "mcp:app-close": { ok: true };
   "mcp:app-link": { opened: boolean };
-  "conn:list": ConnList;
+  "conn:list": ConnList & { gcp: GcpStatus };
   "conn:github-device": { flow: string; userCode: string; verificationUri: "https://github.com/login/device"; expiresIn: number };
   "conn:linear-signin": { flow: string };
   "conn:token": ConnInfo;
@@ -591,6 +640,16 @@ export type Responses = {
   "conn:repin": ConnInfo;
   "conn:disconnect": ConnInfo;
   "agent:autonomy": AutonomyState;
+  "gcp:status": GcpStatus;
+  "gcp:projects": { projects: GcpProject[]; cut: boolean };
+  "gcp:choose": GcpStatus;
+  /** A project's asset types with their counts, from the cached read; `error` is one fixed sentence (D88). */
+  "gcp:types": { types: GcpTypeCount[]; total: number; cut: boolean; error?: string };
+  /** At most 500 from `offset` into the cached list; `total` is the whole list's length. */
+  "gcp:resources": { items: GcpResource[]; total: number; cut: boolean; error?: string };
+  /** `json`: the resource's own JSON (versionedResources[0].resource), cut at 256 KB. */
+  "gcp:resource": { resource: GcpResource; json?: string; cut: boolean };
+  "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
 };
 
 /** A tool as the MCP page shows it. */

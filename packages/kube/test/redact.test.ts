@@ -73,6 +73,7 @@ describe("redactText", () => {
     ["github_pat_11ABCDEFG0" + "c".repeat(30), "<redacted github token>"],
     ["key lin_api_" + "d".repeat(40), "<redacted linear key>"],
     ["lin_oauth_" + "e".repeat(32), "<redacted linear key>"],
+    ["gcloud printed ya29.a0AfB_" + "g".repeat(40), "<redacted google token>"],
     ["password=correcthorse", "password=<redacted>"],
     ['"client_secret": "abcdef123456"', '"client_secret": "<redacted>"'],
     ["-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----", "<redacted private key>"],
