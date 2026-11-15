@@ -3,9 +3,10 @@
 // Overview no longer lists every pod every 10 seconds; workloads, nodes, warning events and TLS Secrets are read when
 // asked and older than their interval. Nothing runs between asks: a scope nobody asked about for 60 seconds stops.
 // Secrets are read here only for their certificates' dates and names (certs.ts); no Secret value leaves main.
-import type { ClusterHealth, DoctorCheck, DoctorCheckState, DoctorEvidence, DoctorReport, KubeObject } from "@landlens/contracts";
+import type { ClusterHealth, DoctorCheck, DoctorCheckState, DoctorEvidence, DoctorReport, KubeObject, Problem } from "@landlens/contracts";
 import {
-  type CertInput, type ClusterManager, diagnose, healthCounts, KubeError, readCerts, readLogTail, recentWarnings, warningEvents, type WatchHub,
+  type CertInput, type ClusterManager, diagnose, healthCounts, KubeError, LIST_MAX, listPages, readCerts, readLogTail, recentWarnings, warningEvents,
+  type WatchHub,
 } from "@landlens/kube";
 
 export const DOCTOR = {
@@ -16,7 +17,11 @@ export const DOCTOR = {
   idleMs: 60_000,
   firstListMs: 20_000,
   scopesPerCluster: 2,
-  log: { tailLines: 200, maxBytes: 64 * 1024, timeoutMs: 10_000 },
+  /** A source that failed (not forbidden, not cut) is read again after this, not after its full interval. */
+  retryMs: 30_000,
+  log: { tailLines: 200, maxBytes: 64 * 1024, readBytes: 1048576, timeoutMs: 10_000 },
+  /** Log reads in flight per scope (one per problem). */
+  evidencePerScope: 4,
 } as const;
 
 type Status = { status: number; message: string };
@@ -33,11 +38,15 @@ class Scope {
   readonly nodes: Src<KubeObject[]> = { at: 0 };
   readonly events: Src<KubeObject[]> = { at: 0 };
   readonly certs: Src<{ certs: CertInput[]; ingresses?: KubeObject[] }> = { at: 0 };
-  readonly certCache = new Map<string, CertInput>();
+  /** Log reads in flight, by problem id. */
+  readonly evidence = new Map<string, Promise<DoctorEvidence>>();
+  /** Aborted when the scope stops, so its reads stop too. */
+  readonly stopped = new AbortController();
   health?: ClusterHealth;
   healthAt = 0;
   constructor(readonly handle: string, readonly namespace: string | undefined) {
-    this.checks = { pods: "ok", workloads: "ok", nodes: namespace ? "off" : "ok", events: "ok", certs: "ok" };
+    // Certificates are "pending" until their first read finishes: never "ok" before anything was read (review, 2).
+    this.checks = { pods: "ok", workloads: "ok", nodes: namespace ? "off" : "ok", events: "ok", certs: "pending" };
   }
 }
 
@@ -51,6 +60,8 @@ export type DoctorDeps = { clusters: ClusterManager; hub: WatchHub; now?: () => 
 
 export class DoctorService {
   private readonly scopes = new Map<string, Map<string, Scope>>();
+  /** Certificate facts by Secret version, per cluster: shared by its scopes, dropped when it disconnects. */
+  private readonly certCaches = new Map<string, Map<string, CertInput>>();
   private readonly now: () => number;
 
   constructor(private readonly deps: DoctorDeps) {
@@ -62,7 +73,12 @@ export class DoctorService {
   async health(handle: string, namespace?: string): Promise<ClusterHealth> {
     const s = this.scope(handle, namespace);
     await this.pods(s);
-    const items = this.deps.hub.items(s.sub!) ?? [];
+    const items = s.sub ? this.deps.hub.items(s.sub) : undefined;
+    if (!items) {
+      // The watch went away under us (the cluster is disconnecting): not "no pods, all clear" (review, finding 8).
+      s.sub = undefined;
+      throw new KubeError(503, "The pod watch stopped; ask again in a moment.");
+    }
     const now = this.now();
     if (s.health && now - s.healthAt < DOCTOR.diagnoseMs) return s.health;
     // Certificates can take a while on a big cluster (one read per changed Secret): wait for them at most 3 seconds;
@@ -90,12 +106,23 @@ export class DoctorService {
     return { at: h.at, problems: h.problems, cut: h.cut, checks: h.checks };
   }
 
-  /** Evidence for a problem in the scope's current report only: the window can't name a pod here (D60). */
+  /**
+   * Evidence for a problem in the scope's current report only: the window can't name a pod here (D60). One read per
+   * problem at a time and at most four per scope; errors are fixed sentences, never the API's text (review, 6).
+   */
   async evidence(handle: string, namespace: string | undefined, id: string): Promise<DoctorEvidence> {
     const s = this.scopes.get(handle)?.get(namespace ?? "");
     const p = s?.health?.problems.find((x) => x.id === id);
     if (!s || !p) throw new KubeError(404, "That problem isn't in the current report.");
-    this.touch(s);
+    const had = s.evidence.get(id);
+    if (had) return had;
+    if (s.evidence.size >= DOCTOR.evidencePerScope) throw new KubeError(429, "Too many log reads at once; try again in a moment.");
+    const run = this.readEvidence(handle, p).finally(() => s.evidence.delete(id));
+    s.evidence.set(id, run);
+    return run;
+  }
+
+  private async readEvidence(handle: string, p: Problem): Promise<DoctorEvidence> {
     const crash = p.class === "crashloop" || p.class === "oom" || p.class === "start" || p.class === "restarts" || (p.class === "probe" && p.facts.probe?.type !== "readiness");
     const pod = p.pods[0];
     if (!crash || !pod || !p.namespace || !p.container) return {};
@@ -114,28 +141,35 @@ export class DoctorService {
           e = e2;
         }
       }
-      const status = (e as KubeError).status;
-      return { log: { error: status === 403 || status === 401 ? "You can't read this pod's logs." : `Couldn't read the log: ${String((e as Error).message).slice(0, 200)}` } };
+      return { log: { error: logError(e) } };
     }
   }
 
-  /** Certificate facts the person's own read found, for the agent's cluster_overview (D67); undefined if not read. */
-  certsFor(handle: string, namespaces?: string[]): CertInput[] | undefined {
-    const all = this.scopes.get(handle)?.get("");
-    const pick = (s: Scope | undefined) => (s && s.checks.certs === "ok" ? s.certs.value?.certs : undefined);
-    if (!namespaces?.length) return pick(all);
+  /**
+   * Certificate facts the person's own read found, for the agent's cluster_overview (D67), with how far that read got.
+   * `namespaces` undefined is every namespace (the all-namespaces scope only); an empty list is none (review, 10).
+   * Nothing read yet is `pending`, never "no certificates".
+   */
+  certsFor(handle: string, namespaces?: string[]): { state: DoctorCheckState; certs?: CertInput[] } {
+    const scopes = this.scopes.get(handle);
+    const all = scopes?.get("");
+    const pick = (s: Scope | undefined) => (s?.certs.value ? { state: s.checks.certs, certs: s.certs.value.certs } : undefined);
+    if (!namespaces) return pick(all) ?? { state: "pending" };
     const out: CertInput[] = [];
+    let state: DoctorCheckState = "ok";
     for (const ns of namespaces) {
-      const certs = pick(this.scopes.get(handle)?.get(ns)) ?? pick(all)?.filter((c) => c.namespace === ns);
-      if (!certs) return undefined;
-      out.push(...certs.filter((c) => c.namespace === ns));
+      const got = pick(scopes?.get(ns)) ?? pick(all);
+      if (!got) return { state: "pending" };
+      if (got.state !== "ok") state = got.state;
+      out.push(...got.certs!.filter((c) => c.namespace === ns));
     }
-    return out;
+    return { state, certs: out };
   }
 
   forget(handle: string) {
     for (const s of this.scopes.get(handle)?.values() ?? []) this.stop(s);
     this.scopes.delete(handle);
+    this.certCaches.delete(handle);
   }
 
   /** How many scopes are running, for tests. */
@@ -171,6 +205,7 @@ export class DoctorService {
   }
 
   private stop(s: Scope) {
+    s.stopped.abort();
     if (s.idle) clearTimeout(s.idle);
     if (s.sub) this.deps.hub.unsubscribe(s.sub);
     s.sub = undefined;
@@ -189,7 +224,9 @@ export class DoctorService {
       s.ready = new Promise<void>((r) => (done = r));
       s.sub = this.deps.hub.subscribe({ handle: s.handle, group: "", version: "v1", resource: "pods", ...(s.namespace ? { namespace: s.namespace } : {}) }, (e) => {
         if (e.type === "snapshot") (s.podsError = undefined), done();
-        else if (e.type === "error") (s.podsError = { status: e.status ?? 500, message: e.message, at: this.now() }), done();
+        // Only a fatal error (no access, no such kind) fails the doctor; the watcher retries the rest and its last
+        // snapshot stays good meanwhile (review, finding 8). The first list still has its 20-second limit.
+        else if (e.type === "error" && (e as { fatal?: boolean }).fatal !== false) (s.podsError = { status: e.status ?? 500, message: e.message, at: this.now() }), done();
       });
       const timer = setTimeout(() => {
         s.podsError = { status: 504, message: "The pod list didn't arrive in time.", at: this.now() };
@@ -202,14 +239,15 @@ export class DoctorService {
     if (s.podsError) throw new KubeError(s.podsError.status, s.podsError.message);
   }
 
-  private async refresh<T>(src: Src<T>, every: number, now: number, read: () => Promise<T | undefined>) {
+  /** Reads a source when it is older than `every`; after an error (not forbidden, not cut), again after 30 seconds. */
+  private async refresh<T>(s: Scope, check: DoctorCheck, src: Src<T>, every: number, now: number, read: () => Promise<T | undefined>) {
     if (src.inflight) return src.inflight;
     if (src.at && now - src.at < every) return;
     src.inflight = (async () => {
       try {
         src.value = await read();
       } finally {
-        src.at = this.now();
+        src.at = s.checks[check] === "error" ? this.now() - every + DOCTOR.retryMs : this.now();
         src.inflight = undefined;
       }
     })();
@@ -219,11 +257,11 @@ export class DoctorService {
   private refreshWorkloads(s: Scope, now: number) {
     const get = this.getter(s.handle);
     const ns = s.namespace ? `/namespaces/${s.namespace}` : "";
-    return this.refresh(s.workloads, DOCTOR.workloadsMs, now, async () => {
+    return this.refresh(s, "workloads", s.workloads, DOCTOR.workloadsMs, now, async () => {
       let state: DoctorCheckState = "ok";
-      const one = (r: string) => get(`/apis/apps/v1${ns}/${r}?limit=2000`).then((l) => {
-        if (l?.metadata?.continue && state === "ok") state = "partial";
-        return (Array.isArray(l?.items) ? l.items : []) as KubeObject[];
+      const one = (r: string) => listPages(get, `/apis/apps/v1${ns}/${r}`, LIST_MAX.workloads).then((l) => {
+        if (l.partial && state === "ok") state = "partial";
+        return l.items;
       }, (e) => {
         if (state === "ok" || stateOf(e) === "forbidden") state = stateOf(e);
         return undefined;
@@ -237,23 +275,26 @@ export class DoctorService {
   private refreshNodes(s: Scope, now: number) {
     if (s.namespace) return Promise.resolve();
     const get = this.getter(s.handle);
-    return this.refresh(s.nodes, DOCTOR.workloadsMs, now, () =>
-      get("/api/v1/nodes").then((l) => ((s.checks.nodes = "ok"), (l.items ?? []) as KubeObject[]), (e) => ((s.checks.nodes = stateOf(e)), undefined)));
+    return this.refresh(s, "nodes", s.nodes, DOCTOR.workloadsMs, now, () =>
+      listPages(get, "/api/v1/nodes", LIST_MAX.nodes).then((l) => ((s.checks.nodes = l.partial ? "partial" : "ok"), l.items), (e) => ((s.checks.nodes = stateOf(e)), undefined)));
   }
 
   private refreshEvents(s: Scope, now: number) {
     const get = this.getter(s.handle);
-    return this.refresh(s.events, DOCTOR.eventsMs, now, () =>
+    return this.refresh(s, "events", s.events, DOCTOR.eventsMs, now, () =>
       warningEvents(get, s.namespace).then((r) => ((s.checks.events = r.partial ? "partial" : "ok"), r.items), (e) => ((s.checks.events = stateOf(e)), undefined)));
   }
 
   private refreshCerts(s: Scope, now: number) {
     const client = this.deps.clusters.get(s.handle).client;
     const ns = s.namespace ? `/namespaces/${s.namespace}` : "";
-    return this.refresh(s.certs, DOCTOR.certsMs, now, async () => {
+    let cache = this.certCaches.get(s.handle);
+    if (!cache) this.certCaches.set(s.handle, (cache = new Map()));
+    return this.refresh(s, "certs", s.certs, DOCTOR.certsMs, now, async () => {
       try {
-        const { certs } = await readCerts(client, s.namespace, s.certCache);
-        s.checks.certs = "ok";
+        const { certs, cut, failed } = await readCerts(client, s.namespace, cache, { signal: s.stopped.signal });
+        // More than 500 Secrets, or some left out (403, 429, a timeout): said, not "ok" (review, finding 2).
+        s.checks.certs = cut || failed ? "partial" : "ok";
         const ingresses = await client.jsonCapped(`/apis/networking.k8s.io/v1${ns}/ingresses?limit=2000`, { maxBytes: 16 * 1048576, timeoutMs: 10_000 })
           .then((l: any) => (l.items ?? []) as KubeObject[], () => undefined);
         return { certs, ...(ingresses ? { ingresses } : {}) };
@@ -264,9 +305,19 @@ export class DoctorService {
     });
   }
 
-  /** Lists as you, each answer capped at 32 MB as it streams in and given up after 15 seconds. */
+  /** Lists as you, a page at a time; each answer capped at 32 MB as it streams in and given up after 15 seconds. */
   private getter(handle: string) {
     const client = this.deps.clusters.get(handle).client;
     return (path: string) => client.jsonCapped(path, { maxBytes: 32 * 1048576, timeoutMs: 15_000 });
   }
+}
+
+/** A log read's failure as a fixed sentence: the API's own text doesn't reach the window (review, finding 6). */
+function logError(e: unknown): string {
+  const status = (e as KubeError)?.status;
+  if (status === 401 || status === 403) return "You can't read this pod's logs.";
+  if (status === 404) return "The pod or its container is gone.";
+  if (status === 400) return "This container has no log to read yet.";
+  if ((e as Error)?.name === "TimeoutError" || (e as Error)?.name === "AbortError") return "The log didn't arrive in time.";
+  return status ? `Couldn't read the log (HTTP ${status}).` : "Couldn't read the log.";
 }

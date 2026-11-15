@@ -624,8 +624,11 @@ export type ProblemClass =
   | "restarts" | "unavailable" | "node" | "warning" | "cert";
 /** What the doctor could read; a missing check is said plainly rather than read as "no problems". */
 export type DoctorCheck = "pods" | "workloads" | "nodes" | "events" | "certs";
-/** ok; forbidden (no access); error (failed this time); partial (a cap or a failed page cut it); off (not for this scope). */
-export type DoctorCheckState = "ok" | "forbidden" | "error" | "partial" | "off";
+/**
+ * ok; forbidden (no access); error (failed this time); partial (a cap, a failed page or Secrets left out cut it);
+ * pending (still being read: certificates on a first ask); off (not for this scope).
+ */
+export type DoctorCheckState = "ok" | "forbidden" | "error" | "partial" | "pending" | "off";
 /** A TLS Secret's certificate as main reads it from `tls.crt`: dates and names, never the key or the PEM. */
 export type CertFact = {
   notBefore: string;

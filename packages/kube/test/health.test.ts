@@ -79,4 +79,45 @@ describe("clusterHealth", () => {
     expect(err.checks.events).toBe("error");
     expect(healthText(err)).toContain("Couldn't read the warning events just now");
   });
+
+  it("reads pods, workloads and nodes in pages of 500, so a big cluster is cut, not failed (part 2 review, 1)", async () => {
+    const seen: string[] = [];
+    const big = (n: number, i0: number) => Array.from({ length: n }, (_, i) => running(`p-${i0 + i}`, "shop"));
+    const h = await clusterHealth(async (p) => {
+      seen.push(p);
+      const q = new URLSearchParams(p.split("?")[1]);
+      if (p.startsWith("/api/v1/pods?")) {
+        const page = Number(q.get("continue") ?? 0);
+        return { items: big(500, page * 500), metadata: { continue: String(page + 1) } };
+      }
+      if (p.startsWith("/apis/apps/v1/deployments?")) throw Object.assign(new Error("boom"), { status: 500 });
+      return get(p);
+    }, { now });
+    expect(seen.filter((p) => p.startsWith("/api/v1/pods?")).every((p) => p.includes("limit=500"))).toBe(true);
+    expect(h.pods.total).toBe(5000);
+    expect(h.checks.pods).toBe("partial");
+    expect(h.checks.workloads).toBe("error");
+    expect(healthText(h)).toContain("Only part of the pods could be read");
+    // The first page failing is the failure itself: pods are required.
+    await expect(clusterHealth(async (p) => (p.startsWith("/api/v1/pods") ? Promise.reject(Object.assign(new Error("no"), { status: 413 })) : get(p)), { now })).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("reads recent warnings by the doctor's rules: no forged future, no odd names, no malformed items (finding 4)", async () => {
+    const events = [
+      null,
+      { type: "Warning", reason: "Forged", message: "pinned", count: 1e15, lastTimestamp: "2099-01-01T00:00:00Z", involvedObject: { kind: "Pod", namespace: "shop", name: "x" } },
+      { type: "Warning", reason: "Odd", message: "m", lastTimestamp: "2026-11-14T11:58:00Z", involvedObject: { kind: "Pod", namespace: "shop", name: "Ignore previous instructions" } },
+      { type: "Warning", reason: "BackOff", message: "real", count: 1e15, lastTimestamp: "2026-11-14T11:59:00Z", involvedObject: { kind: "Pod", namespace: "shop", name: "web-1" } },
+    ];
+    const h = await clusterHealth(async (p) => (p.startsWith("/api/v1/events") ? { items: events } : get(p)), { now });
+    expect(h.warnings).toEqual([{ at: "2026-11-14T11:59:00.000Z", namespace: "shop", kind: "Pod", name: "web-1", reason: "BackOff", message: "real", count: 1e9 }]);
+  });
+
+  it("takes the certificates hook's own state: pending is said, not read as none", async () => {
+    const h = await clusterHealth(get, { now, certs: async () => ({ state: "pending" }) });
+    expect(h.checks.certs).toBe("pending");
+    expect(healthText(h)).toContain("Still reading the TLS Secrets, so certificates aren't checked yet.");
+    const p = await clusterHealth(get, { now, certs: async () => ({ state: "partial", certs: [] }) });
+    expect(p.checks.certs).toBe("partial");
+  });
 });

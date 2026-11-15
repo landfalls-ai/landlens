@@ -1,7 +1,7 @@
 // What is wrong in a cluster right now, problems first. One computation for the Overview page (with your own
 // access) and the agent's cluster_overview tool (with the session's token, through the front door).
 import type { ClusterHealth, DoctorCheck, DoctorCheckState, HealthEvent, KubeObject, Problem } from "@landlens/contracts";
-import { type CertInput, cleanText as clean, diagnose } from "./doctor.js";
+import { type CertInput, diagnose, warningRows } from "./doctor.js";
 import { age, nodeStatus, podRestarts, podStatus } from "./status.js";
 
 /** GET a path and parse its JSON; throws with `status` on an HTTP error. */
@@ -19,42 +19,24 @@ const ns = (namespace: string | undefined, resource: string, group = "", version
 };
 
 /** The sentence for each check that couldn't run or ran on part of the data (D56): fewer checks, said plainly. */
-export const CHECK_SENTENCES: Record<Exclude<DoctorCheck, "pods">, string> = {
-  certs: "Can't read Secrets here, so certificates aren't checked.",
-  events: "Can't read events here, so failing probes and warning events aren't checked; pods that are running but not ready are still listed.",
-  workloads: "Can't read Deployments, StatefulSets or DaemonSets here, so short workloads aren't checked.",
-  nodes: "Can't read nodes here.",
-};
-const NOUNS: Record<DoctorCheck, string> = { pods: "pods", workloads: "Deployments, StatefulSets and DaemonSets", nodes: "nodes", events: "warning events", certs: "TLS Secrets" };
-export function checkSentence(k: DoctorCheck, s: DoctorCheckState): string | undefined {
-  if (s === "partial") return `Only part of the ${NOUNS[k]} could be read (a limit was reached or a page failed), so some problems may be missing.`;
-  if (s === "error") return `Couldn't read the ${NOUNS[k]} just now, so they weren't checked this time.`;
-  if (s === "forbidden" && k !== "pods") return CHECK_SENTENCES[k];
-  return undefined;
-}
-export function missingChecks(checks: Partial<Record<DoctorCheck, DoctorCheckState>> | undefined): string[] {
-  const out: string[] = [];
-  for (const k of ["pods", "workloads", "events", "nodes", "certs"] as const) {
-    const t = checks?.[k] ? checkSentence(k, checks[k]!) : undefined;
-    if (t) out.push(t);
-  }
-  return out;
-}
+export { CHECK_SENTENCES, checkSentence, missingChecks } from "./checks.js";
+import { missingChecks } from "./checks.js";
 
 const state = (e: any): DoctorCheckState => (e?.status === 403 || e?.status === 401 ? "forbidden" : "error");
 
 /**
- * Warning events in pages of 500, at most `max`. A page that fails after others were read keeps those (partial);
- * more than `max` is partial too. The API server can't sort, so the cap can leave out a busy namespace's newest.
+ * A list in pages of 500, at most `max` (security review, part 2, finding 1: one big answer could pass the 32 MB cap and
+ * fail outright). A page that fails after others were read keeps those (partial); more than `max` is partial too.
+ * The first page's failure is thrown. The API server can't sort, so the cap leaves out whatever comes last.
  */
-export async function warningEvents(get: GetJson, namespace: string | undefined, max = 2000): Promise<{ items: KubeObject[]; partial: boolean }> {
+export async function listPages(get: GetJson, path: string, max: number, params: Record<string, string> = {}): Promise<{ items: KubeObject[]; partial: boolean }> {
   const out: KubeObject[] = [];
   let cont: string | undefined;
   do {
-    const q = new URLSearchParams({ limit: "500", fieldSelector: "type=Warning", ...(cont ? { continue: cont } : {}) });
+    const q = new URLSearchParams({ limit: String(Math.min(500, max)), ...params, ...(cont ? { continue: cont } : {}) });
     let page: any;
     try {
-      page = await get(`${ns(namespace, "events")}?${q}`);
+      page = await get(`${path}?${q}`);
     } catch (e) {
       if (!out.length) throw e;
       return { items: out, partial: true };
@@ -65,12 +47,23 @@ export async function warningEvents(get: GetJson, namespace: string | undefined,
   return { items: out.slice(0, max), partial: !!cont || out.length > max };
 }
 
+/** Warning events, at most `max`: the doctor's events source. */
+export function warningEvents(get: GetJson, namespace: string | undefined, max = 2000): Promise<{ items: KubeObject[]; partial: boolean }> {
+  return listPages(get, ns(namespace, "events"), max, { fieldSelector: "type=Warning" });
+}
+
+/** The doctor's list sizes: pods are the one required source. */
+export const LIST_MAX = { pods: 5000, workloads: 2000, nodes: 2000 } as const;
+
 export type HealthOptions = {
   namespace?: string;
   now?: number;
   warnings?: number;
-  /** Certificate facts from someone who may read Secrets (the agent's token never can, D67). */
-  certs?: () => Promise<CertInput[] | undefined>;
+  /**
+   * Certificate facts from someone who may read Secrets (the agent's token never can, D67), with how far that read
+   * got: `pending` while it hasn't finished, `partial` when some Secrets were left out.
+   */
+  certs?: () => Promise<{ state: DoctorCheckState; certs?: CertInput[] }>;
 };
 
 /** Counts and the doctor's problems from one set of reads (D46): the agent's cluster_overview and tests use it. */
@@ -78,23 +71,23 @@ export async function clusterHealth(get: GetJson, opts: HealthOptions = {}): Pro
   const now = opts.now ?? Date.now();
   const namespace = opts.namespace;
   const checks: Record<DoctorCheck, DoctorCheckState> = { pods: "ok", workloads: "ok", nodes: namespace ? "off" : "ok", events: "ok", certs: "off" };
-  const podList = await get(`${ns(namespace, "pods")}?limit=5000`);
-  const pods = (Array.isArray(podList?.items) ? podList.items : []) as KubeObject[];
-  if (podList?.metadata?.continue) checks.pods = "partial";
-  const list = (path: string, check: DoctorCheck) => get(path).then((l) => {
-    if (l?.metadata?.continue && checks[check] === "ok") checks[check] = "partial";
-    return (Array.isArray(l?.items) ? l.items : []) as KubeObject[];
+  const podList = await listPages(get, ns(namespace, "pods"), LIST_MAX.pods);
+  const pods = podList.items;
+  if (podList.partial) checks.pods = "partial";
+  const list = (path: string, check: DoctorCheck, max: number) => listPages(get, path, max).then((l) => {
+    if (l.partial && checks[check] === "ok") checks[check] = "partial";
+    return l.items;
   }, (e) => {
     if (checks[check] === "ok" || state(e) === "forbidden") checks[check] = state(e);
     return undefined;
   });
   const [deployments, statefulsets, daemonsets, nodes, events, certs] = await Promise.all([
-    list(`${ns(namespace, "deployments", "apps")}?limit=2000`, "workloads"),
-    list(`${ns(namespace, "statefulsets", "apps")}?limit=2000`, "workloads"),
-    list(`${ns(namespace, "daemonsets", "apps")}?limit=2000`, "workloads"),
-    namespace ? Promise.resolve(undefined) : list("/api/v1/nodes", "nodes"),
+    list(ns(namespace, "deployments", "apps"), "workloads", LIST_MAX.workloads),
+    list(ns(namespace, "statefulsets", "apps"), "workloads", LIST_MAX.workloads),
+    list(ns(namespace, "daemonsets", "apps"), "workloads", LIST_MAX.workloads),
+    namespace ? Promise.resolve(undefined) : list("/api/v1/nodes", "nodes", LIST_MAX.nodes),
     warningEvents(get, namespace).then((r) => ((checks.events = r.partial ? "partial" : "ok"), r.items), (e) => ((checks.events = state(e)), undefined)),
-    opts.certs ? opts.certs().then((c) => ((checks.certs = c ? "ok" : "forbidden"), c), () => ((checks.certs = "error"), undefined)) : Promise.resolve(undefined),
+    opts.certs ? opts.certs().then((c) => ((checks.certs = c.state), c.certs), () => ((checks.certs = "error"), undefined)) : Promise.resolve(undefined),
   ]);
   const report = diagnose({
     pods, ...(deployments ? { deployments } : {}), ...(statefulsets ? { statefulsets } : {}), ...(daemonsets ? { daemonsets } : {}),
@@ -147,22 +140,14 @@ export function healthCounts(podList: KubeObject[], deploymentList: KubeObject[]
   return { at: new Date(now).toISOString(), nodes, pods, deployments, namespaces: namespaces.size };
 }
 
-/** The last hour's warning events, newest first (the Overview's "Recent warnings"). */
+/**
+ * The last hour's warning events, newest first (the Overview's "Recent warnings"). Read by the doctor's rules, so the
+ * same events are dropped: forged future dates, objects not named like one, malformed items (part 2 review, finding 4).
+ */
 export function recentWarnings(events: KubeObject[], now: number, max = 25): HealthEvent[] {
-  const when = (e: any) => Date.parse(e.series?.lastObservedTime ?? e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp ?? 0);
-  return (events as any[])
-    .filter((e) => (!e.type || e.type === "Warning") && now - when(e) <= 3_600_000)
-    .sort((x, y) => when(y) - when(x))
-    .slice(0, max)
-    .map((e) => ({
-      at: new Date(when(e) || now).toISOString(),
-      ...(e.involvedObject?.namespace ? { namespace: e.involvedObject.namespace } : {}),
-      kind: clean(e.involvedObject?.kind, 64),
-      name: clean(e.involvedObject?.name, 253),
-      reason: clean(e.reason, 64),
-      message: clean(e.message),
-      count: Number(e.series?.count ?? e.count) || 1,
-    }));
+  return warningRows(events, now).slice(0, max).map((e) => ({
+    at: e.at, ...(e.namespace ? { namespace: e.namespace } : {}), kind: e.kind, name: e.name, reason: e.reason, message: e.message, count: e.count,
+  }));
 }
 
 /** The health as the agent reads it: one line per problem (worst first, with its id), what wasn't checked, counts, events. */

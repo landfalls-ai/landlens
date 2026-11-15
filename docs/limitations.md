@@ -57,7 +57,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **The doctor** ([doctor.md](doctor.md)) checks certificates only in `kubernetes.io/tls` Secrets (at most 500 per
   scope): not cert-manager `Certificate`s, Opaque Secrets with PEM, webhook CA bundles or the control plane's own.
   The API server can't sort events, so with more than 2,000 warning events the newest of a busy namespace can be left
-  out (the page says the list is partial). A bare ReplicaSet with a `pod-template-hash` label shows as a Deployment
+  out, and past 5,000 pods (or 2,000 of a workload kind) the rest aren't checked (the page says the list is partial). A bare ReplicaSet with a `pod-template-hash` label shows as a Deployment
   that doesn't exist. There is no mute, acknowledge or history of cleared problems, and the thresholds are fixed.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).

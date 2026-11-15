@@ -16,7 +16,7 @@ For each container, the first rule that matches wins; a pod with no container pr
 | Class | When | Failing or to watch |
 |---|---|---|
 | Out of memory (`oom`) | The container's current or last run ended `OOMKilled`, within the last hour or it isn't running now | Failing if it isn't running, else to watch |
-| Probe (`probe`) | A liveness or startup probe's `Unhealthy` event in the last 10 minutes; for a running pod, a readiness probe's | Liveness and startup: failing. Readiness: to watch, failing when the owner has none available |
+| Probe (`probe`) | A liveness or startup probe's `Unhealthy` event in the last 10 minutes, or the last hour when the container's last run was killed (exit 137): at a 5-minute back-off the kubelet can stop updating the event's time; for a running pod, a readiness probe's | Liveness and startup: failing. Readiness: to watch, failing when the owner has none available |
 | Crash loop (`crashloop`) | Waiting `CrashLoopBackOff`, or an exited run the kubelet will restart (it often reports `terminated: Error` between back-offs) | Failing |
 | Image (`image`) | Waiting `ImagePullBackOff`, `ErrImagePull` or `InvalidImageName` | Failing |
 | Config (`config`) | Waiting `CreateContainerConfigError` | Failing |
@@ -88,19 +88,25 @@ you. It answers `cluster:health` (the Overview) and `doctor:list` (the report), 
 | TLS Secrets | A metadata-only list (`type=kubernetes.io/tls`, at most 500), then one GET per Secret whose version is new, 4 at a time; only the certificate's facts are kept. The first answer waits for them at most 3 s | When older than 10 min |
 | Ingresses | One list, for which Ingress uses a Secret | With the Secrets |
 
-Each read is capped at 32 MB as it streams in and given up after 15 s. The report is worked out again at most every 2
+Lists are read in pages of 500 (pods up to 5,000; workloads and nodes up to 2,000 each), each page capped at 32 MB as it
+streams in and given up after 15 s; a list cut by its limit, or by a page that failed after others, is `partial`. A
+source whose read failed is read again after 30 s rather than its full interval. The report is worked out again at most every 2
 seconds. Nothing runs between asks; a scope nobody asked about for 60 seconds stops, a cluster keeps at most two
 scopes (the older one stops), and all stop when the cluster disconnects.
 
-Each source's state is `ok`, `forbidden`, `error`, `partial` (a limit was reached or a page failed after others were
-read) or `off` (nodes in a namespace). Only pods are required: without them `cluster:health` answers 403 and the
+Each source's state is `ok`, `forbidden`, `error`, `partial` (a limit was reached, or some reads failed after others
+succeeded: a page, or a Secret that answered 403, 429 or not in time), `pending` (certificates whose first read hasn't
+finished: never `ok` before anything was read) or `off` (nodes in a namespace). Only pods are required: without them `cluster:health` answers 403 and the
 Overview shows its lock. Every other state has a sentence: "Can't read Secrets here, so certificates aren't
 checked."; "Only part of the warning events could be read …, so some problems may be missing."; "Couldn't read the
 nodes just now, …". The agent's `cluster_overview` ends with the same sentences.
 
 `doctor:evidence` gives, for a crash loop, an OOM kill, a start failure, restarts or a liveness or startup probe, the
-last 200 lines (64 KB, 10 s) of the first affected pod's container: the previous run when it has restarted, else the
-current one. Only an id in the scope's current report is answered, so the window can't name a pod to read.
+last 200 lines of the first affected pod's container: the previous run when it has restarted, else the current one.
+Up to 1 MB is read in 10 s and the last 64 KB kept, from a line's start, so a long stack trace keeps its end. Only an
+id in the scope's current report is answered, so the window can't name a pod to read; one read per problem runs at a
+time and four per scope; a failure is a fixed sentence ("You can't read this pod's logs.", "The pod or its container
+is gone."), not the API's text.
 
 ## What the agent reads
 

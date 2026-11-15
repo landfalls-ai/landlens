@@ -38,34 +38,54 @@ export function logPath(r: LogRequest): string {
 }
 
 /**
- * The last lines of a container's log, not followed, read with a byte cap and a time limit (the doctor's evidence,
- * wave 5 D60). Lines keep their text only; past the cap the answer is cut and the partial last line dropped.
+ * The last lines of a container's log, not followed, read with a time limit (the doctor's evidence, wave 5 D60). Up
+ * to `readBytes` (1 MB) is read and only the last `maxBytes` kept, cut at a line start, so a long stack trace keeps its
+ * end, which is the crash itself (part 2 review, finding 5). Lines keep their text only.
  */
-export async function readLogTail(client: Pick<KubeClient, "request">, r: LogRequest, opts: { maxBytes: number; timeoutMs: number }): Promise<{ lines: string[]; cut: boolean }> {
+export async function readLogTail(
+  client: Pick<KubeClient, "request">, r: LogRequest, opts: { maxBytes: number; timeoutMs: number; readBytes?: number },
+): Promise<{ lines: string[]; cut: boolean }> {
+  const readBytes = Math.max(opts.readBytes ?? 1048576, opts.maxBytes);
   const res = await client.request(logPath({ ...r, follow: false }), { signal: AbortSignal.timeout(opts.timeoutMs), headers: { Accept: "*/*" } });
   const chunks: Uint8Array[] = [];
-  let size = 0;
-  let cut = false;
+  let kept = 0;
+  let read = 0;
+  let dropped = false; // bytes dropped from the start
+  let stopped = false; // the answer was longer than readBytes
   const reader = res.body?.getReader();
   while (reader) {
     const { done, value } = await reader.read();
     if (done) break;
-    const room = opts.maxBytes - size;
-    if (value.byteLength > room) {
-      chunks.push(value.subarray(0, Math.max(0, room)));
-      size = opts.maxBytes;
-      cut = true;
+    const take = Math.min(value.byteLength, readBytes - read);
+    chunks.push(take < value.byteLength ? value.subarray(0, take) : value);
+    kept += take;
+    read += take;
+    // Keep only what can still be in the last maxBytes.
+    while (chunks.length > 1 && kept - chunks[0]!.byteLength >= opts.maxBytes) {
+      kept -= chunks.shift()!.byteLength;
+      dropped = true;
+    }
+    if (read >= readBytes) {
+      stopped = true;
       await reader.cancel().catch(() => {});
       break;
     }
-    size += value.byteLength;
-    chunks.push(value);
   }
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!res.ok) throw toKubeError(res.status, text);
+  let buf = Buffer.concat(chunks);
+  if (!res.ok) throw toKubeError(res.status, buf.subarray(0, 4096).toString("utf8"));
+  if (buf.byteLength > opts.maxBytes) {
+    buf = buf.subarray(buf.byteLength - opts.maxBytes);
+    dropped = true;
+  }
+  let text = buf.toString("utf8");
+  if (dropped) {
+    // Start at a whole line; a single line longer than the window is kept from where the window starts.
+    const nl = text.indexOf("\n");
+    if (nl >= 0 && nl < text.length - 1) text = text.slice(nl + 1);
+  }
   const raw = text.split("\n");
-  if (cut) raw.pop();
-  return { lines: raw.filter((l) => l.length).map((l) => splitLine(l).text), cut };
+  if (stopped && raw.length > 1) raw.pop(); // its last line was cut
+  return { lines: raw.filter((l) => l.length).map((l) => splitLine(l).text), cut: dropped || stopped };
 }
 
 /** "2026-11-15T10:00:00.123456789Z message" → its parts; a line without a timestamp keeps its text. */

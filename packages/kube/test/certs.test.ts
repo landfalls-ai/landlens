@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { certFacts, parseSans, pemBlocks } from "../src/certs.js";
+import type { CertInput } from "../src/doctor.js";
+import { KubeError } from "../src/client.js";
+import { certFacts, parseSans, pemBlocks, readCerts } from "../src/certs.js";
 
 // Public certificates only: the fixtures hold no keys.
 const dir = join(import.meta.dirname, "fixtures", "doctor");
@@ -56,5 +58,42 @@ describe("certFacts", () => {
     // leaf + its CA: the CA is self-signed and lasts longer anyway; with the CA first it is the "leaf" and the real
     // leaf (not self-signed) is the chain's earliest. A root after the leaf is never the date.
     expect(certFacts({ data: { "tls.crt": b64(leaf + ca) } })).toMatchObject({ which: "leaf", notAfter: "2026-12-01T00:00:00.000Z" });
+  });
+
+  it("reads SANs entry by entry, so a value can't carry another (part 2 review, finding 9)", () => {
+    expect(parseSans("URI:http://x/DNS:bank.example")).toEqual([]);
+    expect(parseSans('URI:"http://x, DNS:bank.example", DNS:shop.test')).toEqual(["shop.test"]);
+    expect(parseSans("email:a@b, DNS:a.test")).toEqual(["a.test"]);
+    const t = Date.now();
+    parseSans("URI:a, ".repeat(40_000));
+    parseSans(`DNS:"${"\\\"".repeat(40_000)}`);
+    expect(Date.now() - t).toBeLessThan(200);
+  });
+
+  it("counts Secrets it couldn't read, prunes only its namespace, and stops when told (findings 2 and 7)", async () => {
+    const items = ["a", "b", "c", "gone"].map((name) => ({ metadata: { name, namespace: "shop", resourceVersion: "1" } }));
+    const gets: string[] = [];
+    const client: any = {
+      jsonText: async () => ({ value: { items }, bytes: 1 }),
+      jsonCapped: async (p: string) => {
+        gets.push(p);
+        if (p.endsWith("/b")) throw new KubeError(429, "slow down");
+        if (p.endsWith("/gone")) throw new KubeError(404, "gone");
+        return { data: { "tls.crt": b64(leaf) } };
+      },
+    };
+    const other: CertInput = { namespace: "other", name: "keep", fact: certFacts({ data: { "tls.crt": b64(leaf) } }) };
+    const cache = new Map<string, CertInput>([["other/keep@9", other], ["shop/old@1", other]]);
+    const r = await readCerts(client, "shop", cache);
+    expect(r.failed).toBe(1);
+    expect(r.certs.map((c) => c.name)).toEqual(["a", "c"]);
+    expect(cache.has("other/keep@9")).toBe(true);
+    expect(cache.has("shop/old@1")).toBe(false);
+    const stopped = new AbortController();
+    stopped.abort();
+    gets.length = 0;
+    const s = await readCerts(client, "shop", new Map(), { signal: stopped.signal });
+    expect(gets).toEqual([]);
+    expect(s.failed).toBe(4);
   });
 });

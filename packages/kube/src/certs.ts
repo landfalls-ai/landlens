@@ -29,21 +29,40 @@ export function pemBlocks(pem: string, max: number): string[] {
   return out;
 }
 
-/** Node's subjectAltName text: `DNS:a, DNS:"b,c", IP Address:10.0.0.1`; quoted values are JSON strings. */
+/**
+ * Node's subjectAltName text: `DNS:a, DNS:"b,c", IP Address:10.0.0.1`; quoted values are JSON strings. Read entry by
+ * entry from the start, so a value can't smuggle in another entry (`URI:http://x/DNS:bank.example`, or a quoted
+ * `URI:"http://x, DNS:bank.example"`: part 2 review, finding 9). Linear: sticky patterns, no backtracking across entries.
+ */
 export function parseSans(s: string): string[] {
   const out: string[] = [];
-  const re = /(DNS|IP Address):("(?:[^"\\]|\\.)*"|[^,]*)(?:,\s*|$)/g;
-  for (let m = re.exec(s); m && out.length < CERT_LIMITS.sans; m = re.exec(s)) {
-    if (!m[0]) break;
-    let v = m[2]!.trim();
-    if (v.startsWith('"')) {
+  const TYPE = /([A-Za-z][A-Za-z ]{0,30}):/y;
+  const QUOTED = /"(?:[^"\\]|\\.)*"/y;
+  let i = 0;
+  while (i < s.length && out.length < CERT_LIMITS.sans) {
+    TYPE.lastIndex = i;
+    const t = TYPE.exec(s);
+    if (!t) break;
+    i = TYPE.lastIndex;
+    let v: string | undefined;
+    if (s[i] === '"') {
+      QUOTED.lastIndex = i;
+      const q = QUOTED.exec(s);
+      if (!q) break;
+      i = QUOTED.lastIndex;
       try {
-        v = JSON.parse(v);
+        v = JSON.parse(q[0]);
       } catch {
-        continue;
+        v = undefined;
       }
+    } else {
+      const j = s.indexOf(", ", i);
+      v = s.slice(i, j < 0 ? s.length : j);
+      i = j < 0 ? s.length : j;
     }
-    if (v) out.push(v);
+    if ((t[1] === "DNS" || t[1] === "IP Address") && typeof v === "string" && v.trim()) out.push(v.trim());
+    if (s.startsWith(", ", i)) i += 2;
+    else break;
   }
   return out;
 }
@@ -100,7 +119,9 @@ export const MAX_TLS_SECRETS = 500;
  * most 500), then one capped GET for each Secret whose version isn't in `cache`. Only the CertFact is kept; a Secret
  * that can't be read is left out. Throws the list's error (403 when Secrets can't be listed).
  */
-export async function readCerts(client: KubeClient, namespace: string | undefined, cache: Map<string, CertInput>): Promise<{ certs: CertInput[]; cut: boolean }> {
+export async function readCerts(
+  client: KubeClient, namespace: string | undefined, cache: Map<string, CertInput>, opts: { signal?: AbortSignal } = {},
+): Promise<{ certs: CertInput[]; cut: boolean; failed: number }> {
   const q = new URLSearchParams({ fieldSelector: "type=kubernetes.io/tls", limit: String(MAX_TLS_SECRETS) });
   const { value: list } = await client.jsonText(`${apiPath(SECRETS, namespace)}?${q}`, { maxBytes: 8 * 1048576, headers: { Accept: META }, signal: AbortSignal.timeout(15_000) });
   const metas = ((list?.items ?? []) as { metadata?: { name?: string; namespace?: string; resourceVersion?: string } }[])
@@ -109,19 +130,24 @@ export async function readCerts(client: KubeClient, namespace: string | undefine
     .slice(0, MAX_TLS_SECRETS);
   const key = (m: { name: string; namespace: string; rv: string }) => `${m.namespace}/${m.name}@${m.rv}`;
   const todo = metas.filter((m) => !cache.has(key(m)));
+  let failed = 0;
   await pool(todo, 4, async (m) => {
+    // A scope that stopped (idle, replaced, disconnected) reads no more (part 2 review, finding 7).
+    if (opts.signal?.aborted) return void failed++;
     try {
       const secret = await client.jsonCapped(apiPath(SECRETS, m.namespace, m.name), { maxBytes: 1048576, timeoutMs: 10_000 });
       // The Secret goes out of scope here: only its certificate's dates and names are kept.
       cache.set(key(m), { namespace: m.namespace, name: m.name, fact: certFacts(secret) });
     } catch (e) {
       if (e instanceof KubeError && e.status === 413) cache.set(key(m), { namespace: m.namespace, name: m.name, fact: { ...UNREADABLE } });
-      // Gone since the list, or not readable by name: left out.
+      // Gone since the list (404) is simply gone; anything else (403, 429, a timeout) is a Secret left out, and said.
+      else if (!(e instanceof KubeError && e.status === 404)) failed++;
     }
   });
+  // The cache may be shared by a cluster's scopes: only this scope's namespace is pruned.
   const live = new Set(metas.map(key));
-  for (const k of cache.keys()) if (!live.has(k)) cache.delete(k);
-  return { certs: metas.map((m) => cache.get(key(m))).filter((c): c is CertInput => !!c), cut: !!list?.metadata?.continue };
+  for (const k of cache.keys()) if ((!namespace || k.startsWith(`${namespace}/`)) && !live.has(k)) cache.delete(k);
+  return { certs: metas.map((m) => cache.get(key(m))).filter((c): c is CertInput => !!c), cut: !!list?.metadata?.continue, failed };
 }
 
 async function pool<T>(items: T[], n: number, f: (t: T) => Promise<void>): Promise<void> {

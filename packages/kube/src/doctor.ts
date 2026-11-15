@@ -98,7 +98,8 @@ export function subjectOf(pod: KubeObject): Subject {
 }
 
 type Ev = ProblemEvent & { kind: string; namespace?: string; name: string; apiVersion?: string; container?: string; first: number; last: number };
-function readEvents(events: KubeObject[] | undefined, now: number): Ev[] {
+/** Warning events as the rules read them: the last hour, checked shapes, newest first (also "Recent warnings"). */
+export function warningRows(events: KubeObject[] | undefined, now: number): Ev[] {
   const out: Ev[] = [];
   for (const e of (events ?? []) as any[]) {
     if (!e || typeof e !== "object" || (e.type && e.type !== "Warning")) continue;
@@ -167,7 +168,7 @@ type Draft = Omit<Problem, "id" | "title" | "detail" | "hint" | "group" | "versi
 export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorReport {
   const checks: Record<DoctorCheck, DoctorCheckState> = { pods: "ok", workloads: "ok", nodes: "ok", events: "ok", certs: "off", ...input.checks };
   const byId = new Map<string, Problem & { message?: string; exitCode?: number; signal?: number }>();
-  const events = readEvents(input.events, now);
+  const events = warningRows(input.events, now);
   const evOf = new Map<string, Ev[]>();
   for (const e of events) {
     const k = key(e);
@@ -242,8 +243,8 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
     const subject = subjectOf(pod);
     podNames.set(key({ kind: "Pod", namespace: ns, name: pod.metadata.name }), subject);
     const podEvents = evOf.get(key({ kind: "Pod", namespace: ns, name: pod.metadata.name })) ?? [];
-    const recent = (c: string | undefined, type: string) =>
-      podEvents.filter((e) => e.reason === "Unhealthy" && now - e.last <= 10 * MIN && e.message.toLowerCase().startsWith(type) && (!c || !e.container || e.container === c));
+    const recent = (c: string | undefined, type: string, within = 10 * MIN) =>
+      podEvents.filter((e) => e.reason === "Unhealthy" && now - e.last <= within && e.message.toLowerCase().startsWith(type) && (!c || !e.container || e.container === c));
     const base = { kind: subject.kind, ...(ns ? { namespace: ns } : {}), name: subject.name, pods: [pod.metadata.name] };
     const specs: any[] = [...(Array.isArray(pod.spec?.initContainers) ? pod.spec.initContainers : []), ...(Array.isArray(pod.spec?.containers) ? pod.spec.containers : [])].filter(Boolean);
     const arr = (v: unknown) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object") : []);
@@ -279,7 +280,13 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
         matched = true;
         continue;
       }
-      const live = [...recent(c.name, "liveness"), ...recent(c.name, "startup")];
+      // A probe kill is exit 137. Once the back-off reaches minutes the kubelet may stop updating its Unhealthy event's
+      // time, so for a container whose last run was killed, a probe event within the hour still counts.
+      const killed = (term ?? last)?.exitCode === 137 && now - time((term ?? last)?.finishedAt) <= HOUR;
+      const live = [
+        ...recent(c.name, "liveness", killed && spec.livenessProbe ? HOUR : 10 * MIN),
+        ...recent(c.name, "startup", killed && spec.startupProbe ? HOUR : 10 * MIN),
+      ];
       if (live.length && !init) {
         const type = live[0]!.message.toLowerCase().startsWith("startup") ? "startup" : "liveness";
         const p = type === "startup" ? spec.startupProbe : spec.livenessProbe;
@@ -499,7 +506,8 @@ function finish(p: Problem & { message?: string; exitCode?: number; signal?: num
       title = p.reason === "Expired" ? `${n} expired ${age(time(c.notAfter), now)} ago`
         : p.reason === "Expiring" ? `${n} expires in ${age(now, now + left)}`
         : p.reason === "NotYetValid" ? `${n} isn't valid yet` : `${n} can't be read`;
-      detail = join(c.subject ? `CN ${c.subject}` : "", c.unreadable ? "" : `not after ${c.notAfter.slice(0, 10)}`, f.usedBy?.length ? `used by ${f.usedBy.join(", ")}` : "");
+      // A CN is whatever the Secret's writer put there: only a host name's shape goes into the text (part 2 review, 3).
+      detail = join(c.subject && isName(c.subject.replace(/^\*\./, "")) ? `CN ${c.subject}` : "", c.unreadable ? "" : `not after ${c.notAfter.slice(0, 10)}`, f.usedBy?.length ? `used by ${f.usedBy.join(", ")}` : "");
       break;
     }
   }
