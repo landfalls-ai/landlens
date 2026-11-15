@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { FamilyError } from "../src/family.js";
 import { executeFlow, findTriggerResult, getExecution, lastOutput, listFlows, readExecution, runLink, sendAlert, webLink } from "../src/landflow.js";
-import { FakeLandfall, FakeLandflow, LF_KEY, LF_KEY_NARROW, nodeRun, TRIAGE_SECRET } from "./fake-family.js";
+import { FakeLandfall, FakeLandflow, LF_KEY, LF_KEY_NARROW, nodeRun, OWNED, SHARED, TRIAGE_SECRET } from "./fake-family.js";
 
 let stops: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -138,6 +138,18 @@ describe("sending an alert to the triage webhook (D120, D122)", () => {
     expect(await hook({ origin: at } as FakeLandflow)).toEqual({ executionId: "ex_from_header", trigger: { outcome: "attached", incidentId: "inc_9", room: "http://127.0.0.1:3001/o/x/i/9" } });
   });
 
+  it("prefers Landflow's header to an executionId in the flow's own data (review of part 4, L2)", async () => {
+    // A flow that answers with its last node's output: that data names another run.
+    const data = await answering(200, JSON.stringify({ executionId: "ex_from_data", workflowId: "wf_from_data", note: "done" }), { "x-landflow-execution": "ex_from_header" });
+    expect(await hook({ origin: data } as FakeLandflow)).toEqual({ executionId: "ex_from_header" });
+    // Data with no header: no run id at all.
+    const bare = await answering(200, JSON.stringify({ executionId: "ex_from_data", workflowId: "wf_from_data" }));
+    expect(await hook({ origin: bare } as FakeLandflow)).toEqual({});
+    // Landflow's own answer (immediately): its body is Landflow's.
+    const own = await answering(202, JSON.stringify({ status: "started", executionId: "ex_own", workflowId: "wf_triage" }));
+    expect(await hook({ origin: own } as FakeLandflow)).toEqual({ executionId: "ex_own", workflowId: "wf_triage" });
+  });
+
   it("follows no redirect: the secret never reaches another address", async () => {
     const elsewhere = await up(new FakeLandflow());
     const s = createServer((_q, r) => (r.writeHead(307, { Location: `${elsewhere.origin}/api/webhook/alerts` }), r.end()));
@@ -162,13 +174,35 @@ describe("sending an alert to the triage webhook (D120, D122)", () => {
 });
 
 describe("flows and runs (D125)", () => {
+  it("says whose each flow is, and lists an id Landlens doesn't run as such (review of part 4, M2, L9)", async () => {
+    const lf = await up(new FakeLandflow());
+    lf.workflows.push({ id: "wf_ops", name: "Ops check", tags: ["landlens"], updatedAt: "2026-11-15T10:00:00.000Z", ownership: SHARED });
+    lf.workflows.push({ id: "wf_nobody", name: "No ownership", tags: ["landlens"], updatedAt: "2026-11-15T10:00:00.000Z", ownership: undefined });
+    lf.workflows.push({ id: "w".repeat(101), name: "Long id", tags: ["landlens"], updatedAt: "", ownership: OWNED });
+    lf.workflows.push({ id: "wf.dotted", name: "Dotted id", tags: ["landlens"], updatedAt: "", ownership: OWNED });
+    const flows = await listFlows(lf.origin, LF_KEY);
+    expect(flows.find((f) => f.id === "wf_ops")).toMatchObject({ owner: "Ops", shared: true, runnable: true });
+    expect(flows.find((f) => f.id === "wf_landlens_check")).toMatchObject({ owner: "Fable Person", shared: false });
+    // Not said to be the key user's: shown as shared.
+    expect(flows.find((f) => f.id === "wf_nobody")).toMatchObject({ shared: true });
+    expect(flows.find((f) => f.name === "Long id")).toMatchObject({ runnable: true });
+    expect(flows.find((f) => f.name === "Dotted id")).toMatchObject({ runnable: false });
+  });
+
+  it("keeps a room address only while it fits family-sent.json once encoded (review of part 4, L1)", () => {
+    expect(webLink(`https://landfall.example/o/${"é".repeat(1_500)}`)).toBeUndefined();
+    expect(webLink(`https://landfall.example/o/${"e".repeat(1_500)}`)).toBe(`https://landfall.example/o/${"e".repeat(1_500)}`);
+  });
+
   it("lists only the flows tagged landlens, names and descriptions as one line", async () => {
     const lf = await up(new FakeLandflow());
     lf.workflows.push({ ...lf.workflows[0]!, id: "wf_tagged_2", name: "Two\nlines‮", description: "d".repeat(400) });
     lf.workflows.push({ ...lf.workflows[0]!, id: "../escape", name: "bad id" });
     const flows = await listFlows(lf.origin, LF_KEY);
-    expect(flows.map((f) => f.id)).toEqual(["wf_landlens_check", "wf_tagged_2"]);
-    expect(flows[1]).toEqual({ id: "wf_tagged_2", name: "Two lines", description: "d".repeat(300) });
+    expect(flows.map((f) => f.id)).toEqual(["wf_landlens_check", "wf_tagged_2", "../escape"]);
+    expect(flows[1]).toEqual({ id: "wf_tagged_2", name: "Two lines", description: "d".repeat(300), owner: "Fable Person", shared: false, runnable: true, updatedAt: "2026-11-15T10:00:00.000Z" });
+    // An id Landlens doesn't run is listed as such, never run (review of part 4, L9).
+    expect(flows[2]).toMatchObject({ name: "bad id", runnable: false });
     expect((await caught(listFlows(lf.origin, LF_KEY_NARROW))).message).toBe(LANDFLOW_NOTES.cantList);
     expect((await caught(listFlows(lf.origin, `lf_${"Z".repeat(43)}`))).message).toBe(FAMILY_NOTES.landflowRefused);
   });

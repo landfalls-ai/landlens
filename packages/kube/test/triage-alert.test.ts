@@ -95,4 +95,14 @@ describe("a flow's input (D125)", () => {
     expect(i.yaml!.length).toBeLessThan(33 * 1024);
     expect(i.yaml).toMatch(/cut at 32 KiB/);
   });
+
+  it("scrubs the YAML as text, past the cut (review of part 4, M3)", () => {
+    const yaml = "data:\n  DB_PASSWORD: hunter2hunter2\n  API_TOKEN: abcdef123456\n  LOG_LEVEL: debug\n";
+    const i = flowInput({ cluster: "orbstack", kind: "ConfigMap", apiVersion: "v1", name: "c", yaml });
+    expect(i.yaml).toContain("LOG_LEVEL: debug");
+    expect(i.yaml).not.toMatch(/hunter2hunter2|abcdef123456/);
+    // A token the 32 KiB cut would split is taken whole.
+    const cut = flowInput({ cluster: "orbstack", kind: "ConfigMap", apiVersion: "v1", name: "c", yaml: `${"#".repeat(32 * 1024 - 10)}\ntoken: ${"s".repeat(40)}\n` });
+    expect(cut.yaml).not.toContain("ssssss");
+  });
 });

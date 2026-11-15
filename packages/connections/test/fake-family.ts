@@ -383,6 +383,11 @@ export type FakeExecution = { workflowId: string; polls: number; script: { statu
 /** One node's run as Landflow records it (packages/engine/src/types.ts NodeRun). */
 export const nodeRun = (items: unknown[]) => ({ startedAt: new Date().toISOString(), durationMs: 3, status: "success", source: "main", inputs: [], outputs: [items.map((json) => ({ json }))] });
 
+/** A flow of the key user's own project, as Landflow's list says it. */
+export const OWNED = { projectId: "personal_u_fake", projectName: "Fable Person", projectType: "personal", access: "owner", shared: false };
+/** A flow another project shared with the key user. */
+export const SHARED = { projectId: "proj_ops", projectName: "Ops", projectType: "team", access: "editor", shared: true };
+
 export class FakeLandflow extends FakeBase {
   readonly keys = new Map<string, { scopes: string[] }>([
     [LF_KEY, { scopes: ["brain:read", "brain:write", "workflows:read", "run", "executions:read"] }],
@@ -401,9 +406,10 @@ export class FakeLandflow extends FakeBase {
   /** Every alert the webhook took: its headers and body. */
   readonly alerts: { headers: Record<string, string>; body: unknown }[] = [];
   readonly workflows = [
-    { id: "wf_landlens_check", name: "Check a workload", description: "A two-node flow: Manual trigger → Set.", tags: ["landlens"], active: false, nodeCount: 2, nodeTypes: ["core.manualTrigger", "core.set"], updatedAt: "", createdAt: "", ownership: "owned" },
-    { id: "wf_other", name: "Nightly digest", description: "Not for Landlens.", tags: ["digest"], active: true, nodeCount: 4, nodeTypes: [], updatedAt: "", createdAt: "", ownership: "owned" },
-  ];
+    // `ownership` as Landflow's list routes attach it (lib/shared/projects.ts ResourceOwnership).
+    { id: "wf_landlens_check", name: "Check a workload", description: "A two-node flow: Manual trigger → Set.", tags: ["landlens"], active: false, nodeCount: 2, nodeTypes: ["core.manualTrigger", "core.set"], updatedAt: "2026-11-15T10:00:00.000Z", createdAt: "2026-11-15T09:00:00.000Z", ownership: OWNED },
+    { id: "wf_other", name: "Nightly digest", description: "Not for Landlens.", tags: ["digest"], active: true, nodeCount: 4, nodeTypes: [], updatedAt: "2026-11-15T10:00:00.000Z", createdAt: "2026-11-15T09:00:00.000Z", ownership: OWNED },
+  ] as { id: string; name: string; description?: string; tags: string[]; updatedAt: string; ownership: unknown; [k: string]: unknown }[];
   readonly executions = new Map<string, FakeExecution>();
   /** Each run's input, as Landflow's execute route took it. */
   readonly inputs = new Map<string, unknown>();

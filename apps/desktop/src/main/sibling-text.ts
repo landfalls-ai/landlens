@@ -2,7 +2,8 @@
 // served Clickland's log lines to the window (clickland:logs, the doctor's fallback), so it remembers them, and when
 // a question reaches AgentService.prompt it looks for them in it: a question that quotes any holds the session's
 // GitHub and Linear autonomy, whatever head or flag the window gave the quote. The quote's head (CLICKLAND_QUOTE)
-// still counts too; this is the rule that doesn't depend on the window.
+// still counts too; this is the rule that doesn't depend on the window. A Landflow flow's output (main/landflow.ts)
+// is remembered the same way, whole and line by line, as Landflow's (security review of part 4, M4).
 //
 // What counts as found: a line's time as main sent it (`at`, an ISO time to the millisecond, which the History view
 // writes before each picked line), or a body of at least 16 characters, both compared after the changes the window

@@ -224,12 +224,12 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     // sheet owned by this window; the window sends only choices and main's ids. Links open after main's own dialog.
     "landflow:alert": (req, event) => landflow.prepareAlert(req, event.sender),
     "landflow:triage": (req, event) => landflow.sendAlert(req, event.sender),
-    "landflow:flows": () => landflow.flows(),
+    "landflow:flows": (_req, event) => landflow.flows(event.sender),
     "landflow:input": (req, event) => landflow.prepareInput(req, event.sender),
     "landflow:run": (req, event) => landflow.run(req, event.sender),
     "landflow:follow": (req) => landflow.follow(req),
     "landflow:sent": async (req) => landflow.sentFor(req),
-    "landflow:open": (req, event) => landflow.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }),
+    "landflow:open": (req, event) => landflow.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }, event.sender),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
     "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),

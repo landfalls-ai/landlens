@@ -19,7 +19,7 @@
 // Every request goes through pinnedFetch to Landflow's stored origin (no redirects, a time limit); the key only in the
 // Authorization header, the webhook's secret only in its own header. Answers are read up to a size limit and reduced
 // to a few checked fields; a failure is one of the fixed sentences, its raw error kept for main's log.
-import { FAMILY_NOTES, familyHttpNote, LANDFLOW_NOTES, type LandflowFlow, type LandflowOutcome, type LandflowRunStatus } from "@landlens/contracts";
+import { FAMILY_NOTES, familyHttpNote, LANDFLOW_ID, LANDFLOW_NOTES, type LandflowFlow, type LandflowOutcome, type LandflowRunStatus } from "@landlens/contracts";
 import { FamilyError } from "./family.js";
 import { failureKind, oneLine, OriginRefused, pinnedFetch, readCapped, TooLarge } from "./providers.js";
 
@@ -27,8 +27,8 @@ export const LANDFLOW_TIMEOUT = 15_000;
 /** A run's answer can carry every node's output: read up to 4 MB (D122). */
 export const MAX_EXECUTION = 4 * 1024 * 1024;
 const MAX_ANSWER = 1024 * 1024;
-/** Ids Landflow makes (`wf_…`, nanoid execution ids): letters, digits, `_` and `-`. */
-const ID = /^[A-Za-z0-9_-]{1,128}$/;
+/** Ids Landflow makes (`wf_…`, nanoid execution ids): letters, digits, `_` and `-`; the one rule (contracts, L9). */
+const ID = LANDFLOW_ID;
 const OUTCOMES: ReadonlySet<string> = new Set<LandflowOutcome>(["opened", "attached", "recorded", "ignored", "suppressed"]);
 const STATUSES: ReadonlySet<string> = new Set<LandflowRunStatus>(["running", "queued", "waiting", "success", "error", "canceled"]);
 /** The tag that marks a flow Landlens may run (D125). */
@@ -71,12 +71,15 @@ const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 
 /** Landfall's answer as Landlens keeps it: the outcome, and the room's address and incident id when they check out. */
 export type TriggerResult = { outcome: LandflowOutcome; room?: string; incidentId?: string };
 
-/** An http(s) address with no user info, as text, or undefined. */
+/**
+ * An http(s) address with no user info, as text, or undefined. The text kept is the parsed address, which grows when
+ * it is percent-encoded: it is held to 2,000 characters too (review of part 4, L1), as family-sent.json holds it.
+ */
 export function webLink(v: unknown): string | undefined {
   if (typeof v !== "string" || v.length > 2_000) return undefined;
   try {
     const u = new URL(v);
-    return (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password ? u.href : undefined;
+    return (u.protocol === "https:" || u.protocol === "http:") && !u.username && !u.password && u.href.length <= 2_000 && !/\s/.test(u.href) ? u.href : undefined;
   } catch {
     return undefined;
   }
@@ -167,8 +170,12 @@ export async function sendAlert(o: { origin: string; path: string; header: strin
   if (!r.ok) throw new FamilyError(502, familyHttpNote("Landflow", r.status));
   const j = await body(r, MAX_ANSWER);
   if (isObj(j) && (j.status === "debounced" || j.status === "batched")) return { held: true };
-  const executionId = (isObj(j) ? idOf(j.executionId) : undefined) ?? idOf(r.headers.get("x-landflow-execution"));
-  const workflowId = isObj(j) ? idOf(j.workflowId) : undefined;
+  // Landflow's own header names the run (review of part 4, L2). The body is Landflow's only when it answers "started",
+  // "queued" or "running" (immediately, or a repeated key); otherwise it is the flow's data, whose `executionId` or
+  // `workflowId` could name another run.
+  const own = isObj(j) && (j.status === "started" || j.status === "queued" || j.status === "running");
+  const executionId = idOf(r.headers.get("x-landflow-execution")) ?? (own ? idOf(j.executionId) : undefined);
+  const workflowId = own ? idOf(j.workflowId) : undefined;
   // A flow that answers with its last node's output may carry Landfall's answer already.
   const trigger = triggerIn(j, { left: 20_000 }, 0);
   return { ...(executionId ? { executionId } : {}), ...(workflowId ? { workflowId } : {}), ...(trigger ? { trigger } : {}) };
@@ -176,21 +183,34 @@ export async function sendAlert(o: { origin: string; path: string; header: strin
 
 const auth = (key: string) => ({ Authorization: `Bearer ${key}`, Accept: "application/json" });
 
-/** The flows tagged `landlens` (D125): id, and name and description as one line of text each; at most 50. */
-export async function listFlows(origin: string, key: string, base: typeof fetch = fetch): Promise<LandflowFlow[]> {
+/** A listed flow as main keeps it: what the window sees, and when Landflow last saved it (M2). */
+export type ListedFlow = LandflowFlow & { updatedAt?: string };
+
+/**
+ * The flows tagged `landlens` (D125): id, and name and description as one line of text each; at most 50. Whose each is
+ * (review of part 4, M2): Landflow lists the flows of the key user's projects and those shared with them, each with
+ * `ownership` (`{ projectName, shared, … }`, lib/shared/projects.ts) and `updatedAt`. A flow whose id isn't one
+ * Landlens runs is listed as such (L9).
+ */
+export async function listFlows(origin: string, key: string, base: typeof fetch = fetch): Promise<ListedFlow[]> {
   const r = await send(origin, "/api/workflows", { headers: auth(key) }, base);
   if (r.status === 401) throw new FamilyError(401, FAMILY_NOTES.landflowRefused);
   if (r.status === 403) throw new FamilyError(403, LANDFLOW_NOTES.cantList);
   if (!r.ok) throw new FamilyError(502, familyHttpNote("Landflow", r.status));
   const j = await body(r, MAX_EXECUTION);
   if (!isObj(j) || !Array.isArray(j.workflows)) throw new FamilyError(502, FAMILY_NOTES.landflowAnswer);
-  const out: LandflowFlow[] = [];
+  const out: ListedFlow[] = [];
   for (const w of j.workflows) {
     if (!isObj(w) || !Array.isArray(w.tags) || !w.tags.includes(LANDLENS_TAG)) continue;
     const id = idOf(w.id);
-    if (!id) continue;
+    const shown = id ?? oneLine(w.id, 100) ?? `#${out.length + 1}`;
     const description = oneLine(w.description, 300);
-    out.push({ id, name: oneLine(w.name, 100) ?? id, ...(description ? { description } : {}) });
+    const own = isObj(w.ownership) ? w.ownership : undefined;
+    const owner = oneLine(own?.projectName, 100);
+    // Not marked as owned is shown as shared: only Landflow's own `shared: false` says it is the key user's.
+    const shared = own?.shared !== false;
+    const updatedAt = typeof w.updatedAt === "string" && w.updatedAt.length <= 40 ? w.updatedAt : undefined;
+    out.push({ id: shown, name: oneLine(w.name, 100) ?? shown, ...(description ? { description } : {}), ...(owner ? { owner } : {}), shared, runnable: !!id, ...(updatedAt !== undefined ? { updatedAt } : {}) });
     if (out.length >= 50) break;
   }
   return out;

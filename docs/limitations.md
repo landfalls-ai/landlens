@@ -209,6 +209,14 @@ person's check reads them), and Ask Claude sends one problem at a time.
   offered are the ones Landflow lists with the tag `landlens`, at most 50; their input has no declared contract on
   Landflow's side, and a flow's output can say anything (it reaches a prompt only quoted, under the hold). A send Landflow holds (debounced or batched) has no run, so it
   isn't remembered and leaves no chip. A problem's recovery isn't sent. Run a Landflow flow is a button in the object drawer's header (there is no ⋯ menu there).
+  After the security review of part 4: a flow shared from another project is listed (marked "Shared from the project
+  …") and can be run; Landlens only shows whose it is and refuses one that changed since the list. A ConfigMap's
+  values are sent when its YAML is ticked, scrubbed (the keyed pattern now sees `DB_PASSWORD: …` in the YAML text),
+  not hidden as a Secret's are; a value under a key the patterns don't know (`DSN`, `conn`) goes as it is, shown on
+  the sheet first. The room's host is shown, and said when it isn't the connected Landfall's, but not checked. Old
+  `family-sent.json` entries without the API server's hash are set aside with the file (part 4 isn't released). A send
+  the file couldn't keep is followed for this launch only. A flow whose id has characters other than letters, digits,
+  `_` and `-` can't be run from Landlens.
 - **Clickland's history in the IDE** (wave 7 part 3, [metrics.md](metrics.md#logs-and-traces-from-clickland)).
   Traces are searched by service name only (the pod's `app.kubernetes.io/name` or `app` label, which the workload's
   author writes, else the workload's name). Spans that name another cluster or namespace (`k8s.cluster.name`,

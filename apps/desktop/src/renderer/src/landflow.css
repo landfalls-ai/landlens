@@ -29,6 +29,11 @@
 .lf-flow:hover { background: var(--bg-3); }
 .lf-flow.on { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
 .lf-flow-name { font-weight: 500; font-size: 13px; color: var(--ink); }
+.lf-flow:disabled { opacity: .6; cursor: default; }
+.lf-owner.tone-warn { color: var(--warn-text, var(--warn)); }
+/* Every field of the alert, folded (review of part 4, L3). */
+.lf-more summary { cursor: pointer; color: var(--ink-2); }
+.lf-more[open] summary { margin-bottom: 6px; }
 /* The chip a send leaves on a problem's row and drawer (D124): In triage, or War room (it opens the room). */
 .lf-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11.5px; font-weight: 500; white-space: nowrap; flex: none; }
 .lf-chip.triage { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }

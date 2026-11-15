@@ -1,8 +1,10 @@
 // Run a Landflow flow on an object (wave 7 part 4, D125; docs/family.md#landflow-on-a-resource): the flows tagged
 // `landlens` in the connected Landflow, the input main will send (names, the problem it came from, the object's YAML
 // only when ticked), and the run followed to its last node's output, shown as data. The window holds only the sheet's
-// id and the flow's id: main built the input and sends what this sheet shows. Enter never runs; Run is a click.
-import type { FlowPreview, LandflowFlow, LandflowRun, ResourceRef } from "@landlens/contracts";
+// id, the digest of the input it shows and the flow's id: main built the input and sends that input only (review of
+// part 4, H1), to a flow Landflow still lists as this sheet showed it (M2: each row says whose flow it is). Enter never
+// runs; Run is a click.
+import { LANDFLOW_NOTES, type FlowPreview, type LandflowFlow, type LandflowRun, type ResourceRef } from "@landlens/contracts";
 import { CircleX, Sparkles, SquareArrowOutUpRight, Workflow, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AskContext } from "./AgentDock";
@@ -32,12 +34,12 @@ export function FlowSheet({ handle, namespace, subject, onAsk, onClose }: {
   const follow = useFollow(started);
   const { ref } = subject;
 
-  useEffect(() => {
+  const list = () =>
     api.invoke("landflow:flows", {}).then(
-      (r) => (setFlows(r.flows), setFlow(r.flows[0]?.id)),
+      (r) => (setFlows(r.flows), setFlow((cur) => r.flows.find((f) => f.runnable && f.id === cur)?.id ?? r.flows.find((f) => f.runnable)?.id)),
       (e: ApiError) => (setFlows([]), setError(e.message)),
     );
-  }, []);
+  useEffect(() => void list(), []); // eslint-disable-line react-hooks/exhaustive-deps
   // The input, built again by main under the same sheet whenever the YAML box changes.
   useEffect(() => {
     let live = true;
@@ -58,7 +60,12 @@ export function FlowSheet({ handle, namespace, subject, onAsk, onClose }: {
     if (!preview || !flow || starting || reading) return;
     setStarting(true);
     setError(undefined);
-    api.invoke("landflow:run", { sheet: preview.sheet, flow }).then(setStarted, (e: ApiError) => (setError(e.message), setStarting(false)));
+    api.invoke("landflow:run", { sheet: preview.sheet, flow, digest: preview.digest }).then(setStarted, (e: ApiError) => {
+      setError(e.message);
+      setStarting(false);
+      // Changed in Landflow since it was listed: the list is read again, to be looked at before Run.
+      if (e.message === LANDFLOW_NOTES.flowChanged) void list();
+    });
   };
   const r = follow.run;
   const chosen = flows?.find((f) => f.id === flow);
@@ -82,9 +89,11 @@ export function FlowSheet({ handle, namespace, subject, onAsk, onClose }: {
                   : (
                     <div className="lf-flows" role="radiogroup" aria-labelledby="lf-flow">
                       {flows.map((f) => (
-                        <button key={f.id} role="radio" aria-checked={flow === f.id} className={"lf-flow" + (flow === f.id ? " on" : "")} onClick={() => setFlow(f.id)}>
+                        <button key={f.id} role="radio" aria-checked={flow === f.id} disabled={!f.runnable} className={"lf-flow" + (flow === f.id ? " on" : "")} onClick={() => f.runnable && setFlow(f.id)}>
                           <span className="lf-flow-name">{f.name}</span>
                           {f.description ? <span className="small dim">{f.description}</span> : null}
+                          <span className={"small lf-owner" + (f.shared ? " tone-warn" : " dim")}>{f.shared ? `Shared from ${f.owner ? `the project ${f.owner}` : "another project"}` : `In ${f.owner ? `the project ${f.owner}` : "your project"}`}</span>
+                          {f.runnable ? null : <span className="small dim">Its id can't be run from Landlens.</span>}
                         </button>
                       ))}
                     </div>

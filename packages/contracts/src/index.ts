@@ -463,8 +463,19 @@ export type TriageSeverity = z.infer<typeof TriageSeverity>;
 export const LandflowSheetId = z.string().regex(/^ls[A-Za-z0-9_-]{20,40}$/, "not a sheet");
 /** A send or run main made: landflow:follow and landflow:open take it, never an address. */
 export const LandflowRunId = z.string().regex(/^lr[A-Za-z0-9_-]{20,40}$/, "not a run");
+/**
+ * The one id rule for Landflow's workflow and execution ids (`wf_…`, nanoid execution ids), shared by the channel, the
+ * client and family-sent.json (security review of part 4, L9). A workflow listed with another id is shown as one
+ * Landlens can't run.
+ */
+export const LANDFLOW_ID = /^[A-Za-z0-9_-]{1,128}$/;
 /** A Landflow workflow id, as GET /api/workflows lists it (`wf_…`, or one a person chose). */
-export const LandflowFlowId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/, "not a workflow id");
+export const LandflowFlowId = z.string().regex(LANDFLOW_ID, "not a workflow id");
+/**
+ * The SHA-256 of the body a sheet shows, as hex (security review of part 4, H1): the send names it, and main refuses a
+ * sheet whose body is no longer that one.
+ */
+export const LandflowDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
 /**
  * The Generic alert Landlens sends (D120): Normalize Alert reads title, severity, service, id, description, status and
  * environment with its default paths; the rest rides along.
@@ -485,6 +496,8 @@ export type TriageAlert = {
 /** What the triage sheet shows: the alert exactly as it will be sent, where it goes, and the header's name. */
 export type AlertPreview = {
   sheet: string;
+  /** SHA-256 of the alert's JSON as main will post it: landflow:triage names it (H1). */
+  digest: string;
   /** `<Landflow>/api/webhook/<path>`. */
   to: string;
   header: string;
@@ -504,9 +517,14 @@ export type FlowInput = {
   /** The object as Ask Claude would attach it: no Secret, no env[].value, at most 32 KiB. */
   yaml?: string;
 };
-export type FlowPreview = { sheet: string; to: string; input: FlowInput; yaml?: { note: string } };
-/** A flow tagged `landlens`: its name and description as text, one line each. */
-export type LandflowFlow = { id: string; name: string; description?: string };
+/** `digest`: SHA-256 of the input's JSON as main will send it; landflow:run names it (H1). */
+export type FlowPreview = { sheet: string; digest: string; to: string; input: FlowInput; yaml?: { note: string } };
+/**
+ * A flow tagged `landlens`: its name and description as text, one line each, and whose it is (review of part 4, M2):
+ * the project that owns it and whether it reached the key's user through a share. `runnable: false`: its id isn't one
+ * Landlens runs (LANDFLOW_ID); `id` is then only the row's key.
+ */
+export type LandflowFlow = { id: string; name: string; description?: string; owner?: string; shared: boolean; runnable: boolean };
 /** Landfall's TriggerResult outcomes, read from the triage run's node outputs (D122). */
 export type LandflowOutcome = "opened" | "attached" | "recorded" | "ignored" | "suppressed";
 export type LandflowRunStatus = "running" | "queued" | "waiting" | "success" | "error" | "canceled";
@@ -558,6 +576,10 @@ export const LANDFLOW_NOTES = {
   noTriage: "Set up the triage webhook on Connections → Landflow first.",
   notReady: "Connect Landflow first.",
   noSheet: "That sheet is gone. Open it again.",
+  sheetChanged: "What this sheet shows changed. Look again before sending.",
+  flowChanged: "This flow changed in Landflow since it was listed. Look again.",
+  cantKeep: "Landlens can't keep a record of a send from this cluster, so it doesn't send it.",
+  dialogOpen: "A dialog is already open.",
   stillGoing: "Still going. Check again in a moment.",
 } as const;
 
@@ -896,10 +918,10 @@ export const channels = {
   // the scope's current report and the flow's input from the object, and sends only what the sheet showed. Strict: a
   // request that carries anything else (a title, a description, an address) is refused.
   "landflow:alert": z.object({ handle: Handle, namespace: NamespaceName.optional(), problem: ProblemId, severity: TriageSeverity, logs: z.boolean(), sheet: LandflowSheetId.optional() }).strict(),
-  "landflow:triage": z.object({ sheet: LandflowSheetId }).strict(),
+  "landflow:triage": z.object({ sheet: LandflowSheetId, digest: LandflowDigest }).strict(),
   "landflow:flows": z.object({}).strict(),
   "landflow:input": z.object({ handle: Handle, ref: ResourceRef.strict(), namespace: NamespaceName.optional(), problem: ProblemId.optional(), yaml: z.boolean(), sheet: LandflowSheetId.optional() }).strict(),
-  "landflow:run": z.object({ sheet: LandflowSheetId, flow: LandflowFlowId }).strict(),
+  "landflow:run": z.object({ sheet: LandflowSheetId, flow: LandflowFlowId, digest: LandflowDigest }).strict(),
   "landflow:follow": z.object({ run: LandflowRunId }).strict(),
   "landflow:sent": z.object({ handle: Handle }).strict(),
   /** The run in Landflow, or the room it opened: main's own record of it, after the native dialog that shows its host. */

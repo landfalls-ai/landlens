@@ -1,7 +1,9 @@
 // Send to triage (wave 7 part 4, D120, D122; docs/family.md#landflow-on-a-resource): the alert exactly as main will
 // send it to the connected Landflow's triage webhook, the severity and the log lines the person chooses, and then what
-// Landflow's triage did with it. The window holds only the sheet's id: main built the alert from the doctor's report
-// and sends the body this sheet shows, with the webhook's secret it keeps. Enter never sends; Send is a click.
+// Landflow's triage did with it. The window holds only the sheet's id and the digest of the body it shows: main built
+// the alert from the doctor's report and sends that body only, with the webhook's secret it keeps (review of part 4,
+// H1). Every field is shown from the alert itself, the rest folded under "Everything that is sent" (L3). Enter never
+// sends; Send is a click.
 import type { AlertPreview, LandflowRun, Problem, TriageSeverity } from "@landlens/contracts";
 import { CircleCheck, CircleX, Info, Siren, SquareArrowOutUpRight, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -74,7 +76,7 @@ export function TriageSheet({ handle, namespace, problem: p, onClose }: { handle
     if (!preview || sending || reading) return;
     setSending(true);
     setError(undefined);
-    api.invoke("landflow:triage", { sheet: preview.sheet }).then(
+    api.invoke("landflow:triage", { sheet: preview.sheet, digest: preview.digest }).then(
       (r) => (setSent(r), refreshSent(handle)),
       (e: ApiError) => (setError(e.message), setSending(false)),
     );
@@ -90,7 +92,7 @@ export function TriageSheet({ handle, namespace, problem: p, onClose }: { handle
           <button className="icon-btn sm" aria-label="Close" onClick={onClose}><Ic icon={X} size={14} /></button>
         </header>
         <div className="dialog-body lf-body" ref={body}>
-          <div className="lf-title"><Ic icon={Siren} size={14} className={`tone-${p.tone}`} /><strong>{p.title}</strong></div>
+          <div className="lf-title"><Ic icon={Siren} size={14} className={`tone-${p.tone}`} /><strong>{a?.title ?? p.title}</strong></div>
           {r ? null : (
             <>
               <div className="lf-field">
@@ -105,7 +107,7 @@ export function TriageSheet({ handle, namespace, problem: p, onClose }: { handle
               <dl className="facts lf-facts">
                 <Fact k="Service" v={a?.service ?? p.name} />
                 <Fact k="Cluster" v={a?.environment ?? "…"} />
-                {p.namespace ? <Fact k="Namespace" v={p.namespace} /> : null}
+                {a?.labels.namespace ? <Fact k="Namespace" v={a.labels.namespace} /> : null}
                 <Fact k="To" v={preview?.to ?? "…"} />
                 <Fact k="Secret" v={<span className="dim">Your webhook secret, in the <b className="mono">{preview?.header ?? "…"}</b> header</span>} />
               </dl>
@@ -114,6 +116,21 @@ export function TriageSheet({ handle, namespace, problem: p, onClose }: { handle
                 <pre className="lf-well" tabIndex={0} aria-label="Description as it will be sent">{a ? a.description : "…"}</pre>
                 {preview?.logs?.note ? <p className="small dim">{preview.logs.note}</p> : null}
               </div>
+              {a ? (
+                <details className="lf-more">
+                  <summary className="small">Everything that is sent</summary>
+                  <dl className="facts lf-facts">
+                    <Fact k="source" v={a.source} />
+                    <Fact k="status" v={a.status} />
+                    <Fact k="severity" v={a.severity} />
+                    <Fact k="id" v={a.id} />
+                    <Fact k="fingerprint" v={a.fingerprint} />
+                    {Object.entries(a.labels).map(([k, v]) => <Fact key={k} k={`labels.${k}`} v={String(v)} />)}
+                    <Fact k="entity.kind" v={a.entity.kind} />
+                    <Fact k="entity.id" v={a.entity.id} />
+                  </dl>
+                </details>
+              ) : null}
               {hasLogs(p) ? (
                 <label className="check-box">
                   <input type="checkbox" checked={logs} onChange={(e) => setLogs(e.target.checked)} />

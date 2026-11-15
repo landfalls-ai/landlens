@@ -98,8 +98,10 @@ export function alertFor(p: Problem, cluster: string, choices: { severity: Triag
 
 /**
  * A flow's input for an object (D125): names, the problem it was started from (class, reason, title), and the object's
- * YAML only when ticked, already redacted by the caller (redactObject: no Secret values, no env[].value), cut here at
- * 32 KiB.
+ * YAML only when ticked, already redacted by the caller (redactObject: no Secret values, no env[].value). Here the YAML
+ * text is scrubbed again as a whole, then cut at 32 KiB (security review of part 4, M3): redactObject scrubs value by
+ * value, so a ConfigMap's `DB_PASSWORD: …` (the key and its value in two strings) passed; in the YAML text they are
+ * one line, which the keyed pattern sees.
  */
 export function flowInput(o: { cluster: string; namespace?: string; kind: string; apiVersion: string; name: string; problem?: Pick<Problem, "class" | "reason" | "title">; yaml?: string }): FlowInput {
   return {
@@ -110,6 +112,12 @@ export function flowInput(o: { cluster: string; namespace?: string; kind: string
     apiVersion: alertName(o.apiVersion),
     name: alertName(o.name),
     ...(o.problem ? { problem: { class: o.problem.class, reason: alertName(o.problem.reason), title: alertName(o.problem.title) } } : {}),
-    ...(o.yaml !== undefined ? { yaml: o.yaml.length > TRIAGE.yaml ? `${o.yaml.slice(0, TRIAGE.yaml)}\n# … (cut at 32 KiB)` : o.yaml } : {}),
+    ...(o.yaml !== undefined ? { yaml: yamlText(o.yaml) } : {}),
   };
+}
+
+/** The YAML as it goes: scrubbed whole (past the cut), then cut at 32 KiB. */
+function yamlText(yaml: string): string {
+  const y = scrubCut(yaml, TRIAGE.yaml);
+  return y.cut ? `${y.text}\n# … (cut at 32 KiB)` : y.text;
 }

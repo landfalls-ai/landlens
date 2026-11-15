@@ -215,8 +215,10 @@ async function start() {
   // Landflow on a resource (wave 7 part 4): sends to triage and flow runs, built in main, sent on the person's click.
   const landflow = new LandflowActions({
     family, doctor,
-    clusters: { context: (handle) => clusters.get(handle).info.context, typeOf: (handle, ref) => clusters.typeOf(handle, ref), getObject: (handle, ref) => clusters.getObject(handle, ref) },
+    clusters: { context: (handle) => clusters.get(handle).info.context, server: (handle) => clusters.get(handle).info.server, typeOf: (handle, ref) => clusters.typeOf(handle, ref), getObject: (handle, ref) => clusters.getObject(handle, ref) },
     sent: new FamilySentStore(join(app.getPath("userData"), "family-sent.json")),
+    // A flow's output is Landflow's text: a question quoting it holds autonomy, decided here (review of part 4, M4).
+    served: (rows) => siblingText.served("landflow", rows),
   });
   registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow);
   const service = mcp;

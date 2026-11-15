@@ -162,8 +162,11 @@ chips, sections, which problems have logs, the held problem, ⌘K matching), `Tr
 Wave 7 part 4 ([family.md](family.md#landflow-on-a-resource)). With the Landflow you connected and its triage
 webhook set up, a problem can go to Landflow's triage flow: **Triage…** in the drawer beside Ask Claude, **Triage**
 on the row, `t` on the page, or Tab in ⌘K. The sheet shows the alert exactly as it will be sent: the problem's facts
-and events (not the hint), a severity you pick (failing starts at sev2, to watch at sev3), and the last 40 log lines
-only if you tick the box (the same evidence the Logs tab reads, scrubbed). **Send** is a click; Enter doesn't send.
+and events (not the hint), a severity you pick (failing starts at sev2, to watch at sev3), the last 40 log lines
+only if you tick the box (the same evidence the Logs tab reads, scrubbed), and every other field folded under
+**Everything that is sent**. **Send** is a click; Enter doesn't send. Send sends only the body on screen: a choice
+changed while main was still reading the log lines never lands late, and a send naming a body the sheet no longer
+holds is refused (security review of part 4, H1).
 Landflow's triage decides whether a war room opens in Landfall; Landlens never opens one, and reads the room's link
 from the run. A problem sent shows **In triage** or **War room** on its row and drawer (the War room chip opens the
 room), and the chips above the list gain **In triage**. The problem is sent by its id in the scope's current report,

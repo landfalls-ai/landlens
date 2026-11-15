@@ -188,6 +188,11 @@ export class FamilyService {
     this.say(line);
   }
 
+  /** Main only: the Landfall origin signed in to, for the room dialog's line (review of part 4, L10). */
+  landfallOrigin(): string | undefined {
+    return this.landfallSec()?.url;
+  }
+
   /** The console's origin, for Open in Clickland (D118), while this build takes it. */
   clicklandConsole(): string | undefined {
     const c = this.o.clickland.consoleUrl();
