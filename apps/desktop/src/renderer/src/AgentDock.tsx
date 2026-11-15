@@ -2,12 +2,12 @@
 // ACP's updates as they come: the answer as it streams, thinking (folded), each tool call as a row with what it
 // ran and what came back, the plan, any question the agent asks before a tool call, and (wave 3) each change it
 // proposes, which waits for your decision in the dock. History lists and resumes past sessions; "/" opens commands.
-import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ClusterInfo, ResourceRef } from "@landlens/contracts";
+import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, AutonomyState, ClusterInfo, ConnProvider, ResourceRef } from "@landlens/contracts";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ban, ChevronDown, CircleX, History, ShieldCheck, Sparkles, SquarePen, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
 import { ChangeCard, ChangeDone, isWaiting, riskWords, type CardKeys } from "./ChangeCard";
-import { answerKeys, AskCard, Plan, Transcript, type Item, type PlanEntry, type Tool } from "./DockParts";
+import { answerKeys, AskCard, AutonomyChips, AutonomySheet, AutonomyStrip, Plan, PROVIDER_NAME, Transcript, type Item, type PlanEntry, type Tool } from "./DockParts";
 import { HistoryPanel, whenText } from "./HistoryPanel";
 import type { ObjectTarget } from "./app-host";
 import { contextIcon, Ic, kindIcon } from "./icons";
@@ -63,6 +63,10 @@ export function AgentDock(props: {
   const [cardHidden, setCardHidden] = useState<"up" | "down">();
   const [alert, setAlert] = useState("");
   const [status, setStatus] = useState("");
+  // GitHub's and Linear's autonomous mode in this session (D82–D84): main's word, never stored.
+  const [autonomy, setAutonomy] = useState<AutonomyState[]>([]);
+  const [sheet, setSheet] = useState<ConnProvider>();
+  const [sheetError, setSheetError] = useState<string>();
   const session = useRef<string | undefined>(undefined);
   const replaying = useRef(false);
   const early = useRef<AgentUpdate[]>([]);
@@ -76,6 +80,7 @@ export function AgentDock(props: {
   // MCP App views: a tool card whose gateway call returned a view shows it inline (paired by toolCallId in main).
   const mcpCalls = useMcpCalls();
   const views = new Map(mcpCalls.filter((c) => hasView(c) && c.toolCallId && c.session === info?.session).map((c) => [c.toolCallId!, c.id]));
+  const autonomous = new Set(mcpCalls.filter((c) => c.gate === "autonomous" && c.toolCallId && c.session === info?.session).map((c) => c.toolCallId!));
 
   const waiting = changes.filter((c) => c.state === "waiting");
   const applying = changes.some((c) => c.state === "applying");
@@ -103,6 +108,14 @@ export function AgentDock(props: {
       if (!session.current) earlyChanges.current.push(c);
       else if (c.session === session.current) change(c);
     });
+    const offAutonomy = api.on("agent:autonomy", (a: AutonomyState) => {
+      if (a.session !== session.current) return;
+      setAutonomy((xs) => (xs.some((x) => x.provider === a.provider) ? xs.map((x) => (x.provider === a.provider ? a : x)) : [...xs, a]));
+      if (!a.on && a.offBecause && a.offBecause !== "you" && a.offBecause !== "session") {
+        const words = { budget: `used its ${a.budget} writes`, drift: "its tools changed", refused: "three writes in a row weren't routine" }[a.offBecause];
+        setItems((xs) => [...xs, { type: "note", text: `${PROVIDER_NAME[a.provider]} autonomous stopped: ${words}. Every write asks again.`, tone: "warn" }]);
+      }
+    });
     const offStatus = api.on("agent:status", (s: AgentStatus) => {
       if (s.state === "answered") setAsks((a) => a.filter((x) => x.request !== s.request));
       else if (s.state === "stopped") {
@@ -126,6 +139,7 @@ export function AgentDock(props: {
         if (closed) return void api.invoke("agent:close", { session: i.session });
         session.current = i.session;
         setInfo(i);
+        setAutonomy(i.autonomy ?? []);
         setMode(i.mode?.current);
         for (const u of early.current.splice(0)) if (u.session === i.session) apply(u.update);
         for (const c of earlyChanges.current.splice(0)) if (c.session === i.session) change(c);
@@ -146,6 +160,7 @@ export function AgentDock(props: {
       offAsk();
       offChange();
       offStatus();
+      offAutonomy();
       if (session.current) void api.invoke("agent:close", { session: session.current }).catch(() => {});
       session.current = undefined;
     };
@@ -304,6 +319,20 @@ export function AgentDock(props: {
     });
   };
 
+  /** Turn a connection's autonomous mode on or off in this session; main checks it and answers with the new state. */
+  const setAuto = (provider: ConnProvider, on: boolean, scope?: { repos?: string[]; branch?: string; team?: string }) => {
+    if (!info) return;
+    setSheetError(undefined);
+    void api.invoke("agent:autonomy", { session: info.session, provider, on, ...(scope ? { scope } : {}) }).then(
+      (st: AutonomyState) => {
+        setAutonomy((xs) => xs.map((x) => (x.provider === st.provider ? st : x)));
+        if (on) setSheet(undefined);
+        setStatus(on ? `${PROVIDER_NAME[provider]} autonomous is on` : `${PROVIDER_NAME[provider]} autonomous stopped`);
+      },
+      (e: ApiError) => setSheetError(e.message),
+    );
+  };
+
   /** Enter allows and Esc rejects the newest question, when the composer is empty. */
   const answerByKey = (e: React.KeyboardEvent) => {
     const newest = asks.at(-1);
@@ -401,6 +430,9 @@ export function AgentDock(props: {
     if (to === "settings") return;
     setPanel(undefined);
     setInfo(undefined);
+    setAutonomy([]);
+    setSheet(undefined);
+    setSheetError(undefined);
     setFailed(undefined);
     setItems([]);
     setPlan([]);
@@ -467,6 +499,7 @@ export function AgentDock(props: {
         {!panel ? <button className="icon-btn" aria-label="History" title="History" onClick={() => setPanel("history")}><Ic icon={History} size={15} /></button> : null}
         <button className="icon-btn" onClick={props.onClose} aria-label={`Close ${agent}`} title={closeTitle}><Ic icon={X} size={15} /></button>
       </header>
+      {!panel ? <AutonomyStrip states={autonomy} onStop={(st) => setAuto(st.provider, false)} /> : null}
       {panel === "history" ? (
         <HistoryPanel
           context={props.cluster.context}
@@ -529,7 +562,7 @@ export function AgentDock(props: {
             </div>
           </div>
         ) : null}
-        <Transcript items={items} busy={busy} views={views} onOpenObject={props.onOpenObject}
+        <Transcript items={items} busy={busy} views={views} autonomous={autonomous} onOpenObject={props.onOpenObject}
           change={(id) => {
             const c = byTool.get(id);
             return c ? renderChange(c) : undefined;
@@ -554,6 +587,16 @@ export function AgentDock(props: {
         {query !== undefined && !panel ? (
           <SlashMenu query={query} options={options} active={slashActive} agent={agent} onHover={setSlashActive} onPick={run}
             short={(body.current?.clientHeight ?? 400) < 300} />
+        ) : null}
+        {sheet && !panel && autonomy.find((a) => a.provider === sheet) ? (
+          <AutonomySheet key={sheet} state={autonomy.find((a) => a.provider === sheet)!} {...(sheetError ? { error: sheetError } : {})}
+            onTurnOn={(scope) => setAuto(sheet, true, scope)}
+            onStop={() => setAuto(sheet, false)}
+            onClose={() => {
+              setSheet(undefined);
+              setSheetError(undefined);
+              box.current?.focus();
+            }} />
         ) : null}
         <div className="composer">
           {props.context.length ? (
@@ -593,6 +636,14 @@ export function AgentDock(props: {
           />
           {noting ? (
             <div className="composer-hint"><Ic icon={Ban} size={12} />{waiting.length > 1 ? `Sending this rejects “${waiting[0]!.title}”.` : "Sending this rejects the change."}</div>
+          ) : null}
+          {!noting && info && autonomy.length ? (
+            <div className="auto-row" role="group" aria-label="GitHub and Linear in this session">
+              <AutonomyChips states={autonomy} {...(sheet ? { open: sheet } : {})} onOpen={(p) => {
+                setSheetError(undefined);
+                setSheet(p);
+              }} />
+            </div>
           ) : null}
           <div className="composer-foot">
             {info?.mode && !noting ? (

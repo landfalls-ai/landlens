@@ -1,6 +1,6 @@
 // MCP in main (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers you added, the call
 // log the MCP page and the dock read, Preview (you running a read-only tool from the MCP page), and MCP App views.
-import { BUILTIN_MCP_SERVER, CONN_NOTES, type ConnInfo, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, CONN_NOTES, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
 import { BuiltinUpstream, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
@@ -16,6 +16,8 @@ export type ConnectionServers = {
   remotes(): Promise<RemoteSpec[]>;
   servers(): McpServerInfo[];
   drifted(p: ConnProvider): void;
+  /** The connection as the page sees it: autonomous needs it ready, at Ask for writes, its tools accepted. */
+  info?(p: ConnProvider): ConnInfo;
 };
 
 export type Ask = {
@@ -41,6 +43,8 @@ export class McpService {
     /** The person's certificate facts for cluster_overview's Preview (DoctorService.certsFor). */
     certs?: (handle: string, namespaces?: string[]) => Awaited<ReturnType<NonNullable<AgentCluster["certs"]>>>;
     push: (call: McpCall) => void;
+    /** A connection's autonomous mode changed in a session (agent:autonomy push). */
+    pushAutonomy?: (s: AutonomyState) => void;
     ask: Ask;
     /** GitHub and Linear, served to every session after the servers you added (docs/connections.md). */
     connections?: ConnectionServers;
@@ -55,6 +59,7 @@ export class McpService {
       ...(deps.log ? { log: deps.log } : {}),
       // Every RemoteSpec the gateway gets comes from the store, with its id, or from Connections, with its provider.
       onDrift: (spec) => (spec.provider ? deps.connections?.drifted(spec.provider.id) : deps.store.drifted((spec as RemoteSpec & { id: string }).id)),
+      ...(deps.pushAutonomy ? { onAutonomy: deps.pushAutonomy } : {}),
     });
     this.gateway.log.subscribe(deps.push);
     deps.clusters.onGone((handle) => void this.closeConsole(handle));
@@ -110,6 +115,40 @@ export class McpService {
       return readsFree ? undefined : "reads";
     });
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
+    // Autonomous ends with the connection as it was turned on: gone, read only, or its tools changed (D82).
+    if (!served || info.mode === "read") this.gateway.stopAutonomy(info.provider, "you");
+    else if (info.note === CONN_NOTES.drift) this.gateway.stopAutonomy(info.provider, "drift");
+  }
+
+  // ---- the autonomous mode (D82) -----------------------------------------------------------------------------------
+
+  /**
+   * agent:autonomy: turn a connection's autonomous mode on (with its scope) or off in one session. On needs the
+   * connection ready, at Ask for writes, given to sessions and with no tools-changed note; the gateway checks the rest.
+   */
+  setAutonomy(session: string, provider: ConnProvider, on: boolean, scope?: AutonomyScope): AutonomyState {
+    if (on) {
+      const c = this.deps.connections?.info?.(provider);
+      const name = PROVIDER_LABEL[provider];
+      if (!c || c.state !== "ready" || !c.give) throw fail(409, `${name} isn't connected for Claude sessions.`);
+      if (c.mode !== "ask") throw fail(409, `${name} is read only: there are no writes to run on their own.`);
+      if (c.note === CONN_NOTES.drift || c.note === CONN_NOTES.unaccepted) throw fail(409, `${name}'s tools need a look on the Connections page first.`);
+    }
+    return this.gateway.setAutonomy(session, provider, on, scope);
+  }
+
+  /** What main asks before answering Claude Code's question for a routine write itself. */
+  autonomyCheck(session: string, toolName: string, input: unknown) {
+    return this.gateway.autonomyCheck(session, toolName, input);
+  }
+
+  /** Main's yes for a write that passed the check: the gateway checks it again when it arrives. */
+  autonomyPermit(session: string, p: { toolCallId: string; toolName: string }) {
+    this.gateway.permit(session, { ...p, always: false, autonomous: true });
+  }
+
+  autonomyStates(session: string): AutonomyState[] {
+    return this.gateway.autonomyStates(session);
   }
 
   /** The front door's audit trail, for the requests behind each landlens-kube call. */

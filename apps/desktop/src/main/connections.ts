@@ -14,7 +14,7 @@ import {
   ConnError, ConnectionStore, endpoints, githubWhoAmI, GITHUB_CLIENT_ID, GITHUB_DEVICE_PAGE, LinearAuth, linearRefresh, linearRevoke, linearSignIn,
   linearViewer, LOOPBACK_ORIGIN, pollDeviceFlow, PROVIDER_NAME, PROVIDERS, startDeviceFlow, StoreError, type Clock, type Crypto, type Endpoints, type LinearUsed, type Provider,
 } from "@landlens/connections";
-import { listingHash, rawError, readonlyIsSmaller, readTools, testRemote, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
+import { isRoutine, listingHash, rawError, readonlyIsSmaller, readTools, testRemote, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 export { readTools };
@@ -458,8 +458,14 @@ export class ConnectionsService {
     const halves = { full: listingHash(full.tools), readonly: listingHash(roTools) };
     const l: Listing = { at: Date.now(), ok: true, steps, full: full.tools, readonly: roTools, reads, pin: `${halves.full}.${halves.readonly}`, halves, smaller };
     this.listings[p] = l;
-    this.store.setListing(p, full.tools.map((t) => toolInfo(t, { readTools: reads })), { read: reads.size, write: full.tools.length - reads.size });
+    this.store.setListing(p, full.tools.map((t) => this.tool(p, t, reads)), { read: reads.size, write: full.tools.length - reads.size });
     return l;
+  }
+
+  /** A tool as the pages show it: a read by the read-only listing, and a write on the routine list marked (D83). */
+  private tool(p: Provider, t: Tool, reads: Set<string>): McpToolInfo {
+    const info = toolInfo(t, { readTools: reads });
+    return !info.readOnly && t.annotations?.destructiveHint !== true && isRoutine(p, t.name) ? { ...info, routine: true } : info;
   }
 
   /**
@@ -471,7 +477,7 @@ export class ConnectionsService {
     if (!l) return { ok: false, steps: [{ name: "sign-in", ok: false, detail: `${PROVIDER_NAME[p]} isn't connected.` }] };
     const steps = [...l.steps];
     if (!l.ok || !l.full || !l.pin) return { ok: false, steps };
-    const tools: McpToolInfo[] = l.full.map((t) => toolInfo(t, { readTools: l.reads }));
+    const tools: McpToolInfo[] = l.full.map((t) => this.tool(p, t, l.reads));
     const counts = { read: l.reads.size, write: l.full.length - l.reads.size };
     this.lastTest[p] = { pin: l.pin, tools: counts };
     const accepted = this.store.pin(p);

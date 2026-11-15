@@ -6,8 +6,8 @@ keychain tokens (the fence, [agent.md](agent.md)), so a connection is Landlens's
 
 Wave 6 is built in parts (the spec's section 8). **Part 1, built 15 November 2026:** signing in and the store
 (`packages/connections`, `apps/desktop/src/main/connections.ts`, the `conn:*` channels). **Part 2, built the same
-day:** the Connections page and the tools in sessions, through the gateway. Not yet built: the autonomous mode
-(part 3), Google Cloud (parts 4 and 5).
+day:** the Connections page and the tools in sessions, through the gateway. **Part 3, built the same day:** the
+autonomous mode, below. Not yet built: Google Cloud (parts 4 and 5).
 The security rules are in [security.md](security.md#connections-and-google-cloud).
 
 ## The Connections page
@@ -25,7 +25,8 @@ Sidebar, directly above MCP (`Cable`), and **Connections** on Welcome, where it 
   exists in the session) or **Ask for writes** (the default: every write asks in Claude's panel). Under it: "Autonomous
   is turned on per session, in Claude's panel." (part 3).
 - **Reads run without asking** (on by default) and **Give to Claude sessions** (on when connected).
-- "44 tools: 25 read, 19 write" opens the tool list, reads first, each with **Read-only** or **Asks first**. **Check
+- "44 tools: 25 read, 19 write" opens the tool list, reads first, each with **Read-only** or **Asks first**, and a
+  write that may run on its own in an autonomous session also with **Routine** (`McpToolInfo.routine`). **Check
   tools** lists both endpoints again.
 - A note when something needs you: "GitHub's tools changed. Look at them, then accept." with **Review tools** (lists
   both endpoints, shows the steps and the tools, then **Accept these tools**); "Look at its tools, then accept them…"
@@ -100,6 +101,73 @@ call log scrubs arguments and previews as for any server.
 **Names.** `github`, `linear` and `landlens-gcp` are reserved: adding a server under one is refused ("That name is used
 by Connections."). A server you saved under one before wave 6 keeps working under it, and that connection stays off
 with "Rename your server named github first." until you rename it.
+
+## Autonomous mode
+
+Writes to GitHub and Linear ask, one at a time, unless you turn a connection **autonomous** for one session (D82–D84,
+`packages/mcp-gateway/src/autonomy.ts`, `providers/github.ts`, `providers/linear.ts`). It covers GitHub and Linear
+writes only. The cluster's writes always go through the approval broker and wait on their change card, autonomous or
+not (plan rule 1); the shell and the servers you added keep asking; reads follow **Reads run without asking**, as
+before.
+
+**Three levels**, per connection: **Read only** and **Ask for writes** are the connection's level on the Connections
+page; **Autonomous** is turned on in Claude's panel, for this session only, with its scope. It is never stored: every
+session, and a resumed one, starts with it off.
+
+**In the dock** (`DockParts.tsx`, `agent.css`). The composer has a row of chips above its foot, one per connection
+in the session: `GitHub
+· asks`, `GitHub · autonomous 3/20` (warn, with a bolt) or `Linear · read only` (no sheet). A click opens the scope
+sheet above the composer: for GitHub, **Repositories** (1 to 5, `owner/repo`) and **Default branch** (main unless
+you type another); for Linear, **Team key** (one team, such as `ENG`). The sheet says what it allows before you turn it
+on: "Claude may write to landfalls-ai/landlens without asking, up to 20 times. Anything it can read may end up
+there." **Turn on** takes a click, or Space on the focused button: Enter never turns it on (the sheet swallows it),
+and Esc closes the sheet. While on, a warn strip under the dock's head says "Autonomous: GitHub writes to
+landfalls-ai/landlens run without asking." with the count and **Stop**; it can't be dismissed. The sheet says why
+it can't be turned on (the tools aren't accepted, changed since you accepted them, or didn't list when the session
+opened; start a new session after you accept them), and why it went off ("You stopped it.", "It used its 20 writes
+for this session.", "The tools changed, so it stopped.", "Three writes in a row weren't routine, so it stopped."),
+which the transcript also notes.
+
+**What runs on its own** (D83), all of it checked in the gateway:
+
+1. **Routine tools, by name, in code.** GitHub: `issue_write` (method create or update), `add_issue_comment`,
+   `update_issue_comment`, `create_branch`, `create_or_update_file` and `push_files` (on a named branch that isn't
+   main, master or the default branch you typed), `create_pull_request`, `update_pull_request`,
+   `pull_request_review_write` (create or submit a review as a COMMENT only; an approval or a request for changes
+   asks), `add_comment_to_pending_review`, `add_reply_to_pull_request_comment`. Linear: `create_issue` (it must name
+   the scope's team), `update_issue` and `create_comment` (a team they name must be the scope's). Every other tool
+   asks: merges, deletes, closing by merge, repositories, workflows, secrets, releases, and any tool a vendor adds
+   until a release of Landlens names it. A tool whose annotations say it may destroy something asks even if named.
+2. **The scope.** A GitHub write must name `owner` and `repo`, and together they must be one of the scope's
+   repositories (case aside). A Linear write is placed by its team key.
+3. **The budget.** 20 writes a session, then it turns off; 5 in any minute, then the next one asks (it stays on).
+4. **The arguments.** Anything the credential scrubber would change (the patterns the front door and the call log
+   use) asks; so does any string over 20,000 characters or arguments over 200 KB.
+5. **Three refused in a row** by these rules (not by the budget) turn it off.
+6. **It stops** on **Stop**, at the end of the session, when the connection's level drops to Read only, when it is
+   disconnected or taken from sessions, and when its tools are found changed.
+
+**How a write runs on its own.** Claude Code still asks its permission question. Main (`AgentService.ask`) asks the
+gateway whether this call, with these arguments, would run on its own; only when it says yes does main answer
+allow-once itself and give the gateway a permit marked autonomous, for that tool call. When the call arrives, the
+gateway checks the arguments that actually arrived again and counts it; if they no longer pass, it refuses the call
+("github · issue_write wasn't run on its own: …"). An autonomous permit never becomes "always". The renderer can't
+answer for you: `agent:answer` takes only a question the dock was shown.
+
+**A write that asks** is the existing question card, now with the provider's mark, the tool ("GitHub · issue
+write?"), "Asked because: other-org/elsewhere isn't in the scope" when autonomous is on and said no, and the
+arguments as a short table (repository, team, issue or pull request, branch, title, file, the first 600 characters of
+the body, a few other plain values), not raw JSON. Enter allows it and Esc rejects it, as before.
+
+**Marked where it ran.** A tool row in the dock that ran on its own has a **ran on its own** chip. The call log keeps
+how each call got through (`McpCall.gate`: read, asked, autonomous, or preview); the Calls tab has an **Autonomous**
+filter, the same chip on its rows, and **Allowed by** in the drawer.
+
+**What it doesn't stop.** Inside the scope, an issue or comment written to steer Claude can make it write wrong or
+leaking things (anything it can read, from the cluster or the providers, may end up in an issue in scope), up to the
+budget; the scope, the routine list and the budget bound that, nothing more. Linear's updates and comments name an
+issue, not a team, so they aren't held to the team ([limitations.md](limitations.md)). The repositories you name are
+taken as typed: Landlens doesn't check that they exist or that the default branch is right.
 
 **On the MCP page** the Servers tab lists `github` and `linear` (when connected) after `landlens-kube`, each with a
 **From Connections** chip, its tools marked by the read-only listing, Preview for reads that need no arguments, and
@@ -252,7 +320,17 @@ the built app with the overrides, and replaces `shell.openExternal` in main so t
 fake's authorize page (a non-loopback address, such as GitHub's device page, is only recorded). It connects GitHub by
 the device flow and by a token, Linear by the browser and by a key, sets the level and switches, and checks the MCP
 page; with `claude` added, one live session reads with `list_issues` without a question and is asked before
-`issue_write` (turned down; the fake never sees it).
+`issue_write` (turned down; the fake never sees it). Then, in the same session, it turns GitHub autonomous on in the
+dock for `landfalls-ai/landlens` (Enter in the sheet doesn't), and asks for two `issue_write` creates: the one in scope
+runs on its own (the fake records it; its row says ran on its own; the Calls tab's Autonomous filter shows it), the
+one out of scope asks with its reason and is turned down. Last, with autonomous still on, it asks for the orders-api
+crash-loop fix in `landlens-dev`: the change card appears and is rejected, and the deployment's env is unchanged.
+
+The autonomous rules are tested without the app: `packages/mcp-gateway/test/autonomy.test.ts` (the routine rules
+against the fixtures' tool names, the arguments, the budget, the rate, three refused, Stop, drift, and the gateway
+re-checking the arguments that arrive) and `apps/desktop/test/agent-service.test.ts` (main answers only when the
+gateway's check passes; cluster tools, the shell and reads are never answered by it), and `mcp-main.test.ts` (when it
+can be turned on, and what stops it when the connection changes).
 
 An unpackaged build reads `LANDLENS_GITHUB_ENDPOINT` and `LANDLENS_LINEAR_ENDPOINT` (`http://127.0.0.1:<port>`
 only; every origin of the provider becomes that one) and `LANDLENS_GITHUB_CLIENT_ID`. A packaged app reads none of
@@ -274,3 +352,6 @@ provider and writes the fixture.
   one, but that isn't stated anywhere.
 - With your own GitHub and Linear connected, start a session and ask for a read (an issue list) and a write: the read
   runs without asking, the write asks. The e2e proves this against the fakes only.
+- The routine list names GitHub's and Linear's tools as the hand-made fixtures do. Once the listings are recorded,
+  check that the names and arguments match (`owner`, `repo`, `method`, `branch`, Linear's `team`). A name or argument that doesn't match makes those writes ask, so
+  autonomous would do less than it says, not more.

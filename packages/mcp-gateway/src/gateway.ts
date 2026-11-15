@@ -9,13 +9,14 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { BUILTIN_MCP_SERVER, type McpCall, type McpToolResult } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
 import type { AuditEntry } from "@landlens/kube";
 import { APP_HTML, CALL_META, type AgentCluster } from "@landlens/kube-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { appMayCall, drifted, modelMayCall, preAllowed, readsOnly, toolUi, type ListedServer } from "./approval.js";
+import { Autonomy } from "./autonomy.js";
 import { CallLog, newCallId } from "./calls.js";
 import { Pairing, TOOL_USE_META } from "./pairing.js";
 import { providerResult, providerTool, type ProviderRules } from "./providers/index.js";
@@ -56,6 +57,11 @@ export type Approver = (q: { label: string; server: string; tool: string; args: 
 const MAX_PERMITS = 200;
 const MAX_CARD_NAMES = 2000;
 
+/** Why a connection's autonomous mode can't be turned on in a session (the dock shows it in the sheet). */
+export const AUTONOMY_UNACCEPTED = "Its tools aren't accepted yet. Look at them on the Connections page, then start a new session.";
+export const AUTONOMY_DRIFT = "Its tools changed since you accepted them. Review them on the Connections page, then start a new session.";
+export const AUTONOMY_UNLISTED = "Its tools didn't list when this session opened. Start a new session.";
+
 export class GatewaySession {
   /** The ACP session id, once Claude Code made it; "console" for yours. */
   acpSession: string | undefined;
@@ -65,8 +71,13 @@ export class GatewaySession {
   readonly readUpstreams = new Map<string, Upstream>();
   /** Permission rules Claude Code gets: what runs without asking. */
   allow: string[] = [];
-  /** Your yes in the dock to one tool call (its ACP toolCallId → `mcp__<server>__<tool>`, if known). */
-  private readonly once = new Map<string, string | undefined>();
+  /**
+   * A yes to one tool call (its ACP toolCallId → `mcp__<server>__<tool>`, if known): yours in the dock, or main's for
+   * a routine write in an autonomous session, which run() checks again on the arguments that arrive.
+   */
+  private readonly once = new Map<string, { rule: string | undefined; autonomous: boolean }>();
+  /** Each connection's autonomous mode in this session (agent sessions only); off until you turn it on. */
+  readonly autonomy = new Map<ConnProvider, Autonomy>();
   /** Tools you said "don't ask again" for in this session. */
   private readonly always = new Set<string>();
 
@@ -96,10 +107,10 @@ export class GatewaySession {
   }
 
   /** You allowed a tool call in the dock (Claude Code's permission request, answered through main). */
-  permit(toolCallId: string, rule: string | undefined, always: boolean) {
-    if (always && rule) this.always.add(rule);
+  permit(toolCallId: string, rule: string | undefined, always: boolean, autonomous = false) {
+    if (always && rule && !autonomous) this.always.add(rule);
     else {
-      this.once.set(toolCallId, rule);
+      this.once.set(toolCallId, { rule, autonomous });
       while (this.once.size > MAX_PERMITS) this.once.delete(this.once.keys().next().value!);
     }
   }
@@ -109,21 +120,27 @@ export class GatewaySession {
    * id; if Claude Code stopped sending that, the oldest unused yes for the same tool). A yes is used up by its call.
    */
   takePermit(rule: string, toolUseId: string | undefined): boolean {
-    if (this.always.has(rule)) return true;
+    return !!this.takePermitKind(rule, toolUseId);
+  }
+
+  /** As takePermit, saying whose yes it was: yours ("asked") or main's for an autonomous routine write. */
+  takePermitKind(rule: string, toolUseId: string | undefined): "asked" | "autonomous" | undefined {
+    if (this.always.has(rule)) return "asked";
+    const kind = (p: { autonomous: boolean }) => (p.autonomous ? "autonomous" as const : "asked" as const);
     if (toolUseId) {
-      if (!this.once.has(toolUseId)) return false;
-      const named = this.once.get(toolUseId);
-      if (named !== undefined && named !== rule) return false;
+      const p = this.once.get(toolUseId);
+      if (!p) return undefined;
+      if (p.rule !== undefined && p.rule !== rule) return undefined;
       this.once.delete(toolUseId);
-      return true;
+      return kind(p);
     }
-    for (const [id, named] of this.once) {
-      if (named === rule) {
+    for (const [id, p] of this.once) {
+      if (p.rule === rule) {
         this.once.delete(id);
-        return true;
+        return kind(p);
       }
     }
-    return false;
+    return undefined;
   }
 
   /** A server's rules and every yes for its tools leave the session: they run only after a new yes. */
@@ -131,7 +148,7 @@ export class GatewaySession {
     const prefix = `mcp__${server}__`;
     this.allow = this.allow.filter((a) => !a.startsWith(prefix));
     for (const a of [...this.always]) if (a.startsWith(prefix)) this.always.delete(a);
-    for (const [id, named] of [...this.once]) if (named === undefined || named.startsWith(prefix)) this.once.delete(id);
+    for (const [id, p] of [...this.once]) if (p.rule === undefined || p.rule.startsWith(prefix)) this.once.delete(id);
   }
 
   /**
@@ -142,6 +159,8 @@ export class GatewaySession {
   restrict(server: string, what: "drop" | "reads") {
     this.forgetRules(server);
     if (what !== "drop") return;
+    const provider = this.init.remotes.find((r) => r.name === server)?.provider;
+    if (provider) this.autonomy.get(provider.id)?.stop("you");
     for (const m of [this.upstreams, this.readUpstreams]) {
       const u = m.get(server);
       m.delete(server);
@@ -157,6 +176,7 @@ export class GatewaySession {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    for (const a of this.autonomy.values()) a.stop("session");
     this.gateway.drop(this);
     await Promise.all([...this.upstreams.values(), ...this.readUpstreams.values()].map((u) => u.close()));
   }
@@ -178,6 +198,10 @@ export class McpGateway {
     log?: (line: string) => void;
     /** A remote server's listing changed since you let its read-only tools run without asking: they ask again. */
     onDrift?: (server: RemoteSpec) => void;
+    /** A connection's autonomous mode changed in a session (turned on or off, a write counted). */
+    onAutonomy?: (s: AutonomyState) => void;
+    /** The clock autonomy's per-minute limit reads (tests). */
+    now?: () => number;
   } = {}) {}
 
   async start(): Promise<void> {
@@ -239,12 +263,83 @@ export class McpGateway {
       });
     }
     session.allow = preAllowed(answered);
-    for (const name of drifted(answered)) {
+    const changed = drifted(answered);
+    for (const name of changed) {
       this.opts.log?.(`[mcp] ${init.label}: ${name}'s tools changed since you allowed its read-only tools; they ask again`);
       const spec = init.remotes.find((r) => r.name === name);
       if (spec) this.opts.onDrift?.(spec);
     }
+    // A connection's autonomous mode, off; it can be turned on only while the session's listing is the accepted one
+    // (D80, D82). Views and Preview have none.
+    if (init.origin === "agent") {
+      for (const r of init.remotes) {
+        if (!r.provider) continue;
+        const listedOk = answered.some((l) => l.name === r.name);
+        const blocked = !r.pin ? AUTONOMY_UNACCEPTED : changed.includes(r.name) ? AUTONOMY_DRIFT : !listedOk ? AUTONOMY_UNLISTED : undefined;
+        session.autonomy.set(r.provider.id, new Autonomy(r.provider.id, {
+          session: () => session.id, mode: r.provider.mode, ...(blocked ? { blocked } : {}),
+          ...(this.opts.now ? { now: this.opts.now } : {}),
+          changed: (st) => this.opts.onAutonomy?.(st),
+        }));
+      }
+    }
     return session;
+  }
+
+  /** An agent session by Claude Code's id for it. */
+  private agentSession(acpSession: string): GatewaySession | undefined {
+    return [...this.sessions.values()].find((x) => x.init.origin === "agent" && x.acpSession === acpSession && !x.closed);
+  }
+
+  /** Each connection's autonomous mode in a session. */
+  autonomyStates(acpSession: string): AutonomyState[] {
+    return [...(this.agentSession(acpSession)?.autonomy.values() ?? [])].map((a) => a.state());
+  }
+
+  /**
+   * Turn a connection's autonomous mode on, with its scope, or off (Stop), in one session (agent:autonomy). Turning it
+   * on needs the connection in the session at Ask for writes, with the accepted listing; main checks the connection
+   * itself is still ready.
+   */
+  setAutonomy(acpSession: string, provider: ConnProvider, on: boolean, scope?: AutonomyScope): AutonomyState {
+    const s = this.agentSession(acpSession);
+    const a = s?.autonomy.get(provider);
+    if (!s || !a) throw Object.assign(new Error("That session has no such connection."), { status: 404 });
+    const spec = s.init.remotes.find((r) => r.provider?.id === provider);
+    if (on && (!spec || !s.upstreams.has(spec.name))) throw Object.assign(new Error("That connection has left this session."), { status: 409 });
+    if (on) a.turnOn(scope!);
+    else a.stop("you");
+    return a.state();
+  }
+
+  /** A connection changed (Disconnect, Read only, its tools changed): its autonomous mode ends in every session. */
+  stopAutonomy(provider: ConnProvider, because: AutonomyOff) {
+    for (const s of this.sessions.values()) s.autonomy.get(provider)?.stop(because);
+  }
+
+  /**
+   * Main asks before answering Claude Code's question itself (D82): whether this tool call, with the input Claude Code
+   * showed, may run on its own. Only a connection's write in a session where its autonomous mode is on, a routine
+   * write in scope within the budget, passes. A failure on the rules counts toward the three in a row that turn it
+   * off. Nothing is counted on a pass: run() checks the arguments that arrive and counts then.
+   */
+  async autonomyCheck(acpSession: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider }> {
+    const m = /^mcp__([a-z][a-z0-9-]{0,30}[a-z0-9])__([A-Za-z0-9_.-]{1,128})$/.exec(toolName);
+    const s = this.agentSession(acpSession);
+    if (!m || !s || m[1] === BUILTIN_MCP_SERVER) return { ok: false };
+    const spec = s.init.remotes.find((r) => r.name === m[1]);
+    const up = spec?.provider ? s.upstreams.get(spec.name) : undefined;
+    if (!spec?.provider || !up) return { ok: false };
+    const provider = spec.provider.id;
+    const a = s.autonomy.get(provider);
+    if (!a?.on || spec.provider.readTools.has(m[2]!)) return { ok: false, provider };
+    const t = await this.listTools(up).then((ts) => ts.find((x) => x.name === m[2]), () => undefined);
+    if (!t) return { ok: false, provider, why: "not one of the routine writes" };
+    const args = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+    const r = a.check(providerTool(t), args);
+    if (!r) return { ok: true, provider };
+    if (r.rules) a.refused();
+    return { ok: false, provider, why: r.why };
   }
 
   /** Called by GatewaySession.close(). */
@@ -279,10 +374,12 @@ export class McpGateway {
    * You answered Claude Code's permission request in the dock with a yes. The gateway lets a proxied tool that isn't
    * pre-allowed run only after such a yes, so a Claude Code that skipped the ask still can't run it.
    */
-  permit(acpSession: string, p: { toolCallId: string; toolName?: string; always: boolean }) {
+  permit(acpSession: string, p: { toolCallId: string; toolName?: string; always: boolean; autonomous?: boolean }) {
     const s = [...this.sessions.values()].find((x) => x.init.origin === "agent" && x.acpSession === acpSession);
     const name = p.toolName ?? this.cardNames.get(p.toolCallId);
-    s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, p.always);
+    // Main's yes for an autonomous write names its tool: it never stands in for another.
+    if (p.autonomous && !name) return;
+    s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, p.always, !!p.autonomous);
   }
 
   async listTools(u: Upstream, keep = true): Promise<Tool[]> {
@@ -342,8 +439,24 @@ export class McpGateway {
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
       const rule = `mcp__${server}__${tool}`;
-      if (server !== BUILTIN_MCP_SERVER && !s.allow.includes(rule) && !s.takePermit(rule, toolUseId)) {
-        return refuse(`${server} · ${tool} needs your yes in the dock first, and Landlens didn't see one.`);
+      if (server !== BUILTIN_MCP_SERVER) {
+        if (s.allow.includes(rule)) this.log.gate(id, "read");
+        else {
+          const kind = s.takePermitKind(rule, toolUseId);
+          if (!kind) return refuse(`${server} · ${tool} needs your yes in the dock first, and Landlens didn't see one.`);
+          if (kind === "autonomous") {
+            // The check that counts (D82): on the arguments that arrived, not the ones the question showed. Only then
+            // is the write counted against the budget and forwarded.
+            const a = provider ? s.autonomy.get(provider.id) : undefined;
+            const r = a ? a.check(t, args) : { why: "autonomous is off", rules: false };
+            if (r) {
+              if (r.rules) a?.refused();
+              return refuse(`${server} · ${tool} wasn't run on its own: ${r.why}. Ask the person, or change the call.`);
+            }
+            a!.count();
+          }
+          this.log.gate(id, kind);
+        }
       }
       this.pairing.call({ id, session: s.id, server, tool, args, ...(toolUseId ? { toolUseId } : {}) });
     } else if (origin === "app") {
@@ -352,9 +465,10 @@ export class McpGateway {
         const yes = this.opts.approve ? await this.opts.approve({ label: s.label, server, tool, args, origin }).catch(() => false) : false;
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
       }
+      if (server !== BUILTIN_MCP_SERVER) this.log.gate(id, readOnly ? "read" : "asked");
     } else if (!readOnly) {
       return refuse(`${tool} doesn't say it only reads, so Landlens won't run it from the MCP page.`);
-    }
+    } else if (server !== BUILTIN_MCP_SERVER) this.log.gate(id, "preview");
 
     const app = toolUi(t).resourceUri;
     // A connection's read goes to its read-only endpoint when the session has one (M1): the full server can't be

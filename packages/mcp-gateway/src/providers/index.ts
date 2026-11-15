@@ -1,9 +1,31 @@
 // GitHub and Linear on the gateway (docs/connections.md, wave 6). Landlens proxies the vendors' own remote MCP
 // servers and adds what a proxy can't take from the server's word: which tools only read, decided by the vendor's
 // read-only endpoint and never by a tool's readOnlyHint (D78), and how a result reaches the model, marked as other
-// people's words and capped (D81).
-import type { ConnMode, ConnProvider } from "@landlens/contracts";
+// people's words and capped (D81). Which writes an autonomous session may run on its own is github.ts and linear.ts
+// (D83).
+import type { AutonomyScope, ConnMode, ConnProvider } from "@landlens/contracts";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { GITHUB_ROUTINE, type RoutineRule } from "./github.js";
+import { LINEAR_ROUTINE } from "./linear.js";
+
+export { GITHUB_ROUTINE, inRepos, offMain, protectedBranches, type RoutineRule } from "./github.js";
+export { LINEAR_ROUTINE } from "./linear.js";
+
+/** Each provider's routine writes, by tool name. A tool not named here is never routine. */
+export const ROUTINE: Readonly<Record<ConnProvider, Readonly<Record<string, RoutineRule>>>> = { github: GITHUB_ROUTINE, linear: LINEAR_ROUTINE };
+
+/** Whether a provider's tool is on the routine list at all (the Connections page's "Routine" chip). */
+export const isRoutine = (p: ConnProvider, name: string) => Object.hasOwn(ROUTINE[p], name);
+
+/**
+ * D83 rule 1 and 2: why this call isn't a routine write in this scope, or undefined when it is. A tool that says it
+ * may destroy something is never routine, whatever its name; a tool not on the list never is.
+ */
+export function routine(p: ConnProvider, tool: Pick<Tool, "name" | "annotations">, args: Record<string, unknown>, scope: AutonomyScope): string | undefined {
+  if (tool.annotations?.destructiveHint === true) return "it says it may destroy something";
+  if (!isRoutine(p, tool.name)) return "not one of the routine writes";
+  return ROUTINE[p][tool.name]!(args, scope);
+}
 
 /** What the gateway knows about a connection's server, set in main for every session. */
 export type ProviderRules = {

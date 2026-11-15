@@ -138,6 +138,23 @@ all N) and Recent warnings; Nodes. It reads
   `.skel` lines. The body reserves its scrollbar gutter (`scrollbar-gutter: stable`) and its right padding plus the
   gutter equals the composer's inset, so cards and composer share one right edge; the user's bubble uses the cards'
   10px padding.
+- **Autonomous mode in the dock** (`DockParts.tsx`, `agent.css`; [connections.md](connections.md#autonomous-mode)).
+  The one place the dock uses amber as a state: autonomous is a standing permission, so it reads as a warning, never
+  as the iris accent. A row of `.auto-pill`s above the composer's foot, one per connection (`GitHub · asks`, 24px, a
+  `--line` ring like the pill selects; `GitHub · autonomous 3/20` on `--warn-soft` in `--warn-text` with a `Zap`;
+  `Linear · read only` as quiet text, hidden when the window is narrow). A pill opens the scope sheet, a popover
+  above the composer built like the slash menu (`--bg-2`, `--shadow-2`, 10px radius): the provider's mark in a 22px
+  tile, "GitHub writes in this session", the level sentence, the scope `.field`s in mono, the D83 sentence in an
+  amber well, then **Turn on** (filled `--warn`, dark ink; the one amber button) and Cancel; when on, the scope, the
+  count and Stop. Under the dock's head, while any connection is autonomous, a full-width strip on `--warn-soft` with a
+  hairline under it: `Zap`, "**Autonomous:** GitHub writes to … run without asking." with the count dimmed, and a
+  small secondary **Stop**; no close button. A tool row that ran on its own has an `.auto-chip` (18px, amber,
+  `Zap` and "ran on its own") after its label; the transcript notes why autonomous stopped in `--warn-text`.
+- **A GitHub or Linear question** is the ask card with the provider's mark in a 22px tile, "GitHub · issue write?",
+  "Asked because: …" in `--warn-text` with a `CircleAlert` when autonomous said no, and an `.args-table`: a ringed
+  `<dl>` of 92px labels and mono values divided by hairlines (Repository, Team, Issue, Pull request, Method, Branch,
+  Title, File(s), then up to six more plain values), the Body in the sans face, pre-wrapped, its first 600
+  characters, at most 140px before it scrolls. The answers are Claude Code's own, with ↵ and esc hints.
 - **Views in the dock**: only the newest view stays open; earlier ones fold to their tool row plus a one-line verdict
   (the tool's first line of text, ellipsised, with "Show view"; a heading ending in ":" takes its first item), and
   reopen on a click ("Hide view" folds them back). A view shows at most 320px; past that a fade to `--bg-2` with
@@ -153,7 +170,8 @@ all N) and Recent warnings; Nodes. It reads
   (quiet: runs without asking) or an amber **Asks first**; where Preview can't run, a disabled button in its place says
   why (Needs arguments, Not read-only, Server off). Calls are `.ov-row`s with a status icon and word, `server · tool`
   and the target as words, the session (and "from a view") in the sub line, a `view` chip, filtered by two selects
-  with the toolbar's chevron and a `.seg`; a row opens the call in the `.drawer`, where the session id is
+  with the toolbar's chevron and a `.seg` (All, OK, Failed, Refused, Autonomous); a call that ran on its own has the amber `.auto-chip`; a row
+  opens the call in the `.drawer` (with **Allowed by**: a read, you, the autonomous mode, or a preview), where the session id is
   middle-truncated with a copy button and a JSON result is indented. The add-server dialog reuses `.dialog`,
   `.form-row`, `.test-steps`.
 - **Connections** (`ConnectionsPage.tsx`, `connections.css`; sidebar above MCP, `Cable`; also "Connections" under
@@ -166,7 +184,8 @@ all N) and Recent warnings; Nodes. It reads
   one** under it. Connected, the body is rows on one grid (a 210px label column, the control, its sentence), divided
   by hairlines: **Level** as a `.seg` (Read only · Ask for writes), then the `.switch`es "Reads run without asking" and
   "Give to Claude sessions"; then the tool count as a link that opens the tools (`.mcp-tool` rows with the name, a
-  one-line description that expands, and **Read-only** or the amber **Asks first**, reads first) and **Check tools**.
+  one-line description that expands, and **Read-only** or the amber **Asks first**, reads first; a routine write
+  also has a muted **Routine** badge with a `Zap`; the badges sit right-aligned) and **Check tools**.
   A note that needs you is amber with its icon and **Review tools**; a card whose tools changed gets an amber ring.
   On the MCP page a connection's panel carries its mark, a **From Connections** chip and **Manage in Connections**.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
@@ -240,12 +259,16 @@ API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes 
 "Servers" and "Calls"; regions "MCP server <name>"; lists "<name> tools" and "MCP calls"; buttons "Add server",
 "Preview <tool>", "Test", "Save"; dialog "Add an MCP server" with fields "Server name", "Server address", "Header
 name", "Header value"; a `switch`; complementary "MCP call" with list "Front-door requests"; classes `.mcp-tool`,
-`.mcp-call`, `.tool-app`, `.app-frame`, `.tool-with-app.folded`, `.tool-verdict`; switch "Use clickland on
+`.mcp-call`, `.tool-app`, `.app-frame`, `.tool-with-app.folded`, `.tool-verdict`; the status `.seg` (group
+"Status") with "Autonomous"; the drawer's "Allowed by"; switch "Use clickland on
 <context>". Connections: button "Connections" (sidebar and Welcome); heading "Connections" (standalone); regions
-"GitHub connection" and "Linear connection"; buttons "Connect", "Disconnect", "Use a token instead", "Use an API key
+"GitHub connection" and "Linear connection"; the tool rows' **Routine** badge; buttons "Connect", "Disconnect", "Use a token instead", "Use an API key
 instead", "Open github.com/login/device", "Read only", "Ask for writes", "Review tools", "Accept these tools",
 "Manage in Connections"; label "Device code"; fields "GitHub token" and "Linear API key"; switches "<Name>: reads run
-without asking" and "Give <Name> to Claude sessions"; lists "<Name> tools"; regions "MCP server github". Badges and key hints inside buttons are `aria-hidden`,
+without asking" and "Give <Name> to Claude sessions"; lists "<Name> tools"; regions "MCP server github".
+Autonomous: buttons "GitHub · asks", "GitHub · autonomous <n>/20", "Turn on", "Stop GitHub autonomous"; dialog
+"GitHub autonomous" with fields "Repositories", "Default branch" (Linear: "Team key"); status "Autonomous" (the
+strip); region "Claude asks"; classes `.auto-chip`, `section.change`, `.change-done.rejected`. Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
 
 `LANDLENS_SHOTS=<folder>` saves screenshots of every screen in dark, light and at 1024×700 ([development.md](development.md)).

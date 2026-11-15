@@ -80,8 +80,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
   changing its listing. Its tool descriptions and results reach the model verbatim ([security.md](security.md)). If a
   server's listing changes, auto-run turns off and you Test and turn it on again; there is no diff of what changed.
 - **GitHub and Linear go to every cluster's sessions** (one "Give to Claude sessions" switch, no per-cluster choice),
-  and a read's arguments reach the vendor without a question ([connections.md](connections.md)). Writes always ask
-  until part 3's autonomous mode; Google Cloud is parts 4 and 5.
+  and a read's arguments reach the vendor without a question ([connections.md](connections.md)). Writes ask unless
+  you turn a connection autonomous for one session; Google Cloud is parts 4 and 5.
+- **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
+  asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
+  hostile issue or comment can still steer up to 20 writes, wrong or leaking ones
+  ([connections.md](connections.md#autonomous-mode)).
+- **Linear's autonomous updates and comments aren't held to the team**: `update_issue` and `create_comment` name an
+  issue, and Landlens can't place an issue in a team without a read it doesn't make, so only a create (and any call
+  that names a team) is checked against the scope's team.
+- **The routine list is fixed in code**: a tool GitHub or Linear adds or renames asks until a release of Landlens
+  names it, and the list matches the hand-made fixtures until the real listings are recorded. The repositories and
+  default branch typed in the sheet aren't checked against GitHub.
 - **GitHub grants can't be revoked from Landlens**: GitHub needs the OAuth App's secret, which Landlens doesn't have,
   so Disconnect only forgets the token, and a device sign-in cancelled after GitHub gave the token leaves a grant
   that you remove at GitHub's Settings → Applications ([connections.md](connections.md#signing-in-to-github)).

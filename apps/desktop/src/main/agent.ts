@@ -2,7 +2,7 @@
 // cluster, each with its own session on the MCP gateway (main/mcp.ts). Updates and permission requests go to the dock;
 // answers come back. Tool calls in the updates are handed to the gateway too, to pair dock cards with logged calls.
 import { randomBytes } from "node:crypto";
-import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentSettingsInfo, AgentStatus, AgentUpdate, ResourceRef } from "@landlens/contracts";
+import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentSettingsInfo, AgentStatus, AgentUpdate, AutonomyState, ConnProvider, ResourceRef } from "@landlens/contracts";
 import { AcpHost, agentEnv, claudeAdapterEntry, listSkills, loginPath, objectUri, resourceBlock, startClusterSession, unreadableObject, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { apiPath, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
@@ -22,6 +22,16 @@ type Push = {
 };
 
 const AGENT_TITLE = "Claude Code";
+
+/**
+ * The autonomous mode as main's ask needs it (the MCP gateway through McpService, D82): whether a connection's write
+ * may run on its own, and main's yes for one that may.
+ */
+export type AutonomyHooks = {
+  check(session: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider }>;
+  permit(session: string, p: { toolCallId: string; toolName: string }): void;
+  states(session: string): AutonomyState[];
+};
 /** The modes the dock offers: Manual and Plan. Never acceptEdits, auto or bypass. */
 const MODES = new Set(["default", "plan"]);
 
@@ -53,6 +63,8 @@ export class AgentService {
       onToolCall?: (u: { session: string; toolCallId: string; toolName?: string; title?: string; rawInput?: unknown }) => void;
       /** You said yes to a permission request: the MCP gateway runs a proxied tool that asks only after this. */
       onPermit?: (p: { session: string; toolCallId: string; toolName?: string; always: boolean }) => void;
+      /** GitHub's and Linear's autonomous mode (D82): main answers a routine write's question only when this passes. */
+      autonomy?: AutonomyHooks;
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
       certs?: Parameters<typeof startClusterSession>[0]["certs"];
       /** Past sessions and your chosen skills (agent-history.ts). */
@@ -169,7 +181,9 @@ export class AgentService {
     }, req);
     this.sessions.set(s.id, s);
     this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, server: this.deps.clusters.get(s.handle).info.server, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
-    return info(s, s.response);
+    // Each connection's autonomous mode, off: a new or resumed session never starts autonomous (D82).
+    const autonomy = this.deps.autonomy?.states(s.id) ?? [];
+    return { ...info(s, s.response), ...(autonomy.length ? { autonomy } : {}) };
   }
 
   history(context?: string): AgentHistoryEntry[] {
@@ -342,7 +356,31 @@ export class AgentService {
     await this.host?.stop();
   }
 
-  private ask(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionOutcome> {
+  /**
+   * Claude Code asks before a tool call its rules don't settle. Main answers it itself in one case only (D82): a
+   * GitHub or Linear write in a session where that connection is autonomous, and the gateway's check passes on the
+   * input Claude Code shows; then main says allow-once and gives the gateway a yes bound to this tool call, which the
+   * gateway checks again on the arguments that arrive. Everything else (cluster tools, the shell, servers you added,
+   * reads, writes that fail the check) goes to the dock, with the reason when autonomous was on. The renderer can't
+   * answer for it: agent:autonomy only turns the mode on or off.
+   */
+  private async ask(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionOutcome> {
+    const name = (req.toolCall._meta as { claudeCode?: { toolName?: unknown } } | undefined)?.claudeCode?.toolName;
+    let auto: { ok: boolean; why?: string; provider?: ConnProvider } = { ok: false };
+    if (typeof name === "string" && /^mcp__/.test(name) && this.deps.autonomy) {
+      auto = await this.deps.autonomy.check(req.sessionId, name, req.toolCall.rawInput ?? {}).catch(() => ({ ok: false }));
+      const once = req.options.find((o) => o.kind === "allow_once");
+      if (signal.aborted) return { outcome: "cancelled" };
+      if (auto.ok && once) {
+        this.deps.autonomy.permit(req.sessionId, { toolCallId: req.toolCall.toolCallId, toolName: name });
+        this.deps.log?.(`[agent] ${req.sessionId}: ${name} ran on its own (autonomous)`);
+        return { outcome: "selected", optionId: once.optionId };
+      }
+    }
+    return this.askDock(req, signal, auto.provider, auto.why);
+  }
+
+  private askDock(req: RequestPermissionRequest, signal: AbortSignal, provider?: ConnProvider, reason?: string): Promise<RequestPermissionOutcome> {
     const request = randomBytes(9).toString("base64url");
     return new Promise((resolve) => {
       const toolName = (req.toolCall._meta as { claudeCode?: { toolName?: unknown } } | undefined)?.claudeCode?.toolName;
@@ -366,6 +404,8 @@ export class AgentService {
         session: req.sessionId,
         toolCall: { toolCallId: tc.toolCallId, title: tc.title ?? null, kind: tc.kind ?? null, rawInput: tc.rawInput },
         options: req.options.map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind })),
+        ...(provider ? { provider } : {}),
+        ...(reason ? { reason } : {}),
       });
     });
   }

@@ -3,7 +3,7 @@
 // run without asking, whether sessions get it at all, and its tools as the vendor's read-only listing sorts them.
 // Tokens come in here (a pasted one) and never come back: the page knows ConnInfo only.
 import { CONN_NOTES, GITHUB_TOKEN_SHAPE, LINEAR_KEY_SHAPE, type ConnInfo, type ConnList, type ConnMode, type ConnProvider, type McpServerInfo, type McpTest, type McpToolInfo } from "@landlens/contracts";
-import { CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, ExternalLink, Eye, KeyRound, ShieldCheck, X } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, ExternalLink, Eye, KeyRound, ShieldCheck, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, type ApiError } from "./api";
 import { Ic } from "./icons";
@@ -288,7 +288,10 @@ function ToolRow({ tool: t, free }: { tool: McpToolInfo; free: boolean }) {
         {t.readOnly ? (
           <span className="badge muted" title={free ? "A read: runs without asking" : "A read, but reads ask for now"}><Ic icon={Eye} size={13} />{free ? "Read-only" : "Read, asks"}</span>
         ) : (
-          <span className="badge warn" title="A write: Claude Code asks you first"><Ic icon={CircleAlert} size={13} />Asks first</span>
+          <span className="tool-badges">
+            {t.routine ? <span className="badge muted" title="A routine write: in a session where you turn autonomous on, it can run without asking inside the scope you set"><Ic icon={Zap} size={13} />Routine</span> : null}
+            <span className="badge warn" title="A write: Claude Code asks you first"><Ic icon={CircleAlert} size={13} />Asks first</span>
+          </span>
         )}
       </div>
     </li>

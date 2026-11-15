@@ -97,6 +97,7 @@ async function start() {
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     push: (call) => send("mcp:call", call),
+    pushAutonomy: (s) => send("agent:autonomy", s),
     ask: {
       confirm: async ({ message, detail, yes }) => {
         const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
@@ -110,6 +111,7 @@ async function start() {
   await mcp.start();
   registerAppProtocol(mcp.views);
   const gateway = mcp.gateway;
+  const mcpSvc = mcp;
   const agent = new AgentService({
     frontDoor,
     clusters,
@@ -118,6 +120,12 @@ async function start() {
     mcp: mcp.forSessions(),
     onToolCall: (u) => gateway.card(u),
     onPermit: (p) => gateway.permit(p.session, p),
+    // GitHub's and Linear's autonomous mode: main answers a routine write's question only when the gateway's check passes.
+    autonomy: {
+      check: (session, toolName, input) => mcpSvc.autonomyCheck(session, toolName, input),
+      permit: (session, p) => mcpSvc.autonomyPermit(session, p),
+      states: (session) => mcpSvc.autonomyStates(session),
+    },
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     history: new AgentHistory(join(app.getPath("userData"), "agent-history.json")),

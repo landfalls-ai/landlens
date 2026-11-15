@@ -273,6 +273,46 @@ export const CONN_NOTES = {
 } as const;
 export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
 
+// The autonomous mode (docs/connections.md, D82–D84): per session, per connection, turned on in the dock, never
+// stored. It covers GitHub and Linear writes only; cluster writes always go through the approval broker.
+/** A GitHub repository as `owner/repo`. */
+export const RepoName = z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/, "not owner/repo");
+/** A Linear team key, such as ENG. */
+export const TeamKey = z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/, "not a team key");
+/** A branch name as the person types it in the scope sheet (the repository's default branch). */
+export const BranchName = z.string().regex(/^(?!-)[A-Za-z0-9._/-]{1,100}$/, "not a branch name");
+/** Where autonomous writes may go: 1–5 repositories (GitHub, with their default branch), or one team (Linear). */
+export const AutonomyScope = z.object({
+  repos: z.array(RepoName).min(1).max(5).optional(),
+  /** The repositories' default branch, as the person typed it; file writes never go to it, main or master. */
+  branch: BranchName.optional(),
+  team: TeamKey.optional(),
+}).strict();
+export type AutonomyScope = z.infer<typeof AutonomyScope>;
+/** The most autonomous writes in one session per provider, and in any minute (D83). */
+export const AUTONOMY_BUDGET = 20;
+export const AUTONOMY_PER_MINUTE = 5;
+/** Why autonomous ended: Stop, the budget, the tools changed, the session ended, or 3 refusals in a row. */
+export type AutonomyOff = "you" | "budget" | "drift" | "session" | "refused";
+/** A connection's autonomy in one agent session (agent:autonomy, answered and pushed). */
+export type AutonomyState = {
+  session: string;
+  provider: ConnProvider;
+  on: boolean;
+  scope?: AutonomyScope;
+  /** Autonomous writes run in this session, and the most it may run. */
+  used: number;
+  budget: number;
+  offBecause?: AutonomyOff;
+  /** The connection's level for this session: at "read" no write exists, so there is no autonomy to turn on. */
+  mode: ConnMode;
+  /** Why it can't be turned on in this session (its tools changed, or were never accepted). */
+  blocked?: string;
+};
+/** Turn a connection's autonomy on (with its scope) or off, for one session. */
+export const AutonomyRequest = z.object({ session: SessionId, provider: ConnProvider, on: z.boolean(), scope: AutonomyScope.optional() })
+  .refine((r) => !r.on || (r.provider === "github" ? !!r.scope?.repos?.length && r.scope.team === undefined : !!r.scope?.team && r.scope.repos === undefined && r.scope.branch === undefined), "a scope for that provider is needed: GitHub repositories, or one Linear team");
+
 /** A container's name (a DNS label). */
 export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
 /** A log stream's or terminal's id, made by main. */
@@ -466,6 +506,9 @@ export const channels = {
   "conn:test": z.object({ provider: ConnProvider }),
   "conn:repin": z.object({ provider: ConnProvider }),
   "conn:disconnect": z.object({ provider: ConnProvider }),
+  // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
+  // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
+  "agent:autonomy": AutonomyRequest,
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -547,6 +590,7 @@ export type Responses = {
   "conn:test": McpTest;
   "conn:repin": ConnInfo;
   "conn:disconnect": ConnInfo;
+  "agent:autonomy": AutonomyState;
 };
 
 /** A tool as the MCP page shows it. */
@@ -562,6 +606,8 @@ export type McpToolInfo = {
   visibility: ("model" | "app")[];
   /** Arguments it requires. */
   required: string[];
+  /** A connection's write that may run on its own in an autonomous session (D83's allowlist). */
+  routine?: boolean;
 };
 export type McpServerInfo = {
   /** "landlens-kube" for the built-in server, the provider for a connection, else its stored id. */
@@ -626,6 +672,11 @@ export type McpCall = {
   app?: string;
   /** For landlens-kube: what it asked the front door. */
   requests: McpFrontDoorRequest[];
+  /**
+   * How a remote server's call got to run (set by the gateway): a read that runs without asking, your yes in the
+   * dock, autonomous (a routine write in scope, wave 6), or Preview on the MCP page.
+   */
+  gate?: "read" | "asked" | "autonomous" | "preview";
 };
 export type McpToolResult = { content: unknown[]; structuredContent?: Record<string, unknown>; isError?: boolean; _meta?: Record<string, unknown> };
 /** A view ready to load: the frame's address on the sandbox origin, and what the host hands the view. */
@@ -815,6 +866,8 @@ export type AgentSessionInfo = {
   mode?: { current: string; available: AgentChoice[] };
   /** Select-type config options (model, effort): current value and choices. */
   options: { id: string; name: string; current: string; choices: AgentChoice[] }[];
+  /** The connections (GitHub, Linear) in this session and their autonomy, which starts off. */
+  autonomy?: AutonomyState[];
 };
 
 /**
@@ -829,6 +882,10 @@ export type AgentPermissionRequest = {
   session: string;
   toolCall: { toolCallId: string; title?: string | null; kind?: string | null; rawInput?: unknown };
   options: { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" }[];
+  /** A connection's tool (GitHub, Linear): the dock shows its mark and its arguments as a table. */
+  provider?: ConnProvider;
+  /** Autonomous was on, and this write asks anyway: why (D82), e.g. "not one of the routine writes". */
+  reason?: string;
 };
 
 /** What a change does to one object. */
@@ -907,7 +964,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 /** Main → renderer push channels. */
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

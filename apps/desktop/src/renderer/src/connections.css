@@ -48,8 +48,8 @@ button.secondary.sm { height: 24px; padding: 0 8px; font-size: var(--t-12); }
 .conn-test { margin: 0; }
 .conn-accept { display: flex; align-items: center; gap: 10px; }
 .conn-tools { margin: 0 -6px; max-height: 420px; overflow: auto; border-radius: var(--r-2); background: var(--bg-1); box-shadow: inset 0 0 0 1px var(--line); }
-.conn-tool-row { display: grid; grid-template-columns: minmax(0, 1fr) 104px; align-items: center; gap: 10px; padding: 7px 10px; min-width: 0; }
-.conn-tool-row .badge { justify-self: start; }
+.conn-tool-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 10px; min-width: 0; }
+.conn-tool-row > .badge, .conn-tool-row > .tool-badges { justify-self: end; }
 .conn-tool-row .ov-name .mono { font-size: var(--t-125); }
 .conn-revoke { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 
@@ -64,3 +64,4 @@ button.secondary.sm { height: 24px; padding: 0 8px; font-size: var(--t-12); }
 .standalone-bar h1 { font-size: var(--t-15); font-weight: 600; margin: 0; }
 .welcome-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; font-size: var(--t-12); }
 .welcome-link .dim { font-weight: 400; color: var(--ink-3); }
+.tool-badges { display: inline-flex; gap: 6px; flex: none; }

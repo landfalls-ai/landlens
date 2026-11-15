@@ -111,6 +111,8 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       return { opened: true };
     },
     "agent:close": async ({ session }) => (await agent.close(session), { ok: true }),
+    // The autonomous mode (D82): on or off for one connection in one session; main alone answers for it.
+    "agent:autonomy": async ({ session, provider, on, scope }) => mcp.setAutonomy(session, provider, on, scope),
     // Graphs (docs/metrics.md). The Clickland key comes in with configure and test; nothing sends it back.
     "metrics:series": (req) => metrics.service.series(req),
     "metrics:settings": async ({ context }) => metrics.settings.view(context),

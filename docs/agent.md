@@ -17,6 +17,8 @@ you choose which of your Claude Code skills a session gets.
 | A row per tool call, consecutive calls grouped in one list: what it is (for example `describe pod landlens-dev/orders-api-…` or `shell kubectl logs …`), its status as an icon, and, opened, what it ran and what came back with line numbers and error lines marked | `tool_call`, `tool_call_update` |
 | The plan, as a checklist | `plan` |
 | "Run a shell command?" with the command and Claude Code's own choices (Yes / Yes, and don't ask again for … / No); Enter picks the first, Esc rejects, when the composer is empty | `session/request_permission` |
+| A GitHub or Linear write: the provider's mark, the tool, "Asked because: …" when autonomous said no, and its arguments as a short table | `session/request_permission`, with main's `provider` and `reason` |
+| `GitHub · asks` / `GitHub · autonomous 3/20` chips above the composer's foot, the scope sheet, and a warn strip with Stop under the head while autonomous; **ran on its own** on a tool row | main's `agent:autonomy`, and the call log's `gate` ([connections.md](connections.md#autonomous-mode)) |
 | Mode (Manual or Plan) and model pickers, in the composer's foot | the session's modes and config options |
 | A change card: the agent's reason, each operation with its diff, risk tags, Approve / Reject / Reject with a note | the `landlens-kube` write tools, through Landlens's approval broker (not ACP) |
 | A "/" menu: Landlens's commands, then the agent's | `available_commands_update` |
@@ -60,6 +62,14 @@ narrows to make room.
   sessions, as `mcp__github__…` and `mcp__linear__…` on the gateway. Their reads run without asking; their writes ask
   in the dock like any tool; at Read only no write tool exists. Their results reach the model marked as other people's
   words ([mcp.md](mcp.md)).
+- **Autonomous mode** (wave 6 part 3, D82–D84): in one session you can let a connection's routine writes, in a scope
+  you set (1 to 5 repositories, or one Linear team), run without asking, up to 20 a session and 5 a minute. Main
+  (`AgentService.ask`) answers Claude Code's permission question itself only when the gateway's check passes for that
+  call's arguments, and the gateway checks the arguments that arrive again before it runs them. Cluster writes, the
+  shell and your own servers are never answered this way: a cluster write still waits on its change card. Off by
+  default, never stored; `agent:open`'s answer carries each connection's state, and `agent:autonomy` turns it on or
+  off (`{ session, provider, on, scope? }` → `AutonomyState`, pushed again when it changes). Details, limits and what
+  it doesn't stop: [connections.md](connections.md#autonomous-mode).
 
 ## The cluster tools (`landlens-kube` MCP server)
 
@@ -230,6 +240,7 @@ ConfigMap with the exact commands, and said it couldn't check the Secret because
 | `packages/kube/src/changes.ts`, `diff.ts` | The approval broker: checks, preconditions, dry run, diff, apply |
 | `packages/kube-mcp/src/writes.ts` | The write tools and what they tell the agent |
 | `packages/acp-host/src/skills.ts` | Your skills, and the plugin a session gets |
-| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings |
-| `apps/desktop/src/renderer/src/AgentDock.tsx`, `ChangeCard.tsx`, `HistoryPanel.tsx`, `SlashMenu.tsx`, `Markdown.tsx` | The dock |
+| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings, the autonomous answer |
+| `packages/mcp-gateway/src/autonomy.ts`, `providers/github.ts`, `providers/linear.ts` | The autonomous mode: scope, budget, arguments, the routine writes |
+| `apps/desktop/src/renderer/src/AgentDock.tsx`, `DockParts.tsx`, `ChangeCard.tsx`, `HistoryPanel.tsx`, `SlashMenu.tsx`, `Markdown.tsx` | The dock (`DockParts.tsx` also has the autonomous chips, sheet and strip, and the provider question card) |
 | `apps/desktop/src/renderer/src/AgentPage.tsx` | The Agent page: skills and agents |
