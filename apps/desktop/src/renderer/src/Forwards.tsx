@@ -144,7 +144,7 @@ export function ForwardPop(props: { handle: string; target: ForwardTarget; onClo
         <div className="change-fact warn" role="alert"><Ic icon={TriangleAlert} size={12} />{busy.message}{busy.next ? <> <button className="link-btn" onClick={() => (setPort(String(busy.next)), setBusy(undefined))}>Use {busy.next}</button></> : null}</div>
       ) : !valid && port !== "" ? <div className="change-fact warn">Use a port from 1024 to 65535.</div> : null}
       {error ? <div className="change-fact bad" role="alert"><Ic icon={CircleX} size={12} />{error}</div> : null}
-      <small>Only this Mac can reach it. It runs as you, through Landlens.</small>
+      <small>Other machines can't reach it; any program or browser page on this Mac can. It runs as you, through Landlens.</small>
       <label className="check-box"><input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />Keep after restart</label>
       <div className="row">
         <button className="primary" disabled={!valid || starting} onClick={() => void start()}>{starting ? <><span className="spinner" />Starting…</> : <>Start<kbd aria-hidden="true">⏎</kbd></>}</button>
@@ -186,11 +186,12 @@ export function ForwardsList(props: { handle: string; context: string }) {
         {forwards.map((f) => {
           const on = live(f);
           const [word, tone] = STATE[f.state];
-          const to = f.pod ? `pod/${f.pod}:${f.podPort}` : `${f.kind}/${f.name}:${f.port}`;
+          // A pod forward that followed its controller to another pod says so: you started it on f.name.
+          const to = f.pod && f.pod !== f.name ? `pod/${f.name}:${f.port} · now ${f.pod}` : `${f.kind}/${f.name}:${f.port}`;
           return (
             <div key={f.id} className={"fw-row" + (on ? "" : " off")} role="listitem" aria-label={`${word}: ${address(f)} to ${f.kind} ${f.name} port ${f.port}`}>
               <span className={`st ${tone}`}>{f.state === "starting" || f.state === "reconnecting" ? <span className="spinner" /> : <i className="dot" />}{word}</span>
-              <span className="fw-map" title={f.kind === "service" ? `service/${f.name}:${f.port}${f.pod ? ` through pod/${f.pod}:${f.podPort}` : ""}` : undefined}>
+              <span className="fw-map" title={f.pod ? `${f.kind}/${f.name}:${f.port} through pod/${f.pod}:${f.podPort}` : undefined}>
                 <span className="addr">{address(f)}</span><span className="to">→</span>
                 <span>{f.kind === "service" ? `service/${f.name}:${f.port}${f.pod ? ` · ${f.pod}` : ""}` : to}</span>
               </span>

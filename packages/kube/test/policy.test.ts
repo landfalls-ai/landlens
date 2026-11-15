@@ -198,6 +198,12 @@ describe("the approval broker's write policy", () => {
       ["GET", "/api/v1/namespaces/shop/pods/web-1/proxy/?ports=8080"],
       ["GET", "/api/v1/namespaces/shop/pods/web-1"],
       ["GET", "/api/v1/namespaces/shop/services/web/portforward?ports=8080"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080&port=22"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080&Ports=22"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=08080"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward/?ports=8080"],
+      ["GET", "/api/v2/namespaces/shop/pods/web-1/portforward?ports=8080"],
+      ["GET", "/api/v1/watch/namespaces/shop/pods/web-1/portforward?ports=8080"],
     ] as const) expect(allowed(fwd, m, p), `${m} ${p}`).toBe(false);
     expect(allowed({ access: "forward", pod: { namespace: "shop", name: "web-1" } }, "GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080")).toBe(false);
   });

@@ -196,6 +196,32 @@ describe("FrontDoor", () => {
     expect(res).toMatch(/^HTTP\/1.1 403/);
     expect(seen).toHaveLength(0);
   });
+
+  it("lets a forward token open only the v4.channel.k8s.io WebSocket, not SPDY or SPDY over a WebSocket", async () => {
+    sidecar.on("upgrade", (req, socket) => {
+      seen.push(req);
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+      socket.end();
+    });
+    const token = door.issueToken({ label: "you · fwd", policy: { access: "forward", pod: { namespace: "a", name: "p1" }, port: 8080 }, clusters: [HANDLE] });
+    const send = (method: string, headers: string) => new Promise<string>((resolve) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
+        s.write(`${method} /c/${HANDLE}/api/v1/namespaces/a/pods/p1/portforward?ports=8080 HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${token}\r\nConnection: Upgrade\r\n${headers}\r\n`);
+      });
+      let buf = "";
+      s.on("data", (d) => (buf += d));
+      s.on("close", () => resolve(buf));
+    });
+    expect(await send("POST", "Upgrade: SPDY/3.1\r\nX-Stream-Protocol-Version: portforward.k8s.io\r\n")).toMatch(/^HTTP\/1.1 403/);
+    expect(await send("GET", "Upgrade: websocket\r\nSec-WebSocket-Protocol: SPDY/3.1+portforward.k8s.io\r\n")).toMatch(/^HTTP\/1.1 403/);
+    expect(await send("GET", "Upgrade: websocket\r\nSec-WebSocket-Protocol: v4.channel.k8s.io, SPDY/3.1+portforward.k8s.io\r\n")).toMatch(/^HTTP\/1.1 403/);
+    expect(seen).toHaveLength(0);
+    expect(await send("GET", "Upgrade: websocket\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n")).toMatch(/^HTTP\/1.1 101/);
+    expect(seen).toHaveLength(1);
+    // Not as a plain request either.
+    const plain = await call(`/c/${HANDLE}/api/v1/namespaces/a/pods/p1/portforward?ports=8080`, token);
+    expect(plain.status).toBe(403);
+  });
 });
 
 describe("FrontDoor scrubbing for agent tokens", () => {

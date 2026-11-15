@@ -97,9 +97,13 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **Port-forward** ([workbench.md](workbench.md#port-forward)) is TCP only. A Service forward goes through one pod,
   not spread across them as the Service would. The pod is checked every 5 seconds, so a connection in the seconds
   after its pod goes can fail. A WebSocket can't half-close, so a client that half-closes waits for the pod's answer
-  for up to 30 seconds. Any program on this Mac can reach a forward (as with `kubectl port-forward`), though the
-  agent's sandbox can't. A bare pod's forward fails when the pod goes. Kept forwards are matched to a cluster by its
-  context's name. The row menu's F (D6) and the palette's forward action aren't built.
+  for up to 30 seconds. Any program of any user on this Mac can reach a forward, and so can pages in your browser (a
+  cross-site request, or DNS rebinding against an app that doesn't check `Host`), as with `kubectl port-forward`;
+  a kept forward is open whenever Landlens is connected. The agent's sandbox can't reach or see one. A bare pod's
+  forward fails when the pod goes; a controller's pod forward follows only that controller's pods. Landlens's own
+  checks on a forward are reads as you that skip the audit trail. A kept forward made before Landlens noted its
+  cluster (before the review fixes) waits for you to start it again. The row menu's F (D6) and the palette's
+  forward action aren't built.
 - **Graphs are CPU and memory only**, for the cluster, nodes, pods and Deployments, StatefulSets and DaemonSets: no
   network, disk, GPU, or Prometheus. Namespaces are a Top namespaces list, not a chart of their own.
 - **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is

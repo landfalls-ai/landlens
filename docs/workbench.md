@@ -157,12 +157,13 @@ merge patches, rebasing).
 
 ## Port-forward
 
-A port on 127.0.0.1 that reaches a pod's port, or a Service's through a pod behind it (D33–D37).
+A port on 127.0.0.1 (and [::1], so `localhost` works either way) that reaches a pod's port, or a Service's through a
+pod behind it (D33–D37).
 
 - **Start from a port** (D33). A pod's container cards list each port ("8080/TCP http"), and a Service's Overview has
   a **Ports** card ("80/TCP → http · http"), each with **Forward**. It opens a popover: `127.0.0.1 :` and a local
-  port, prefilled with the same port when it is free and 1024 or above, else one in the 8000s (80 → 8080, 443 →
-  8443) or the next free one; **Pick a free port**; "Only this Mac can reach it. It runs as you, through Landlens.";
+  port, prefilled with the same port when it is free (on every address, wildcards included) and 1024 or above, else
+  one in the 8000s (80 → 8080, 443 → 8443) or the next free one; **Pick a free port**; "Other machines can't reach it; any program or browser page on this Mac can. It runs as you, through Landlens.";
   **Keep after restart** (on); **Start** (Enter). A taken port says "Port 8080 is in use." and offers **Use 8081**.
   Forward is disabled, with the reason, for a UDP port, a pod that isn't running, a Service without a selector, or
   when a SelfSubjectAccessReview says your role can't create `pods/portforward` there.
@@ -173,18 +174,22 @@ A port on 127.0.0.1 that reaches a pod's port, or a Service's through a pod behi
   such as "Nothing is listening on port 9999 in the pod (connection refused)."), its age, then Open, Copy address and
   Stop; a stopped or failed one has Start and Remove.
 - **A Service forward goes through one ready pod** (D36), the oldest, and its target port (a number, or a container
-  port's name). Landlens checks the pod every 5 seconds; when it goes or stops being ready, the forward says
-  Reconnecting and moves to another ready pod. A pod forward of a Deployment's (or any controller's) pod moves the same
-  way to a pod with the same labels; a bare pod's forward fails when the pod goes.
+  port's name). Landlens reads the Service and its pods every 5 seconds: when the pod goes or stops being ready, or
+  the selector or port changes, the forward says Reconnecting and moves to another ready pod; when the Service goes,
+  it says "Service web is gone.". A pod forward of a Deployment's (or any controller's) pod moves the same way, but
+  only to a pod of the same controller (`pod/web-1:8080 · now web-3`); a bare pod's forward fails when the pod goes.
+  At most 20 forwards per cluster, and 64 open connections per forward.
 - **Kept forwards come back** (D37): they are saved per context (`forwards.json` in Landlens's data, without tokens)
-  and start again when you connect to that cluster, without opening a browser. One whose port is taken by then shows
+  and start again when you connect to that cluster, without opening a browser: the same cluster, by its API server
+  and kube-system's uid, not just the context's name. One whose context now names another cluster stays Stopped with
+  "This context now points at another cluster.". One whose port is taken by then shows
   Failed with the reason. Stopping one keeps it stopped after a restart; Remove forgets it. Forwards stop when you
   switch clusters or quit; the ones not kept are forgotten.
 
 **No kubectl.** The design (D36) ran `kubectl port-forward`; Landlens speaks the Kubernetes port-forward API itself,
 over a WebSocket (`v4.channel.k8s.io`) per local connection, through the front door. Each pod a forward reaches gets
 a token labelled `you · <context> · forward <namespace>/<pod>:<port>` that may open that pod's port-forward on that
-one port and nothing else (policy `forward`), revoked when the forward stops or moves to another pod, which closes its
+one port, over that WebSocket only (no SPDY), and nothing else (policy `forward`), revoked when the forward stops or moves to another pod, which closes its
 connections. So every connection is in the audit trail, your RBAC applies, and nothing depends on a kubectl on your
 `PATH`.
 
@@ -205,11 +210,16 @@ Code: `Forwards.tsx` (port lines, the popover, the Forwards tab), `apps/desktop/
   the same cluster, once), `forwards.test.ts` (a Service's oldest ready pod with a token for its one port; moving to
   another pod when it goes, revoking the old token; Reconnecting with no pod; a bare pod's forward failing; a taken
   port with a free one offered; kept forwards saved without tokens, mode 0600, restored on reconnect but not the
-  stopped ones; forwards end with their cluster).
+  stopped ones; forwards end with their cluster; and the security review's cases: nothing runs after a stop, remove
+  or cluster loss during a start; the cap after the reads; one check at a time; the connection cap; following only
+  the same controller, a changed or deleted Service, never an empty selector; a tampered `forwards.json`; another
+  cluster under the same context).
 - `packages/kube`: `forward.test.ts` (the bridge against a stand-in kubelet: the port prefix skipped, the token sent,
-  a refused connection in words, a refused upgrade's status; 127.0.0.1 only; suggested ports; a Service's target and
-  pod) and, on OrbStack, `forward.integration.test.ts` (three requests at once through the front door with the
-  forward token and in the audit; nothing listening; another port refused with 403; a revoked token with 401).
+  a refused connection in words, a refused upgrade's status, a non-text message, capped error text and bodies;
+  127.0.0.1 and [::1], a wildcard listener as taken; suggested ports; a Service's target and pod) and, on OrbStack,
+  `forward.integration.test.ts` (three requests at once through the front door with the forward token and in the
+  audit; nothing listening; another port refused with 403; a revoked token with 401; SPDY, tunnelled SPDY and extra
+  query keys refused with 403).
 - `apps/desktop/test/workbench.e2e.test.ts` on OrbStack with `deploy/scenarios/workbench.yaml` (`shop-web`, two
   pods, an `app` container that logs every second and a `sidecar` with no shell): follows a pod's log, searches it,
   opens a shell that runs as you and reconnects after `exit 3`, the no-shell case, a deployment's two pods merged and

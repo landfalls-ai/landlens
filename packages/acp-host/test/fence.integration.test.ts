@@ -217,6 +217,9 @@ describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
     const server = createServer((_req, res) => res.end(FORWARD_CANARY));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as { port: number }).port;
+    // Forwards listen on [::1] too (security review, wave 4 part 3, finding 2).
+    const v6 = createServer((_req, res) => res.end(FORWARD_CANARY));
+    await new Promise<void>((r) => v6.listen(port, "::1", r));
     try {
       const before = updates.length;
       const res = await host.prompt(session.id, [{
@@ -228,16 +231,26 @@ describe.runIf(run)("an agent session on OrbStack behind the fence", () => {
           `1. curl -sS -m 5 http://127.0.0.1:${port}/`,
           `2. curl -sS -m 5 --noproxy '*' http://localhost:${port}/`,
           `3. python3 -c "import socket; s=socket.create_connection(('127.0.0.1', ${port}), 5); s.sendall(b'GET / HTTP/1.0\\r\\n\\r\\n'); print(s.recv(200))"`,
+          `4. curl -sS -m 5 --noproxy '*' -g 'http://[::1]:${port}/'`,
+          `5. lsof -nP -iTCP:${port} -sTCP:LISTEN`,
+          `6. netstat -an -p tcp | grep '[.]${port} '`,
         ].join("\n"),
       }]);
       expect(res.stopReason).toBe("end_turn");
       const outputs = updates.slice(before)
         .filter((u) => u.update.sessionUpdate === "tool_call" || u.update.sessionUpdate === "tool_call_update")
         .map((u) => JSON.stringify(u.update)).join("\n");
+      writeFileSync(join(process.env.LANDLENS_LOGS ?? tmpdir(), "landlens-fence-forward.txt"), outputs);
       expect(outputs).toContain(String(port)); // it really tried
+      expect(outputs).toContain("lsof");
       expect(outputs).not.toContain(FORWARD_CANARY);
+      // Nor see it listen: lsof lists nothing (it can't inspect other processes) and the sandbox refuses netstat's
+      // sysctl (net.inet.tcp.pcblist_n), so no listening socket shows up (checked live 2026-11-15).
+      expect(outputs).not.toMatch(new RegExp(`node\\s+${process.pid}\\b`));
+      expect(outputs).not.toMatch(new RegExp(`(127\\.0\\.0\\.1|::1)\\.${port}\\s+\\*\\.\\*\\s+LISTEN`));
     } finally {
       server.close();
+      v6.close();
     }
   }, 300_000);
 });

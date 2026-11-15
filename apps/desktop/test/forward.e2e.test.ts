@@ -92,7 +92,7 @@ describe.runIf(run)("port-forward on OrbStack", () => {
     const ports = page.locator(".drawer .ports");
     await expect.poll(() => ports.innerText()).toMatch(/80\/TCP\s*→ http · http/);
     const pop = await forward(/^Forward shop-front port 80$/, svcPort, true);
-    expect(await pop.innerText()).toContain("Only this Mac can reach it. It runs as you, through Landlens.");
+    expect(await pop.innerText()).toContain("Other machines can't reach it; any program or browser page on this Mac can. It runs as you, through Landlens.");
     await shot(page, "w4-20-forward-pop");
     await page.keyboard.press("Enter");
     await pop.waitFor({ state: "detached" });
@@ -127,11 +127,15 @@ describe.runIf(run)("port-forward on OrbStack", () => {
 
     const before = kubectl("get", "pod", "-l", "app=shop-front", "-o", "jsonpath={.items[0].metadata.name}").trim();
     kubectl("delete", "pod", before, "--wait=false");
-    // The Service forward moves to the new pod; the pod forward has no pod like it until the new one is ready.
+    // The Service forward moves to the new pod. The pod forward follows the Deployment to its new pod, and its row
+    // keeps the pod you started it on: "pod/<old>:8080 · now <new>".
+    const svcRow = list.getByRole("listitem").filter({ hasText: `127.0.0.1:${svcPort}` });
+    const podRow = list.getByRole("listitem").filter({ hasText: `127.0.0.1:${podPort}` });
     await expect.poll(async () => {
-      const t = await list.innerText();
-      return /shop-front-/.test(t) && !t.includes(before) && t.includes(`127.0.0.1:${svcPort}`);
+      const t = await svcRow.innerText();
+      return /shop-front-/.test(t) && !t.includes(before);
     }, { timeout: 60_000, interval: 1000 }).toBe(true);
+    await expect.poll(() => podRow.innerText(), { timeout: 60_000, interval: 1000 }).toMatch(new RegExp(`pod/${before}:8080 · now shop-front-`));
     await expect.poll(() => fetched(svcPort), { timeout: 30_000 }).toBe("<h1>shop-front</h1>\n");
     await shot(page, "w4-24-forward-moved");
 

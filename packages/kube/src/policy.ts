@@ -16,8 +16,8 @@ export type ParsedRequest =
       name?: string;
       subresource?: string;
       verb: Verb;
-      /** For `portforward`: the `ports` query values, as sent. */
-      ports?: string[];
+      /** For `portforward`: the path without its query, and the query as sent (no leading "?"). */
+      forward?: { path: string; query: string };
     };
 
 export type Policy = {
@@ -113,8 +113,8 @@ export function parseRequest(method: string, rawPath: string): ParsedRequest {
   if (parts.length > i + 3) subresource = parts.slice(i + 2).join("/"); // e.g. proxy/some/path
 
   const verb = resourceVerb(m, name, subresource, watchParam || watchPrefix);
-  const ports = subresource === "portforward" ? url.searchParams.getAll("ports") : undefined;
-  return { kind: "resource", group, version, namespace, resource, name, subresource, verb, ...(ports ? { ports } : {}) };
+  const forward = subresource?.split("/")[0] === "portforward" ? { path: url.pathname, query: url.search.replace(/^\?/, "") } : undefined;
+  return { kind: "resource", group, version, namespace, resource, name, subresource, verb, ...(forward ? { forward } : {}) };
 }
 
 function nonResourceVerb(m: string): Verb {
@@ -178,10 +178,14 @@ export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf =
     return ok ? { allow: true } : { allow: false, reason: "this token may only open a shell in its own pod" };
   }
   if (policy.access === "forward") {
-    // One value naming one port: the kubelet splits each value on commas, so "8080,22" would be two.
+    // Exactly this path and exactly `ports=<port>`: no other query key, no second value, no list ("8080,22" is two
+    // ports to the kubelet), no watch prefix or other version. The front door also requires a WebSocket upgrade with
+    // the v4.channel.k8s.io protocol, the one where the kubelet takes the port from this query (security review,
+    // wave 4 part 3, finding 1).
     const p = policy.pod;
-    const ok = !!p && policy.port !== undefined && k === "pods" && req.subresource === "portforward" && req.namespace === p.namespace && req.name === p.name
-      && req.ports?.length === 1 && req.ports[0] === String(policy.port);
+    const ok = !!p && policy.port !== undefined && Number.isInteger(policy.port) && req.verb === "connect"
+      && req.forward?.path === `/api/v1/namespaces/${p.namespace}/pods/${p.name}/portforward`
+      && req.forward.query === `ports=${policy.port}`;
     return ok ? { allow: true } : { allow: false, reason: "this token may only forward its own pod's port" };
   }
 

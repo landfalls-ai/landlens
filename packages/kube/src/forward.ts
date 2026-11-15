@@ -11,7 +11,7 @@ import WebSocket from "ws";
 import type { KubeObject } from "@landlens/contracts";
 
 export const FORWARD_PROTOCOL = "v4.channel.k8s.io";
-/** The address every forward listens on: only this Mac can reach it. */
+/** The address every forward listens on (and [::1]): other machines can't reach it (programs and browser pages on this Mac can). */
 export const LOOPBACK = "127.0.0.1";
 /** What the window may ask for: not the ports below 1024 (root's on macOS anyway). */
 export const MIN_LOCAL_PORT = 1024;
@@ -19,6 +19,8 @@ export const MIN_LOCAL_PORT = 1024;
 const HIGH = 1024 * 1024, LOW = 256 * 1024;
 /** After the local side half-closes, wait this long for the pod's side before closing. */
 const LINGER_MS = 30_000;
+/** The most of the kubelet's error text, or of a refused upgrade's body, that is kept. */
+const MAX_TEXT = 4000;
 
 export type BridgeTarget = {
   /** The cluster's front door URL (https://127.0.0.1:port/c/<handle>). */
@@ -62,8 +64,15 @@ export function bridge(t: BridgeTarget, socket: Socket, on: { error(e: BridgeErr
     setTimeout(() => socket.destroy(), 1000).unref();
   };
   const fail = (e: BridgeError) => {
-    if (!done) on.error(e);
+    const first = !done;
+    // Close first: whatever on.error does, both sides end (security review, wave 4 part 3, finding 5).
     close();
+    if (!first) return;
+    try {
+      on.error(e);
+    } catch {
+      // A handler's mistake must not become an uncaught exception in main.
+    }
   };
 
   const toPod = (b: Buffer) => {
@@ -101,27 +110,38 @@ export function bridge(t: BridgeTarget, socket: Socket, on: { error(e: BridgeErr
     if (ch === 0) {
       if (!socket.write(b)) ws.pause();
     } else {
-      errText += b.toString("utf8").slice(0, 2000);
+      if (errText.length < MAX_TEXT) errText += b.toString("utf8").slice(0, MAX_TEXT - errText.length);
     }
   });
   ws.on("unexpected-response", (_req, res) => {
     let text = "";
     res.setEncoding("utf8");
-    res.on("data", (c: string) => (text += c.slice(0, 4000)));
-    res.on("end", () => {
-      const status = res.statusCode ?? 0;
-      let message = `HTTP ${status}`;
-      try {
-        message = (JSON.parse(text) as { message?: string }).message ?? message;
-      } catch {
-        // not a Status
-      }
-      fail({ message, status });
+    const status = res.statusCode ?? 0;
+    const end = () => fail({ message: upgradeRefusal(text, status), status });
+    res.on("data", (c: string) => {
+      text += c.slice(0, MAX_TEXT - text.length);
+      // Enough to say why: the rest is not read (finding 4).
+      if (text.length >= MAX_TEXT) (res.off("end", end), res.destroy(), end());
     });
+    res.on("end", end);
+    res.on("error", end);
   });
   ws.on("error", (e) => fail({ message: e.message }));
   ws.on("close", () => (errText ? fail({ message: kubeletError(errText, t.port) }) : close()));
   return close;
+}
+
+/** Why an upgrade was refused: a Status's message when it is text, else the status code (finding 5). */
+export function upgradeRefusal(body: string, status: number): string {
+  let m: unknown;
+  try {
+    m = (JSON.parse(body) as { message?: unknown } | null)?.message;
+  } catch {
+    // not a Status
+  }
+  const t = typeof m === "string" ? m.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").trim() : "";
+  if (!t) return `HTTP ${status}`;
+  return t.length > 300 ? `${t.slice(0, 300)}…` : t;
 }
 
 /**
@@ -136,35 +156,69 @@ export function kubeletError(text: string, forwarded?: number): string {
   return t.length > 300 ? `${t.slice(0, 300)}…` : t;
 }
 
-/** Listen on 127.0.0.1:port. Rejects with EADDRINUSE when the port is taken. */
-export function listenLocal(port: number, onConnection: (s: Socket) => void): Promise<Server> {
+/** One forward's listeners: 127.0.0.1 and [::1] on the same port, so `localhost:<port>` is Landlens either way. */
+export type Listener = { port: number; close(): void };
+
+function bind(port: number, host: string, onConnection?: (s: Socket) => void): Promise<Server> {
   return new Promise((resolve, reject) => {
-    const server = createServer({ allowHalfOpen: true, pauseOnConnect: false }, onConnection);
+    const server = createServer({ allowHalfOpen: true }, onConnection ?? ((c) => c.destroy()));
     server.once("error", reject);
-    server.listen({ port, host: LOOPBACK, exclusive: true }, () => {
+    server.listen({ port, host, exclusive: true }, () => {
       server.off("error", reject);
       resolve(server);
     });
   });
 }
+const closed = (s: Server) => new Promise<void>((r) => s.close(() => r()));
+/** No IPv6 on this Mac (or that address): nothing can take it either. */
+const noAddress = (e: unknown) => ["EADDRNOTAVAIL", "EAFNOSUPPORT"].includes((e as NodeJS.ErrnoException).code ?? "");
 
-/** Whether 127.0.0.1:port can be listened on now. */
-export async function isPortFree(port: number): Promise<boolean> {
-  try {
-    const s = await listenLocal(port, (c) => c.destroy());
-    await new Promise((r) => s.close(r));
-    return true;
-  } catch {
-    return false;
+/**
+ * Listen on 127.0.0.1:port and [::1]:port (kubectl port-forward binds both). Rejects with EADDRINUSE when either is
+ * taken, or when another program listens on the port's wildcard address (it would lose its loopback traffic to the
+ * forward: security review, wave 4 part 3, finding 2). Port 0 picks one free on both.
+ */
+export async function listenLocal(port: number, onConnection: (s: Socket) => void): Promise<Listener> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (port && !(await isPortFree(port))) throw Object.assign(new Error(`port ${port} is in use`), { code: "EADDRINUSE" });
+    const v4 = await bind(port, LOOPBACK, onConnection);
+    const p = (v4.address() as { port: number }).port;
+    let v6: Server | undefined;
+    try {
+      v6 = await bind(p, "::1", onConnection);
+    } catch (e) {
+      if (!noAddress(e)) {
+        await closed(v4);
+        if (port) throw e;
+        continue; // port 0: that one was taken on ::1, try another
+      }
+    }
+    return { port: p, close: () => (v4.close(), v6?.close()) };
   }
+  throw Object.assign(new Error("no free port"), { code: "EADDRINUSE" });
+}
+
+/** Whether nothing listens on the port: not on 127.0.0.1, [::1], 0.0.0.0 or [::]. */
+export async function isPortFree(port: number): Promise<boolean> {
+  for (const host of [LOOPBACK, "::1", "0.0.0.0", "::"]) {
+    try {
+      await closed(await bind(port, host));
+    } catch (e) {
+      if (!noAddress(e)) return false;
+    }
+  }
+  return true;
 }
 
 /** A port the system says is free (above 1023). */
 export async function anyFreePort(): Promise<number> {
-  const s = await listenLocal(0, (c) => c.destroy());
-  const port = (s.address() as { port: number }).port;
-  await new Promise((r) => s.close(r));
-  return port;
+  for (let i = 0; i < 5; i++) {
+    const s = await bind(0, LOOPBACK);
+    const port = (s.address() as { port: number }).port;
+    await closed(s);
+    if (await isPortFree(port)) return port;
+  }
+  throw new Error("no free port");
 }
 
 /**

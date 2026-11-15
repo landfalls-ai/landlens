@@ -3,12 +3,12 @@
 // landlens-dev; writes nothing.
 import { execFile } from "node:child_process";
 import { get } from "node:http";
-import type { AddressInfo, Server } from "node:net";
+import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ClusterManager } from "../src/clusters.js";
-import { bridge, listenLocal, type BridgeError } from "../src/forward.js";
+import { bridge, listenLocal, type BridgeError, type Listener } from "../src/forward.js";
 import { FrontDoor, type AuditEntry } from "../src/frontdoor.js";
 import { loopbackCert } from "../src/sidecar.js";
 
@@ -31,7 +31,7 @@ describe.runIf(run)("port-forward on OrbStack", () => {
   let clusters: ClusterManager;
   let handle = "";
   let pod = "";
-  const servers: Server[] = [];
+  const servers: Listener[] = [];
 
   beforeAll(async () => {
     await kubectl("apply", "-f", resolve(__dirname, "../../../deploy/scenarios/workbench.yaml"));
@@ -53,7 +53,7 @@ describe.runIf(run)("port-forward on OrbStack", () => {
     const errors: BridgeError[] = [];
     const s = await listenLocal(0, (c) => void bridge({ url: door.clusterUrl(handle), certificate: door.certificate, token, namespace: NS, pod, port }, c, { error: (e) => errors.push(e) }));
     servers.push(s);
-    return { port: (s.address() as AddressInfo).port, errors };
+    return { port: s.port, errors };
   };
 
   it("serves the pod's port on 127.0.0.1, as you, for several connections at once", async () => {
@@ -85,5 +85,34 @@ describe.runIf(run)("port-forward on OrbStack", () => {
     const revoked = await forward(token, 8080);
     await fetchText(revoked.port).catch(() => undefined);
     await expect.poll(() => revoked.errors[0]?.status, { timeout: 10_000 }).toBe(401);
+  }, 30_000);
+
+  /** The status the front door answers an upgrade with: 101 when it upgrades. */
+  const upgrade = (token: string, path: string, method: string, headers: Record<string, string>) => new Promise<number>((ok, fail) => {
+    const u = new URL(door.clusterUrl(handle) + path);
+    const req = httpsRequest({ host: u.hostname, port: u.port, path: u.pathname + u.search, method, ca: door.certificate, agent: false,
+      headers: { Authorization: `Bearer ${token}`, Connection: "Upgrade", ...headers } });
+    req.on("upgrade", (_res, socket) => (socket.destroy(), ok(101)));
+    req.on("response", (res) => (res.resume(), ok(res.statusCode ?? 0)));
+    req.on("error", fail);
+    req.end();
+  });
+
+  it("opens only a v4.channel.k8s.io WebSocket for exactly its port: no SPDY, no tunnel, no extra keys (review finding 1)", async () => {
+    const token = door.issueToken({ label: "you · orbstack · forward test", policy: { access: "forward", pod: { namespace: NS, name: pod }, port: 8080 }, clusters: [handle] });
+    const path = `/api/v1/namespaces/${NS}/pods/${pod}/portforward`;
+    const ws = { Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" };
+    // The control: the WebSocket the bridge uses upgrades.
+    expect(await upgrade(token, `${path}?ports=8080`, "GET", { ...ws, "Sec-WebSocket-Protocol": "v4.channel.k8s.io" })).toBe(101);
+    // kubectl's SPDY dialer (POST, Upgrade: SPDY/3.1) chooses its ports inside the stream, not in the URL.
+    expect(await upgrade(token, `${path}?ports=8080`, "POST", { Upgrade: "SPDY/3.1", "X-Stream-Protocol-Version": "portforward.k8s.io" })).toBe(403);
+    // SPDY tunnelled through a WebSocket (kubectl 1.30+).
+    expect(await upgrade(token, `${path}?ports=8080`, "GET", { ...ws, "Sec-WebSocket-Protocol": "SPDY/3.1+portforward.k8s.io" })).toBe(403);
+    expect(await upgrade(token, `${path}?ports=8080`, "GET", { ...ws, "Sec-WebSocket-Protocol": "SPDY/3.1+portforward.k8s.io, v4.channel.k8s.io" })).toBe(403);
+    // Another port in the query, under any key.
+    for (const q of ["ports=8080&ports=22", "ports=8080&port=22", "ports=8080,22", "ports=22", "Ports=8080"]) {
+      expect(await upgrade(token, `${path}?${q}`, "GET", { ...ws, "Sec-WebSocket-Protocol": "v4.channel.k8s.io" }), q).toBe(403);
+    }
+    door.revokeToken(token);
   }, 30_000);
 });

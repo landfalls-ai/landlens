@@ -140,7 +140,7 @@ export class FrontDoor {
   }
 
   /** The shared checks for plain and upgraded requests. */
-  private check(req: IncomingMessage):
+  private check(req: IncomingMessage, upgrade = false):
     | { ok: true; grant: TokenGrant; handle: string; path: string; upstream: Upstream; parsed: ParsedRequest }
     | { ok: false; status: number; reason: string; label: string; handle: string; path: string } {
     const m = PREFIX.exec(req.url ?? "");
@@ -164,6 +164,13 @@ export class FrontDoor {
     const parsed = parseRequest(req.method ?? "GET", path);
     const decision = authorize(grant.policy, parsed, upstream.scopeOf);
     if (!decision.allow) return { ok: false, status: 403, reason: decision.reason, label, handle, path };
+    // A forward token opens only the WebSocket port-forward (v4.channel.k8s.io), where the kubelet takes the port from
+    // the query the policy checked. SPDY, and SPDY tunnelled over a WebSocket, name the port inside the stream.
+    if (grant.policy.access === "forward") {
+      const ws = upgrade && req.method === "GET" && String(req.headers.upgrade ?? "").toLowerCase() === "websocket"
+        && String(req.headers["sec-websocket-protocol"] ?? "").trim() === "v4.channel.k8s.io";
+      if (!ws) return { ok: false, status: 403, reason: "a forward token opens only a v4.channel.k8s.io WebSocket", label, handle, path };
+    }
     return { ok: true, grant, handle, path, upstream, parsed };
   }
 
@@ -230,7 +237,7 @@ export class FrontDoor {
 
   /** exec/attach/port-forward use upgraded connections; same checks, then splice the sockets. */
   private handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer) {
-    const c = this.check(req);
+    const c = this.check(req, true);
     if (!c.ok) {
       this.audit(req, c, false, c.status, c.reason);
       socket.end(`HTTP/1.1 ${c.status} ${c.status === 401 ? "Unauthorized" : "Forbidden"}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n${statusBody(c.status, c.reason)}`);
