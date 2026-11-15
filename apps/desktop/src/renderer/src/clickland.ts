@@ -1,8 +1,8 @@
 // Whether Clickland's history can be offered in the IDE (wave 7 part 3, D118), shared by every view: its card's state
 // and whether a console address is set, from family:list and kept live from family:update. The key never comes here.
-import type { ClicklandScope, FamilyInfo } from "@landlens/contracts";
-import { useEffect, useState } from "react";
-import { api } from "./api";
+import type { ClicklandScope, FamilyInfo, Request } from "@landlens/contracts";
+import { useCallback, useEffect, useState } from "react";
+import { api, type ApiError } from "./api";
 
 export type ClicklandState = { ready: boolean; console?: string };
 
@@ -37,4 +37,17 @@ export function clicklandScope(kind: string, namespace: string | undefined, name
   const k = ({ Pod: "pod", Deployment: "deployment", StatefulSet: "statefulset", DaemonSet: "daemonset" } as const)[kind as "Pod"];
   if (!k || !namespace || !/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name)) return undefined;
   return { kind: k, namespace, name, ...(container ? { container } : {}) };
+}
+
+/**
+ * Open in Clickland and what went wrong, for the view to show (security review of part 3, L3: a refusal used to do
+ * nothing). The error is main's own sentence; it clears on the next try.
+ */
+export function useOpenInClickland(): [string | undefined, (req: Request<"clickland:open">) => void] {
+  const [error, setError] = useState<string>();
+  const open = useCallback((req: Request<"clickland:open">) => {
+    setError(undefined);
+    void api.invoke("clickland:open", req).catch((e: ApiError) => setError(`Couldn't open Clickland: ${e.message}`));
+  }, []);
+  return [error, open];
 }

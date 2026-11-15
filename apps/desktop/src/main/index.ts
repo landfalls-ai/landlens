@@ -1,5 +1,5 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
-import { ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
+import { checkAccess, ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
 import { MetricsService } from "@landlens/metrics";
 import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "electron";
 import { existsSync } from "node:fs";
@@ -11,6 +11,7 @@ import { PrometheusChoices } from "./prometheus-choice";
 import { registerIpc } from "./ipc";
 import { DoctorService } from "./doctor";
 import { ClicklandHistory } from "./clickland-history";
+import { SiblingText } from "./sibling-text";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { McpService, moveClicklandServer } from "./mcp";
@@ -61,6 +62,8 @@ async function start() {
   const hub = new WatchHub(clusters);
   // The doctor's evidence falls back to Clickland's history when the kubelet has neither run (D118); set below.
   let history: ClicklandHistory | undefined;
+  // What main sent the window from Clickland, so a question that quotes it holds autonomy (review of part 3, M2).
+  const siblingText = new SiblingText();
   const doctor = new DoctorService({ clusters, hub, history: (handle, q) => history?.lastLines(handle, q) ?? Promise.resolve(undefined) });
   let win: BrowserWindow | undefined;
   const send = (channel: string, payload: unknown) => {
@@ -125,6 +128,9 @@ async function start() {
     object: (handle, ref) => clusters.getObject(handle, ref).catch((e: { status?: number }) => (e?.status === 404 ? undefined : Promise.reject(e))),
     known: (handle, scope) => doctor.knows(handle, scope),
     console: () => family.clicklandConsole(),
+    // History shows log lines only when the cluster would (review of part 3, L1).
+    canReadLogs: async (handle, namespace) => (await checkAccess(clusters.get(handle).client, [{ verb: "get", group: "", resource: "pods", subresource: "log", namespace }]))[0] === true,
+    served: (rows) => siblingText.served("clickland", rows),
   });
   clusters.onGone((handle) => history?.forget(handle));
   // D109: the server Add Clickland made on the MCP page becomes the family's clickland server, once.
@@ -172,6 +178,7 @@ async function start() {
   const gateway = mcp.gateway;
   const mcpSvc = mcp;
   const agent = new AgentService({
+    siblingText,
     frontDoor,
     clusters,
     sessionsDir: join(app.getPath("userData"), "agent-sessions"),

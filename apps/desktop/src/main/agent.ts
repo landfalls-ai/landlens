@@ -97,6 +97,11 @@ export class AgentService {
       onPermit?: (p: { session: string; toolCallId: string; toolName?: string; always: boolean }) => void;
       /** GitHub's and Linear's autonomous mode (D82): main answers a routine write's question only when this passes. */
       autonomy?: AutonomyHooks;
+      /**
+       * Text main served the window from a sibling (Clickland's log lines: sibling-text.ts). A question that quotes
+       * any holds the session's autonomy, whatever its head says (security review of part 3, M2).
+       */
+      siblingText?: { found(text: string): Set<"clickland" | "landflow" | "landfall"> };
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
       certs?: Parameters<typeof startClusterSession>[0]["certs"];
       /** Past sessions and your chosen skills (agent-history.ts). */
@@ -279,9 +284,12 @@ export class AgentService {
     const s = this.session(id);
     // Google Cloud data enters the session with this question: hold its autonomous writes before it is sent (W1).
     if (GCP_QUOTE.test(text)) this.deps.autonomy?.gcpQuoted?.(id);
-    // So does a sibling's: Clickland's log lines are written by workloads (D113's reasoning, review of part 2 L8).
-    if (CLICKLAND_QUOTE.test(text)) this.deps.autonomy?.familyQuoted?.(id, "clickland");
-    if (LANDFLOW_QUOTE.test(text)) this.deps.autonomy?.familyQuoted?.(id, "landflow");
+    // So does a sibling's: Clickland's log lines are written by workloads (D113's reasoning, review of part 2 L8). Main
+    // decides from what it served (siblingText), not only from the head the window wrote (review of part 3, M2).
+    const quoted = new Set(this.deps.siblingText?.found(text) ?? []);
+    if (CLICKLAND_QUOTE.test(text)) quoted.add("clickland");
+    if (LANDFLOW_QUOTE.test(text)) quoted.add("landflow");
+    for (const sibling of quoted) this.deps.autonomy?.familyQuoted?.(id, sibling);
     this.deps.history?.prompted(id, text);
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;

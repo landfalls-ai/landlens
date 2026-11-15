@@ -39,6 +39,54 @@ export function redactText(s: string): string {
   return out;
 }
 
+export const KEY_REDACTED = "<redacted private key>";
+/** A private key's head with no end after it (redactText has already taken every whole key). */
+const OPEN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/;
+/** A private key's end with no head before it. */
+const CLOSE_KEY = /^[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/;
+
+/**
+ * redactText for text that may be a piece of something longer (a cut body, one row of a key logged line by line):
+ * also a private key's head with no end, to the end of the text, and a key's end with no head, from the start (security
+ * review of wave 7 part 3, M1 and L9). `opened`: the text ends inside a key.
+ */
+export function redactPart(s: string): { text: string; opened: boolean } {
+  let text = redactText(s).replace(CLOSE_KEY, KEY_REDACTED);
+  const opened = OPEN_KEY.test(text);
+  if (opened) text = text.replace(OPEN_KEY, KEY_REDACTED);
+  return { text, opened };
+}
+
+/**
+ * Scrub, then cut at `max` (security review of wave 7 part 3, M1): the scrub reads past the cut, at least 4,096
+ * characters of scrubbed text beyond it, so a secret that the cut would split is taken whole; then a private key left
+ * open by the cut is taken to the end. `fromEnd` keeps the last `max` characters instead (a log's tail), the text
+ * scrubbed whole first. `cut`: the scrubbed text was longer than `max`.
+ */
+export function scrubCut(s: string, max: number, fromEnd = false): { text: string; cut: boolean; opened: boolean } {
+  if (fromEnd) {
+    const whole = redactPart(s);
+    if (whole.text.length <= max) return { ...whole, cut: false };
+    return { text: whole.text.slice(whole.text.length - max), cut: true, opened: whole.opened };
+  }
+  const MARGIN = 4096;
+  for (let w = max + MARGIN; ; w *= 2) {
+    let scrubbed: string;
+    if (w >= s.length) {
+      const whole = redactPart(s);
+      if (whole.text.length <= max) return { ...whole, cut: false };
+      scrubbed = whole.text;
+    } else {
+      scrubbed = redactText(s.slice(0, w));
+      // A replacement shortens the text: what the window cut off at its end (perhaps half a secret) must still lie
+      // MARGIN past the cut, or the window grows.
+      if (scrubbed.length < max + MARGIN) continue;
+    }
+    const kept = redactPart(scrubbed.slice(0, max));
+    return { text: kept.text, cut: true, opened: kept.opened };
+  }
+}
+
 const CAPPED = /… \(\d+ more characters\)$/;
 
 function capString(s: string): string {

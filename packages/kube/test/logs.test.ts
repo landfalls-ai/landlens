@@ -13,6 +13,14 @@ const stream = (parts: string[], status = 200) => ({
 const req = { namespace: "shop", pod: "api-1", container: "api", previous: true, tailLines: 200 };
 
 describe("readLogTail", () => {
+  // Security review of wave 7 part 3, M1: a line past 16 KiB is scrubbed before it is cut.
+  it("scrubs a long line before cutting it at 16 KiB", async () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const r = await readLogTail(stream([`2026-11-15T11:59:00Z ${"x".repeat(16 * 1024 - 10)} ${token} and more\n`]), req, { maxBytes: 64 * 1024, timeoutMs: 1000 });
+    expect(r.lines[0]).not.toContain("ghp_");
+    expect(r.lines[0]).toContain("more characters)");
+  });
+
   it("returns the lines without timestamps when they fit", async () => {
     const r = await readLogTail(stream(["2026-11-15T11:59:00Z one\n2026-11-15T11:59:01Z two\n"]), req, { maxBytes: 1024, timeoutMs: 1000 });
     expect(r).toEqual({ lines: ["one", "two"], cut: false });

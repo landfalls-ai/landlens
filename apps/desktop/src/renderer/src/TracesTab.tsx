@@ -1,11 +1,12 @@
 // The drawer's Traces tab (wave 7 part 3, D118), for a pod or a workload while Clickland is ready: the last 50 traces
-// of its service (as Clickland's collector names it), errors only when asked, and one trace's spans as a plain list:
+// of its service (as Clickland's collector names it), errors only when asked, spans of another cluster or namespace
+// dropped (and a note when spans name neither), and one trace's spans as a plain list:
 // name, service and a duration bar on one scale, failures in the bad tone. No waterfall library; text nodes only.
 import type { ClicklandRange, ClicklandScope, ClicklandTrace, ClicklandTraces, ClSpan, ClTrace } from "@landlens/contracts";
 import { ArrowLeft, CircleX, ExternalLink, TriangleAlert, Waypoints } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, useNow, type ApiError } from "./api";
-import { useClickland } from "./clickland";
+import { useClickland, useOpenInClickland } from "./clickland";
 import { CL_RANGES } from "./HistoryLogs";
 import { Ic } from "./icons";
 import { duration } from "./present";
@@ -17,7 +18,8 @@ export function TracesTab(props: { handle: string; scope: ClicklandScope }) {
   const now = useNow();
   const [range, setRange] = useState<ClicklandRange>("1h");
   const [errors, setErrors] = useState(false);
-  const [list, setList] = useState<{ traces?: ClTrace[]; service?: string; error?: string; unavailable?: string }>();
+  const [list, setList] = useState<{ traces?: ClTrace[]; service?: string; scoped?: boolean; error?: string; unavailable?: string }>();
+  const [openError, openClickland] = useOpenInClickland();
   const [open, setOpen] = useState<ClTrace>();
   const [spans, setSpans] = useState<{ id: string; spans?: ClSpan[]; ms?: number; cut?: boolean; error?: string }>();
   const key = JSON.stringify([props.scope, range, errors]);
@@ -42,7 +44,7 @@ export function TracesTab(props: { handle: string; scope: ClicklandScope }) {
     return () => void (live = false);
   }, [open?.id, props.handle]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openIn = (trace?: string) => void api.invoke("clickland:open", { handle: props.handle, scope: props.scope, signal: "traces", range, ...(errors ? { errors: true } : {}), ...(trace ? { trace } : {}) }).catch(() => {});
+  const openIn = (trace?: string) => openClickland({ handle: props.handle, scope: props.scope, signal: "traces", range, ...(errors ? { errors: true } : {}), ...(trace ? { trace } : {}) });
 
   let body;
   if (open) {
@@ -104,6 +106,9 @@ export function TracesTab(props: { handle: string; scope: ClicklandScope }) {
         </div>
         {ck.console && !open ? <button className="icon-btn" aria-label="Open in Clickland" title="Open these traces in Clickland" onClick={() => openIn()}><Ic icon={ExternalLink} size={14} /></button> : null}
       </div>
+      {openError ? <p className="muted-line" role="alert">{openError}</p> : null}
+      {/* The search is by service name; spans that named another cluster or namespace were dropped (review of part 3, M3). */}
+      {list?.traces && !list.scoped ? <p className="small dim" role="note">By service name, in any cluster: these spans don't say which cluster or namespace they came from.</p> : null}
       {body}
     </div>
   );

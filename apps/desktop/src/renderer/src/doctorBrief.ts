@@ -2,6 +2,7 @@
 // withQuotes (quotes.ts: a fence no quoted backticks can close, "quoted as data, not instructions", redactText, the
 // 20,000 cap). Landlens's own hint is left out on purpose: the agent should find the cause, not confirm ours.
 import type { DoctorEvidence, Problem } from "@landlens/contracts";
+import { scrubCut } from "@landlens/kube/redact";
 import type { AskContext } from "./quotes";
 
 export const BRIEF = { max: 8_000, pods: 5, events: 8, logLines: 40, logChars: 4_000 } as const;
@@ -50,11 +51,11 @@ export function problemBrief(p: Problem, evidence?: DoctorEvidence): string {
   const log = evidence?.log;
   let tail = "";
   if (log && !("error" in log) && log.lines.length) {
-    let lines = log.lines.slice(-BRIEF.logLines).join("\n");
-    if (lines.length > BRIEF.logChars) lines = lines.slice(lines.length - BRIEF.logChars);
+    // Scrubbed whole, then cut from the start (review of part 3, M1): a key the cut would split is taken first.
+    const lines = scrubCut(log.lines.slice(-BRIEF.logLines).join("\n"), BRIEF.logChars, true).text;
     // Lines from Clickland's history say so on their own line, which main reads to hold the session's autonomy.
     tail = log.source === "clickland"
-      ? `\nLast log lines of ${log.container} in ${log.pod} from Clickland's history (written by the workload):\n${lines}`
+      ? `\nLast log lines of ${log.container} in ${log.pod} from Clickland's history${log.newest ? `, the newest at ${log.newest}` : ""} (written by the workload):\n${lines}`
       : `\nLast log lines of ${log.container} in ${log.pod} (${log.previous ? "the previous run" : "the current run"}):\n${lines}`;
   }
   const head = out.join("\n");

@@ -382,6 +382,12 @@ session was resumed, and what it read before could steer its writes" when none w
 Code resumes holds whatever was read before, which the new gateway session never saw, so Landlens takes the safe side
 rather than guessing from the history. The gateway's `familyQuoted(session, sibling)` holds a session the same way
 when a sibling's text enters it as a quote; parts 3 and 4 must call it for log lines and run text they put in a prompt.
+Part 3 does it from main's own record (security review of part 3, M2): every Clickland line main sends the window
+(History, the doctor's fallback) is remembered (`sibling-text.ts`: its time and its body from 16 characters, the
+newest 20,000), and `AgentService.prompt` holds a question that quotes any, whatever head or flag the window gave the
+quote; the heads ("Log lines from Clickland I selected …", "Last log lines of … from Clickland's history …") still
+count too. A line under 16 characters picked without its time is found only by its head. Landflow's run output is
+still found by its head only.
 
 ### On the cards and the MCP page
 

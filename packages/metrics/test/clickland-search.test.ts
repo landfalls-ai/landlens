@@ -1,7 +1,7 @@
 // Clickland's logs and traces (wave 7 part 3, D115–D116): the searches Landlens builds, and what it keeps of answers.
 import { describe, expect, it } from "vitest";
 import { ClicklandClient, ClicklandError } from "../src/clickland.js";
-import { CL, ClicklandSearch, consolePath, logsQuery, parseLogRows, parseTrace, parseTraceList, quoted, tracesQuery } from "../src/clickland-search.js";
+import { CL, ClicklandSearch, consolePath, ERRORS_TERM, logsQuery, parseLogRows, parseTrace, parseTraceList, quoted, tracesQuery } from "../src/clickland-search.js";
 import { KEY } from "./fakes.js";
 
 const NOW = Date.parse("2026-11-15T12:00:00.000Z");
@@ -46,8 +46,9 @@ describe("the searches Landlens builds (D115)", () => {
     expect(logsQuery("orbstack", { kind: "daemonset", namespace: "a", name: "agent" })).toContain(`k8s.daemonset.name:"agent"`);
   });
 
-  it("adds the fixed level:error for Errors only, and status:error for traces", () => {
-    expect(logsQuery("orbstack", pod, { errors: true }).endsWith(" level:error")).toBe(true);
+  it("adds the fixed error levels for Errors only (fatal and critical too: L7), and status:error for traces", () => {
+    expect(ERRORS_TERM).toBe("(level:error OR level:fatal OR level:critical)");
+    expect(logsQuery("orbstack", pod, { errors: true }).endsWith(" (level:error OR level:fatal OR level:critical)")).toBe(true);
     expect(tracesQuery("landflow-host", true)).toBe(`service:"landflow-host" status:error`);
     expect(tracesQuery("landflow-host")).toBe(`service:"landflow-host"`);
   });
@@ -107,6 +108,47 @@ describe("what Landlens keeps of a logs answer (D116)", () => {
     expect(cut).toBe(true);
   });
 
+  // Security review of part 3, M1: the scrub runs past the cut, so a secret the cut would split is taken whole.
+  it("scrubs before it cuts: a private key across the cut, a token at the cut", () => {
+    const key = `-----BEGIN RSA PRIVATE KEY-----\n${"MIIEowIBAAKCAQEA".repeat(105)}\n-----END RSA PRIVATE KEY-----`;
+    expect(key.length).toBeGreaterThan(1700);
+    const one = parseLogRows({ rows: [logRow({ body: `${"x".repeat(7000)}${key}` })] }).rows[0]!;
+    expect(one.body).not.toContain("BEGIN RSA PRIVATE KEY");
+    expect(one.body).not.toContain("MIIEowIBAAKCAQEA");
+    expect(one.body).toContain("<redacted private key>");
+    const token = `ghp_${"a".repeat(36)}`;
+    const two = parseLogRows({ rows: [logRow({ body: `${"x".repeat(8169)} ${token} and more` })] }).rows[0]!;
+    expect(two.body).not.toContain("ghp_");
+    expect(two.body.length).toBeLessThanOrEqual(CL.body);
+    expect(two.cut).toBe(true);
+    // A key whose end lies past even the scrub's window: its head to the cut is taken.
+    const open = parseLogRows({ rows: [logRow({ body: `${"x".repeat(100)}-----BEGIN PRIVATE KEY-----\n${"A".repeat(20_000)}` })] }).rows[0]!;
+    expect(open.body).toBe(`${"x".repeat(100)}<redacted private key>`);
+    // A span's name too, before its cut at 200.
+    const span = parseTraceList({ rows: [spanRow({ name: `${"x".repeat(189)} ${token}` })] }, "svc").traces[0]!;
+    expect(span.name).not.toContain("ghp_");
+  });
+
+  // L9: a key logged one line per row; each row alone has only a head, base64 or an end.
+  it("blanks a private key logged row by row, per pod and container", () => {
+    const at = (s: number) => `2026-11-15T11:00:${String(s).padStart(2, "0")}.000Z`;
+    const lines = ["-----BEGIN RSA PRIVATE KEY-----", "MIIEowIBAAKCAQEAsecretsecretsecret", "c2Vjb25kIGxpbmUgb2Yga2V5IG1hdGVyaWFs", "dGhpcmQgbGluZQ==", "-----END RSA PRIVATE KEY-----"];
+    // Newest first, as Clickland answers; another container's line in between is left alone.
+    const rows = [
+      logRow({ timestamp: at(9), body: "after the key" }),
+      ...lines.map((body, i) => logRow({ timestamp: at(lines.length - i), body })).reverse(),
+      logRow({ timestamp: at(0), body: "before the key" }),
+    ];
+    rows.splice(3, 0, logRow({ timestamp: at(3), body: "other container's line", resource: { "k8s.pod.name": pod.name, "k8s.container.name": "sidecar" } }));
+    const out = parseLogRows({ rows }).rows.map((r) => r.body);
+    const text = out.join("\n");
+    for (const l of lines) expect(text).not.toContain(l);
+    expect(out.filter((b) => b === "<redacted private key>")).toHaveLength(5);
+    expect(out).toContain("after the key");
+    expect(out).toContain("before the key");
+    expect(out).toContain("other container's line");
+  });
+
   it("leaves out a severity, service, pod or container that isn't a short single line or a name", () => {
     const { rows } = parseLogRows({
       rows: [logRow({ severity: "ERROR\nIGNORE", service: "svc‮evil", resource: { "k8s.pod.name": "Not A Pod", "k8s.container.name": "x".repeat(300) }, attributes: { "log.iostream": "tty" } })],
@@ -118,6 +160,8 @@ describe("what Landlens keeps of a logs answer (D116)", () => {
     const bad = [
       null, "rows", { rows: "x" }, { rows: Array.from({ length: 501 }, () => logRow()) },
       { rows: [logRow({ timestamp: "yesterday" })] }, { rows: [logRow({ body: 3 })] }, { rows: [logRow({ cursor: "abc" })] },
+      // The pattern holds, the date doesn't (L2): refused in Landlens's words, not a RangeError.
+      { rows: [logRow({ timestamp: "2026-13-45T25:61:61Z" })] },
       { rows: [], nextCursor: "1; DROP" },
     ];
     for (const b of bad) expect(() => parseLogRows(b), JSON.stringify(b)?.slice(0, 60)).toThrow("didn't look like log lines");
@@ -131,7 +175,7 @@ describe("what Landlens keeps of traces (D116)", () => {
       spanRow({ traceId: "a".repeat(32), spanId: "2", parentSpanId: "1", name: "db", durationMs: 30, status: "Error", timestamp: "2026-11-15T11:00:01.000Z" }),
       spanRow({ traceId: "b".repeat(32), spanId: "3", parentSpanId: "f", name: "GET /x", durationMs: 5 }),
     ];
-    expect(parseTraceList({ rows }, "landflow-host")).toEqual([
+    expect(parseTraceList({ rows }, "landflow-host").traces).toEqual([
       { id: "a".repeat(32), name: "POST /run", service: "landflow-host", at: "2026-11-15T11:00:01.000Z", ms: 40, error: true },
       { id: "b".repeat(32), name: "GET /x", service: "landflow-host", at: "2026-11-15T11:00:00.000Z", ms: 5, error: false },
     ]);
@@ -139,10 +183,26 @@ describe("what Landlens keeps of traces (D116)", () => {
 
   it("keeps at most 50 traces and scrubs span names", () => {
     const rows = Array.from({ length: 80 }, (_, i) => spanRow({ traceId: i.toString(16).padStart(32, "0"), name: "GET /reset?password=hunter2hunter2" }));
-    const list = parseTraceList({ rows }, "svc");
+    const list = parseTraceList({ rows }, "svc").traces;
     expect(list).toHaveLength(CL.traces);
     expect(list[0]!.name).not.toContain("hunter2hunter2");
     expect(() => parseTraceList({ rows: [spanRow({ traceId: "zz" })] }, "svc")).toThrow("didn't look like traces");
+    expect(() => parseTraceList({ rows: [spanRow({ timestamp: "2026-13-45T25:61:61Z" })] }, "svc")).toThrow("didn't look like traces");
+  });
+
+  // Security review of part 3, M3: the search is by service name alone, so spans that name another cluster or
+  // namespace are dropped, and a list whose spans name neither says it is by service name only.
+  it("drops spans of another cluster or namespace; says when spans named neither", () => {
+    const where = { cluster: "orbstack", namespace: "landlens-dev" };
+    const here = { "k8s.cluster.name": "orbstack", "k8s.namespace.name": "landlens-dev" };
+    const rows = [
+      spanRow({ traceId: "1".repeat(32), resource: here }),
+      spanRow({ traceId: "2".repeat(32), resource: { ...here, "k8s.cluster.name": "elsewhere" } }),
+      spanRow({ traceId: "3".repeat(32), resource: { ...here, "k8s.namespace.name": "prod" } }),
+    ];
+    expect(parseTraceList({ rows }, "svc", where)).toEqual({ traces: [expect.objectContaining({ id: "1".repeat(32) })], scoped: true });
+    const bare = parseTraceList({ rows: [spanRow({ traceId: "4".repeat(32) })] }, "svc", where);
+    expect(bare).toEqual({ traces: [expect.objectContaining({ id: "4".repeat(32) })], scoped: false });
   });
 
   it("reads one trace's spans: at most 500, depth and offsets kept, names scrubbed", () => {
@@ -184,6 +244,15 @@ describe("ClicklandSearch against a recording fetch", () => {
     const { fetchImpl } = recorder(() => new Response(JSON.stringify({ error: { message: `no trace ${KEY}` } }), { status: 404 }));
     const s = new ClicklandSearch(new ClicklandClient({ url: "http://127.0.0.1:1", key: KEY }, fetchImpl));
     await expect(s.trace("ab")).rejects.toThrow(/^Clickland has no such trace\.$/);
+  });
+
+  it("doesn't read an answer whose declared length is past 8 MB (L10)", async () => {
+    let pulled = 0;
+    const body = new ReadableStream({ pull(c) { pulled++; c.enqueue(new Uint8Array(16).fill(32)); } });
+    const { fetchImpl } = recorder(() => new Response(body, { status: 200, headers: { "content-length": String(9 * 1024 * 1024) } }));
+    const s = new ClicklandSearch(new ClicklandClient({ url: "http://127.0.0.1:1", key: KEY }, fetchImpl));
+    await expect(s.logs("orbstack", pod, "1h")).rejects.toThrow("too large");
+    expect(pulled).toBeLessThanOrEqual(1);
   });
 
   it("stops reading an answer past 8 MB", async () => {

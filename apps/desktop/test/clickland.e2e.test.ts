@@ -154,7 +154,8 @@ describe.runIf(run)("Clickland's history in the IDE, against the fake Clickland"
   it("Errors only and the person's words narrow it in Clickland; a picked line can go to Claude", async () => {
     await drawer().getByRole("button", { name: "Errors" }).click();
     await expect.poll(() => lines().locator(".ll").count(), { timeout: 10_000 }).toBe(4);
-    expect(ck.searches.at(-1)!.query.endsWith(" level:error")).toBe(true);
+    // Fatal and critical lines count as errors too (review of part 3, L7).
+    expect(ck.searches.at(-1)!.query.endsWith(" (level:error OR level:fatal OR level:critical)")).toBe(true);
     await drawer().getByLabel("Find in Clickland's lines").fill(`three" OR k8s.namespace.name:"clickland-dev`);
     await page.keyboard.press("Enter");
     await expect.poll(() => drawer().locator(".logs-end").innerText().catch(() => ""), { timeout: 10_000 }).toMatch(/No lines from Clickland/);
@@ -176,7 +177,7 @@ describe.runIf(run)("Clickland's history in the IDE, against the fake Clickland"
     const u = new URL(opened[0]!);
     expect(u.origin).toBe(CONSOLE);
     expect(u.searchParams.get("signal")).toBe("logs");
-    expect(u.searchParams.get("query")).toMatch(/^k8s\.cluster\.name:"orbstack" k8s\.namespace\.name:"landlens-dev" k8s\.deployment\.name:"ledger-worker"( k8s\.container\.name:"worker")? level:error$/);
+    expect(u.searchParams.get("query")).toMatch(/^k8s\.cluster\.name:"orbstack" k8s\.namespace\.name:"landlens-dev" k8s\.deployment\.name:"ledger-worker"( k8s\.container\.name:"worker")? \(level:error OR level:fatal OR level:critical\)$/);
   });
 
   it("lists the service's traces and one trace's spans, failures marked (D118)", async () => {
@@ -195,7 +196,8 @@ describe.runIf(run)("Clickland's history in the IDE, against the fake Clickland"
     await drawer().getByRole("button", { name: "All traces" }).click();
     await drawer().getByRole("button", { name: "Errors" }).click();
     await drawer().getByText(/No failed traces from/).or(list.getByText("POST /ledger/close")).first().waitFor();
-    expect(ck.searches.at(-1)!.query).toBe(`service:"ledger-worker" status:error`);
+    // The old list can still be on screen when the wait above passes: wait for the search itself.
+    await expect.poll(() => ck.searches.at(-1)!.query, { timeout: 10_000 }).toBe(`service:"ledger-worker" status:error`);
   });
 
   it("a pod's History reads that pod only; ⌘K's Tab on it offers Open in Clickland", async () => {

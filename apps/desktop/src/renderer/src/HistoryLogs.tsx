@@ -8,11 +8,11 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } fr
 import type { AskContext } from "./AgentDock";
 import { api, type ApiError } from "./api";
 import { elide } from "./benchState";
-import { useClickland } from "./clickland";
+import { useClickland, useOpenInClickland } from "./clickland";
 import { Ic, MOD } from "./icons";
 import { ansi, plain } from "./logRows";
 import { copyText } from "./present";
-import { capForAsk } from "./TerminalView";
+import { historyAsk } from "./quotes";
 
 export const CL_RANGES: ClicklandRange[] = ["1h", "6h", "24h", "7d"];
 const KEEP = 2000;
@@ -99,14 +99,11 @@ export function HistoryLogs(props: {
   const askClaude = () => {
     const lines = chosen();
     if (!lines.length) return;
-    const { text } = capForAsk(lines);
-    props.onAsk({
-      label: `${lines.length} Clickland line${lines.length === 1 ? "" : "s"} · ${elide(props.scope.name, 18)}`, text, kind: "logs", from: "clickland",
-      source: `${props.scope.namespace}/${props.label}${container ? `, container ${container}` : ""}, from Clickland's history, last ${range}`,
-    });
+    props.onAsk(historyAsk(lines, { scope: props.scope, label: props.label, ...(container ? { container } : {}), range }));
     setPicked(undefined);
   };
-  const open = () => void api.invoke("clickland:open", { handle: props.handle, scope, signal: "logs", range, ...(errors ? { errors: true } : {}) }).catch(() => {});
+  const [openError, openClickland] = useOpenInClickland();
+  const open = () => openClickland({ handle: props.handle, scope, signal: "logs", range, ...(errors ? { errors: true } : {}) });
 
   return (
     <div className="logs-pane hist" aria-label="Logs from Clickland"
@@ -149,6 +146,7 @@ export function HistoryLogs(props: {
           {next && rows.length < KEEP ? <button className="link-btn more" disabled={state.loading} onClick={() => read(next)}>Load older</button> : null}
           {next && rows.length >= KEEP ? <div className="logs-end">The newest {KEEP.toLocaleString()} lines are shown; Open in Clickland for the rest.</div> : null}
           {rows.map((r) => <HLine key={r.key} row={r} stamps={stamps} days={days} many={many} colour={r.pod ? slot.get(r.pod) : undefined} picked={!!picked && r.key >= picked.from && r.key <= picked.to} onPick={pick} />)}
+          {openError ? <div className="logs-end" role="alert">{openError}</div> : null}
           {state.unavailable ? <div className="logs-end" role="status">{state.unavailable}</div>
             : state.error ? <div className="logs-end" role="alert">Couldn't read Clickland's history: {state.error}</div>
             : !rows.length && state.loading ? <div className="logs-end">Asking Clickland…</div>

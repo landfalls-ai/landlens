@@ -8,7 +8,7 @@
 // today's triage flow the dedup key is a hash of source, title and service, so a second send of one problem attaches
 // to the room the first opened.
 import type { FlowInput, Problem, TriageAlert, TriageSeverity } from "@landlens/contracts";
-import { redactText } from "./redact.js";
+import { redactText, scrubCut } from "./redact.js";
 
 export const TRIAGE = { description: 4_000, logLines: 40, logChars: 2_000, events: 8, pods: 5, yaml: 32 * 1024 } as const;
 
@@ -73,8 +73,9 @@ export function alertFor(p: Problem, cluster: string, choices: { severity: Triag
   let tail = "";
   if (choices.logs?.lines.length) {
     const l = choices.logs;
-    let text = l.lines.slice(-TRIAGE.logLines).map((x) => redactText(x)).join("\n");
-    if (text.length > TRIAGE.logChars) text = text.slice(text.length - TRIAGE.logChars);
+    // Scrubbed whole, then cut from the start (security review of part 3, M1): a private key logged across lines is
+    // taken whole, and a key the 40-line window opened or closed without its other end is taken too.
+    const text = scrubCut(l.lines.slice(-TRIAGE.logLines).join("\n"), TRIAGE.logChars, true).text;
     tail = `\nLast log lines of ${alertName(l.container)} in ${alertName(l.pod)}${l.source === "clickland" ? " (from Clickland's history)" : ""}:\n${text}`;
   }
   const head = redactText([p.detail, ...problemFacts(p)].join("\n"));

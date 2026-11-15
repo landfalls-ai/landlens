@@ -271,6 +271,8 @@ export class FakeClickland extends FakeBase {
         return this.mcp(req, res, body, "clickland", this.tools);
       case "/api/search":
         if (!known) return this.json(res, 401, { error: { code: "unauthorized", message: "a key with read" } });
+        // Clickland's requireScope("read") (apps/api/src/auth.ts): read, or admin, which has every scope.
+        if (!readable(known.scopes)) return this.json(res, 403, { error: { code: "forbidden", message: "needs read" } });
         if (req.method !== "POST") return this.json(res, 405, {});
         return this.search(res, body);
       case "/v1/traces":
@@ -282,6 +284,7 @@ export class FakeClickland extends FakeBase {
       default:
         if (url.pathname.startsWith("/api/traces/") && req.method === "GET") {
           if (!known) return this.json(res, 401, { error: { code: "unauthorized", message: "a key with read" } });
+          if (!readable(known.scopes)) return this.json(res, 403, { error: { code: "forbidden", message: "needs read" } });
           return this.trace(res, url.pathname.slice("/api/traces/".length));
         }
         return this.json(res, 404, { error: "not found" });
@@ -298,12 +301,17 @@ export type ClSpanRow = {
 /** A cursor as Clickland's (nanoseconds since the epoch), kept apart for rows at the same millisecond. */
 const cursorOf = (ts: string, n: number) => (BigInt(Date.parse(ts)) * 1_000_000n + BigInt(n % 1_000_000)).toString();
 
+/** Whether a key's scopes let it search (Clickland: read, or admin). */
+const readable = (scopes: string[]) => scopes.includes("read") || scopes.includes("admin");
+
 type SearchTerm = { field: string | null; value: string };
+/** Landlens's one fixed group (clickland-search.ts ERRORS_TERM): Errors only for logs. */
+const ERRORS_GROUP = "(level:error OR level:fatal OR level:critical)";
 /**
  * A search as Clickland's lexer reads it (clickland/libs/query/src/parse.ts: whitespace splits, `"…"` is a phrase with
  * `\` escaping the next character, `field:"…"` keeps its quotes, AND/OR/NOT, `-` and brackets are operators), but only
- * what Landlens may send is accepted: terms ANDed by adjacency, each a quoted `field:"value"`, the bare `level:error`
- * and `status:error`, and one phrase. Anything else (an operator, a bracket, a wildcard, an unquoted value) is refused,
+ * what Landlens may send is accepted: terms ANDed by adjacency, each a quoted `field:"value"`, the fixed group
+ * `(level:error OR level:fatal OR level:critical)`, the bare `level:error` and `status:error`, and one phrase. Anything else (an operator, a bracket, a wildcard, an unquoted value) is refused,
  * so a test sees at once when the person's words got out of their quotes.
  */
 export function landlensTerms(input: string): SearchTerm[] {
@@ -325,6 +333,11 @@ export function landlensTerms(input: string): SearchTerm[] {
   while (i < input.length) {
     const c = input[i]!;
     if (/\s/.test(c)) { i++; continue; }
+    if (input.startsWith(ERRORS_GROUP, i)) {
+      out.push({ field: "level", value: "error|fatal|critical" });
+      i += ERRORS_GROUP.length;
+      continue;
+    }
     if (c === "(" || c === ")" || (c === "-" && (i === 0 || /[\s(]/.test(input[i - 1]!)))) throw new Error(`Landlens sends no operator: ${c}`);
     if (c === '"') {
       if (++phrases > 1) throw new Error("Landlens sends one phrase at most");
@@ -356,7 +369,7 @@ function matchTerm(signal: "logs" | "traces", r: ClLogRow | ClSpanRow, t: Search
     return text.toLowerCase().includes(t.value.toLowerCase());
   }
   if (t.field === "service" || t.field === "service.name") return r.service === t.value;
-  if (signal === "logs" && (t.field === "level" || t.field === "severity")) return (r as ClLogRow).severity.toLowerCase() === t.value.toLowerCase();
+  if (signal === "logs" && (t.field === "level" || t.field === "severity")) return t.value.toLowerCase().split("|").includes((r as ClLogRow).severity.toLowerCase());
   if (signal === "traces" && t.field === "status") return (r as ClSpanRow).status.toLowerCase() === t.value.toLowerCase();
   return r.resource[t.field] === t.value || r.attributes[t.field] === t.value;
 }

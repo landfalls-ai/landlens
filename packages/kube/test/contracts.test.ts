@@ -97,3 +97,20 @@ describe("IPC contracts", () => {
     expect(channels["cluster:connect"].safeParse({ context: "x", kubeconfig: "/tmp/k" }).data).not.toHaveProperty("kubeconfig");
   });
 });
+
+// Security review of wave 7 part 3, L10: Clickland's channels refuse what main would refuse again (the second line).
+describe("Clickland's history channels", () => {
+  const scope = { kind: "pod", namespace: "landlens-dev", name: "ledger-worker-1" };
+  const base = { handle: "handle-0001", scope, range: "1h" };
+  it("refuse a filter past 200 characters or with a line break, a scope name with a quote, an uppercase trace id", () => {
+    expect(channels["clickland:logs"].safeParse({ ...base, filter: "x".repeat(200) }).success).toBe(true);
+    expect(channels["clickland:logs"].safeParse({ ...base, filter: "x".repeat(201) }).success).toBe(false);
+    expect(channels["clickland:logs"].safeParse({ ...base, filter: "a\nb" }).success).toBe(false);
+    expect(channels["clickland:logs"].safeParse({ ...base, scope: { ...scope, name: `x" OR y` } }).success).toBe(false);
+    expect(channels["clickland:traces"].safeParse({ ...base, scope: { ...scope, namespace: `a"b` } }).success).toBe(false);
+    expect(channels["clickland:trace"].safeParse({ handle: "handle-0001", id: "ab" }).success).toBe(true);
+    expect(channels["clickland:trace"].safeParse({ handle: "handle-0001", id: "AB" }).success).toBe(false);
+    expect(channels["clickland:open"].safeParse({ ...base, signal: "logs", trace: "ABC" }).success).toBe(false);
+    expect(channels["clickland:open"].safeParse({ ...base, signal: "logs", scope: { ...scope, container: "Worker" } }).success).toBe(false);
+  });
+});

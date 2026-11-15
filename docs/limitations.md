@@ -210,16 +210,25 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Landflow's side, and a flow's output can say anything (it reaches a prompt only quoted, under the hold). A send Landflow holds (debounced or batched) has no run, so it
   isn't remembered and leaves no chip. A problem's recovery isn't sent. Run a Landflow flow is a button in the object drawer's header (there is no ⋯ menu there).
 - **Clickland's history in the IDE** (wave 7 part 3, [metrics.md](metrics.md#logs-and-traces-from-clickland)).
-  Traces are found by service name only (the pod's `app.kubernetes.io/name` or `app` label, else the workload's name),
-  across namespaces and clusters (a workload's spans carry Kubernetes names only if it sends them, so Landlens doesn't
-  filter on them); two workloads with the same label share a list. A workload's History filters on `k8s.deployment.name` (or StatefulSet, DaemonSet),
+  Traces are searched by service name only (the pod's `app.kubernetes.io/name` or `app` label, which the workload's
+  author writes, else the workload's name). Spans that name another cluster or namespace (`k8s.cluster.name`,
+  `k8s.namespace.name`) are dropped, but spans that name neither, as Clickland's local spans do, are listed from any
+  cluster and namespace with that service name: the tab says "By service name, in any cluster". A workload's History
+  filters on `k8s.deployment.name` (or StatefulSet, DaemonSet),
   which Clickland's collector sets for pods it owns; a bare ReplicaSet, Job or CronJob has no History. **Errors**
-  is Clickland's severity (`level:error`), so a workload that logs everything at INFO shows no errors, though the
+  is Clickland's severity (error, fatal or critical), so a workload that logs everything at INFO shows no errors, though the
   failure-line rule still colours its lines. History pages 200 lines and keeps 2,000; the rest is in Clickland's
-  console. A trace's span list is a plain list with a duration bar, no waterfall, at most 500 spans. The doctor's
-  fallback reads only when the kubelet has neither run, from the last 7 days. Open in Clickland needs the console's
+  console. A private key logged one line per row is blanked only within one page (a key across **Load older** keeps
+  the rows of the older page before its head), and Live logs aren't blanked that way: a quote is scrubbed again, and a
+  quote that opens or closes a key without its other end is. History needs `get pods/log` in the namespace, though
+  Clickland's own console shows the same lines to whoever holds the key (Clickland's keys have no cluster or
+  namespace limit). A question holds autonomy for a quoted Clickland line found by its time, or by its body from 16
+  characters; a shorter line picked without its time is found only by its quote's head. A trace's span list is a plain list with a duration bar, no waterfall, at most 500 spans. The doctor's
+  fallback reads only when the kubelet has neither run, from the last 7 days (from the pod's creation when it still
+  exists). Open in Clickland needs the console's
   address typed in **Connect Clickland**; Clickland names no console of its own. The doctor's Clickland fallback is
-  checked in unit tests, not on the built app.
+  checked in unit tests, not on the built app. The live checks run with Clickland's bootstrap key (`admin`), since a
+  read key can't be made without writing to Clickland; that `read` is enough is checked against the fake.
 - **Clickland's address is an origin now** (wave 7, D102). Before wave 7 a Clickland behind a path prefix
   (`https://host/clickland`) was taken and stored; now **Connect Clickland** and its **Test** refuse an address with a
   path, and a stored one keeps working for graphs only until it is saved again, while the family's who-am-I goes to

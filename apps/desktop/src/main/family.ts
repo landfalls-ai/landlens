@@ -211,7 +211,8 @@ export class FamilyService {
     const keyOrigin = cfg?.origin;
     const who = cfg ? this.store.clicklandWho(keyOrigin) : undefined;
     const t = this.transient.clickland;
-    const consoleUrl = this.o.clickland.consoleUrl();
+    // Only a console this build would open (review of part 3, L3): the window offers Open in Clickland when main will.
+    const consoleUrl = this.clicklandConsole();
     // A key nobody has asked about yet (saved before wave 7, or just now): ask once, in the background.
     if (cfg && keyOrigin && !who && this.clicklandAsked !== keyOrigin) void this.readClickland().catch(() => {});
     const writes = !!who && who.scopes.some((s) => s !== "read" && s !== "usage:read");

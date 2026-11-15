@@ -41,8 +41,10 @@ describe.runIf(run)("Clickland's history for landlens-dev (live, reads only)", (
   });
 
   it("lists landflow-host's traces and reads one", async () => {
-    const list = await s.traces("landflow-host", "24h");
+    const { traces: list, scoped } = await s.traces("landflow-host", "24h", false, { cluster: "orbstack", namespace: "landflow-dev" });
     expect(list.length).toBeGreaterThan(0);
+    // landflow-host's spans carry no k8s.* attributes (checked live), so the list is by service name only, and says so.
+    expect(scoped).toBe(false);
     const t = await s.trace(list[0]!.id);
     expect(t.spans.length).toBeGreaterThan(0);
     expect(t.spans.some((x) => x.service === "landflow-host")).toBe(true);

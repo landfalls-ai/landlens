@@ -5,6 +5,13 @@ import type { ClicklandScope, KubeObject } from "@landlens/contracts";
 import { logsQuery } from "@landlens/metrics";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClicklandHistory, serviceOf, type HistoryDeps } from "../src/main/clickland-history";
+import { AgentService, type AutonomyHooks } from "../src/main/agent";
+import { SiblingText } from "../src/main/sibling-text";
+import { plain } from "../src/renderer/src/logRows";
+import { historyAsk, withQuotes } from "../src/renderer/src/quotes";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ClicklandSettingsStore } from "../src/main/clickland-settings";
 import { FamilyService } from "../src/main/family";
 import { CK_READ, FakeClickland } from "../../../packages/connections/test/fake-family";
@@ -33,11 +40,13 @@ beforeEach(async () => {
 });
 afterEach(() => ck.stop());
 
-function make(o: { object?: (ref: { name: string }) => Promise<KubeObject | undefined>; known?: boolean; console?: string; noKey?: boolean } = {}) {
+function make(o: { object?: (ref: { name: string }) => Promise<KubeObject | undefined>; known?: boolean; console?: string; noKey?: boolean; logs?: boolean; cluster?: string; fetch?: typeof fetch } = {}) {
   const asked: { name: string }[] = [];
+  const reviews: string[] = [];
+  const served: { at?: string; body: string }[] = [];
   const deps: HistoryDeps = {
     key: () => (o.noKey ? undefined : { origin: ck.origin, key: CK_READ }),
-    clusterName: () => "orbstack",
+    clusterName: () => o.cluster ?? "orbstack",
     context: (h) => {
       if (h !== HANDLE) throw Object.assign(new Error("cluster is not connected"), { status: 404 });
       return "orbstack";
@@ -45,8 +54,11 @@ function make(o: { object?: (ref: { name: string }) => Promise<KubeObject | unde
     object: async (_h, ref) => (asked.push(ref), o.object ? o.object(ref) : ({ metadata: { name: ref.name, namespace: ref.namespace, uid: "u", labels: { app: "ledger-worker" } } } as KubeObject)),
     known: () => !!o.known,
     console: () => o.console,
+    canReadLogs: async (_h, ns) => (reviews.push(ns), o.logs ?? true),
+    served: (rows) => void served.push(...rows),
+    ...(o.fetch ? { fetch: o.fetch } : {}),
   };
-  return { h: new ClicklandHistory(deps), asked };
+  return { h: new ClicklandHistory(deps), asked, reviews, served };
 }
 
 describe("what the window may ask Clickland about (D117)", () => {
@@ -154,7 +166,7 @@ describe("traces (D115, D118)", () => {
     await expect(h.trace({ handle: HANDLE, id: "a".repeat(32) })).rejects.toMatchObject({ status: 404 });
     expect(ck.requests.some((r) => r.path.startsWith("/api/traces/"))).toBe(false);
     const list = await h.traces({ handle: HANDLE, scope: pod, range: "1h" });
-    expect(list).toEqual({ service: "ledger-worker", traces: [{ id: "a".repeat(32), name: "POST /run", service: "ledger-worker", at: expect.any(String), ms: 40, error: true }] });
+    expect(list).toEqual({ service: "ledger-worker", scoped: false, traces: [{ id: "a".repeat(32), name: "POST /run", service: "ledger-worker", at: expect.any(String), ms: 40, error: true }] });
     const t = await h.trace({ handle: HANDLE, id: "a".repeat(32) });
     expect("spans" in t && t.spans.map((s) => `${s.depth} ${s.name} ${s.error}`)).toEqual(["0 POST /run false", "1 db query true"]);
     // Another cluster's list doesn't count.
@@ -181,9 +193,51 @@ describe("Open in Clickland (D118, security row 10)", () => {
 
   it("needs a console address, and asks nothing without one", async () => {
     const a = ask();
-    await expect(make().h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, a.ask(true))).rejects.toMatchObject({ status: 409 });
-    await expect(make({ console: "http://clickland.test:4711" }).h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, a.ask(true))).rejects.toMatchObject({ status: 409 });
+    await expect(make().h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, a.ask(true))).rejects.toMatchObject({ status: 409, message: expect.stringContaining("console address first") });
     expect(a.seen.confirm).toEqual([]);
+  });
+
+  // Review of part 3, L3: the console FamilyService gives already passed this build's rule (its listed http hosts);
+  // main doesn't check it again without them, and a name Clickland can't be asked about is a 409 in its own words.
+  it("opens a console this build's hosts allow; a cluster name that isn't a label value is a 409 sentence", async () => {
+    const crypto = fakeCrypto(true);
+    const store = new ClicklandSettingsStore(tempFile("clickland.json"), crypto);
+    store.set({ url: "http://clickland.test:4730", key: CK_READ });
+    store.setConsole("http://clickland.test:4711");
+    const fam = new FamilyService({ file: tempFile("family.json"), crypto, clickland: store, overrides: { httpHosts: ["clickland.test"] }, openExternal: async () => {}, push: () => {} });
+    expect(fam.info("clickland").console).toBe("http://clickland.test:4711");
+    const a = ask();
+    expect(await make({ console: fam.clicklandConsole() }).h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, a.ask(true))).toEqual({ opened: true });
+    expect(new URL(a.seen.opened[0]!).host).toBe("clickland.test:4711");
+    // FamilyInfo carries no console this build won't open, so the window offers no button main would refuse.
+    const off = new FamilyService({ file: tempFile("family.json"), crypto, clickland: store, overrides: { httpHosts: [] }, openExternal: async () => {}, push: () => {} });
+    expect(off.info("clickland").console).toBeUndefined();
+    const arn = make({ console: "http://127.0.0.1:4711", cluster: "arn:aws:eks:eu-west-1:123:cluster/x" });
+    await expect(arn.h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, a.ask(true))).rejects.toMatchObject({
+      status: 409, message: "Landlens can't build a Clickland search for this cluster's name or this object.",
+    });
+  });
+
+  // L4: the window can set the console's address, so the dialog says what main knows: it is the saved address.
+  it("the dialog calls it the address saved as Clickland's console, and shows its host", async () => {
+    const a = ask();
+    await make({ console: "https://evil.example" }).h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, a.ask(false));
+    expect(a.seen.confirm[0]!.detail.startsWith("The address saved as Clickland's console (evil.example):\n")).toBe(true);
+    expect(a.seen.confirm[0]!.detail).not.toContain("Clickland's console, at");
+  });
+
+  // L5: one dialog per cluster at a time.
+  it("two opens at once show one dialog", async () => {
+    let release!: (v: boolean) => void;
+    const shown: string[] = [];
+    const slow = { confirm: (q: { message: string }) => (shown.push(q.message), new Promise<boolean>((r) => (release = r))), openExternal: async () => {} };
+    const { h } = make({ console: "http://127.0.0.1:4711" });
+    const first = h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, slow);
+    await expect.poll(() => shown.length).toBe(1);
+    await expect(h.open({ handle: HANDLE, scope: pod, signal: "logs", range: "1h" }, slow)).rejects.toMatchObject({ status: 409 });
+    release(false);
+    expect(await first).toEqual({ opened: false });
+    expect(shown).toHaveLength(1);
   });
 
   it("builds the URL itself on the console's origin, shows its host, and opens it only on Open", async () => {
@@ -211,11 +265,114 @@ describe("the doctor's fallback (D118)", () => {
   it("gives the last lines of a pod's container, oldest first, scrubbed; nothing without a key", async () => {
     const { h } = make();
     const got = await h.lastLines(HANDLE, { namespace: "landlens-dev", pods: ["gone-pod-1", POD], container: "worker" });
-    expect(got).toEqual({ pod: POD, lines: ["starting ledger worker", "FATAL: cannot parse LEDGER_SHARDS=three (want a number) password=<redacted>"], cut: false });
+    expect(got).toEqual({ pod: POD, lines: ["starting ledger worker", "FATAL: cannot parse LEDGER_SHARDS=three (want a number) password=<redacted>"], cut: false, newest: expect.any(String) });
     expect(ck.searches.map((s) => s.query)).toEqual([
       logsQuery("orbstack", { kind: "pod", namespace: "landlens-dev", name: "gone-pod-1", container: "worker" }),
       logsQuery("orbstack", { kind: "pod", namespace: "landlens-dev", name: POD, container: "worker" }),
     ]);
     expect(await make({ noKey: true }).h.lastLines(HANDLE, { namespace: "landlens-dev", pods: [POD], container: "worker" })).toBeUndefined();
+  });
+});
+
+// Security review of wave 7 part 3: one test per finding that main enforces.
+describe("review of part 3", () => {
+  // L6: the live runs use Clickland's bootstrap key (admin); that read alone is enough is proven here, against the
+  // fake, which answers a search only for a key with read (or admin), as Clickland's requireScope does.
+  it("the key these tests use has only read, and a key without read gets nothing", async () => {
+    expect(ck.keys.get(CK_READ)!.scopes).toEqual(["read"]);
+    expect(await make().h.logs({ handle: HANDLE, scope: pod, range: "1h" })).toMatchObject({ source: "clickland" });
+    const NOREAD = `ck_${"N".repeat(32)}`;
+    ck.keys.set(NOREAD, { name: "notes-bot", role: "editor", scopes: ["notes:write"] });
+    const { h: base } = make();
+    const h = new ClicklandHistory({ ...(base as unknown as { deps: HistoryDeps }).deps, key: () => ({ origin: ck.origin, key: NOREAD }) });
+    expect(await h.logs({ handle: HANDLE, scope: pod, range: "1h" })).toEqual({ unavailable: expect.objectContaining({ code: "clickland-unauthorized" }) });
+  });
+
+  // L1: History shows a pod's lines only to a person the cluster lets read pods/log there.
+  it("refuses History's lines with 403 when the access review says no, before anything is sent", async () => {
+    const { h, reviews } = make({ logs: false });
+    await expect(h.logs({ handle: HANDLE, scope: pod, range: "1h" })).rejects.toMatchObject({ status: 403, message: expect.stringContaining("can't read pods' logs") });
+    expect(reviews).toEqual(["landlens-dev"]);
+    expect(ck.searches).toEqual([]);
+    // Traces aren't pods/log: they still read.
+    await expect(h.traces({ handle: HANDLE, scope: pod, range: "1h" })).resolves.toMatchObject({ service: "ledger-worker" });
+  });
+
+  // M3: spans that name another cluster or namespace aren't listed, so their trace can't be read either.
+  it("drops another cluster's spans and refuses their trace; spans with no k8s.* are listed, unscoped", async () => {
+    ck.addSpan({ timestamp: minutesAgo(5), name: "GET /elsewhere", service: "ledger-worker", traceId: "e".repeat(32), spanId: "9", resource: { "k8s.cluster.name": "elsewhere", "k8s.namespace.name": "landlens-dev" } });
+    ck.addSpan({ timestamp: minutesAgo(5), name: "GET /prod", service: "ledger-worker", traceId: "d".repeat(32), spanId: "8", resource: { "k8s.cluster.name": "orbstack", "k8s.namespace.name": "prod" } });
+    const { h } = make();
+    const list = await h.traces({ handle: HANDLE, scope: pod, range: "1h" });
+    if (!("traces" in list)) throw new Error("unavailable");
+    expect(list.traces.map((t) => t.id)).toEqual(["a".repeat(32)]);
+    expect(list.scoped).toBe(false);
+    await expect(h.trace({ handle: HANDLE, id: "e".repeat(32) })).rejects.toMatchObject({ status: 404 });
+    await expect(h.trace({ handle: HANDLE, id: "d".repeat(32) })).rejects.toMatchObject({ status: 404 });
+    ck.spans.length = 0;
+    ck.addSpan({ timestamp: minutesAgo(5), name: "GET /here", service: "ledger-worker", traceId: "c".repeat(32), spanId: "7", resource: { "k8s.cluster.name": "orbstack", "k8s.namespace.name": "landlens-dev" } });
+    expect(await h.traces({ handle: HANDLE, scope: pod, range: "1h" })).toMatchObject({ scoped: true, traces: [{ id: "c".repeat(32) }] });
+  });
+
+  // L5: the doctor's fallback counts against the four reads, and gives way without a request when they are taken.
+  it("with four History reads held, lastLines answers nothing and sends nothing", async () => {
+    const held: (() => void)[] = [];
+    const { h } = make({ fetch: (async (u: string | URL | Request, i?: RequestInit) => (await new Promise<void>((r) => held.push(r)), fetch(u, i))) as typeof fetch });
+    const reads = [0, 1, 2, 3].map(() => h.logs({ handle: HANDLE, scope: pod, range: "1h" }));
+    await expect.poll(() => held.length).toBe(4);
+    expect(await h.lastLines(HANDLE, { namespace: "landlens-dev", pods: [POD], container: "worker" })).toBeUndefined();
+    expect(held).toHaveLength(4);
+    for (const r of held) r();
+    await Promise.all(reads);
+  });
+
+  // L7: Errors only keeps a FATAL line.
+  it("Errors only returns fatal and critical lines too", async () => {
+    ck.addLog({ timestamp: minutesAgo(20), body: "panic: out of shards\n", severity: "FATAL", service: "ledger-worker", resource: res(POD), attributes: attrs });
+    const out = await make().h.logs({ handle: HANDLE, scope: pod, range: "1h", errors: true });
+    expect("rows" in out && out.rows.map((r) => r.severity)).toEqual(["FATAL", "ERROR"]);
+  });
+
+  // L8: a pod that exists is searched from its creation, so another incarnation's lines (db-0) aren't its evidence.
+  it("the fallback doesn't bring an older incarnation's lines, and says when its newest line was", async () => {
+    ck.addLog({ timestamp: new Date(Date.now() - 6 * 86_400_000).toISOString(), body: "old db-0 crashed\n", resource: { ...res("db-0", "db") } });
+    const created = new Date(Date.now() - 3_600_000).toISOString();
+    const withPod = make({ object: async (ref) => ({ metadata: { name: ref.name, uid: "u", creationTimestamp: created } }) as KubeObject });
+    expect(await withPod.h.lastLines(HANDLE, { namespace: "landlens-dev", pods: ["db-0"], container: "db" })).toBeUndefined();
+    const gone = await make({ object: async () => undefined }).h.lastLines(HANDLE, { namespace: "landlens-dev", pods: ["db-0"], container: "db" });
+    expect(gone).toMatchObject({ pod: "db-0", lines: ["old db-0 crashed"], newest: expect.stringMatching(/Z$/) });
+  });
+
+  // M2: main decides the hold from what it served, not from the window's flag or head.
+  it("a question quoting History's lines holds autonomy in main, whatever head the window gave it", async () => {
+    const text = new SiblingText();
+    const h = new ClicklandHistory({ ...(make() as unknown as { h: { deps: HistoryDeps } }).h.deps, served: (rows) => text.served("clickland", rows) });
+    const out = await h.logs({ handle: HANDLE, scope: pod, range: "1h" });
+    if (!("rows" in out)) throw new Error("unavailable");
+    const held: [string, string][] = [];
+    const hooks: AutonomyHooks = { check: async () => ({ ok: false }), permit: () => {}, states: () => [], familyQuoted: (s, sib) => void held.push([s, sib]) };
+    const svc = new AgentService({ frontDoor: {} as never, clusters: { onGone: () => {} } as never, sessionsDir: mkdtempSync(join(tmpdir(), "landlens-agent-")), push: (() => {}) as never, mcp: {} as never, autonomy: hooks, siblingText: text });
+    const sent: string[] = [];
+    (svc as unknown as { sessions: Map<string, unknown> }).sessions.set("acp-1", { id: "acp-1", handle: HANDLE, context: "orbstack" });
+    (svc as unknown as { host: unknown }).host = { init: {}, prompt: async (_id: string, blocks: { text: string }[]) => (sent.push(blocks[0]!.text), { stopReason: "end_turn" }) };
+    // The lines as the History view picks them (time, plain text), quoted as live logs: no flag, no Clickland head.
+    const picked = out.rows.map((r) => `${r.at} ${plain(r.body)}`);
+    const q = withQuotes("Why?", [{ kind: "logs", label: "2 log lines", source: "landlens-dev/ledger-worker", text: picked.join("\n") }]);
+    expect(q).toContain("Log lines I selected");
+    await svc.prompt("acp-1", q);
+    expect(sent).toHaveLength(1);
+    expect(held).toEqual([["acp-1", "clickland"]]);
+    // Without the times, the bodies alone; and with only a short line, its time.
+    held.length = 0;
+    await svc.prompt("acp-1", withQuotes("Why?", [{ kind: "terminal", label: "x", text: plain(out.rows[0]!.body) }]));
+    expect(held).toEqual([["acp-1", "clickland"]]);
+    // The kubelet's own lines, never served from Clickland: not held.
+    held.length = 0;
+    await svc.prompt("acp-1", withQuotes("Why?", [{ kind: "logs", label: "1 log line", source: "landlens-dev/x", text: "2026-11-15T10:00:00.123456789Z a line Clickland never sent" }]));
+    expect(held).toEqual([]);
+    // And the view's own context (historyAsk) still writes the Clickland head.
+    held.length = 0;
+    await svc.prompt("acp-1", withQuotes("Why?", [historyAsk(picked, { scope: pod, label: "pod ledger-worker", range: "1h" })]));
+    expect(held).toEqual([["acp-1", "clickland"]]);
   });
 });

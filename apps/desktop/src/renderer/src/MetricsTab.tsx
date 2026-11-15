@@ -7,7 +7,7 @@ import { TimeChart } from "./charts/TimeChart";
 import { format } from "./charts/scale";
 import { useMetrics } from "./metrics";
 import { api } from "./api";
-import { clicklandScope, useClickland } from "./clickland";
+import { clicklandScope, useClickland, useOpenInClickland } from "./clickland";
 import { MetricsSource, MetricsUnavailable, RangeSwitch } from "./MetricsNotice";
 
 const SCOPES: Record<string, MetricsScope> = { "/pods": "pod", "apps/deployments": "deployment", "apps/statefulsets": "statefulset", "apps/daemonsets": "daemonset" };
@@ -23,7 +23,8 @@ export function MetricsTab(props: { handle: string; type: ResourceType; object: 
   // Open in Clickland (D118): its logs search for this object, when a console address is set.
   const ck = useClickland();
   const cl = ck.console ? clicklandScope(props.type.kind, o.metadata.namespace, o.metadata.name) : undefined;
-  const openIn = cl ? () => void api.invoke("clickland:open", { handle: props.handle, scope: cl, signal: "logs", range }).catch(() => {}) : undefined;
+  const [openError, openClickland] = useOpenInClickland();
+  const openIn = cl ? () => openClickland({ handle: props.handle, scope: cl, signal: "logs", range }) : undefined;
 
   let body;
   if (error && !data) body = <p className="tone-bad small" role="alert">Couldn't read metrics: {error.message}</p>;
@@ -61,6 +62,7 @@ export function MetricsTab(props: { handle: string; type: ResourceType; object: 
         <span className="grow" />
         <RangeSwitch value={range} onChange={setRange} label="Metrics range" />
       </div>
+      {openError ? <p className="tone-bad small" role="alert">{openError}</p> : null}
       {body}
     </div>
   );

@@ -18,6 +18,18 @@ const crash = (over: Partial<Problem> = {}): Problem => ({
   ...over,
 });
 
+// Security review of part 3, M1: the log lines are scrubbed whole before they are cut to 2,000 characters, so a key
+// logged across lines, or one the cut would split, never goes to Landflow.
+describe("the alert's log lines are scrubbed before they are cut", () => {
+  it("a key logged line by line, and a key whose head the 2,000-character cut drops", () => {
+    const keyLines = ["-----BEGIN RSA PRIVATE KEY-----", ...Array.from({ length: 30 }, (_, i) => `MIIEowIBAAKCAQEA${String(i).padStart(48, "Q")}`), "-----END RSA PRIVATE KEY-----"];
+    const a = alertFor(crash(), "orbstack", { severity: "sev2", logs: { container: "worker", pod: "ledger-worker-1", lines: ["starting", ...keyLines, "FATAL: done"] } });
+    expect(a.description).not.toContain("MIIEowIBAAKCAQEA");
+    expect(a.description).toContain("<redacted private key>");
+    expect(a.description).toContain("FATAL: done");
+  });
+});
+
 describe("the alert (D120)", () => {
   it("is Landflow's Generic shape, with the problem's names and a stable id", () => {
     const a = alertFor(crash(), "orbstack", { severity: "sev2" });

@@ -64,7 +64,7 @@ export type DoctorDeps = {
    * Clickland's last lines of a pod's container (wave 7 D118), for when the kubelet has neither run; undefined when
    * Clickland isn't connected or has none. Bodies come scrubbed (clickland-history.ts).
    */
-  history?: (handle: string, q: { namespace: string; pods: string[]; container: string }) => Promise<{ pod: string; lines: string[]; cut: boolean } | undefined>;
+  history?: (handle: string, q: { namespace: string; pods: string[]; container: string }) => Promise<{ pod: string; lines: string[]; cut: boolean; newest?: string } | undefined>;
 };
 
 export class DoctorService {
@@ -165,7 +165,7 @@ export class DoctorService {
     const container = p.container.replace(/^init:/, "");
     const got = await this.deps.history(handle, { namespace: p.namespace, pods: p.pods.slice(0, DOCTOR.log.pods), container }).catch(() => undefined);
     if (!got || stopped.aborted) return ev;
-    return { log: { pod: got.pod, container, previous: false, lines: got.lines.slice(-DOCTOR.log.tailLines), cut: got.cut || got.lines.length > DOCTOR.log.tailLines, source: "clickland" } };
+    return { log: { pod: got.pod, container, previous: false, lines: got.lines.slice(-DOCTOR.log.tailLines), cut: got.cut || got.lines.length > DOCTOR.log.tailLines, source: "clickland", ...(got.newest ? { newest: got.newest } : {}) } };
   }
 
   private async readKubelet(handle: string, p: Problem, stopped: AbortSignal): Promise<DoctorEvidence> {

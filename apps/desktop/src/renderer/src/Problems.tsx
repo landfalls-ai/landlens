@@ -420,7 +420,7 @@ function Evidence({ p, state, gone, now, onAgain, onFull }: {
       <div className="logs-note">
         <Ic icon={log.source === "clickland" ? Database : ScrollText} size={13} />
         {log.source === "clickland"
-          ? <span><b>From Clickland's history</b>: <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}. The kubelet no longer has its runs.</span>
+          ? <span><b>From Clickland's history</b>: <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{log.newest ? <>, the newest at <b>{new Date(log.newest).toLocaleString([], { dateStyle: "medium", timeStyle: "medium" })}</b></> : null}. The kubelet no longer has its runs.</span>
           : <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{state.at ? `, read ${when(new Date(state.at).toISOString(), now)}` : ""}</span>}
         <span className="grow" />
         {again}

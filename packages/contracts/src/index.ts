@@ -210,7 +210,7 @@ export const ClicklandLogsRequest = z.object({
   range: ClicklandRange,
   /** Words to find, sent as one quoted phrase, never as search syntax. One line. */
   filter: z.string().max(200).regex(/^[^\u0000-\u001f\u007f]*$/, "one line").optional(),
-  /** "Errors only": the fixed term `level:error`. */
+  /** "Errors only": the fixed error levels (error, fatal, critical). */
   errors: z.boolean().optional(),
   before: ClicklandCursor.optional(),
 });
@@ -231,7 +231,11 @@ export type ClicklandLogs =
   | { unavailable: MetricsReason };
 /** One trace of a service: its top span of that service, when, how long, and whether any of its spans failed. */
 export type ClTrace = { id: string; name: string; service: string; at: string; ms: number; error: boolean };
-export type ClicklandTraces = { traces: ClTrace[]; service: string } | { unavailable: MetricsReason };
+/**
+ * `scoped`: every span listed named the window's cluster and namespace (k8s.cluster.name, k8s.namespace.name); spans
+ * that named another were dropped. False: the list is by service name, in any cluster (security review of part 3, M3).
+ */
+export type ClicklandTraces = { traces: ClTrace[]; service: string; scoped: boolean } | { unavailable: MetricsReason };
 /** A span of one trace, for the plain span list (no waterfall): depth, start offset and duration on one scale. */
 export type ClSpan = { id: string; name: string; service: string; kind?: string; depth: number; offsetMs: number; ms: number; error: boolean };
 export type ClicklandTrace = { spans: ClSpan[]; ms: number; cut: boolean } | { unavailable: MetricsReason };
@@ -1277,9 +1281,10 @@ export type DoctorReport = { at: string; problems: Problem[]; cut: boolean; chec
 export type DoctorEvidence = {
   /**
    * `source: "clickland"`: the kubelet had neither run, so the lines are Clickland's history of that pod and container
-   * (wave 7 D118), oldest first, scrubbed before they crossed.
+   * (wave 7 D118), oldest first, scrubbed before they crossed; `newest` is the time of the last of them (review of part
+   * 3, L8: a pod name can be another incarnation's, so the note shows when).
    */
-  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean; source?: "clickland" } | { error: string };
+  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean; source?: "clickland"; newest?: string } | { error: string };
 };
 export type HealthEvent = {
   at: string;
