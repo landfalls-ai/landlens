@@ -10,6 +10,7 @@ import { ClicklandSettingsStore } from "./clickland-settings";
 import { PrometheusChoices } from "./prometheus-choice";
 import { registerIpc } from "./ipc";
 import { DoctorService } from "./doctor";
+import { ClicklandHistory } from "./clickland-history";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { McpService, moveClicklandServer } from "./mcp";
@@ -56,7 +57,9 @@ async function start() {
     log: (l) => console.log(`[sidecar] ${l}`),
   });
   const hub = new WatchHub(clusters);
-  const doctor = new DoctorService({ clusters, hub });
+  // The doctor's evidence falls back to Clickland's history when the kubelet has neither run (D118); set below.
+  let history: ClicklandHistory | undefined;
+  const doctor = new DoctorService({ clusters, hub, history: (handle, q) => history?.lastLines(handle, q) ?? Promise.resolve(undefined) });
   let win: BrowserWindow | undefined;
   const send = (channel: string, payload: unknown) => {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -111,6 +114,17 @@ async function start() {
     takenNames: () => mcpStore.list().map((s) => s.name),
     log: (l) => console.log(l),
   });
+  // Clickland's logs and traces in the IDE (docs/metrics.md#logs-and-traces): its key and console through the family's
+  // rule; an object only if the window's cluster has it or the doctor named it.
+  history = new ClicklandHistory({
+    key: () => family.clicklandReadKey(),
+    clusterName: (context) => settings.clusterName(context),
+    context: (handle) => clusters.get(handle).info.context,
+    object: (handle, ref) => clusters.getObject(handle, ref).catch((e: { status?: number }) => (e?.status === 404 ? undefined : Promise.reject(e))),
+    known: (handle, scope) => doctor.knows(handle, scope),
+    console: () => family.clicklandConsole(),
+  });
+  clusters.onGone((handle) => history?.forget(handle));
   // D109: the server Add Clickland made on the MCP page becomes the family's clickland server, once.
   moveClicklandServer({ store: mcpStore, clickland: settings, family, log: (l) => console.log(l) });
   // Google Cloud (docs/gcp.md): gcloud's sign-in, read-only. An unpackaged build is off unless it has a loopback fake
@@ -169,6 +183,7 @@ async function start() {
       permit: (session, p) => mcpSvc.autonomyPermit(session, p),
       states: (session) => mcpSvc.autonomyStates(session),
       gcpQuoted: (session) => gateway.gcpQuoted(session),
+      familyQuoted: (session, sibling) => gateway.familyQuoted(session, sibling),
       hold: (session, why) => gateway.hold(session, why),
     },
     metrics: series,
@@ -188,7 +203,7 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections, gcp, family);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();

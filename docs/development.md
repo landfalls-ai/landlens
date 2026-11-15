@@ -43,6 +43,16 @@ default the dev one), which they use only to make a read-scoped key and revoke i
 read key once and paste it into Connect Clickland ([metrics.md](metrics.md), "Setup"). The e2e test runs the app with
 its own profile (`LANDLENS_USER_DATA`, development only), so it never touches your settings.
 
+Clickland's logs and traces (wave 7 part 3): the same flags also run `clickland-search.integration.test.ts` in
+`packages/metrics` and the live half of `apps/desktop/test/clickland.e2e.test.ts`. These only read (`POST
+/api/search`, `GET /api/traces/:id`) and make no key: they use `LANDLENS_CLICKLAND_URL` (default here
+`http://127.0.0.1:4730`, a Clickland with search and traces) and `LANDLENS_CLICKLAND_KEY` (default Clickland's
+development bootstrap key, which a development Clickland takes for reads), and expect ledger-worker's crash line
+("cannot parse LEDGER_SHARDS", `deploy/scenarios/doctor`) and `landflow-host`'s traces in that Clickland. Without
+`clickland`, `clickland.e2e` runs on OrbStack against the fake Clickland only: `pnpm -s build`, then in
+`apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/clickland.e2e.test.ts`
+(screenshots `w7p3-*` with `LANDLENS_SHOTS`).
+
 The doctor ([doctor.md](doctor.md)): `node deploy/scenarios/doctor/up.mjs` starts one broken workload per problem
 class in `landlens-dev` (and `--down` removes them); `LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/kube
 test:integration` starts them itself and waits up to 4 minutes for each problem, since pending and not-ready count
@@ -111,8 +121,9 @@ A packaged app reads none: forward the service in Landlens and use `http://127.0
 build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism
 test/family.e2e.test.ts` (screenshots `w7-*` with `LANDLENS_SHOTS`). It starts the three fakes, plays the browser
 for Landfall's sign-in with a stub of `shell.openExternal` that fetches only loopback addresses, and uses its own
-profile. The live checks of the spec's D137 (`orbstack,clickland`, `orbstack,landflow,claude`, `landfall,claude`,
-and the writing ones behind `LANDLENS_LIVE_WRITES=1`) are not written yet. They come with the parts that use each
+profile. Of the live checks of the spec's D137, Clickland's logs and traces (`orbstack,clickland`) are written
+(above); the rest (`orbstack,landflow,claude`, `landfall,claude`, and the writing ones behind `LANDLENS_LIVE_WRITES=1`)
+are not written yet. They come with the parts that use each
 link, and the ones that write are run only by the person.
 
 ## Where things start

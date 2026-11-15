@@ -39,6 +39,7 @@ import { HelmDrawer, HelmPage, useHelmList } from "./Helm";
 import { Boundary } from "./Boundary";
 import { CreateSheet } from "./CreateSheet";
 import { leaveEdit } from "./editGuard";
+import { clicklandScope, useClickland } from "./clickland";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
@@ -125,6 +126,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [clickland, setClickland] = useState<ClicklandView>();
   const [settings, setSettings] = useState(false);
   const [metricsVersion, setMetricsVersion] = useState(0);
+  const ck = useClickland();
   useEffect(() => void api.invoke("metrics:settings", { context: cluster.context }).then(setClickland, () => undefined), [cluster.context]);
 
   useEffect(() => {
@@ -647,6 +649,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onOpen={(t) => void reach(t)}
           onAct={(t, verb, container) => void reach(t, verb, container)}
           onSwitch={switchTo}
+          {...(ck.console ? { onOpenClickland: (t: Target) => {
+            const scope = clicklandScope(t.kind, t.namespace, t.name);
+            if (scope) void api.invoke("clickland:open", { handle: cluster.handle, scope, signal: "logs", range: "1h" }).catch((e: ApiError) => setReachError(`${t.kind} ${t.name}: ${e.message}`));
+          } } : {})}
           {...(gcpRows ? { gcp: { ...gcpRows, onOpen: openGcp } } : {})}
           commands={{
             togglePanel: () => (bench.open ? bench.setOpen(false) : (bench.setOpen(true), focusBench())),

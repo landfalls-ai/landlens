@@ -180,17 +180,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
   pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
 - **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
   Clickland (wave 7 part 5).
-- **The Land family is connections and session tools so far** (wave 7 parts 1–2, [family.md](family.md)).
-  Landlens signs in to Clickland, Landflow and Landfall and gives Claude sessions their own MCP servers (reads by
-  Landlens's list, the server's hint and the accepted listing; every write asks). Not built yet: Clickland logs,
-  traces or console links (part 3; the console address can be set only over IPC), triage or flows from a resource
-  (part 4; the webhook is stored, not sent), and telemetry or the brain (part 5). No live link was checked with a real
-  key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
+- **The Land family is connections, session tools and Clickland's logs and traces so far** (wave 7 parts 1–3,
+  [family.md](family.md)). Landlens signs in to Clickland, Landflow and Landfall, gives Claude sessions their own MCP
+  servers (reads by Landlens's list, the server's hint and the accepted listing; every write asks), and shows
+  Clickland's stored lines and traces in the drawer ([metrics.md](metrics.md#logs-and-traces-from-clickland)). Not
+  built yet: triage or flows from a resource (part 4; the webhook is stored, not sent), and telemetry or the brain
+  (part 5). Clickland's reads were checked live (:4730, its development bootstrap key, reads only); no other live
+  link was checked with a real key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
   listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` was compared by hand with the siblings'
   code ([family.md](family.md#what-the-lists-were-checked-against-review-of-part-2-m6)), and the three recorded-listing
   tests show as `todo` until a listing is recorded. Clickland hints a new tool read-only by default: only Landlens's
-  list keeps it asking. Parts 3 and 4 must hold autonomy (`familyQuoted`) when they quote a sibling's text into a
-  prompt. A server you add at a connected sibling's address stays out of sessions rather than getting the sibling's
+  list keeps it asking. Part 4 must hold autonomy (`familyQuoted`) when it quotes a sibling's text into a prompt,
+  as part 3 does. A server you add at a connected sibling's address stays out of sessions rather than getting the sibling's
   rules. A sibling's writes have no autonomous mode, by design (D113), and the family's tools are on for every
   cluster or none. A Clickland view can call Clickland's writes behind the native dialog, as an added server's view
   can. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in and its MCP server were checked
@@ -199,6 +200,17 @@ person's check reads them), and Ask Claude sends one problem at a time.
   at 1024×700. Below the page's 640px container width they have a rule, but no test is narrow enough to reach it.
   Landfall names no account to Landlens, so every new Landfall sign-in starts with Tools for Claude off, even at the
   same address (wave 7 review, M3).
+- **Clickland's history in the IDE** (wave 7 part 3, [metrics.md](metrics.md#logs-and-traces-from-clickland)).
+  Traces are found by service name only (the pod's `app.kubernetes.io/name` or `app` label, else the workload's name),
+  across namespaces and clusters (a workload's spans carry Kubernetes names only if it sends them, so Landlens doesn't
+  filter on them); two workloads with the same label share a list. A workload's History filters on `k8s.deployment.name` (or StatefulSet, DaemonSet),
+  which Clickland's collector sets for pods it owns; a bare ReplicaSet, Job or CronJob has no History. **Errors**
+  is Clickland's severity (`level:error`), so a workload that logs everything at INFO shows no errors, though the
+  failure-line rule still colours its lines. History pages 200 lines and keeps 2,000; the rest is in Clickland's
+  console. A trace's span list is a plain list with a duration bar, no waterfall, at most 500 spans. The doctor's
+  fallback reads only when the kubelet has neither run, from the last 7 days. Open in Clickland needs the console's
+  address typed in **Connect Clickland**; Clickland names no console of its own. The doctor's Clickland fallback is
+  checked in unit tests, not on the built app.
 - **Clickland's address is an origin now** (wave 7, D102). Before wave 7 a Clickland behind a path prefix
   (`https://host/clickland`) was taken and stored; now **Connect Clickland** and its **Test** refuse an address with a
   path, and a stored one keeps working for graphs only until it is saved again, while the family's who-am-I goes to

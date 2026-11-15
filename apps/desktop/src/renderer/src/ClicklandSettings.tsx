@@ -13,6 +13,7 @@ export function ClicklandSettings(props: { handle?: string; context?: string; on
   const [url, setUrl] = useState("");
   const [key, setKey] = useState("");
   const [cluster, setCluster] = useState(props.context ?? "");
+  const [consoleUrl, setConsoleUrl] = useState("");
   const [test, setTest] = useState<ClicklandTest | "running">();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -22,6 +23,7 @@ export function ClicklandSettings(props: { handle?: string; context?: string; on
     api.invoke("metrics:settings", props.context ? { context: props.context } : {}).then((v) => {
       setView(v);
       setUrl(v.url);
+      setConsoleUrl(v.console ?? "");
       setCluster(v.cluster ?? props.context ?? "");
       setTimeout(() => (v.hasKey ? first.current : first.current?.form?.elements.namedItem("key") as HTMLInputElement | null)?.focus(), 0);
     }, (e: ApiError) => setError(e.message));
@@ -42,10 +44,15 @@ export function ClicklandSettings(props: { handle?: string; context?: string; on
     e.preventDefault();
     setBusy(true);
     setError(undefined);
-    api.invoke("metrics:configure", { url: url.trim(), ...(typed ? { key: typed } : {}), ...(props.context ? { cluster: { context: props.context, name: cluster.trim() || props.context } } : {}) }).then(
-      (v) => (setKey(""), props.onSaved(v), props.onClose()),
-      (e: ApiError) => (setBusy(false), setError(e.message)),
-    );
+    // The console's address (D118) is the family's setting: saved after the key, only when it changed.
+    const cons = consoleUrl.trim().replace(/\/+$/, "");
+    const consoleChanged = cons !== (view?.console ?? "");
+    api.invoke("metrics:configure", { url: url.trim(), ...(typed ? { key: typed } : {}), ...(props.context ? { cluster: { context: props.context, name: cluster.trim() || props.context } } : {}) })
+      .then(async (v) => (consoleChanged ? (await api.invoke("family:set", { sibling: "clickland", console: cons || null }), { ...v, ...(cons ? { console: cons } : {}) }) : v))
+      .then(
+        (v) => (setKey(""), props.onSaved(v), props.onClose()),
+        (e: ApiError) => (setBusy(false), setError(e.message)),
+      );
   };
   const forget = () => api.invoke("metrics:disconnect", {}).then((v) => (setView(v), setTest(undefined), props.onSaved(v)), (e: ApiError) => setError(e.message));
 
@@ -59,7 +66,7 @@ export function ClicklandSettings(props: { handle?: string; context?: string; on
           <button type="button" className="icon-btn" aria-label="Close" onClick={props.onClose}><Ic icon={X} size={15} /></button>
         </header>
         <div className="dialog-body">
-          <p className="dim">Clickland keeps the cluster's CPU and memory history (kubelet stats every 30s). Landlens asks it from the main process only; the key is encrypted on this Mac and never shown again.</p>
+          <p className="dim">Clickland keeps the cluster's CPU and memory history (kubelet stats every 30s), its pods' log lines and the traces workloads send. Landlens asks it from the main process only; the key is encrypted on this Mac and never shown again.</p>
           <label className="form-row">
             <span>Address</span>
             <span className="field"><input ref={first} name="url" value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off" aria-label="Clickland address" /></span>
@@ -73,6 +80,11 @@ export function ClicklandSettings(props: { handle?: string; context?: string; on
             <span className="field"><input name="cluster" value={cluster} onChange={(e) => setCluster(e.target.value)} spellCheck={false} autoComplete="off" aria-label="Cluster name in Clickland" /></span>
             <small className="dim">Its <span className="mono">k8s.cluster.name</span> in Clickland; for context <span className="mono">{props.context}</span>.</small>
           </label> : null}
+          <label className="form-row">
+            <span>Console address</span>
+            <span className="field"><input name="console" value={consoleUrl} onChange={(e) => setConsoleUrl(e.target.value)} placeholder="Optional, e.g. http://127.0.0.1:4711" spellCheck={false} autoComplete="off" aria-label="Clickland console address" /></span>
+            <small className="dim">For <b>Open in Clickland</b> on logs, traces and graphs. Each link opens after a dialog that shows its host.</small>
+          </label>
           {view && !view.canStore ? <p className="tone-bad small">This machine can't encrypt the key (safeStorage is unavailable), so it can't be stored.</p> : null}
           {test === "running" ? <p className="test-line dim"><span className="spinner" />Testing…</p> : test ? (
             <ul className="test-steps" aria-label="Test result">

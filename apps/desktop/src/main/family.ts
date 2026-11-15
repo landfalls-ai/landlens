@@ -163,6 +163,20 @@ export class FamilyService {
     return cfg && this.allowed(origin) ? { origin, key: cfg.key } : undefined;
   }
 
+  /**
+   * Main only: Clickland's key and its origin for the IDE's history reads (part 3, D115), under the same rule as the
+   * family's own use: the origin it was saved for, while this build takes it.
+   */
+  clicklandReadKey(): { origin: string; key: string } | undefined {
+    return this.clicklandKey();
+  }
+
+  /** The console's origin, for Open in Clickland (D118), while this build takes it. */
+  clicklandConsole(): string | undefined {
+    const c = this.o.clickland.consoleUrl();
+    return this.allowed(c) ? c : undefined;
+  }
+
   /** Which key Clickland has, as an origin and a hash (never the key itself). */
   private clicklandId(): string | undefined {
     const k = this.clicklandKey();

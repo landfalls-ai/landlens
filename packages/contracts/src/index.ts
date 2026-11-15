@@ -185,6 +185,57 @@ export const ClicklandSettingsInput = z.object({
   cluster: z.object({ context: z.string().min(1).max(253), name: ClicklandClusterName }).optional(),
 });
 
+// Clickland's history in the IDE (docs/metrics.md#logs-and-traces, wave 7 part 3, D115–D118): a pod's or a workload's
+// logs and traces, read in main with Clickland's key. The window names an object and a range; main builds the search
+// from names it validated (each a quoted term), so nothing the window sends is search syntax. Answers are checked,
+// capped and their bodies scrubbed (redactText) before they cross.
+export const ClicklandRange = z.enum(["1h", "6h", "24h", "7d"]);
+export type ClicklandRange = z.infer<typeof ClicklandRange>;
+/** A Kubernetes name as Clickland's collectors record it (a DNS subdomain). */
+export const K8S_NAME = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
+export const ClicklandScope = z.object({
+  kind: z.enum(["pod", "deployment", "statefulset", "daemonset"]),
+  namespace: NamespaceName,
+  name: z.string().min(1).max(253).regex(K8S_NAME, "not a Kubernetes name"),
+  container: z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name").optional(),
+});
+export type ClicklandScope = z.infer<typeof ClicklandScope>;
+/** Clickland's paging cursor (its SearchRequest's `before`). */
+export const ClicklandCursor = z.string().regex(/^\d{1,20}$/, "not a cursor");
+/** A trace id as Clickland takes it: hex. */
+export const ClicklandTraceId = z.string().regex(/^[0-9a-f]{1,64}$/, "not a trace id");
+export const ClicklandLogsRequest = z.object({
+  handle: Handle,
+  scope: ClicklandScope,
+  range: ClicklandRange,
+  /** Words to find, sent as one quoted phrase, never as search syntax. One line. */
+  filter: z.string().max(200).regex(/^[^\u0000-\u001f\u007f]*$/, "one line").optional(),
+  /** "Errors only": the fixed term `level:error`. */
+  errors: z.boolean().optional(),
+  before: ClicklandCursor.optional(),
+});
+/** One log line from Clickland, as Landlens keeps it: the body scrubbed and cut, three attributes, the rest dropped. */
+export type ClRow = {
+  at: string;
+  body: string;
+  severity?: string;
+  service?: string;
+  pod?: string;
+  container?: string;
+  stream?: "stdout" | "stderr";
+  /** The body was longer than 8,192 characters and is cut. */
+  cut?: true;
+};
+export type ClicklandLogs =
+  | { rows: ClRow[]; next?: string; cut: boolean; source: "clickland"; cluster: string }
+  | { unavailable: MetricsReason };
+/** One trace of a service: its top span of that service, when, how long, and whether any of its spans failed. */
+export type ClTrace = { id: string; name: string; service: string; at: string; ms: number; error: boolean };
+export type ClicklandTraces = { traces: ClTrace[]; service: string } | { unavailable: MetricsReason };
+/** A span of one trace, for the plain span list (no waterfall): depth, start offset and duration on one scale. */
+export type ClSpan = { id: string; name: string; service: string; kind?: string; depth: number; offsetMs: number; ms: number; error: boolean };
+export type ClicklandTrace = { spans: ClSpan[]; ms: number; cut: boolean } | { unavailable: MetricsReason };
+
 // MCP (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers it serves (the built-in
 // landlens-kube and remote servers you add), the call log, and MCP Apps (tool views in a sandboxed frame).
 
@@ -665,6 +716,22 @@ export const channels = {
   "metrics:configure": ClicklandSettingsInput,
   "metrics:test": z.object({ handle: Handle.optional(), url: ClicklandUrl.optional(), key: ClicklandKey.optional(), cluster: ClicklandClusterName.optional() }),
   "metrics:disconnect": z.object({}),
+  // Clickland's history (D117): main checks the object is in the window's cluster or its doctor report first.
+  "clickland:logs": ClicklandLogsRequest,
+  "clickland:traces": z.object({ handle: Handle, scope: ClicklandScope, range: ClicklandRange, errors: z.boolean().optional() }),
+  "clickland:trace": z.object({ handle: Handle, id: ClicklandTraceId }),
+  /**
+   * Open in Clickland (D118): main builds the console's URL from the stored console address and this object (or one
+   * trace), asks in a native dialog that shows the host, then opens it. The window never supplies a URL.
+   */
+  "clickland:open": z.object({
+    handle: Handle,
+    scope: ClicklandScope,
+    signal: z.enum(["logs", "traces"]),
+    range: ClicklandRange,
+    errors: z.boolean().optional(),
+    trace: ClicklandTraceId.optional(),
+  }),
   // MCP (docs/mcp.md). Header values come in with save and test; nothing sends them back.
   "mcp:servers": z.object({ context: z.string().min(1).max(253).optional() }),
   "mcp:save": McpServerInput,
@@ -786,6 +853,10 @@ export type Responses = {
   "metrics:configure": ClicklandSettings;
   "metrics:test": ClicklandTest;
   "metrics:disconnect": ClicklandSettings;
+  "clickland:logs": ClicklandLogs;
+  "clickland:traces": ClicklandTraces;
+  "clickland:trace": ClicklandTrace;
+  "clickland:open": { opened: boolean };
   "mcp:servers": McpServers;
   "mcp:save": McpServerInfo;
   "mcp:test": McpTest;
@@ -993,6 +1064,8 @@ export type ClicklandSettings = {
   canStore: boolean;
   /** The Clickland cluster name for the asked context (its own name unless set). */
   cluster?: string;
+  /** The console's origin, for Open in Clickland (wave 7 D118); set on the Clickland dialog. */
+  console?: string;
 };
 export type ClicklandTest = {
   ok: boolean;
@@ -1073,7 +1146,11 @@ export type HealthProblem = Problem;
 export type DoctorReport = { at: string; problems: Problem[]; cut: boolean; checks: Record<DoctorCheck, DoctorCheckState> };
 /** On-demand evidence for one problem (D60): the previous run's last lines for a crash, an OOM kill or a probe kill. */
 export type DoctorEvidence = {
-  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean } | { error: string };
+  /**
+   * `source: "clickland"`: the kubelet had neither run, so the lines are Clickland's history of that pod and container
+   * (wave 7 D118), oldest first, scrubbed before they crossed.
+   */
+  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean; source?: "clickland" } | { error: string };
 };
 export type HealthEvent = {
   at: string;

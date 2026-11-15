@@ -116,3 +116,35 @@
 .link-btn.danger { color: var(--bad-text); font-size: var(--t-12); }
 .sb-item.metrics { color: var(--ink-3); }
 .sb-item.metrics:hover { color: var(--ink-2); }
+
+/* Clickland's history (wave 7 part 3, D118): the Logs tab's source switch and the Traces tab. */
+.logs-tools .src-switch { margin-left: 0; margin-right: 4px; flex: none; }
+.traces-tab { gap: 12px; }
+.traces-tab .mtab-head .seg { margin-left: 0; }
+.traces-tab .mtab-head .metrics-src { flex: 0 1 auto; overflow: hidden; }
+.traces-tab .mtab-head .metrics-src .mono { overflow: hidden; text-overflow: ellipsis; }
+.traces-tab .mtab-head .tog, .traces-tab .mtab-head .icon-btn { flex: none; }
+.hist .logs-tools { flex-wrap: wrap; row-gap: 6px; }
+.tr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; border-radius: var(--r-3); overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.tr-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 7ch; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 12px; text-align: left; background: var(--bg-1); color: var(--ink-2); font-size: var(--t-12); }
+.tr-row:hover { background: var(--hover); color: var(--ink); }
+.tr-row:focus-visible { box-shadow: var(--focus-in); }
+.tr-row .tr-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: var(--t-115); }
+.tr-row.bad .tr-name { color: var(--bad-text); }
+.tr-row .tr-when { font-size: var(--t-115); white-space: nowrap; }
+.tr-ms { text-align: right; font-size: var(--t-11); color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tr-detail { display: grid; gap: 8px; min-width: 0; }
+.tr-head { display: flex; align-items: center; gap: 8px; }
+.tr-head .link-btn { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-12); }
+.tr-title { display: flex; align-items: baseline; gap: 10px; margin: 0; font-size: var(--t-13); font-weight: 500; min-width: 0; }
+.tr-title .mono:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-spans { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.tr-span { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, .8fr) minmax(48px, .9fr) 7ch; align-items: center; gap: 8px; height: 26px; padding: 0 4px; border-bottom: 1px solid var(--line); font-size: var(--t-115); }
+.tr-span .tr-name { display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); color: var(--ink); }
+.tr-span .tr-svc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-bar { position: relative; height: 8px; border-radius: 2px; background: var(--bg-3); }
+.tr-bar i { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); max-width: 100%; }
+.tr-span.bad .tr-bar i { background: var(--bad); }
+.tr-span.bad .tr-name { color: var(--bad-text); }
+.hist .logs-find { min-width: 0; }
+.hist .logs-find .find-count { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

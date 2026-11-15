@@ -53,6 +53,13 @@ followed stream: one long request with `follow=true`, not Lens's poll every ten 
 offers Copy and **Ask Claude** (⌘⏎), which adds a chip ("4 log lines · shop-web") to the dock's composer and sends
 nothing. When you send, the lines go in the prompt, redacted as `get_logs` output is, at most 200 lines or 16 KB.
 
+**Live | History** (wave 7 part 3, D118): while Clickland is connected and ready, a pod's, Deployment's,
+StatefulSet's or DaemonSet's Logs tab has a source switch. **History** lists Clickland's stored lines for it, newest
+last, with **Load older**, a range (1h, 6h, 24h, 7d), **Errors**, a find box sent to Clickland as one phrase, a pod
+column for a workload, picked lines for Ask Claude, and **Open in Clickland** when the console address is set. A pod
+that is gone offers **See its history in Clickland** from Live. The same objects get a **Traces** tab. Both are read
+in main and scrubbed before they reach the window: [metrics.md](metrics.md#logs-and-traces-from-clickland).
+
 Logs are read through the IDE's own connection (the sidecar), like every other view. Code: `LogsView.tsx`,
 `logRows.ts` (ordering, merging, ANSI, search), `packages/kube/src/logs.ts` (`followLogs`, batches every 100ms or
 500 lines, lines over 16 KB cut), `apps/desktop/src/main/workbench.ts`.
@@ -276,6 +283,9 @@ pages) and **Clusters** (switch to another context).
 - **Tab** on an object lists its actions (the object shows as a crumb; Backspace or Esc goes back to the search);
   Tab on a pod's shell or logs row lists its containers. Enter on a shell row opens the pod's only running
   container, or the first.
+- **Open in Clickland** (wave 7 part 3): with Clickland's console address set, Tab on a pod or a workload adds
+  "Open in Clickland", which opens its last hour of log lines in Clickland's console after the native dialog
+  ([metrics.md](metrics.md#logs-and-traces-from-clickland)).
 - **`problems`** as the first word searches only problems (`problems cart`); alone it lists the worst six. Enter
   opens a problem's drawer on the Problems page; Tab lists Open, Ask Claude and Open <Kind>. Problems come from the
   report the window already holds: ⌘K reads nothing more for them.

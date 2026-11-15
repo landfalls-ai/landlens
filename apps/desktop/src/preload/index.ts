@@ -8,6 +8,7 @@ const CHANNELS: readonly Channel[] = [
   "cluster:health", "doctor:list", "doctor:evidence", "resource:get", "resource:events", "watch:subscribe", "watch:unsubscribe",
   "agent:start", "agent:prompt", "agent:cancel", "agent:mode", "agent:config", "agent:answer", "agent:decide", "agent:close", "agent:history", "agent:resume", "agent:forget", "agent:settings", "agent:skills", "link:open",
   "metrics:series", "metrics:settings", "metrics:configure", "metrics:test", "metrics:disconnect",
+  "clickland:logs", "clickland:traces", "clickland:trace", "clickland:open",
   "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:auto-run", "mcp:remove", "mcp:calls", "mcp:try",
   "mcp:app-open", "mcp:app-call", "mcp:app-close", "mcp:app-link",
   "logs:open", "logs:close", "terminal:open", "terminal:local", "terminal:input", "terminal:resize", "terminal:ack", "terminal:close",

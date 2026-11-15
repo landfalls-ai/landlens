@@ -78,7 +78,18 @@ export class ClicklandClient {
     return parseSeries(await this.call("POST", "/api/metrics/query", q, true));
   }
 
-  private async call<T>(method: string, path: string, body: unknown, auth: boolean): Promise<T> {
+  /** POST /api/search (logs or traces), the answer unchecked: clickland-search.ts checks it. At most 8 MB is read. */
+  async search(body: { signal: "logs" | "traces"; query: string; from: string; to: string; limit: number; before?: string }): Promise<unknown> {
+    return this.call("POST", "/api/search", body, true, SEARCH_ANSWER_MAX);
+  }
+
+  /** GET /api/traces/:id, the answer unchecked; the id must be hex (the caller's schema holds it). */
+  async trace(id: string): Promise<unknown> {
+    if (!/^[0-9a-f]{1,64}$/.test(id)) throw new ClicklandError("failed", "Not a trace id.");
+    return this.call("GET", `/api/traces/${id}`, undefined, true, SEARCH_ANSWER_MAX);
+  }
+
+  private async call<T>(method: string, path: string, body: unknown, auth: boolean, max = 20_000_000): Promise<T> {
     let res: Response;
     try {
       res = await this.fetchImpl(this.base + path, {
@@ -99,15 +110,47 @@ export class ClicklandClient {
     if (res.status === 401 || res.status === 403)
       throw new ClicklandError("unauthorized", `Clickland refused the key (${res.status}): it needs the read scope.`);
     // Never the answer's text: the address may be one the page chose, and the message reaches the page and the model.
+    if (res.status === 404 && path.startsWith("/api/traces/")) throw new ClicklandError("failed", "Clickland has no such trace.");
     if (!res.ok) throw new ClicklandError("failed", `Clickland answered HTTP ${res.status}.`);
-    const text = await res.text().catch(() => "");
-    if (text.length > 20_000_000) throw new ClicklandError("failed", "Clickland's answer was too large.");
+    const text = await readCapped(res, max);
+    if (text === undefined) throw new ClicklandError("failed", "Clickland's answer was too large.");
     try {
       return JSON.parse(text) as T;
     } catch {
       throw new ClicklandError("failed", "Clickland's answer wasn't JSON.");
     }
   }
+}
+
+/** The most of a search or trace answer main reads (500 rows of 8 KiB bodies and their attributes fit). */
+export const SEARCH_ANSWER_MAX = 8 * 1024 * 1024;
+
+/** The body as text, read with a counter: past `max` characters' worth of bytes the read stops (undefined). */
+async function readCapped(res: Response, max: number): Promise<string | undefined> {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel().catch(() => {});
+    return undefined;
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      n += value.byteLength;
+      if (n > max) {
+        await reader.cancel().catch(() => {});
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return "";
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /**

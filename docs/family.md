@@ -9,9 +9,10 @@ is in [research/land-family.md](research/land-family.md).
 Wave 7 is built in five parts. **Part 1, built 15 November 2026:** the connections themselves, described on this
 page: the store, the sign-ins, the clients that ask each sibling who you are, and the **Land family** section of the
 Connections page. **Part 2, built 15 November 2026:** the family's own MCP servers in Claude sessions, with the
-**Tools for Claude** and **Reads run without asking** rows ([below](#the-familys-tools-in-claude-sessions)). Still to
-come: part 3, Clickland's logs and traces in the IDE; part 4, Landflow on a resource (triage, the war room, flows);
-part 5, Landlens's telemetry and the brain. See [roadmap.md](roadmap.md).
+**Tools for Claude** and **Reads run without asking** rows ([below](#the-familys-tools-in-claude-sessions)). **Part
+3, built 15 November 2026:** Clickland's log lines and traces in the IDE (the Logs tab's History, a Traces tab, the
+doctor's fallback, Open in Clickland), on [metrics.md](metrics.md#logs-and-traces-from-clickland). Still to come:
+part 4, Landflow on a resource (triage, the war room, flows); part 5, Landlens's telemetry and the brain. See [roadmap.md](roadmap.md).
 
 ## How Landlens signs in
 
@@ -97,8 +98,9 @@ MCP server (the pin, below), and these `safeStorage` blobs:
 - Landflow: `key`, and the triage webhook's `triageSecret`.
 - Landfall: `access`, `refresh` and the registered `client`.
 
-Clickland's key stays in `clickland.json` (`ClicklandSettingsStore`), which also gains the console address for
-part 3's links. What Clickland's who-am-I said is kept in `family.json` with the origin it was asked at. It is
+Clickland's key stays in `clickland.json` (`ClicklandSettingsStore`), which also keeps the console address for
+part 3's links (**Console address** in **Connect Clickland**, saved with `family:set`; an origin under the same
+address rule). What Clickland's who-am-I said is kept in `family.json` with the origin it was asked at. It is
 forgotten when the key or address changes in **Connect Clickland**, and asked again in the background.
 
 A secret is bound to the origin it was saved for. Connecting Landflow at another address without pasting the key
@@ -347,14 +349,17 @@ come with their part.
 No test reaches a sibling. `packages/connections/test/fake-family.ts` (D136) has one loopback server for each
 sibling, built from the sibling's docs and code. Each records every request and has `/_fake/state`:
 
-- **Fake Clickland**: health, `auth/me` by key, MCP with 23 tools, and an OTLP sink.
+- **Fake Clickland**: health, `auth/me` by key, MCP with 23 tools, an OTLP sink, and (part 3) `POST /api/search`
+  and `GET /api/traces/:id` over the log rows and spans a test adds. Its search takes only what Landlens sends
+  (quoted `field:"value"` terms, `level:error`, `status:error` and one phrase, read as Clickland's compiler reads
+  them); anything else answers 400, so a test fails if a query ever carries raw syntax.
 - **Fake Landflow**: health, `auth/me` with scopes by key, the webhook, workflows, execute, executions, `brain/work`,
   and MCP tools by scope.
 - **Fake Landfall**: the connector's metadata, register, authorize (it approves at once), token, revoke, and `/mcp`.
   It can play a connector that is off, a sign-in that is turned down, short-lived tokens and a refused refresh. Any
   request for a trigger, timeline or artifact route is recorded in `forbidden`, which the tests expect to be empty.
 
-Clickland's `/api/search` and traces come with part 3.
+Part 3's tests are listed on [metrics.md](metrics.md#tests).
 
 - `family.test.ts`: the address rule and its overrides, this machine's odd spellings, an address stored as typed, the
   key shapes, who-am-I for each sibling (one request, the key only in `Authorization`, `redirect: "error"`), every
@@ -409,8 +414,7 @@ See [limitations.md](limitations.md):
 
 - Checking `FAMILY_READS` against the siblings' real listings: record them with the script and your own keys (the
   code was compared by hand, above).
-- Calling `familyQuoted` when parts 3 and 4 put a sibling's text in a prompt.
-- Clickland's console address in its dialog (part 3).
+- Calling `familyQuoted` when part 4 puts a sibling's text in a prompt (part 3 does: Clickland's quoted lines).
 - Sending to triage and running flows (part 4).
 - Telemetry and the brain (part 5).
 - Checking each link live with a real key.

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DOCTOR, DoctorService } from "../src/main/doctor";
+import { DOCTOR, DoctorService, type DoctorDeps } from "../src/main/doctor";
 
 const leaf = readFileSync(join(__dirname, "../../../packages/kube/test/fixtures/doctor/leaf.crt"), "utf8");
 const MARKER = "SECRET-KEY-MARKER-55e1";
@@ -15,7 +15,7 @@ const crashing = {
   status: { phase: "Running", containerStatuses: [{ name: "api", restartCount: 4, state: { waiting: { reason: "CrashLoopBackOff" } }, lastState: { terminated: { exitCode: 1, reason: "Error", finishedAt: "2026-11-15T11:59:00Z" } } }] },
 };
 
-function fake(opts: { forbid?: RegExp; hang?: RegExp; podsError?: number; podsEvent?: any; secretGet?: (p: string) => Promise<any>; log?: (p: string, init?: { signal?: AbortSignal }) => Promise<Response> } = {}) {
+function fake(opts: { forbid?: RegExp; hang?: RegExp; podsError?: number; podsEvent?: any; secretGet?: (p: string) => Promise<any>; log?: (p: string, init?: { signal?: AbortSignal }) => Promise<Response>; history?: DoctorDeps["history"] } = {}) {
   let now = T0;
   const paths: string[] = [];
   const subs = new Map<string, any>();
@@ -56,7 +56,7 @@ function fake(opts: { forbid?: RegExp; hang?: RegExp; podsError?: number; podsEv
     items: (id: string) => (subs.has(id) ? [crashing] : undefined),
     unsubscribe: vi.fn((id: string) => subs.delete(id)),
   };
-  const service = new DoctorService({ clusters, hub, now: () => now });
+  const service = new DoctorService({ clusters, hub, now: () => now, ...(opts.history ? { history: opts.history } : {}) });
   return { service, hub, client, paths, subs, tick: (ms: number) => (now += ms), gone: (h: string) => gone?.(h), drop: (id: string) => subs.delete(id) };
 }
 
@@ -167,6 +167,42 @@ describe("DoctorService", () => {
     const g = fake({ log: async () => new Response("unable to retrieve container logs for docker://e17e841b0006ff83") });
     const hg = await g.service.health("handle-0001", "shop");
     expect((await g.service.evidence("handle-0001", "shop", hg.problems[0]!.id)).log).toEqual({ error: "The pod or its container is gone." });
+  });
+
+  it("falls back to Clickland's history when the kubelet has neither run, and says so (wave 7 D118)", async () => {
+    const asked: unknown[] = [];
+    const history: DoctorDeps["history"] = async (handle, q) => (asked.push({ handle, ...q }), { pod: "api-1", lines: ["starting", "FATAL: no DATABASE_URL"], cut: false });
+    const g = fake({ log: async () => new Response("unable to retrieve container logs for docker://e17e841b0006ff83"), history });
+    const hg = await g.service.health("handle-0001", "shop");
+    expect((await g.service.evidence("handle-0001", "shop", hg.problems[0]!.id)).log).toEqual({ pod: "api-1", container: "api", previous: false, lines: ["starting", "FATAL: no DATABASE_URL"], cut: false, source: "clickland" });
+    expect(asked).toEqual([{ handle: "handle-0001", namespace: "shop", pods: ["api-1"], container: "api" }]);
+    // A pod that is gone (404) too; Clickland with nothing keeps the kubelet's sentence.
+    const n = fake({ log: async () => new Response("not found", { status: 404 }), history: async () => undefined });
+    const hn = await n.service.health("handle-0001", "shop");
+    expect((await n.service.evidence("handle-0001", "shop", hn.problems[0]!.id)).log).toEqual({ error: "The pod or its container is gone." });
+  });
+
+  it("doesn't ask Clickland when the kubelet has the lines, or when the person can't read the pod's logs", async () => {
+    let asked = 0;
+    const history: DoctorDeps["history"] = async () => (asked++, { pod: "api-1", lines: ["from clickland"], cut: false });
+    const f = fake({ history });
+    const h = await f.service.health("handle-0001", "shop");
+    expect((await f.service.evidence("handle-0001", "shop", h.problems[0]!.id)).log).toMatchObject({ lines: ["FATAL: no DATABASE_URL", "bye"] });
+    const g = fake({ log: async () => new Response("forbidden", { status: 403 }), history });
+    const hg = await g.service.health("handle-0001", "shop");
+    expect((await g.service.evidence("handle-0001", "shop", hg.problems[0]!.id)).log).toEqual({ error: "You can't read this pod's logs." });
+    expect(asked).toBe(0);
+  });
+
+  it("knows the objects its reports name: a problem's subject and its pods, in their namespace (D117)", async () => {
+    const f = fake();
+    expect(f.service.knows("handle-0001", { kind: "pod", namespace: "shop", name: "api-1" })).toBe(false);
+    await f.service.health("handle-0001", "shop");
+    expect(f.service.knows("handle-0001", { kind: "pod", namespace: "shop", name: "api-1" })).toBe(true);
+    expect(f.service.knows("handle-0001", { kind: "pod", namespace: "other", name: "api-1" })).toBe(false);
+    expect(f.service.knows("handle-0001", { kind: "deployment", namespace: "shop", name: "api-1" })).toBe(false);
+    expect(f.service.knows("handle-0001", { kind: "pod", namespace: "shop", name: "api-2" })).toBe(false);
+    expect(f.service.knows("handle-0002", { kind: "pod", namespace: "shop", name: "api-1" })).toBe(false);
   });
 
   it("says certificates are still being read rather than none, and that some were left out (review, finding 2)", async () => {

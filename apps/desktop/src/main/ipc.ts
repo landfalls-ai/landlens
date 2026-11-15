@@ -7,6 +7,7 @@ import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { DoctorService } from "./doctor";
 import type { ClicklandSettingsStore } from "./clickland-settings";
+import type { ClicklandHistory } from "./clickland-history";
 import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
@@ -18,7 +19,7 @@ import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -38,6 +39,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
 
   const disconnect = async (handle: string) => {
     metrics.service.forget(handle);
+    metrics.history.forget(handle);
     doctor.forget(handle);
     await mcp.forget(handle);
     await hub.stopAll(handle);
@@ -154,7 +156,10 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "agent:autonomy": async ({ session, provider, on, scope }) => mcp.setAutonomy(session, provider, on, scope),
     // Graphs (docs/metrics.md). The Clickland key comes in with configure and test; nothing sends it back.
     "metrics:series": (req) => metrics.service.series(req),
-    "metrics:settings": async ({ context }) => metrics.settings.view(context),
+    "metrics:settings": async ({ context }) => {
+      const console = family.clicklandConsole();
+      return { ...metrics.settings.view(context), ...(console ? { console } : {}) };
+    },
     // Clickland's key is the family's too (docs/family.md): a change asks who the key is again.
     "metrics:configure": async (input) => {
       const out = metrics.settings.set(input);
@@ -167,6 +172,12 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       family.clicklandChanged();
       return out;
     },
+    // Clickland's logs and traces (docs/metrics.md#logs-and-traces): an object the window shows or the doctor named;
+    // the search is main's own, the lines scrubbed before they cross. Open in Clickland asks in main's own dialog.
+    "clickland:logs": (req) => metrics.history.logs(req),
+    "clickland:traces": (req) => metrics.history.traces(req),
+    "clickland:trace": (req) => metrics.history.trace(req),
+    "clickland:open": (req, event) => metrics.history.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }),
     // Choosing a Prometheus: only the one Landlens finds now, for this cluster's context (docs/metrics.md#prometheus).
     "metrics:prometheus": async ({ handle, use }) => {
       const context = clusters.get(handle).info.context;

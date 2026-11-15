@@ -6,7 +6,7 @@ import type { GcpResource, KubeContext, KubeObject, Problem, SearchEntry } from 
 import { resourceLabel, serviceIcon, shortType } from "./GcpPage";
 import {
   ArrowRightLeft, Box, ChevronRight, CornerDownLeft, FilePlus2, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
-  CircleX, Search, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, type LucideIcon,
+  CircleX, ExternalLink, Search, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
@@ -16,6 +16,7 @@ import { shellable } from "./ShellMenu";
 import type { Current } from "./Sidebar";
 import { parseQuery, score, VERBS, verbsFor, type Target, type Verb } from "./paletteRules";
 import { matchProblems } from "./problemRules";
+import { clicklandScope } from "./clickland";
 
 export type { Target, Verb };
 
@@ -96,6 +97,8 @@ export function JumpPalette(props: {
   onOpen: (t: Target) => void;
   onAct: (t: Target, verb: Verb, container?: string) => void;
   onSwitch: (context: string) => void;
+  /** Open in Clickland (D118), for a pod or a workload, while a console address is set: a Tab action. */
+  onOpenClickland?: (t: Target) => void;
   commands: Commands;
   /** The Google Cloud rows the page last read (one project), found by name; no new read. */
   gcp?: { project: string; items: GcpResource[]; onOpen: (project: string, r: GcpResource) => void };
@@ -156,6 +159,13 @@ export function JumpPalette(props: {
     run: () => act(t, verb),
     ...(t.kind === "Pod" && (verb === "shell" || verb === "logs") ? { tab: () => containers(t, verb) } : {}),
   });
+  /** Open in Clickland, for a pod or a workload, when a console address is set (D118). */
+  const clicklandRow = (t: Target): Row[] => {
+    const open = props.onOpenClickland;
+    return open && clicklandScope(t.kind, t.namespace, t.name)
+      ? [{ key: `ck:${keyOf(t)}`, group: "Actions", label: "Open in Clickland", hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: ExternalLink, run: () => done(() => open(t)) }]
+      : [];
+  };
   const objectRow = (t: Target, group: Group = "Objects"): Row => ({
     key: `o:${keyOf(t)}`, group, label: t.name, hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: kindIcon(t.resource), mono: true,
     run: () => openObject(t),
@@ -216,7 +226,7 @@ export function JumpPalette(props: {
       return acts.filter((r) => !text || r.label.toLowerCase().includes(text));
     }
     if (onlyProblems) return matchProblems(props.problems, text, text ? 50 : PER_GROUP).map(problemRow);
-    if (focus) return verbsFor(focus.t).map((v) => actionRow(focus.t, v)).filter((r) => !text || r.label.toLowerCase().includes(text));
+    if (focus) return [...verbsFor(focus.t).map((v) => actionRow(focus.t, v)), ...clicklandRow(focus.t)].filter((r) => !text || r.label.toLowerCase().includes(text));
     if (switching) return rank(props.contexts ?? [], (c) => c.name).map(clusterRow);
     if (cmd) return rank(commands, (r) => r.label);
     if (verb) {

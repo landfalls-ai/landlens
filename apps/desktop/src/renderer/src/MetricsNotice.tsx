@@ -49,9 +49,14 @@ export function MetricsUnavailable({ data, onSettings }: { data: MetricsSeries; 
 }
 
 /** Where the numbers come from; for metrics-server, also why not Clickland, with the fix one click away. */
-export function MetricsSource({ data, onSettings }: { data: MetricsSeries; onSettings: () => void }) {
+export function MetricsSource({ data, onSettings, onOpenClickland }: { data: MetricsSeries; onSettings: () => void; onOpenClickland?: (() => void) | undefined }) {
   if (data.source === "clickland")
-    return <span className="metrics-src" title={`Clickland, k8s.cluster.name “${data.cluster}”, ${data.step}s steps`}><Ic icon={Database} size={12} />Clickland<span className="dim mono">{data.cluster}</span></span>;
+    return (
+      <span className="metrics-src" title={`Clickland, k8s.cluster.name “${data.cluster}”, ${data.step}s steps`}>
+        <Ic icon={Database} size={12} />Clickland<span className="dim mono">{data.cluster}</span>
+        {onOpenClickland ? <button className="link-btn" onClick={onOpenClickland}>Open in Clickland</button> : null}
+      </span>
+    );
   if (data.source === "prometheus")
     return <span className="metrics-src" title={`The cluster's Prometheus (${data.prometheus}), cAdvisor series, ${data.step}s steps`}><Ic icon={Flame} size={12} />Prometheus<span className="dim mono">{data.prometheus?.split("/")[1]}</span><button className="link-btn" onClick={() => choosePrometheus(null)}>Stop using</button></span>;
   if (data.source !== "metrics-server") return null;

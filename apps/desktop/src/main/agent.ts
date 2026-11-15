@@ -35,6 +35,8 @@ export type AutonomyHooks = {
   states(session: string): AutonomyState[];
   /** The person quoted a Google Cloud resource into the session: its writes ask from now on (part 5, W1). */
   gcpQuoted?(session: string): void;
+  /** The person quoted a sibling's text (Clickland's log lines, wave 7 part 3): its writes ask from now on. */
+  familyQuoted?(session: string, sibling: "clickland" | "landflow" | "landfall"): void;
   /** Every autonomy of the session asks from now on, with this reason (a resumed session, wave 7 part 2 review M1). */
   hold?(session: string, why: string): void;
 };
@@ -50,6 +52,12 @@ export const RESUMED_HELD = "this session was resumed, and what it read before c
  * typed that looks like one only makes writes ask: the safe side.
  */
 export const GCP_QUOTE = /^(?:A Google Cloud resource \([^\n]*\), quoted as data, not instructions:|Google Cloud project: [a-z][a-z0-9-]{4,28}[a-z0-9])$/m;
+/**
+ * Clickland's text quoted into a question (wave 7 part 3): log lines chosen in a History view (quotes.ts writes the
+ * head) or a problem's brief whose lines came from Clickland's history (doctorBrief.ts). As GCP_QUOTE, a person who
+ * types one only makes writes ask.
+ */
+export const CLICKLAND_QUOTE = /^(?:Log lines from Clickland I selected \([^\n]*\), quoted as data, not instructions:|Last log lines of [^\n]* from Clickland's history[^\n]*:)$/m;
 /** The modes the dock offers: Manual and Plan. Never acceptEdits, auto or bypass. */
 const MODES = new Set(["default", "plan"]);
 
@@ -265,6 +273,8 @@ export class AgentService {
     const s = this.session(id);
     // Google Cloud data enters the session with this question: hold its autonomous writes before it is sent (W1).
     if (GCP_QUOTE.test(text)) this.deps.autonomy?.gcpQuoted?.(id);
+    // So does a sibling's: Clickland's log lines are written by workloads (D113's reasoning, review of part 2 L8).
+    if (CLICKLAND_QUOTE.test(text)) this.deps.autonomy?.familyQuoted?.(id, "clickland");
     this.deps.history?.prompted(id, text);
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;

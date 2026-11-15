@@ -11,6 +11,8 @@ import { Ic, MOD } from "./icons";
 import { copyText, duration } from "./present";
 import { onLogEnd, onLogLines } from "./streams";
 import { capForAsk } from "./TerminalView";
+import { clicklandScope, useClickland } from "./clickland";
+import { HistoryLogs } from "./HistoryLogs";
 import { ansi, findHits, matcher, mergeRows, plain, tsKey, type Row } from "./logRows";
 
 const TAIL = 500;
@@ -26,13 +28,38 @@ const localTime = (ts: string) => {
   return Number.isNaN(d.getTime()) ? "" : `${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}.${String(d.getMilliseconds()).padStart(3, "0")}`;
 };
 
-export function LogsView(props: {
+type LogsProps = {
   handle: string;
   source: LogSource;
   place: "drawer" | "panel";
   onAsk: (c: AskContext) => void;
   onOpenInPanel?: (s: LogSource) => void;
-}) {
+};
+
+/**
+ * The Logs view: Live (the kubelet, followed) or, when Clickland is ready and the object is a pod or a workload it
+ * names, History (Clickland's lines, wave 7 D118). A pod that is gone offers its history.
+ */
+export function LogsView(props: LogsProps) {
+  const ck = useClickland();
+  const [mode, setMode] = useState<"live" | "history">("live");
+  const scope = ck.ready ? clicklandScope(props.source.kind, props.source.namespace, props.source.name) : undefined;
+  const [containers, setContainers] = useState<string[]>([]);
+  const history = mode === "history" && !!scope;
+  const switcher = scope ? (
+    <div className="seg range src-switch" role="radiogroup" aria-label="Log source">
+      <button role="radio" aria-checked={!history} className={!history ? "on" : ""} title="Live from the kubelet, followed" onClick={() => setMode("live")}>Live</button>
+      <button role="radio" aria-checked={history} className={history ? "on" : ""} title="History from Clickland" onClick={() => setMode("history")}>History</button>
+    </div>
+  ) : null;
+  if (history) {
+    const label = `${props.source.kind === "Pod" ? "" : `${props.source.kind.toLowerCase()} `}${props.source.name}`;
+    return <HistoryLogs handle={props.handle} scope={{ ...scope, ...(props.source.container ? { container: props.source.container } : {}) }} containers={containers} switcher={switcher} label={label} onAsk={props.onAsk} />;
+  }
+  return <LiveLogs {...props} switcher={switcher} onContainers={setContainers} onHistory={scope ? () => setMode("history") : undefined} />;
+}
+
+function LiveLogs(props: LogsProps & { switcher: React.ReactNode; onContainers: (c: string[]) => void; onHistory: (() => void) | undefined }) {
   const { source } = props;
   const now = useNow();
   const pods = useWatch({ handle: props.handle, group: "", version: "v1", resource: "pods", namespace: source.namespace });
@@ -52,6 +79,7 @@ export function LogsView(props: {
   useEffect(() => {
     if (source.container) setContainer(source.container);
   }, [source.container]);
+  useEffect(() => props.onContainers(containers), [containers.join()]); // eslint-disable-line react-hooks/exhaustive-deps
   const cName = container && containers.includes(container) ? container : ((first?.spec?.containers ?? [])[0] as { name: string } | undefined)?.name ?? "";
   const [previous, setPrevious] = useState(false);
   const [wrap, setWrap] = useState(props.place === "drawer");
@@ -279,6 +307,7 @@ export function LogsView(props: {
   return (
     <div className="logs-pane" onKeyDownCapture={onKey}>
       <div className="logs-tools" role="toolbar" aria-label="Log tools">
+        {props.switcher}
         {containers.length > 1 ? (
           <label className="pill-select" title="Container">
             <span className="sr-only">Container</span>
@@ -331,7 +360,12 @@ export function LogsView(props: {
       ) : null}
       <div className="logs-wrap">
         <div ref={box} className={"logs" + (wrap ? "" : " nowrap")} role="log" aria-label="Logs" aria-live="off" tabIndex={0} onScroll={onScroll} onMouseUp={onMouseUp}>
-          {notFound ? <div className="logs-end">{many ? "No pods match this workload's selector." : "The pod is gone."}</div> : null}
+          {notFound ? (
+            <div className="logs-end">
+              {many ? "No pods match this workload's selector." : "The pod is gone."}
+              {props.onHistory ? <> <button className="link-btn" onClick={props.onHistory}>See its history in Clickland</button></> : null}
+            </div>
+          ) : null}
           {from > 0 ? <button className="link-btn more" onClick={() => (setShow((s) => s + SHOW_STEP), setFollowing(false))}>Show {Math.min(SHOW_STEP, from)} earlier lines</button> : null}
           {visible.map((r) => (
             <Line key={r.key} row={r} stamps={stamps} colour={r.pod ? slot.get(r.pod) : undefined} re={re}

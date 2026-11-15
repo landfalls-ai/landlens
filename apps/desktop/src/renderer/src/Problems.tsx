@@ -6,7 +6,7 @@ import type { ClusterHealth, DoctorEvidence, Problem } from "@landlens/contracts
 import { age } from "@landlens/kube/status";
 import { missingChecks } from "@landlens/kube/checks";
 import {
-  CircleCheck, CircleX, Clock, Info, Lock, ScrollText, Sparkles, SquareArrowOutUpRight, Stethoscope, TriangleAlert, X,
+  CircleCheck, CircleX, Clock, Database, Info, Lock, ScrollText, Sparkles, SquareArrowOutUpRight, Stethoscope, TriangleAlert, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, type ApiError } from "./api";
@@ -374,8 +374,10 @@ function Evidence({ p, state, gone, now, onAgain, onFull }: {
   return (
     <div className="logs-pane">
       <div className="logs-note">
-        <Ic icon={ScrollText} size={13} />
-        <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{state.at ? `, read ${when(new Date(state.at).toISOString(), now)}` : ""}</span>
+        <Ic icon={log.source === "clickland" ? Database : ScrollText} size={13} />
+        {log.source === "clickland"
+          ? <span><b>From Clickland's history</b>: <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}. The kubelet no longer has its runs.</span>
+          : <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{state.at ? `, read ${when(new Date(state.at).toISOString(), now)}` : ""}</span>}
         <span className="grow" />
         {again}
         <button className="link-btn" onClick={() => onFull(log.pod, p.namespace, log.container)}>Open full logs</button>
