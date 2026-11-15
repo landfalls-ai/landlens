@@ -101,7 +101,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   sends every container. Where you and someone else both changed a field while you edited, yours is kept (the banner
   names it) rather than waiting for you. Secrets can't be edited or created. Create sends its documents in order: if
   one fails at Apply, the ones before it stay created (the error says which). There is no "Show change" on the
-  Applied row, no flash of the row, and the create sheet isn't in the palette yet (part 4). Templates are fixed.
+  Applied row and no flash of the row. Templates are fixed.
   An edit is one object; a leading-zero number like `0600` is refused rather than guessed (YAML 1.1 and 1.2 differ),
   so such values need `0o600` or quotes. A review lasts 15 minutes and a window keeps at most 20. The Apply guard
   (no card-wide Enter, key presses ignored for half a second) is renderer behaviour, checked in e2e only by a click.
