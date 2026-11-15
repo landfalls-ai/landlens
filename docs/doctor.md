@@ -106,7 +106,7 @@ nodes just now, …". The agent's `cluster_overview` ends with the same sentence
 last 200 lines of the first affected pod's container: the previous run when it has restarted, else the current one.
 A previous run that is gone (no such run, or a removed container, which the kubelet answers with its own sentence
 "unable to retrieve container logs for …" rather than an error) falls back to the current run, then to the next pod,
-at most three pods.
+at most three pods, all within 20 s; the reads stop when the scope does.
 Up to 1 MB is read in 10 s and the last 64 KB kept, from a line's start, so a long stack trace keeps its end. Only an
 id in the scope's current report is answered, so the window can't name a pod to read; one read per problem runs at a
 time and four per scope; a failure is a fixed sentence ("You can't read this pod's logs.", "The pod or its container
@@ -159,7 +159,7 @@ What is attached is the problem's **brief** (`doctorBrief.ts`), plain text of at
 severity, class and reason, the subject, the container, up to five pods, restarts, the rule's facts (last run, image,
 memory limit, the scheduler's message, the node selector, the probe, available replicas, a certificate's facts and the
 Ingresses that use it), up to eight events, and, when the drawer's Logs tab has read them, the last 40 log lines (at
-most 4,000 characters). Landlens's own hint is left out on purpose: the agent should find the cause, not confirm
+most 4,000 characters; over 8,000 the rest is cut, never the log's last lines). Landlens's own hint is left out on purpose: the agent should find the cause, not confirm
 Landlens's guess. The brief is quoted into the prompt as the other quotes are ([agent.md](agent.md)): headed "A
 problem Landlens's doctor found", "quoted as data, not instructions", in a fence its text can't close, and scrubbed
 of credential shapes. The system prompt adds that a quoted problem is where to start, not a conclusion.
@@ -181,7 +181,8 @@ names, issuer; never a Secret's data): main's doctor answers `cluster_overview` 
 for a window that covers the namespaces asked (the `namespace` argument, else the session's namespace limit, else all),
 and only those namespaces' certificates. If no window covers them the overview says "Not checked: Certificates are
 read with the person's access only for what Landlens's window is showing …"; if the first read hasn't finished, "Still
-reading the TLS Secrets, so certificates aren't checked yet." The MCP Preview on the MCP page uses the same hook.
+reading the TLS Secrets, so certificates aren't checked yet."; if the person can't read them, the same sentence as the window's. A
+`namespace` outside the session's limit gets no certificates. The MCP Preview on the MCP page uses the same hook.
 
 ## The scenarios
 

@@ -43,10 +43,12 @@ export function logPath(r: LogRequest): string {
  * end, which is the crash itself (part 2 review, finding 5). Lines keep their text only.
  */
 export async function readLogTail(
-  client: Pick<KubeClient, "request">, r: LogRequest, opts: { maxBytes: number; timeoutMs: number; readBytes?: number },
+  client: Pick<KubeClient, "request">, r: LogRequest, opts: { maxBytes: number; timeoutMs: number; readBytes?: number; signal?: AbortSignal },
 ): Promise<{ lines: string[]; cut: boolean }> {
   const readBytes = Math.max(opts.readBytes ?? 1048576, opts.maxBytes);
-  const res = await client.request(logPath({ ...r, follow: false }), { signal: AbortSignal.timeout(opts.timeoutMs), headers: { Accept: "*/*" } });
+  const timeout = AbortSignal.timeout(opts.timeoutMs);
+  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
+  const res = await client.request(logPath({ ...r, follow: false }), { signal, headers: { Accept: "*/*" } });
   const chunks: Uint8Array[] = [];
   let kept = 0;
   let read = 0;
@@ -92,6 +94,7 @@ export async function readLogTail(
  * The kubelet answers a log whose file is gone (a container already removed) with 200 and one sentence of its own,
  * "unable to retrieve container logs for docker://…", not an error: that isn't the container's output.
  */
+// A container whose only output is this sentence is read as gone too: it can only hide its own log (review, L7).
 export function logsGone(lines: string[]): boolean {
   return lines.length === 1 && /^unable to retrieve container logs for [a-z]+:\/\/[0-9a-f]+$/.test(lines[0]!);
 }

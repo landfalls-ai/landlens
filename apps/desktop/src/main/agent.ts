@@ -3,7 +3,7 @@
 // answers come back. Tool calls in the updates are handed to the gateway too, to pair dock cards with logged calls.
 import { randomBytes } from "node:crypto";
 import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentSettingsInfo, AgentStatus, AgentUpdate, ResourceRef } from "@landlens/contracts";
-import { AcpHost, agentEnv, claudeAdapterEntry, listSkills, loginPath, objectUri, resourceBlock, startClusterSession, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
+import { AcpHost, agentEnv, claudeAdapterEntry, listSkills, loginPath, objectUri, resourceBlock, startClusterSession, unreadableObject, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { apiPath, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { getJson, redactObject, redactText } from "@landlens/kube-mcp";
@@ -224,10 +224,10 @@ export class AgentService {
     for (const ref of context) {
       // An object that has gone, or that the session may not read, doesn't fail the question: it says so, in a fixed
       // sentence (a problem's subject can be deleted between the doctor's read and the ask).
-      const { uri, body } = await this.describe(s, ref).catch((e: { status?: number }) => ({
-        uri: `${ref.resource}/${ref.namespace ? `${ref.namespace}/` : ""}${ref.name}`,
-        body: `# Landlens couldn't read this object with the session's access${e?.status ? ` (HTTP ${e.status})` : ""}.\n`,
-      }));
+      const { uri, body } = await this.describe(s, ref).catch((e: { status?: unknown }) => {
+        if (typeof e?.status !== "number") throw e;
+        return unreadableObject(s.context, ref, e.status);
+      });
       blocks.push(embedded ? resourceBlock(uri, body) : { type: "text", text: `${uri}\n${body}` });
     }
     const res = await this.host!.prompt(id, blocks);

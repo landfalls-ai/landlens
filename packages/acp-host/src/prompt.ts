@@ -47,6 +47,15 @@ export function resourceBlock(uri: string, text: string, mimeType = "application
   return { type: "resource" as const, resource: { uri, mimeType, text } };
 }
 
+/**
+ * What "Ask about this" attaches when the session can't read the object (it has gone, or the session's limit refuses
+ * it): the same URI form and a fixed sentence, so the question still goes. Only an API error (one with a status)
+ * comes here; anything else fails the ask as before (review of wave 5 part 4, L5).
+ */
+export function unreadableObject(context: string, ref: { resource: string; name: string; namespace?: string }, status: number): { uri: string; body: string } {
+  return { uri: objectUri(context, ref.resource, ref.name, ref.namespace), body: `# Landlens couldn't read this object with the session's access (HTTP ${status}).\n` };
+}
+
 /** k8s://<context>/<namespace or _cluster>/<kind>/<name> */
 export function objectUri(context: string, kind: string, name: string, namespace?: string): string {
   const seg = (s: string) => encodeURIComponent(s);

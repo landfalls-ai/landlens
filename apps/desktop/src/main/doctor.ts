@@ -19,7 +19,7 @@ export const DOCTOR = {
   scopesPerCluster: 2,
   /** A source that failed (not forbidden, not cut) is read again after this, not after its full interval. */
   retryMs: 30_000,
-  log: { tailLines: 200, maxBytes: 64 * 1024, readBytes: 1048576, timeoutMs: 10_000, pods: 3 },
+  log: { tailLines: 200, maxBytes: 64 * 1024, readBytes: 1048576, timeoutMs: 10_000, pods: 3, totalMs: 20_000 },
   /** Log reads in flight per scope (one per problem). */
   evidencePerScope: 4,
 } as const;
@@ -117,17 +117,19 @@ export class DoctorService {
     const had = s.evidence.get(id);
     if (had) return had;
     if (s.evidence.size >= DOCTOR.evidencePerScope) throw new KubeError(429, "Too many log reads at once; try again in a moment.");
-    const run = this.readEvidence(handle, p).finally(() => s.evidence.delete(id));
+    const run = this.readEvidence(handle, p, s.stopped.signal).finally(() => s.evidence.delete(id));
     s.evidence.set(id, run);
     return run;
   }
 
-  private async readEvidence(handle: string, p: Problem): Promise<DoctorEvidence> {
+  private async readEvidence(handle: string, p: Problem, stopped: AbortSignal): Promise<DoctorEvidence> {
     const crash = p.class === "crashloop" || p.class === "oom" || p.class === "start" || p.class === "restarts" || (p.class === "probe" && p.facts.probe?.type !== "readiness");
     if (!crash || !p.pods.length || !p.namespace || !p.container) return {};
     const container = p.container.replace(/^init:/, "");
     const client = this.deps.clusters.get(handle).client;
-    const read = (pod: string, previous: boolean) => readLogTail(client, { namespace: p.namespace!, pod, container, previous, tailLines: DOCTOR.log.tailLines }, DOCTOR.log);
+    // All reads for one problem share a 20 s deadline and stop with the scope (review of part 4, L4).
+    const signal = AbortSignal.any([AbortSignal.timeout(DOCTOR.log.totalMs), stopped]);
+    const read = (pod: string, previous: boolean) => readLogTail(client, { namespace: p.namespace!, pod, container, previous, tailLines: DOCTOR.log.tailLines }, { ...DOCTOR.log, signal });
     const wantPrevious = (p.restarts ?? 0) > 0 && p.class !== "start";
     let error: unknown;
     // The previous run can be gone (a new pod: 400; a removed container: the kubelet's sentence), so the current run
@@ -141,8 +143,9 @@ export class DoctorService {
         } catch (e) {
           error = e;
           const status = (e as KubeError).status;
+          if (signal.aborted) return { log: { error: logError(e) } };
           if (previous && status === 400) continue; // no previous run: the current one
-          if (status === 404) break; // this pod went: the next
+          if (status === 404 || status === 400) break; // this pod went, or has no log yet: the next
           return { log: { error: logError(e) } };
         }
       }
@@ -159,12 +162,16 @@ export class DoctorService {
   certsFor(handle: string, namespaces?: string[]): { state: DoctorCheckState; certs?: CertInput[] } {
     const scopes = this.scopes.get(handle);
     const all = scopes?.get("");
-    const covering = (s: Scope | undefined) => (!s ? undefined : s.certs.value ? { state: s.checks.certs, certs: s.certs.value.certs } : { state: "pending" as const });
+    // No value yet is the scope's own state: `pending` before the first read, `forbidden` or `error` after a failed
+    // one (review of part 4, M2). Of the namespace's scope and the all-namespaces scope, one with facts wins (L3).
+    const covering = (s: Scope | undefined): { state: DoctorCheckState; certs?: CertInput[] } | undefined =>
+      !s ? undefined : s.certs.value ? { state: s.checks.certs, certs: s.certs.value.certs } : { state: s.checks.certs === "ok" || s.checks.certs === "partial" ? "pending" : s.checks.certs };
+    const best = (a?: ReturnType<typeof covering>, b?: ReturnType<typeof covering>) => (a?.certs ? a : b?.certs ? b : a ?? b);
     if (!namespaces) return covering(all) ?? { state: "skipped" };
     const out: CertInput[] = [];
     let state: DoctorCheckState = "ok";
     for (const ns of namespaces) {
-      const got = covering(scopes?.get(ns)) ?? covering(all);
+      const got = best(covering(scopes?.get(ns)), covering(all));
       if (!got) return { state: "skipped" };
       if (!got.certs) return { state: got.state };
       if (got.state !== "ok") state = got.state;

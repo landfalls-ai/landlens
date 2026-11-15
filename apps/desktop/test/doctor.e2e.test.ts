@@ -200,12 +200,23 @@ describe.runIf(run)("the Problems page on OrbStack", () => {
     };
     const answer = async () => (await dock().locator(".msg-agent").allTextContents()).join("\n");
     /**
-     * A failed card is a bug, unless it's the fence: Landlens refusing a Secret, or kubectl in the agent's own shell,
-     * which has no kubeconfig (the cluster is reached only through Landlens's tools). A previous run's log can also be
-     * briefly missing while a container restarts every few seconds (thumbnailer's OOM loop): the API's answer, not ours.
+     * A failed card is a bug, unless it failed for a reason that isn't Landlens's: a refused Secret (the agent sometimes
+     * looks, and is told no), the agent's own shell typo (zsh's "no matches found" for an unquoted `[*]`; it retries
+     * quoted, and kubectl then works through the front door), or a previous run's log briefly missing while a container
+     * restarts every few seconds (thumbnailer's OOM loop).
      */
+    const excused = ({ title, out }: { title: string; out: string }) =>
+      /may not access secrets/.test(out) ||
+      (/^shell/i.test(title) && /no matches found|parse error near/.test(out)) ||
+      (/^get logs.*previous\s*$/i.test(title.trim()) && /previous terminated container|not found|unable to retrieve container logs/i.test(out));
     const failedCards = async () =>
-      (await dock().locator(".tool-failed").evaluateAll((els) => els.map((e) => (e as unknown as { innerText: string }).innerText))).filter((t) => !/\bsecrets?\b/i.test(t) && !/^shell\s+kubectl\b/.test(t) && !/^get logs\s+\S+ · previous$/.test(t));
+      (await dock().locator(".tool-failed").evaluateAll((els) => els.map((x) => {
+        type El = { textContent: string | null; querySelector(s: string): El | null };
+        const e = x as unknown as El;
+        return { title: (e.querySelector("summary") ?? e).textContent ?? "", out: e.querySelector(".tool-out")?.textContent ?? "" };
+      })))
+        .filter((c) => !excused(c))
+        .map(({ title, out }) => `${title}\n${out.slice(0, 300)}`);
 
     beforeAll(async () => {
       await sidebar().getByRole("button", { name: "Problems", exact: true }).click();
@@ -241,7 +252,10 @@ describe.runIf(run)("the Problems page on OrbStack", () => {
       await finish(async (card) => {
         if (seen++) return;
         await card.locator(".diff").first().waitFor();
-        expect(await card.locator(".diff").first().innerText()).toContain("8080");
+        // 8080, or the container's port named for it (`http` in readiness.yaml): both point the probe where nc listens.
+        const diff = await card.locator(".diff").first().innerText();
+        expect(diff).toMatch(/removed:[\s\S]*8081/);
+        expect(diff).toMatch(/added:[\s\S]*(8080|port: http\b)/);
         await card.scrollIntoViewIfNeeded();
         await shot(page, "w5-41-ask-change-card");
         await card.getByRole("button", { name: "Reject", exact: true }).click();

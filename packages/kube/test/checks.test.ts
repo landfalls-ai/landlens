@@ -7,7 +7,11 @@ describe("the check sentences", () => {
     expect(missingChecks({ pods: "ok", workloads: "ok", events: "ok", nodes: "off", certs: "ok" })).toEqual([]);
     expect(missingChecks(undefined)).toEqual([]);
     expect(checkSentence("pods", "forbidden")).toBeUndefined();
-    for (const s of ["forbidden", "error", "partial", "pending", "skipped"] as const) expect(checkSentence("certs", s), s).toBeTruthy();
+    for (const k of ["workloads", "events", "nodes", "certs"] as const) {
+      for (const s of ["forbidden", "error", "partial", "pending", "skipped"] as const) expect(checkSentence(k, s), `${k} ${s}`).toBeTruthy();
+      expect(checkSentence(k, "ok"), k).toBeUndefined();
+    }
+    for (const s of ["error", "partial", "pending", "skipped"] as const) expect(checkSentence("pods", s), `pods ${s}`).toBeTruthy();
   });
 
   it("orders pods, workloads, events, nodes, certificates, and names what certificates need", () => {

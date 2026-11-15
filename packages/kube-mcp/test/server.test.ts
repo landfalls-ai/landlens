@@ -210,6 +210,9 @@ describe("cluster_overview's certificates (wave 5, D67)", () => {
   const expired = { notBefore: "2026-01-01T00:00:00.000Z", notAfter: "2026-02-01T00:00:00.000Z", which: "leaf" as const, subject: "shop.test", issuer: "ca", sans: ["shop.test"], selfSigned: true };
   const open = async (hook: AgentCluster["certs"], namespaces?: string[]) => {
     const c = fakeCluster();
+    // Another namespace's lists read as empty rather than 404, so nothing but the tool's own check stands in the way.
+    const base = c.get;
+    c.get = async (path, accept) => (/^\/(api\/v1|apis\/apps\/v1)\/namespaces\/kube-system\/[a-z]+$/.test(path.split("?")[0]!) ? { status: 200, text: JSON.stringify({ items: [], metadata: {} }) } : base(path, accept));
     if (namespaces) c.namespaces = namespaces;
     if (hook) c.certs = hook;
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -219,18 +222,23 @@ describe("cluster_overview's certificates (wave 5, D67)", () => {
     return { c, run: async (args: Record<string, unknown> = {}) => ((await cl.callTool({ name: "cluster_overview", arguments: args })) as any).content.map((x: any) => x.text).join("\n") as string, close: () => cl.close() };
   };
 
-  it("asks the person's check only for the session's namespaces, or the one asked, and reads no Secret itself", async () => {
+  it("asks the person's check only for the session's namespaces, or the one asked within them", async () => {
     const asked: (string[] | undefined)[] = [];
-    const s = await open(async (ns) => (asked.push(ns), { state: "ok", certs: [{ namespace: "landlens-dev", name: "shop-tls", fact: expired }] }), ["landlens-dev"]);
-    const text = await s.run({ namespace: "landlens-dev" });
-    expect(text).toMatch(/- \[failing\] Secret landlens-dev\/shop-tls: shop-tls expired/);
+    // The hook answers by the namespaces asked, as main's certsFor does; the fake cluster lets every pod read through,
+    // so only the tool's own check keeps another namespace's certificates out (review of part 4, M1).
+    const hook: AgentCluster["certs"] = async (ns) => (asked.push(ns), { state: "ok", certs: (ns ?? ["landlens-dev", "kube-system"]).map((n) => ({ namespace: n, name: `${n}-tls`, fact: expired })) });
+    const s = await open(hook, ["landlens-dev"]);
+    expect(await s.run({ namespace: "landlens-dev" })).toMatch(/- \[failing\] Secret landlens-dev\/landlens-dev-tls: landlens-dev-tls expired/);
+    const other = await s.run({ namespace: "kube-system" });
+    expect(other).toMatch(/^No problems found/m);
+    expect(other).not.toMatch(/kube-system-tls/);
     await s.run();
     expect(asked).toEqual([["landlens-dev"], ["landlens-dev"]]);
-    expect(s.c.paths.some((p) => p.includes("/secrets"))).toBe(false);
     await s.close();
-    const all = await open(async (ns) => (asked.push(ns), { state: "ok", certs: [] }));
-    await all.run();
-    expect(asked.at(-1)).toBeUndefined();
+    const all = await open(hook);
+    expect(await all.run()).toMatch(/kube-system\/kube-system-tls/);
+    expect(await all.run({ namespace: "kube-system" })).not.toMatch(/landlens-dev-tls/);
+    expect(asked.slice(2)).toEqual([undefined, ["kube-system"]]);
     await all.close();
   });
 
@@ -241,5 +249,8 @@ describe("cluster_overview's certificates (wave 5, D67)", () => {
     const pending = await open(async () => ({ state: "pending" }));
     expect(await pending.run()).toContain("Still reading the TLS Secrets, so certificates aren't checked yet.");
     await pending.close();
+    const forbidden = await open(async () => ({ state: "forbidden" }));
+    expect(await forbidden.run()).toContain("Can't read Secrets here, so certificates aren't checked.");
+    await forbidden.close();
   });
 });

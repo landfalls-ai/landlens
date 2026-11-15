@@ -15,7 +15,7 @@ const crashing = {
   status: { phase: "Running", containerStatuses: [{ name: "api", restartCount: 4, state: { waiting: { reason: "CrashLoopBackOff" } }, lastState: { terminated: { exitCode: 1, reason: "Error", finishedAt: "2026-11-15T11:59:00Z" } } }] },
 };
 
-function fake(opts: { forbid?: RegExp; podsError?: number; podsEvent?: any; secretGet?: (p: string) => Promise<any>; log?: (p: string) => Promise<Response> } = {}) {
+function fake(opts: { forbid?: RegExp; hang?: RegExp; podsError?: number; podsEvent?: any; secretGet?: (p: string) => Promise<any>; log?: (p: string, init?: { signal?: AbortSignal }) => Promise<Response> } = {}) {
   let now = T0;
   const paths: string[] = [];
   const subs = new Map<string, any>();
@@ -23,6 +23,7 @@ function fake(opts: { forbid?: RegExp; podsError?: number; podsEvent?: any; secr
   const answer = (path: string): any => {
     paths.push(path);
     if (opts.forbid?.test(path)) throw Object.assign(new Error("forbidden"), { status: 403 });
+    if (opts.hang?.test(path)) return new Promise(() => {});
     if (path.includes("/secrets?")) return { items: [{ metadata: { name: "shop-tls", namespace: "shop", resourceVersion: "7" } }] };
     if (path.includes("/secrets/shop-tls")) return { data: { "tls.crt": b64(leaf), "tls.key": b64(MARKER), other: b64(MARKER) } };
     if (path.includes("/events?")) return { items: [] };
@@ -31,8 +32,8 @@ function fake(opts: { forbid?: RegExp; podsError?: number; podsEvent?: any; secr
   const client = {
     json: vi.fn(async (p: string) => answer(p)),
     jsonCapped: vi.fn(async (p: string) => (opts.secretGet && p.includes("/secrets/") ? (paths.push(p), opts.secretGet(p)) : answer(p))),
-    jsonText: vi.fn(async (p: string) => ({ value: answer(p), bytes: 1 })),
-    request: vi.fn(async (p: string) => (paths.push(p), opts.log ? opts.log(p) : new Response("2026-11-15T11:59:00Z FATAL: no DATABASE_URL\n2026-11-15T11:59:00Z bye\n"))),
+    jsonText: vi.fn(async (p: string) => ({ value: await answer(p), bytes: 1 })),
+    request: vi.fn(async (p: string, init?: { signal?: AbortSignal }) => (paths.push(p), opts.log ? opts.log(p, init) : new Response("2026-11-15T11:59:00Z FATAL: no DATABASE_URL\n2026-11-15T11:59:00Z bye\n"))),
   };
   let gone: ((h: string) => void) | undefined;
   const clusters: any = {
@@ -102,6 +103,9 @@ describe("DoctorService", () => {
     const f = fake({ forbid: /events|secrets|statefulsets/ });
     const h = await f.service.health("handle-0001");
     expect(h.checks).toMatchObject({ pods: "ok", workloads: "forbidden", events: "forbidden", certs: "forbidden", nodes: "ok" });
+    // The agent hears the same, not "still reading" forever (review of part 4, M2).
+    expect(f.service.certsFor("handle-0001")).toEqual({ state: "forbidden" });
+    expect(f.service.certsFor("handle-0001", ["shop"])).toEqual({ state: "forbidden" });
     await expect(fake({ podsError: 403 }).service.health("handle-0001")).rejects.toMatchObject({ status: 403 });
     await expect(f.service.health("handle-nope")).rejects.toMatchObject({ status: 404 });
   });
@@ -123,6 +127,26 @@ describe("DoctorService", () => {
     expect(f.service.certsFor("handle-0001", ["other"])).toEqual({ state: "skipped" });
     expect(f.service.certsFor("handle-0001")).toEqual({ state: "skipped" });
     expect(f.service.certsFor("handle-0001", [])).toEqual({ state: "ok", certs: [] });
+  });
+
+  it("gives the agent the all-namespaces scope's facts while a namespace's own scope is still reading (review of part 4, L3)", async () => {
+    const f = fake({ hang: /\/namespaces\/shop\/secrets\?/ });
+    await f.service.health("handle-0001");
+    // The shop scope's Secret list never answers: its ask gives up on certificates after 3 s and answers without them.
+    const asked = f.service.health("handle-0001", "shop");
+    await vi.advanceTimersByTimeAsync(3_001);
+    expect((await asked).checks.certs).toBe("pending");
+    expect(f.service.certsFor("handle-0001", ["shop"])).toMatchObject({ state: "ok", certs: [{ name: "shop-tls" }] });
+  });
+
+  it("stops a problem's log reads when its scope stops (review of part 4, L4)", async () => {
+    const f = fake({ log: (_p, init) => new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason))) });
+    const h = await f.service.health("handle-0001", "shop");
+    const read = f.service.evidence("handle-0001", "shop", h.problems[0]!.id);
+    await vi.advanceTimersByTimeAsync(0);
+    f.service.forget("handle-0001");
+    expect(await read).toEqual({ log: { error: "The log didn't arrive in time." } });
+    expect(f.paths.filter((p) => p.includes("/log?"))).toHaveLength(1);
   });
 
   it("gives evidence only for a problem in the current report", async () => {

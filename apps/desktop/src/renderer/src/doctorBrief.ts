@@ -9,6 +9,7 @@ export const BRIEF = { max: 8_000, pods: 5, events: 8, logLines: 40, logChars: 4
 /** The question Ask Claude sends with a problem (D64). */
 export const PROBLEM_QUESTION = "What is causing this problem, and what is the smallest fix? Give the cause first, then the evidence you checked, then one proposed change.";
 
+const CUT = "\n… (cut)";
 const line = (k: string, v: unknown) => (v === undefined || v === "" ? [] : [`${k}: ${String(v)}`]);
 
 /** The brief: class, severity, subject, the rule's facts, events and, when the drawer has read them, log lines. */
@@ -45,14 +46,17 @@ export function problemBrief(p: Problem, evidence?: DoctorEvidence): string {
     out.push("Events (newest first):");
     for (const e of f.events.slice(0, BRIEF.events)) out.push(`- ${e.at} ${e.reason} x${e.count}: ${e.message}`);
   }
+  // The log goes last but is kept whole: the rest is cut first, so the crash's final lines stay (review of part 4, L2).
   const log = evidence?.log;
+  let tail = "";
   if (log && !("error" in log) && log.lines.length) {
     let lines = log.lines.slice(-BRIEF.logLines).join("\n");
     if (lines.length > BRIEF.logChars) lines = lines.slice(lines.length - BRIEF.logChars);
-    out.push(`Last log lines of ${log.container} in ${log.pod} (${log.previous ? "the previous run" : "the current run"}):`, lines);
+    tail = `\nLast log lines of ${log.container} in ${log.pod} (${log.previous ? "the previous run" : "the current run"}):\n${lines}`;
   }
-  const text = out.join("\n");
-  return text.length > BRIEF.max ? `${text.slice(0, BRIEF.max)}\n… (cut)` : text;
+  const head = out.join("\n");
+  const room = BRIEF.max - tail.length;
+  return (head.length > room ? `${head.slice(0, room - CUT.length)}${CUT}` : head) + tail;
 }
 
 /**
