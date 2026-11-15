@@ -1,4 +1,5 @@
-// cluster_overview → a health card: the verdict, nodes, pods, deployments and restarts, and the problems worst first.
+// cluster_overview → a health card: the verdict, nodes, pods, deployments and restarts, and the doctor's problems worst
+// first (grouped by owner, certificates included when the person's own check read them).
 (function () {
   "use strict";
   var v = window.landlensView;
@@ -55,7 +56,8 @@
           onclick: function () { v.openObject(x.kind, x.namespace, x.name).catch(function () {}); },
         },
           h("div", { class: "row-main" },
-            h("div", { class: "row-name" }, h("span", { class: "kind", text: x.kind }), h("span", { text: x.name, title: where })),
+            // The doctor's title ("ledger-worker is crash-looping") leads; grouped rows say "5 pods" in their detail.
+            h("div", { class: "row-name" }, h("span", { class: "kind", text: x.kind }), h("span", { text: x.title || x.name, title: where })),
             h("div", { class: "row-detail", text: x.namespace ? x.namespace + " · " + detail : detail })),
           v.pill(x.tone, x.reason),
           v.icon("open", 13, "dim")));

@@ -205,3 +205,41 @@ describe("landlens-kube MCP server", () => {
     expect(FAILURE_LINE.test("errors=0 handled")).toBe(false);
   });
 });
+
+describe("cluster_overview's certificates (wave 5, D67)", () => {
+  const expired = { notBefore: "2026-01-01T00:00:00.000Z", notAfter: "2026-02-01T00:00:00.000Z", which: "leaf" as const, subject: "shop.test", issuer: "ca", sans: ["shop.test"], selfSigned: true };
+  const open = async (hook: AgentCluster["certs"], namespaces?: string[]) => {
+    const c = fakeCluster();
+    if (namespaces) c.namespaces = namespaces;
+    if (hook) c.certs = hook;
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await kubeMcpServer(c).connect(a);
+    const cl = new Client({ name: "test", version: "0" });
+    await cl.connect(b);
+    return { c, run: async (args: Record<string, unknown> = {}) => ((await cl.callTool({ name: "cluster_overview", arguments: args })) as any).content.map((x: any) => x.text).join("\n") as string, close: () => cl.close() };
+  };
+
+  it("asks the person's check only for the session's namespaces, or the one asked, and reads no Secret itself", async () => {
+    const asked: (string[] | undefined)[] = [];
+    const s = await open(async (ns) => (asked.push(ns), { state: "ok", certs: [{ namespace: "landlens-dev", name: "shop-tls", fact: expired }] }), ["landlens-dev"]);
+    const text = await s.run({ namespace: "landlens-dev" });
+    expect(text).toMatch(/- \[failing\] Secret landlens-dev\/shop-tls: shop-tls expired/);
+    await s.run();
+    expect(asked).toEqual([["landlens-dev"], ["landlens-dev"]]);
+    expect(s.c.paths.some((p) => p.includes("/secrets"))).toBe(false);
+    await s.close();
+    const all = await open(async (ns) => (asked.push(ns), { state: "ok", certs: [] }));
+    await all.run();
+    expect(asked.at(-1)).toBeUndefined();
+    await all.close();
+  });
+
+  it("says when certificates weren't read, never 'no problems' for them", async () => {
+    const skipped = await open(async () => ({ state: "skipped" }));
+    expect(await skipped.run()).toContain("Not checked: Certificates are read with the person's access only for what Landlens's window is showing");
+    await skipped.close();
+    const pending = await open(async () => ({ state: "pending" }));
+    expect(await pending.run()).toContain("Still reading the TLS Secrets, so certificates aren't checked yet.");
+    await pending.close();
+  });
+});

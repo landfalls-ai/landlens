@@ -86,6 +86,8 @@ export function JumpPalette(props: {
   open?: Target;
   /** The doctor's report the workspace already holds (D61): no new read. */
   problems: Problem[];
+  /** What to say when there are no problems to list: not checked yet, couldn't check, or checks skipped (M2). */
+  problemsEmpty: string;
   onProblem: (p: Problem) => void;
   onAskProblem: (p: Problem) => void;
   onOpenSubject: (p: Problem) => void;
@@ -252,7 +254,7 @@ export function JumpPalette(props: {
 
   const parsed = parseQuery(q);
   const placeholder = pfocus ? `Actions for ${pfocus.p.name}…` : focus?.containers ? `Container in ${focus.t.name}…` : focus ? `Actions for ${focus.t.name}…` : switching ? "Switch to a cluster…" : "Search objects, kinds, problems and actions…";
-  const empty = parsed.problems && !pfocus && !props.problems.length ? "No problems found" : index.loading && !rows.length ? "Reading names…" : pfocus || focus || switching || parsed.commands || parsed.verb || q.trim() ? `Nothing matches “${q.trim()}”` : "Type to search";
+  const empty = parsed.problems && !pfocus && !props.problems.length ? props.problemsEmpty : index.loading && !rows.length ? "Reading names…" : pfocus || focus || switching || parsed.commands || parsed.verb || q.trim() ? `Nothing matches “${q.trim()}”` : "Type to search";
 
   let last: Group | undefined;
   return (

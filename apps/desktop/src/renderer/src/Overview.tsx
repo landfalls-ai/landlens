@@ -11,6 +11,8 @@ import type { ApiError } from "./api";
 import { Sparkline } from "./charts/Sparkline";
 import { useMetrics } from "./metrics";
 import { Usage } from "./Usage";
+import { ChecksStrip } from "./Problems";
+import { missingChecks } from "@landlens/kube/checks";
 
 /** The Overview shows the worst few; the Problems page has them all. */
 const OV_PROBLEMS = 5;
@@ -52,6 +54,7 @@ export function Overview(props: {
   return (
     <div className="ov">
       <Verdict h={h} onAsk={props.onAskAll} />
+      <ChecksStrip h={h} />
       <div className="tiles">
         {h.nodes ? (
           <a className="tile" role="link" tabIndex={0} aria-label={`Open nodes: ${h.nodes.ready} of ${h.nodes.total} ready`} onClick={() => props.onOpenList("nodes")} onKeyDown={(e) => e.key === "Enter" && props.onOpenList("nodes")}>
@@ -107,7 +110,7 @@ export function Overview(props: {
               {h.problems.length > OV_PROBLEMS ? <button className="show-all" onClick={props.onSeeAll}>See all {h.problems.length}{h.cut ? "+" : ""}</button> : null}
             </>
           ) : (
-            <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>No problems found</span></div>
+            <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>{missingChecks(h.checks).length ? "No problems found in what was checked" : "No problems found"}</span></div>
           )}
         </section>
         <section className="panel" aria-label="Recent warnings">
@@ -129,11 +132,13 @@ function Verdict({ h, onAsk }: { h: ClusterHealth; onAsk: () => void }) {
   const bad = h.problems.filter((p) => p.tone === "bad");
   const warn = h.problems.filter((p) => p.tone === "warn");
   if (!h.problems.length) {
+    // "All clear" only when every check was made (part 3 review, M2): otherwise the strip below says what wasn't.
+    const skipped = missingChecks(h.checks).length > 0;
     return (
-      <section className="verdict ok" aria-label="Verdict">
-        <span className="verdict-icon"><Ic icon={CircleCheck} size={22} /></span>
+      <section className={`verdict ${skipped ? "warn" : "ok"}`} aria-label="Verdict">
+        <span className="verdict-icon"><Ic icon={skipped ? TriangleAlert : CircleCheck} size={22} /></span>
         <div className="verdict-text">
-          <h2>All clear</h2>
+          <h2>{skipped ? "No problems found, but some checks were skipped" : "All clear"}</h2>
           <p>{plural(h.pods.running, "pod")} running{h.nodes ? ` on ${plural(h.nodes.total, "node")}` : ""}.</p>
         </div>
       </section>

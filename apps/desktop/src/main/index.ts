@@ -76,6 +76,7 @@ async function start() {
     frontDoor,
     clusters,
     metrics: series,
+    certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     push: (call) => send("mcp:call", call),
     ask: {
       confirm: async ({ message, detail, yes }) => {
@@ -99,6 +100,7 @@ async function start() {
     onToolCall: (u) => gateway.card(u),
     onPermit: (p) => gateway.permit(p.session, p),
     metrics: series,
+    certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     history: new AgentHistory(join(app.getPath("userData"), "agent-history.json")),
     settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
     log: (l) => console.log(l),

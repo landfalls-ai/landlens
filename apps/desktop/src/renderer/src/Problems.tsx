@@ -50,6 +50,8 @@ export function ProblemsPage(props: {
   onAsk: (p: Problem) => void;
   onOpen: (p: Problem) => void;
   onClearText: () => void;
+  /** The last refresh failed (L2). */
+  stale?: string;
 }) {
   const { health: h, now } = props;
   const [cls, setCls] = useState<ProblemClass>();
@@ -118,6 +120,12 @@ export function ProblemsPage(props: {
           </div>
         ) : null}
       </div>
+      {props.stale ? (
+        <div className="notice pb-checks" role="status">
+          <Ic icon={CircleX} size={15} className="tone-warn" />
+          <div className="notice-body"><strong>Couldn't check again; this is what was read {when(h.at, now) ?? "earlier"}.</strong><p>{props.stale}</p></div>
+        </div>
+      ) : null}
       <ChecksStrip h={h} />
       {!all.length ? (
         <div className="ov-empty pb-empty"><Ic icon={CircleCheck} size={22} /><span>No problems found</span><span className="dim small">Checked {when(h.at, now) ?? "just now"}.</span></div>
@@ -171,9 +179,14 @@ export function ProblemDrawer(props: {
   handle: string;
   namespace: string;
   held: HeldProblem;
+  /** The report was cut at 500: a problem that left it may still be there (part 3 review, L1). */
+  cut?: boolean;
+  /** The last refresh failed: what is shown is older than it looks (L2). */
+  stale?: string;
   now: number;
   onClose: () => void;
-  onAsk: (p: Problem) => void;
+  /** With the log lines this drawer has read, if any, for the brief. */
+  onAsk: (p: Problem, evidence?: DoctorEvidence) => void;
   onOpen: (p: Problem) => void;
   onNavigate: (t: NavTarget) => void;
   /** The pod's Details → Logs. */
@@ -183,7 +196,12 @@ export function ProblemDrawer(props: {
   const logs = hasLogs(p);
   const tabs: Tab[] = logs ? ["summary", "events", "logs"] : ["summary", "events"];
   const [tab, setTab] = useState<Tab>("summary");
-  const [ev, setEv] = useState<{ id: string; e?: DoctorEvidence; error?: ApiError }>();
+  // The evidence for one problem: read when the Logs tab is first opened, kept when you switch tabs (its answer is
+  // never dropped), and read again on "Read again" or after an error (part 3 review, L3).
+  const [ev, setEv] = useState<{ id: string; e?: DoctorEvidence; error?: ApiError; at?: number }>();
+  const [again, setAgain] = useState(0);
+  const current = useRef(p.id);
+  current.current = p.id;
   useEffect(() => setTab("summary"), [p.id]);
   useEffect(() => {
     if (tab === "logs" && !logs) setTab("summary");
@@ -199,19 +217,17 @@ export function ProblemDrawer(props: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [tabs.length]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Evidence is read once per problem, when the Logs tab is first opened, and only while the problem is in the report.
   useEffect(() => {
-    if (tab !== "logs" || ev?.id === p.id || props.held.goneAt) return;
-    let live = true;
-    setEv({ id: p.id });
-    api.invoke("doctor:evidence", { handle: props.handle, ...(props.namespace ? { namespace: props.namespace } : {}), id: p.id }).then(
-      (e) => live && setEv({ id: p.id, e }),
-      (error: ApiError) => live && setEv({ id: p.id, error }),
+    if (tab !== "logs" || props.held.goneAt) return;
+    const id = p.id;
+    if (ev?.id === id && (ev.e || !ev.error) && !again) return; // read, or being read
+    setAgain(0);
+    setEv({ id });
+    api.invoke("doctor:evidence", { handle: props.handle, ...(props.namespace ? { namespace: props.namespace } : {}), id }).then(
+      (e) => current.current === id && setEv({ id, e, at: Date.now() }),
+      (error: ApiError) => current.current === id && setEv({ id, error, at: Date.now() }),
     );
-    return () => {
-      live = false;
-    };
-  }, [tab, p.id, props.handle, props.namespace]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, p.id, again, props.handle, props.namespace]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const since = when(p.since, props.now);
   return (
@@ -221,7 +237,7 @@ export function ProblemDrawer(props: {
           <span className={`kind-tile sm ${p.tone}`}><Ic icon={Stethoscope} size={15} /></span>
           <div className="eyebrow">Problem<span className="sep"> / </span>{p.kind}{p.namespace ? <><span className="sep"> / </span>{p.namespace}</> : null}</div>
           <span className="grow" />
-          <button className="ask-btn" onClick={() => props.onAsk(p)}><Ic icon={Sparkles} size={14} />Ask Claude</button>
+          <button className="ask-btn" onClick={() => props.onAsk(p, ev?.id === p.id ? ev.e : undefined)}><Ic icon={Sparkles} size={14} />Ask Claude</button>
           <button className="icon-btn" onClick={props.onClose} aria-label="Close problem" title="Close (Esc)"><Ic icon={X} size={15} /></button>
         </div>
         <h2 className="drawer-title">{p.title}</h2>
@@ -235,9 +251,21 @@ export function ProblemDrawer(props: {
         </div>
       </header>
       {props.held.goneAt ? (
+        props.cut ? (
+          <div className="notice pb-gone" role="status">
+            <Ic icon={Info} size={15} className="dim" />
+            <div className="notice-body"><strong>Not in the first 500 problems since {clock(props.held.goneAt)}.</strong><p>It may still be failing. This is the last evidence Landlens saw.</p></div>
+          </div>
+        ) : (
+          <div className="notice pb-gone" role="status">
+            <Ic icon={CircleCheck} size={15} className="tone-ok" />
+            <div className="notice-body"><strong>No longer found at {clock(props.held.goneAt)}.</strong><p>This is the last evidence Landlens saw.</p></div>
+          </div>
+        )
+      ) : props.stale ? (
         <div className="notice pb-gone" role="status">
-          <Ic icon={CircleCheck} size={15} className="tone-ok" />
-          <div className="notice-body"><strong>No longer found at {clock(props.held.goneAt)}.</strong><p>This is the last evidence Landlens saw.</p></div>
+          <Ic icon={CircleX} size={15} className="tone-warn" />
+          <div className="notice-body"><strong>Couldn't check again.</strong><p>This is what Landlens saw last.</p></div>
         </div>
       ) : null}
       <nav className="tabs" role="tablist" aria-label="Problem">
@@ -250,7 +278,7 @@ export function ProblemDrawer(props: {
       <div className={"drawer-body" + (tab === "logs" ? " flush" : "")}>
         {tab === "summary" ? <Summary p={p} now={props.now} onNavigate={props.onNavigate} />
           : tab === "events" ? <ProblemEvents p={p} now={props.now} />
-          : <Evidence p={p} state={ev?.id === p.id ? ev : undefined} gone={!!props.held.goneAt} onFull={props.onFullLogs} />}
+          : <Evidence p={p} state={ev?.id === p.id ? ev : undefined} gone={!!props.held.goneAt} now={props.now} onAgain={() => setAgain((n) => n + 1)} onFull={props.onFullLogs} />}
       </div>
     </aside>
   );
@@ -332,19 +360,24 @@ function ProblemEvents({ p, now }: { p: Problem; now: number }) {
   );
 }
 
-function Evidence({ p, state, gone, onFull }: { p: Problem; state?: { e?: DoctorEvidence; error?: ApiError }; gone: boolean; onFull: (pod: string, namespace: string | undefined, container: string) => void }) {
+function Evidence({ p, state, gone, now, onAgain, onFull }: {
+  p: Problem; state?: { e?: DoctorEvidence; error?: ApiError; at?: number }; gone: boolean; now: number; onAgain: () => void;
+  onFull: (pod: string, namespace: string | undefined, container: string) => void;
+}) {
+  const again = gone ? null : <button className="link-btn" onClick={onAgain}>Read again</button>;
   if (!state) return <p className="muted-line pb-pad">{gone ? "This problem is gone, so its logs aren't read." : "Reading the logs…"}</p>;
-  if (state.error) return <p className="muted-line pb-pad">{state.error.status === 404 ? "This problem is no longer in the report." : `Couldn't read the logs: ${state.error.message}`}</p>;
+  if (state.error) return <p className="muted-line pb-pad">{state.error.status === 404 ? "This problem is no longer in the report." : state.error.status === 429 ? "Too many log reads at once." : `Couldn't read the logs: ${state.error.message}`} {again}</p>;
   if (!state.e) return <p className="muted-line pb-pad">Reading the logs…</p>;
   const log = state.e.log;
   if (!log) return <p className="muted-line pb-pad">No logs for this problem.</p>;
-  if ("error" in log) return <p className="muted-line pb-pad">{/403|forbidden/i.test(log.error) ? "You can't read this pod's logs." : `Couldn't read the logs: ${log.error}`}</p>;
+  if ("error" in log) return <p className="muted-line pb-pad">{log.error} {again}</p>;
   return (
     <div className="logs-pane">
       <div className="logs-note">
         <Ic icon={ScrollText} size={13} />
-        <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}</span>
+        <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{state.at ? `, read ${when(new Date(state.at).toISOString(), now)}` : ""}</span>
         <span className="grow" />
+        {again}
         <button className="link-btn" onClick={() => onFull(log.pod, p.namespace, log.container)}>Open full logs</button>
       </div>
       <pre className="logs" tabIndex={0} aria-label="Log lines">{log.lines.length ? log.lines.map((l, i) => <div key={i} className="ll"><span className="tx">{l}</span></div>) : <div className="logs-end">The run wrote nothing.</div>}</pre>

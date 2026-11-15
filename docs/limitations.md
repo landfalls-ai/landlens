@@ -60,7 +60,8 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   out, and past 5,000 pods (or 2,000 of a workload kind) the rest aren't checked (the page says the list is partial). A bare ReplicaSet with a `pod-template-hash` label shows as a Deployment
   that doesn't exist. There is no mute, acknowledge or history of cleared problems, and the thresholds are fixed.
   On the Problems page, **Open full logs** opens the pod's Logs tab on its current run (choose Previous there), ⌘K's
-  recent items don't keep problems, and until part 4 Ask Claude attaches only the subject, not the problem's facts.
+  recent items don't keep problems. The agent sees certificates only for namespaces a Landlens window is showing (the
+person's check reads them), and Ask Claude sends one problem at a time.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.

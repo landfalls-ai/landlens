@@ -69,6 +69,6 @@ export function Ic({ icon: I, size = 15, className }: { icon: LucideIcon; size?:
 export const MOD = /Mac/.test(navigator.platform) ? "⌘" : "Ctrl ";
 
 /** A dock chip's icon: the object's kind, or logs or a terminal for selected lines. */
-export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" | "helm" }): LucideIcon {
-  return c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : c.kind === "helm" ? Package : SquareTerminal;
+export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" | "helm" | "problem" }): LucideIcon {
+  return c.kind === "problem" ? Stethoscope : c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : c.kind === "helm" ? Package : SquareTerminal;
 }

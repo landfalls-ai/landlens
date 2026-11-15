@@ -1,8 +1,8 @@
 // How the MCP tools reach the cluster: through the front door, with the agent session's own read-only token, so
 // every read is checked by the same policy and lands in the same audit trail as the agent's kubectl.
 import { request } from "node:https";
-import type { MetricsRange, MetricsScope, MetricsSeries, ResourceType } from "@landlens/contracts";
-import { apiPath, KubeError, toKubeError, type Outcome, type ProposedChange, type Send } from "@landlens/kube";
+import type { DoctorCheckState, MetricsRange, MetricsScope, MetricsSeries, ResourceType } from "@landlens/contracts";
+import { apiPath, type CertInput, KubeError, toKubeError, type Outcome, type ProposedChange, type Send } from "@landlens/kube";
 
 export type AgentCluster = {
   /** e.g. "orbstack" */
@@ -18,6 +18,12 @@ export type AgentCluster = {
   withCall?(callId: string): AgentCluster;
   /** CPU and memory over time from Landlens's metrics source (Clickland, else the cluster's Prometheus, else metrics-server), when main offers it. */
   metrics?(req: { scope: MetricsScope; namespace?: string; name?: string; range: MetricsRange }): Promise<MetricsSeries>;
+  /**
+   * TLS certificates' facts (dates and names, never the Secret) from the person's own doctor check (wave 5, D67): the
+   * session's token can't read Secrets. Only for the namespaces asked; undefined is every namespace. `state` says how
+   * far the person's read got (`pending` before it finished, `forbidden` when they can't read Secrets).
+   */
+  certs?(namespaces?: string[]): Promise<{ state: DoctorCheckState; certs?: CertInput[] }>;
   /**
    * Propose a change: Landlens's approval broker dry-runs it, asks the person and applies it only on their yes. Only
    * there in sessions main gives write tools to. `signal` withdraws it (the call was cancelled).
@@ -41,6 +47,7 @@ export function frontDoorCluster(opts: {
    * pods. The usage numbers come from Clickland or the shared metrics-server sampler.
    */
   metrics?: (req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read: (path: string) => Promise<any>) => Promise<MetricsSeries>;
+  certs?: AgentCluster["certs"];
   /** Tags every request for the front door's audit (see withCall). */
   callId?: string;
   propose?: AgentCluster["propose"];
@@ -50,6 +57,7 @@ export function frontDoorCluster(opts: {
     types: opts.types,
     ...(opts.namespaces ? { namespaces: opts.namespaces } : {}),
     ...(opts.propose ? { propose: opts.propose } : {}),
+    ...(opts.certs ? { certs: opts.certs } : {}),
     withCall: (callId) => frontDoorCluster({ ...opts, callId }),
     get: (path, accept = "application/json") =>
       new Promise((resolve, reject) => {

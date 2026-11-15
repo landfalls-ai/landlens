@@ -88,6 +88,14 @@ export async function readLogTail(
   return { lines: raw.filter((l) => l.length).map((l) => splitLine(l).text), cut: dropped || stopped };
 }
 
+/**
+ * The kubelet answers a log whose file is gone (a container already removed) with 200 and one sentence of its own,
+ * "unable to retrieve container logs for docker://…", not an error: that isn't the container's output.
+ */
+export function logsGone(lines: string[]): boolean {
+  return lines.length === 1 && /^unable to retrieve container logs for [a-z]+:\/\/[0-9a-f]+$/.test(lines[0]!);
+}
+
 /** "2026-11-15T10:00:00.123456789Z message" → its parts; a line without a timestamp keeps its text. */
 export function splitLine(raw: string): LogLine {
   const sp = raw.indexOf(" ");

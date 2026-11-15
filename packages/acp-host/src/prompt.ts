@@ -23,6 +23,7 @@ export function clusterSystemPrompt(c: { context: string; server: string; versio
     ``,
     `How to answer:`,
     `- Gather evidence before concluding: the failing object's state, its last exit, its logs and events.`,
+    `- A problem quoted from Landlens's doctor is where to start, not a conclusion: check it against the cluster first.`,
     `- Name what you looked at as kind/namespace/name so the person can open it in Landlens.`,
     ...(c.writes
       ? [

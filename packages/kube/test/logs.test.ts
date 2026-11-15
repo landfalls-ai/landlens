@@ -1,6 +1,6 @@
 // The doctor's log evidence (wave 5, D60): the last lines of a run, read with a cap that keeps the end.
 import { describe, expect, it } from "vitest";
-import { readLogTail } from "../src/logs.js";
+import { logsGone, readLogTail } from "../src/logs.js";
 
 const stream = (parts: string[], status = 200) => ({
   request: async () => new Response(new ReadableStream({
@@ -40,5 +40,13 @@ describe("readLogTail", () => {
 
   it("throws the API's status on a failed read", async () => {
     await expect(readLogTail(stream(['{"message":"previous terminated container not found"}'], 400), req, { maxBytes: 1024, timeoutMs: 1000 })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("knows the kubelet's sentence for a log that is gone, and only that", () => {
+    expect(logsGone(["unable to retrieve container logs for docker://e17e841b0006ff836d32288a6b39ae30862e5e4f6f6391098ea8d8304a73c4df"])).toBe(true);
+    expect(logsGone(["unable to retrieve container logs for containerd://abc123"])).toBe(true);
+    expect(logsGone(["unable to retrieve container logs for docker://abc", "FATAL"])).toBe(false);
+    expect(logsGone(["echo unable to retrieve container logs for docker://abc"])).toBe(false);
+    expect(logsGone([])).toBe(false);
   });
 });

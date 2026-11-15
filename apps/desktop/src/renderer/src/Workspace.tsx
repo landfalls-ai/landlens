@@ -1,6 +1,6 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
-import type { ClicklandSettings as ClicklandView, ClusterInfo, HealthProblem, KubeContext, KubeObject } from "@landlens/contracts";
+import type { ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, HealthProblem, KubeContext, KubeObject } from "@landlens/contracts";
 import { Copy, CircleX, Lock, Pencil, ScrollText, Sparkles, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
@@ -16,8 +16,10 @@ import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
+import { problemContext, PROBLEM_QUESTION } from "./doctorBrief";
 import { ProblemDrawer, ProblemsPage } from "./Problems";
 import { holdProblem, type HeldProblem, type Severity } from "./problemRules";
+import { missingChecks } from "@landlens/kube/checks";
 import { splitByShape } from "./present";
 import { ResourceTable, rowTone } from "./ResourceTable";
 import { Sidebar, type Current } from "./Sidebar";
@@ -244,10 +246,17 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   };
   // Switching cluster ends every session (D23): with live terminals, ask once.
   const switchTo = (context: string) => leaveEdit(() => (bench.terminals ? setLeaving(context) : onSwitch(context)));
-  const askProblem = (p: HealthProblem) => {
+  /**
+   * Ask Claude about a problem (D62, D64): its brief as quoted data, the subject as a reference, and the question sent
+   * at once (or left in the box when a turn is running). The drawer passes the log lines it has read.
+   */
+  const askProblem = (p: HealthProblem, evidence?: DoctorEvidence) => {
     const n = navItem(RESOURCE_OF_KIND[p.kind] ?? "");
-    if (!n) return setDock(true);
-    ask({ ref: { group: n.type.group, version: n.type.version, resource: n.type.resource, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) }, label: `${p.kind} ${p.namespace ? `${p.namespace}/` : ""}${p.name}` });
+    const ref = n ? { group: n.type.group, version: n.type.version, resource: n.type.resource, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) } : undefined;
+    // One problem at a time: an earlier problem's chip gives way to this one.
+    setAskContext((cs) => [...cs.filter((c) => c.kind !== "problem"), problemContext(p, ref, evidence)]);
+    setDock(true);
+    setPrompt({ id: Date.now(), text: PROBLEM_QUESTION });
   };
 
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
@@ -304,7 +313,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       if (e.key === "Escape" && !jump && !creating && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine") && selected) setSelected(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && mcpCall) setMcpCall(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && helmPick) setHelmPick(undefined);
-      if (e.key === "Escape" && !jump && !t?.closest(".dock, .drawer .logs, input") && problemSel) setProblemSel(undefined);
+      if (e.key === "Escape" && !jump && !creating && !typing && !t?.closest(".dock, .drawer .logs") && problemSel) setProblemSel(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -394,6 +403,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             onAsk={askProblem}
             onOpen={openSubject}
             onClearText={() => setFilter("")}
+            {...(health.error && h ? { stale: health.error.message } : {})}
           />
         ) : !list ? (
           <Overview
@@ -499,6 +509,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             handle={cluster.handle}
             namespace={namespace}
             held={problemSel}
+            cut={!!h?.cut}
+            {...(health.error && h ? { stale: health.error.message } : {})}
             now={now}
             onClose={() => setProblemSel(undefined)}
             onAsk={askProblem}
@@ -557,6 +569,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           current={current}
           items={watch.items}
           problems={h?.problems ?? []}
+          problemsEmpty={!h ? (health.error ? "Couldn't check this cluster's problems" : "Still checking for problems…") : missingChecks(h.checks).length ? "No problems found, but some checks were skipped" : "No problems found"}
           onProblem={(p) => openProblems({ problem: p })}
           onAskProblem={askProblem}
           onOpenSubject={openSubject}

@@ -54,6 +54,7 @@ export class AgentService {
       /** You said yes to a permission request: the MCP gateway runs a proxied tool that asks only after this. */
       onPermit?: (p: { session: string; toolCallId: string; toolName?: string; always: boolean }) => void;
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
+      certs?: Parameters<typeof startClusterSession>[0]["certs"];
       /** Past sessions and your chosen skills (agent-history.ts). */
       history?: AgentHistory;
       settings?: AgentSettings;
@@ -153,6 +154,7 @@ export class AgentService {
     const s = await startClusterSession({
       host, frontDoor: this.deps.frontDoor, clusters: this.deps.clusters, mcp: this.deps.mcp,
       ...(this.deps.metrics ? { metrics: this.deps.metrics } : {}),
+      ...(this.deps.certs ? { certs: this.deps.certs } : {}),
       sessionsDir: this.deps.sessionsDir, home: homedir(), path: this.path,
       userKubeconfigs: process.env.KUBECONFIG?.split(delimiter).filter(Boolean) ?? [],
       changes: {
@@ -220,7 +222,12 @@ export class AgentService {
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;
     for (const ref of context) {
-      const { uri, body } = await this.describe(s, ref);
+      // An object that has gone, or that the session may not read, doesn't fail the question: it says so, in a fixed
+      // sentence (a problem's subject can be deleted between the doctor's read and the ask).
+      const { uri, body } = await this.describe(s, ref).catch((e: { status?: number }) => ({
+        uri: `${ref.resource}/${ref.namespace ? `${ref.namespace}/` : ""}${ref.name}`,
+        body: `# Landlens couldn't read this object with the session's access${e?.status ? ` (HTTP ${e.status})` : ""}.\n`,
+      }));
       blocks.push(embedded ? resourceBlock(uri, body) : { type: "text", text: `${uri}\n${body}` });
     }
     const res = await this.host!.prompt(id, blocks);

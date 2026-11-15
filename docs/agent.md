@@ -26,6 +26,10 @@ you choose which of your Claude Code skills a session gets.
 `k8s://<context>/<namespace>/<Kind>/<name>`, so the agent starts from what you are looking at. They are read with the
 session's own token, so they are scrubbed and limited exactly as the agent's own reads are. Not offered on Secrets.
 
+"Ask Claude" on a problem from the doctor ([doctor.md](doctor.md#ask-claude-on-a-problem)) attaches the problem's
+brief (its facts, events and, if read, the crash's last log lines; not Landlens's hint), quoted as data, and asks for
+the cause, the evidence and one proposed change. Any change it proposes is a change card you approve or reject.
+
 Links in an answer show their host beside the text, so a link can't hide where it goes.
 
 The cluster view stays on screen while the dock is open: the clusters rail folds to its dots and the details drawer

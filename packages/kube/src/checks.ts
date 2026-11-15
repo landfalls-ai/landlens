@@ -11,6 +11,9 @@ export const CHECK_SENTENCES: Record<Exclude<DoctorCheck, "pods">, string> = {
 const NOUNS: Record<DoctorCheck, string> = { pods: "pods", workloads: "Deployments, StatefulSets and DaemonSets", nodes: "nodes", events: "warning events", certs: "TLS Secrets" };
 export function checkSentence(k: DoctorCheck, s: DoctorCheckState): string | undefined {
   if (s === "partial") return `Only part of the ${NOUNS[k]} could be read (a limit was reached or some reads failed), so some problems may be missing.`;
+  if (s === "skipped") return k === "certs"
+    ? "Certificates are read with the person's access only for what Landlens's window is showing (its namespace, or all of them), so they weren't checked here."
+    : `The ${NOUNS[k]} weren't read for this.`;
   if (s === "pending") return `Still reading the ${NOUNS[k]}, so ${k === "certs" ? "certificates" : "they"} aren't checked yet.`;
   if (s === "error") return `Couldn't read the ${NOUNS[k]} just now, so they weren't checked this time.`;
   if (s === "forbidden" && k !== "pods") return CHECK_SENTENCES[k];

@@ -626,9 +626,10 @@ export type ProblemClass =
 export type DoctorCheck = "pods" | "workloads" | "nodes" | "events" | "certs";
 /**
  * ok; forbidden (no access); error (failed this time); partial (a cap, a failed page or Secrets left out cut it);
- * pending (still being read: certificates on a first ask); off (not for this scope).
+ * pending (still being read: certificates on a first ask); skipped (not read for this ask: certificates for the agent
+ * in namespaces the window isn't showing); off (not for this scope).
  */
-export type DoctorCheckState = "ok" | "forbidden" | "error" | "partial" | "pending" | "off";
+export type DoctorCheckState = "ok" | "forbidden" | "error" | "partial" | "pending" | "skipped" | "off";
 /** A TLS Secret's certificate as main reads it from `tls.crt`: dates and names, never the key or the PEM. */
 export type CertFact = {
   notBefore: string;

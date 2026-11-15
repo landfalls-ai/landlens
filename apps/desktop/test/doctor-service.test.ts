@@ -120,8 +120,8 @@ describe("DoctorService", () => {
     // For the agent: a namespace's own scope, or the all-namespaces one; nothing read → pending, never "no problems";
     // an empty list is no namespaces, not all of them (part 2 review, finding 10).
     expect(f.service.certsFor("handle-0001", ["shop"])).toMatchObject({ state: "ok", certs: [{ name: "shop-tls" }] });
-    expect(f.service.certsFor("handle-0001", ["other"])).toEqual({ state: "pending" });
-    expect(f.service.certsFor("handle-0001")).toEqual({ state: "pending" });
+    expect(f.service.certsFor("handle-0001", ["other"])).toEqual({ state: "skipped" });
+    expect(f.service.certsFor("handle-0001")).toEqual({ state: "skipped" });
     expect(f.service.certsFor("handle-0001", [])).toEqual({ state: "ok", certs: [] });
   });
 
@@ -134,6 +134,15 @@ describe("DoctorService", () => {
     expect(f.paths.at(-1)).toBe("/api/v1/namespaces/shop/pods/api-1/log?container=api&timestamps=true&previous=true&tailLines=200");
     await expect(f.service.evidence("handle-0001", "shop", "crashloop|Pod/shop/other|api|CrashLoopBackOff")).rejects.toMatchObject({ status: 404 });
     await expect(f.service.evidence("handle-0001", "other", h.problems[0]!.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("skips a run whose log file is gone (the kubelet's own sentence) for the current run", async () => {
+    const f = fake({ log: async (p) => new Response(p.includes("previous=true") ? "unable to retrieve container logs for docker://e17e841b0006ff83" : "2026-11-15T11:59:00Z FATAL: no DATABASE_URL\n") });
+    const h = await f.service.health("handle-0001", "shop");
+    expect((await f.service.evidence("handle-0001", "shop", h.problems[0]!.id)).log).toEqual({ pod: "api-1", container: "api", previous: false, lines: ["FATAL: no DATABASE_URL"], cut: false });
+    const g = fake({ log: async () => new Response("unable to retrieve container logs for docker://e17e841b0006ff83") });
+    const hg = await g.service.health("handle-0001", "shop");
+    expect((await g.service.evidence("handle-0001", "shop", hg.problems[0]!.id)).log).toEqual({ error: "The pod or its container is gone." });
   });
 
   it("says certificates are still being read rather than none, and that some were left out (review, finding 2)", async () => {

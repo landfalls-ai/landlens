@@ -189,13 +189,21 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
 
   registerAppTool(server, "cluster_overview", {
     title: "Cluster overview",
-    description: "What is wrong right now, problems first: crash-looping, pending, image-pull and OOM-killed pods, " +
-      "deployments short of replicas, nodes not ready, and recent warning events." + limitNote,
+    description: "What is wrong right now, problems first, grouped by owner: crash loops, failing probes, image pulls, " +
+      "OOM kills, pending pods, workloads short of replicas, nodes not ready, expiring TLS certificates and recent warning " +
+      "events, each with an id, then the checks that couldn't be made." + limitNote,
     inputSchema: { namespace: Namespace },
     annotations: READ_ONLY,
     _meta: { ui: { resourceUri: APP_URI.health } },
   }, run(async (a: { namespace?: string }, c) => {
-    const h = await clusterHealth((path) => getJson(c, path), { ...(a.namespace ? { namespace: a.namespace } : {}) });
+    // Certificates come from the person's own check, for the namespaces this call may see: the one asked, else the
+    // session's limit, else all (D67). The session's token never reads a Secret.
+    const certNs = a.namespace ? [a.namespace] : cluster.namespaces?.length ? cluster.namespaces : undefined;
+    const certs = c.certs ?? cluster.certs;
+    const h = await clusterHealth((path) => getJson(c, path), {
+      ...(a.namespace ? { namespace: a.namespace } : {}),
+      ...(certs ? { certs: () => certs(certNs) } : {}),
+    });
     return { text: healthText(h), data: { context: cluster.context, ...(a.namespace ? { namespace: a.namespace } : {}), health: h } };
   }));
 

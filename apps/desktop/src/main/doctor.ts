@@ -5,7 +5,7 @@
 // Secrets are read here only for their certificates' dates and names (certs.ts); no Secret value leaves main.
 import type { ClusterHealth, DoctorCheck, DoctorCheckState, DoctorEvidence, DoctorReport, KubeObject, Problem } from "@landlens/contracts";
 import {
-  type CertInput, type ClusterManager, diagnose, healthCounts, KubeError, LIST_MAX, listPages, readCerts, readLogTail, recentWarnings, warningEvents,
+  type CertInput, type ClusterManager, diagnose, healthCounts, KubeError, LIST_MAX, listPages, logsGone, readCerts, readLogTail, recentWarnings, warningEvents,
   type WatchHub,
 } from "@landlens/kube";
 
@@ -19,7 +19,7 @@ export const DOCTOR = {
   scopesPerCluster: 2,
   /** A source that failed (not forbidden, not cut) is read again after this, not after its full interval. */
   retryMs: 30_000,
-  log: { tailLines: 200, maxBytes: 64 * 1024, readBytes: 1048576, timeoutMs: 10_000 },
+  log: { tailLines: 200, maxBytes: 64 * 1024, readBytes: 1048576, timeoutMs: 10_000, pods: 3 },
   /** Log reads in flight per scope (one per problem). */
   evidencePerScope: 4,
 } as const;
@@ -124,44 +124,51 @@ export class DoctorService {
 
   private async readEvidence(handle: string, p: Problem): Promise<DoctorEvidence> {
     const crash = p.class === "crashloop" || p.class === "oom" || p.class === "start" || p.class === "restarts" || (p.class === "probe" && p.facts.probe?.type !== "readiness");
-    const pod = p.pods[0];
-    if (!crash || !pod || !p.namespace || !p.container) return {};
+    if (!crash || !p.pods.length || !p.namespace || !p.container) return {};
     const container = p.container.replace(/^init:/, "");
     const client = this.deps.clusters.get(handle).client;
-    const read = (previous: boolean) => readLogTail(client, { namespace: p.namespace!, pod, container, previous, tailLines: DOCTOR.log.tailLines }, DOCTOR.log);
-    const previous = (p.restarts ?? 0) > 0 && p.class !== "start";
-    try {
-      return { log: { pod, container, previous, ...(await read(previous)) } };
-    } catch (e) {
-      // The previous run can be gone (a new pod); the current one is the next best thing.
-      if (previous && (e as KubeError).status === 400) {
+    const read = (pod: string, previous: boolean) => readLogTail(client, { namespace: p.namespace!, pod, container, previous, tailLines: DOCTOR.log.tailLines }, DOCTOR.log);
+    const wantPrevious = (p.restarts ?? 0) > 0 && p.class !== "start";
+    let error: unknown;
+    // The previous run can be gone (a new pod: 400; a removed container: the kubelet's sentence), so the current run
+    // is the next best thing, then the next pod: at most three pods, one read at a time.
+    for (const pod of p.pods.slice(0, DOCTOR.log.pods)) {
+      for (const previous of wantPrevious ? [true, false] : [false]) {
         try {
-          return { log: { pod, container, previous: false, ...(await read(false)) } };
-        } catch (e2) {
-          e = e2;
+          const tail = await read(pod, previous);
+          if (logsGone(tail.lines)) continue;
+          return { log: { pod, container, previous, ...tail } };
+        } catch (e) {
+          error = e;
+          const status = (e as KubeError).status;
+          if (previous && status === 400) continue; // no previous run: the current one
+          if (status === 404) break; // this pod went: the next
+          return { log: { error: logError(e) } };
         }
       }
-      return { log: { error: logError(e) } };
     }
+    return { log: error ? { error: logError(error) } : { error: "The pod or its container is gone." } };
   }
 
   /**
    * Certificate facts the person's own read found, for the agent's cluster_overview (D67), with how far that read got.
    * `namespaces` undefined is every namespace (the all-namespaces scope only); an empty list is none (review, 10).
-   * Nothing read yet is `pending`, never "no certificates".
+   * A scope still reading is `pending`; no scope covering the namespaces is `skipped` (the person's window shows
+   * another namespace); never "no certificates".
    */
   certsFor(handle: string, namespaces?: string[]): { state: DoctorCheckState; certs?: CertInput[] } {
     const scopes = this.scopes.get(handle);
     const all = scopes?.get("");
-    const pick = (s: Scope | undefined) => (s?.certs.value ? { state: s.checks.certs, certs: s.certs.value.certs } : undefined);
-    if (!namespaces) return pick(all) ?? { state: "pending" };
+    const covering = (s: Scope | undefined) => (!s ? undefined : s.certs.value ? { state: s.checks.certs, certs: s.certs.value.certs } : { state: "pending" as const });
+    if (!namespaces) return covering(all) ?? { state: "skipped" };
     const out: CertInput[] = [];
     let state: DoctorCheckState = "ok";
     for (const ns of namespaces) {
-      const got = pick(scopes?.get(ns)) ?? pick(all);
-      if (!got) return { state: "pending" };
+      const got = covering(scopes?.get(ns)) ?? covering(all);
+      if (!got) return { state: "skipped" };
+      if (!got.certs) return { state: got.state };
       if (got.state !== "ok") state = got.state;
-      out.push(...got.certs!.filter((c) => c.namespace === ns));
+      out.push(...got.certs.filter((c) => c.namespace === ns));
     }
     return { state, certs: out };
   }

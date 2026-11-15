@@ -373,3 +373,4 @@
 .pb-msg { color: var(--ink-2); overflow-wrap: anywhere; }
 .pb-pad { padding: 14px 16px; }
 @container main (max-width: 720px) { .pb-since, .pb-row .ov-kind { display: none; } }
+.ov .pb-checks { margin: 0; }
