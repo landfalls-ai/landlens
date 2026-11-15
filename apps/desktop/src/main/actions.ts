@@ -15,13 +15,15 @@
 // review is a plan (drain.ts) from reads, the cordon request and the API server's dry-run evictions; it keeps the
 // cordon request and the pods to evict by uid, and its Apply starts a run in main that answers at once, pushes its
 // progress to the window that started it, stops on Stop, with its window or its cluster, and leaves the node
-// cordoned. A development build sends nothing to a node, dry run or not, unless the context is named in
-// LANDLENS_NODE_WRITES (D153): every series this service sends goes through that fence.
+// cordoned. Main keeps each window's runs (latest state and plan) so the window can re-attach and Stop is always
+// reachable (security review of part 2, M1, M4). A development build sends nothing to a node, dry run or not, unless
+// LANDLENS_NODE_WRITES names the cluster (D153): the front door refuses it for every token (M5), and every series this
+// service sends goes through the same fence as well.
 import { createHash, randomBytes } from "node:crypto";
-import type { Action, ActionFact, ActionLogEntry, ActionResult, ActionReview, ChangeOperation, DrainProgress, Request } from "@landlens/contracts";
+import type { Action, ActionFact, ActionLogEntry, ActionResult, ActionReview, ChangeOperation, DrainProgress, DrainRun, Request } from "@landlens/contracts";
 import {
   actionFacts, ActionError, apiPath, applyMergePatch, asksInMain, buildOps, capFacts, checkTargets, clean, cordonBody, diffLines, DrainError, dryRunEvictions,
-  EDIT_FIELD_MANAGER, EDIT_TTL_MS, EditBroker, EditError, factList, inOrder, keyOf, nameOf, podsOnNode, prepareOp, readDrain, risks, runDrain, runnable, toEvict,
+  EDIT_FIELD_MANAGER, EDIT_TTL_MS, EditBroker, EditError, factList, inOrder, keyOf, listNodes, nameOf, NODE_WRITES_OFF, nodeWrite, podsOnNode, prepareOp, readDrain, risks, runDrain, runnable, schedulable, toEvict,
   type ActionTarget, type ChangeOp, type ClusterManager, type DrainKept, type DrainPlan, type FactInput, type FrontDoor, type Prepared, type RunEnd, type RunState,
   type Send, type Unread,
 } from "@landlens/kube";
@@ -70,8 +72,18 @@ type Review = {
   log: LogPart;
   /** A drain's kept requests (D151): the cordon, and the pods to evict by uid. Nothing else can be evicted by it. */
   drain?: DrainKept;
+  /** A drain's plan as the card showed it, for the window that re-attaches to its run (M4). */
+  plan?: DrainPlan;
+  /** A drain's node, for dropping an older review of it (M2). */
+  node?: string;
 };
-type Run = { wc: WebContents; handle: string; node: string; stop: boolean; startedAt: number };
+type Run = {
+  wc: WebContents; handle: string; node: string; stop: boolean; startedAt: number;
+  /** What the window re-attaches to (M1, M4): the plan it runs and its latest state; kept a while after it ends. */
+  plan: DrainPlan; last: DrainProgress; ended: boolean; endedAt?: number;
+  /** The action log's row, and whether quitting settled it already (L9). */
+  row: string; log: LogPart; quit?: boolean;
+};
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 
@@ -95,30 +107,45 @@ export const cardDigest = (review: Omit<ActionReview, "digest">, kept: unknown) 
 
 /** Runs at once: one per node, two per cluster (D152). */
 export const MAX_RUNS_PER_CLUSTER = 2;
+/** How long an ended run stays for its window to read (M1, M4). */
+export const ENDED_KEEP_MS = 10 * 60_000;
+/** A drain review a newer one of the same node in the same window replaced (M2, L11). */
+export const SUPERSEDED = "A newer review of this drain replaced this one.";
 /** Progress pushes to the window, at most four a second. */
 export const PROGRESS_MS = 250;
 
-/** D153's words, on the sheet and in every refusal of the fence. */
-export const PREVIEW_ONLY = "Development build: preview only. Nothing is sent to nodes on this cluster.";
-/** A request that writes to a Node or evicts a pod, dry run or not (D153). Reads pass. */
-export function nodeWrite(r: { method: string; path: string }): boolean {
-  if (r.method === "GET") return false;
-  const path = r.path.split("?")[0]!.replace(/\/+/g, "/");
-  return /^\/api\/v1\/nodes(?:\/|$)/.test(path) || /\/eviction\/?$/.test(path);
-}
+/** D153's words, on the sheet and in every refusal of the fence (the front door's own, M5). */
+export const PREVIEW_ONLY = NODE_WRITES_OFF;
+export { nodeWrite };
 /** The fence: a series that may not write to nodes refuses any request that would, before it leaves Landlens. */
 export const fenced = (send: Send): Send => async (r) => {
   if (nodeWrite(r)) throw fail(403, PREVIEW_ONLY);
   return send(r);
 };
+/** A cluster as D153's rule names it: its kubeconfig context and its API server. */
+export type NodeCluster = { context: string; server: string };
+/** An API server's host and port as an entry names it: `https://127.0.0.1:6443` is `127.0.0.1:6443`. */
+const hostOf = (server: string) => {
+  try {
+    return new URL(/^[a-z]+:\/\//i.test(server) ? server : `https://${server}`).host;
+  } catch {
+    return undefined;
+  }
+};
 /**
- * Which contexts a build may send node writes to (D153): a packaged app, any; an unpackaged one, only the contexts
- * named in LANDLENS_NODE_WRITES (comma-separated). No test or script names orbstack.
+ * Which clusters a build may send node writes to (D153): a packaged app, any; an unpackaged one, only those named in
+ * LANDLENS_NODE_WRITES (comma-separated `<context>@<host>:<port>`, the context and its API server both: a context's
+ * name alone could point anywhere, security review of part 2, L8). The front door and ActionService both ask it. No
+ * test or script names orbstack.
  */
-export function nodeWritesFrom(env: NodeJS.ProcessEnv, packaged: boolean): (context: string) => boolean {
+export function nodeWritesFrom(env: NodeJS.ProcessEnv, packaged: boolean): (c: NodeCluster) => boolean {
   if (packaged) return () => true;
-  const named = new Set((env.LANDLENS_NODE_WRITES ?? "").split(",").map((x) => x.trim()).filter(Boolean));
-  return (context) => named.has(context);
+  const named = (env.LANDLENS_NODE_WRITES ?? "").split(",").map((x) => x.trim()).filter(Boolean).flatMap((x) => {
+    const at = x.lastIndexOf("@");
+    const host = at > 0 ? hostOf(x.slice(at + 1)) : undefined;
+    return host ? [{ context: x.slice(0, at), host }] : [];
+  });
+  return (c) => named.some((n) => n.context === c.context && n.host === hostOf(c.server));
 }
 
 export type ActionDeps = {
@@ -127,8 +154,8 @@ export type ActionDeps = {
   log: Pick<ActionLog, "add" | "settle" | "list"> & { readonly unsaved?: boolean };
   /** Telemetry's count (D147): the action and its outcome, closed words only. */
   counted?: (a: { action: string; outcome: string }) => void;
-  /** D153: whether this build may write to the nodes of a context. Absent: never (the safe default). */
-  nodeWrites?: (context: string) => boolean;
+  /** D153: whether this build may write to the nodes of a cluster. Absent: never (the safe default). */
+  nodeWrites?: (c: NodeCluster) => boolean;
   /** Tests: the clock, and the trigger's random suffix; a drain run's sleep and time limit. */
   now?: () => number;
   suffix?: () => string;
@@ -149,6 +176,9 @@ export class ActionService {
   private readonly runs = new Map<string, Run>();
   /** When each object a window changed was sent, for its budget (M2). */
   private readonly spent = new WeakMap<WebContents, number[]>();
+  /** The latest drain review of each node a window asked for (M2, L11): an older one stops at its next request. */
+  private readonly drainGen = new WeakMap<WebContents, Map<string, number>>();
+  private gen = 0;
 
   constructor(private readonly d: ActionDeps) {
     d.clusters.onGone((handle) => {
@@ -159,7 +189,8 @@ export class ActionService {
 
   /** Whether this series may write to nodes (D153); if not, every request goes through the fence. */
   private mayWriteNodes(handle: string): boolean {
-    return !!this.d.nodeWrites?.(this.d.clusters.get(handle).info.context);
+    const info = this.d.clusters.get(handle).info;
+    return !!this.d.nodeWrites?.({ context: info.context, server: info.server });
   }
   private guard(handle: string, send: Send): Send {
     return this.mayWriteNodes(handle) ? send : fenced(send);
@@ -181,7 +212,11 @@ export class ActionService {
       if (e.isMainFrame && !e.isSameDocument) end();
     });
     wc.on("render-process-gone", end);
-    wc.once("destroyed", () => (end(), this.watched.delete(wc)));
+    wc.once("destroyed", () => {
+      end();
+      this.watched.delete(wc);
+      for (const [k, r] of this.runs) if (r.wc === wc && r.ended) this.runs.delete(k);
+    });
   }
 
   private drop(id: string) {
@@ -382,7 +417,7 @@ export class ActionService {
     const row = this.begin(info, v.log);
     this.reviews.delete(r.id);
     this.spend(wc, v.objects);
-    if (v.drain) return { run: this.startRun(r.id, v, wc, row) };
+    if (v.drain) return { run: this.startRun(r.id, v, wc, row, v.plan!) };
     const t = v.log.names.length === 1 ? `${v.log.namespace ? `${v.log.namespace}/` : ""}${v.log.names[0]}` : `${v.log.names.length} ${v.log.kind.toLowerCase()}s`;
     let each: ActionResult[];
     try {
@@ -459,13 +494,48 @@ export class ActionService {
   /** Stop a drain (D152): only the window that started it; no new eviction is sent; the node stays cordoned. */
   stop(run: string, wc: WebContents) {
     const r = this.runs.get(run);
-    if (!r || r.wc !== wc) throw fail(404, "no such run");
+    if (!r || r.wc !== wc || r.ended) throw fail(404, "no such run");
     r.stop = true;
+  }
+
+  /**
+   * This window's drains on this cluster (M1, M4): running, and ended in the last ten minutes, each with its plan and
+   * latest state, so the window can re-attach to one whose sheet it lost, and read an ending it missed. Another
+   * window's runs are not listed.
+   */
+  runsOf(handle: string, wc: WebContents): DrainRun[] {
+    this.prune();
+    return [...this.runs.values()].filter((r) => r.wc === wc && r.handle === handle)
+      .sort((a, b) => a.startedAt - b.startedAt)
+      .map((r) => ({ progress: r.last, plan: r.plan, ended: r.ended }));
+  }
+
+  /** Drains running in this process: quitting asks about them first (L9). */
+  liveRuns(): number {
+    return [...this.runs.values()].filter((r) => !r.ended).length;
+  }
+
+  /**
+   * Landlens is quitting with drains running (L9): each is stopped and its row settled now, as `stopped`, since the
+   * process won't live to see the run end. The node stays cordoned.
+   */
+  quit() {
+    for (const r of this.runs.values()) {
+      if (r.ended || r.quit) continue;
+      r.stop = true;
+      r.quit = true;
+      this.settle(r.row, r.log, "stopped", "Landlens quit during the drain");
+    }
+  }
+
+  private prune() {
+    for (const [k, r] of this.runs) if (r.ended && (r.endedAt ?? 0) + ENDED_KEEP_MS <= this.now) this.runs.delete(k);
   }
 
   /** Whether a drain of this node may start: one per node, two per cluster. */
   private runRoom(handle: string, node: string) {
-    const here = [...this.runs.values()].filter((x) => x.handle === handle);
+    this.prune();
+    const here = [...this.runs.values()].filter((x) => x.handle === handle && !x.ended);
     if (here.some((x) => x.node === node)) throw fail(409, "A drain of this node is already running.");
     if (here.length >= MAX_RUNS_PER_CLUSTER) throw fail(429, `At most ${MAX_RUNS_PER_CLUSTER} drains run on a cluster at once.`);
   }
@@ -474,21 +544,28 @@ export class ActionService {
    * The run (D152), in main: its own token for its whole length (`you · <context> · drain <node>`), revoked at its
    * end; progress to the window that started it, at most four times a second; one log row when it ends.
    */
-  private startRun(id: string, v: Review, wc: WebContents, row: string): string {
+  private startRun(id: string, v: Review, wc: WebContents, row: string, plan: DrainPlan): string {
     const kept = v.drain!;
-    const run: Run = { wc, handle: v.handle, node: kept.node, stop: false, startedAt: this.now };
+    const startedAt = this.now;
+    let seq = 0;
+    const run: Run = {
+      wc, handle: v.handle, node: kept.node, stop: false, startedAt, plan, ended: false, row, log: v.log,
+      last: { run: id, node: kept.node, state: "cordoning", pods: kept.pods.map((p) => ({ namespace: p.namespace, name: p.name, state: "waiting" })), startedAt, seq: 0 },
+    };
     this.runs.set(id, run);
     let last = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let pending: RunState | undefined;
+    let pending: DrainProgress | undefined;
     const flush = () => {
       if (timer) clearTimeout(timer);
       timer = undefined;
       last = Date.now();
-      if (pending && !wc.isDestroyed()) wc.send("action:progress", { ...pending, run: id, startedAt: run.startedAt } satisfies DrainProgress);
+      if (pending && !wc.isDestroyed()) wc.send("action:progress", pending);
     };
+    // Main keeps every state at once (what action:runs answers, M1); the window's pushes are throttled.
     const push = (s: RunState, now = false) => {
-      pending = s;
+      pending = { ...s, run: id, startedAt, seq: ++seq };
+      run.last = pending;
       const wait = PROGRESS_MS - (Date.now() - last);
       if (now || wait <= 0) flush();
       else timer ??= setTimeout(flush, wait);
@@ -499,17 +576,24 @@ export class ActionService {
       ...(this.d.now ? { now: this.d.now } : {}), ...(this.d.sleep ? { sleep: this.d.sleep } : {}), ...(this.d.drainLimitMs ? { limitMs: this.d.drainLimitMs } : {}),
     }))
       .then((end: RunEnd) => {
-        push({ node: end.node, state: end.state, pods: end.pods, ...(end.note ? { note: end.note } : {}) }, true);
+        const { evicted: _e, blocked: _b, failed: _f, ...state } = end;
+        push(state, true);
         const gone = end.pods.filter((p) => p.state === "gone").length;
+        // Pods that arrived after the preview, or a node no longer cordoned, are not "applied" (M3).
         const outcome: ActionLogEntry["outcome"] = end.state === "stopped" ? "stopped"
-          : end.state === "failed" ? (/changed since/.test(end.note ?? "") ? "conflict" : "failed")
-          : gone === total ? "applied" : gone === 0 && end.evicted === 0 ? "failed" : "partial";
-        this.settle(row, v.log, outcome, `${end.evicted} evicted, ${end.blocked} blocked`);
+          : end.state === "failed" ? (/changed since/.test(end.note ?? "") ? "conflict" : end.evicted ? "partial" : "failed")
+          : gone === total && !end.arrived && end.cordoned !== false ? "applied" : gone === 0 && end.evicted === 0 ? "failed" : "partial";
+        const detail = `${end.evicted} evicted, ${end.blocked} blocked${end.arrived ? `, ${end.arrived} arrived after the preview` : ""}${end.cordoned === false ? ", no longer cordoned" : ""}`;
+        if (!run.quit) this.settle(row, v.log, outcome, detail);
       }, () => {
         push({ node: kept.node, state: "failed", pods: kept.pods.map((p) => ({ namespace: p.namespace, name: p.name, state: "waiting" })), note: "Landlens couldn't run the drain. The node may be cordoned." }, true);
-        this.settle(row, v.log, "failed");
+        if (!run.quit) this.settle(row, v.log, "failed");
       })
-      .finally(() => this.runs.delete(id));
+      .finally(() => {
+        run.ended = true;
+        run.endedAt = this.now;
+        if (wc.isDestroyed()) this.runs.delete(id);
+      });
     return id;
   }
 
@@ -523,9 +607,21 @@ export class ActionService {
     const verb = a.kind === "cordon" ? (a.on ? "cordon" : "uncordon") : "drain";
     const deadline = this.now + REVIEW_MS;
     const title = titleOf(a, [t0]);
+    // A drain review supersedes this window's earlier ones of the same node (M2, L11): they stop at their next request
+    // and get no id, and a kept one is dropped. One review per window and node is ever at work.
+    const slot = `${r.handle}/${a.node}`;
+    const mine = a.kind === "drain" ? ++this.gen : 0;
+    if (a.kind === "drain") {
+      let gens = this.drainGen.get(wc);
+      if (!gens) this.drainGen.set(wc, (gens = new Map()));
+      gens.set(slot, mine);
+      for (const [k, v] of this.reviews) if (v.wc === wc && v.drain && v.handle === r.handle && v.node === a.node) this.drop(k);
+    }
+    const current = () => a.kind !== "drain" || this.drainGen.get(wc)?.get(slot) === mine;
     type Out = { review: ActionReview; keep?: { drain?: DrainKept; native?: Question; counts?: DrainPlan["counts"] } };
     const out = await asYou(this.d, r.handle, `${verb} ${a.node}`, async (unguarded): Promise<Out> => {
-      const send = bounded(this.guard(r.handle, unguarded), () => deadline - this.now, SLOW_REVIEW);
+      const timed = bounded(this.guard(r.handle, unguarded), () => deadline - this.now, SLOW_REVIEW);
+      const send: Send = (q) => (current() ? timed(q) : Promise.reject(fail(409, SUPERSEDED)));
       const problem = (message: string): Out => ({ review: { problems: [{ message }] } });
       if (a.kind === "cordon") {
         const got = await send({ method: "GET", path: `/api/v1/nodes/${a.node}` });
@@ -550,17 +646,21 @@ export class ActionService {
         return { review: { ...rest, facts } };
       }
       // Drain: the plan from reads, then (when this build may) the API server's own word and the cordon's dry run.
+      const ticks = { bare: a.bare, emptyDir: a.emptyDir };
       let plan: DrainPlan;
+      let node: any;
       try {
-        plan = (await readDrain(send, a.node, { bare: a.bare, emptyDir: a.emptyDir })).plan;
+        ({ plan, node } = await readDrain(send, a.node, ticks));
       } catch (e) {
         if (e instanceof DrainError) return problem(e.message);
         throw e;
       }
-      if (!allowed) return { review: { plan, previewOnly: true } };
+      // L10: the drain says, as cordon does, when no other node takes new pods: every evicted pod stays Pending.
+      const facts = await this.drainFacts(send, a.node);
+      if (!allowed) return { review: { plan, previewOnly: true, ticks, ...(facts.length ? { facts } : {}) } };
       const asked = await dryRunEvictions(send, plan);
       plan = asked.plan;
-      const disagree = asked.disagree ? { disagree: asked.disagree } : {};
+      const disagree = { ...(asked.disagree ? { disagree: asked.disagree } : {}), ticks, ...(facts.length ? { facts } : {}) };
       if (!runnable(plan)) return { review: { plan, ...disagree } };
       let cordon: DrainKept["cordon"];
       if (!plan.cordoned) {
@@ -575,11 +675,20 @@ export class ActionService {
         }
         cordon = { method: p.method, path: p.path, contentType: p.contentType ?? "application/json", body: p.body ?? "" };
       }
+      const nodeUid = typeof node?.metadata?.uid === "string" ? node.metadata.uid : undefined;
       return {
         review: { plan, ...disagree },
-        keep: { drain: { node: a.node, ...(cordon ? { cordon } : {}), pods: toEvict(plan) }, native: drainQuestion(a.node, info.context, plan), counts: plan.counts },
+        keep: {
+          drain: { node: a.node, ...(nodeUid ? { nodeUid } : {}), ticks, ...(cordon ? { cordon } : {}), pods: toEvict(plan) },
+          native: drainQuestion(a.node, info.context, plan, facts), counts: plan.counts,
+        },
       };
+    }).catch((e) => {
+      if (!current()) return { review: { problems: [{ message: SUPERSEDED }] } } as Out;
+      throw e;
     });
+    // Replaced while it was at work: no id, whatever it found (M2).
+    if (!current()) return { title, problems: [{ message: SUPERSEDED }] };
     const review: ActionReview = { ...out.review, title };
     if (review.previewOnly || (review.problems?.length && !review.id)) return review;
     const log = { kind: "Node", group: "", resource: "nodes", names: [a.node] };
@@ -599,21 +708,37 @@ export class ActionService {
     // The drain's review is main's own: its id, and the digest of the plan main answered, its dialog and exactly what
     // Apply will send (L2).
     const id = `ed${randomBytes(12).toString("base64url")}`;
+    // The ticks are in the card and so in the digest (M2), and main's dialog names what they let go.
     const card: ActionReview = { ...review, id, native: true };
     const digest = cardDigest(card, out.keep.drain);
-    this.remember(id, { wc, handle: r.handle, expires: this.now + EDIT_TTL_MS, digest, question: out.keep.native!, native: true, objects: 1, cancels: 0, drain: out.keep.drain, log: { action: "drain", ...log } });
+    this.remember(id, { wc, handle: r.handle, expires: this.now + EDIT_TTL_MS, digest, question: out.keep.native!, native: true, objects: 1, cancels: 0, drain: out.keep.drain, plan: review.plan!, node: a.node, log: { action: "drain", ...log } });
     return { ...card, digest };
+  }
+
+  /** A drain's facts (L10): the only node that takes new pods, or that the other nodes couldn't be read. */
+  private async drainFacts(send: Send, node: string): Promise<ActionFact[]> {
+    let nodes: Awaited<ReturnType<typeof listNodes>>;
+    try {
+      nodes = await listNodes(send);
+    } catch (e) {
+      if ((e as { status?: number }).status === 504 || (e as { status?: number }).status === 409) throw e;
+      return [{ tone: "info", code: "couldnt-check", text: "Landlens couldn't check the other nodes." }];
+    }
+    if (nodes.status) return [{ tone: "info", code: "couldnt-check", text: `Landlens couldn't check the other nodes (HTTP ${nodes.status}).` }];
+    if (nodes.items.some((n) => n?.metadata?.name !== node && schedulable(n))) return [];
+    return [{ tone: "bad", code: "only-node", text: "No other node takes new pods: every pod evicted stays Pending." }];
   }
 
   /** Cordon's facts (D149): how many pods stay on it, and whether it is the only node that takes new ones. */
   private async cordonFacts(send: Send, on: boolean, node: any): Promise<ActionFact[]> {
     if (!on) return actionFacts({ kind: "cordon", on, objects: [{ group: "", resource: "nodes", kind: "Node", obj: node }] });
     const pods = await podsOnNode(send, String(node.metadata.name));
-    const nodes = await send({ method: "GET", path: "/api/v1/nodes?limit=500" });
+    // Every node, in pages (L10).
+    const nodes = await listNodes(send);
     const input: FactInput = {
       kind: "cordon", on, objects: [{ group: "", resource: "nodes", kind: "Node", obj: node }],
       nodePods: pods.status ? { status: pods.status } : pods.items.filter((p) => !["Succeeded", "Failed"].includes(p?.status?.phase)).length,
-      nodes: nodes.status === 200 ? (JSON.parse(nodes.text).items ?? []) as Unread | any[] : { status: nodes.status },
+      nodes: nodes.status ? { status: nodes.status } as Unread : nodes.items,
     };
     return actionFacts(input);
   }
@@ -685,8 +810,12 @@ export function targetLines(objs: { namespace?: string; name: string }[], kind: 
   return lines.join("\n").replace(/^\n/, "");
 }
 
-/** Main's dialog before a drain (D152): the node, the context, the plan's counts, and the pods it evicts by namespace (M1). */
-export function drainQuestion(node: string, context: string, plan: DrainPlan): Question {
+/**
+ * Main's dialog before a drain (D152): the node, the context, the plan's counts, what the two ticks let go (bare pods
+ * deleted for good, emptyDir data lost, each named: security review of part 2, M2), the only node (L10), and the pods
+ * it evicts by namespace (M1). All from main's own plan, never from the window.
+ */
+export function drainQuestion(node: string, context: string, plan: DrainPlan, facts: ActionFact[] = []): Question {
   const ds = plan.pods.filter((p) => p.class === "daemonset").length;
   const parts = [
     `${count(plan.counts.evict, "pod")} will be evicted`,
@@ -694,9 +823,24 @@ export function drainQuestion(node: string, context: string, plan: DrainPlan): Q
     ...(plan.counts.skipped ? [`${count(plan.counts.skipped, ds === plan.counts.skipped ? "DaemonSet pod" : "pod")} stay`] : []),
   ];
   const evicted = toEvict(plan);
+  const uids = new Set(evicted.map((p) => p.uid));
+  const kept = plan.pods.filter((p) => uids.has(p.uid));
+  const bare = kept.filter((p) => p.bare && p.class === "evict");
+  const empty = kept.filter((p) => p.emptyDir.length);
+  const full = (p: { namespace: string; name: string }) => `${p.namespace}/${p.name}`;
+  const loss = [
+    ...(bare.length ? [`${count(bare.length, "pod")} ${bare.length === 1 ? "is" : "are"} recreated by nothing and deleted for good:`, ...bare.map(full)] : []),
+    ...(empty.length ? [`${bare.length ? "\n" : ""}${count(empty.length, "pod")} lose${empty.length === 1 ? "s" : ""} emptyDir data:`, ...empty.map((p) => `${full(p)} (${p.emptyDir.join(", ")})`)] : []),
+  ];
+  const only = facts.filter((f) => f.code === "only-node").map((f) => f.text);
   return {
     message: `Drain ${node} on ${context}?`,
-    detail: `${parts.join(", ")}.\nThe node stays cordoned until you uncordon it.${evicted.length ? `\n\n${targetLines(evicted, "Pod")}` : ""}`,
+    detail: [
+      `${parts.join(", ")}.\nThe node stays cordoned until you uncordon it.`,
+      ...only,
+      ...(loss.length ? [loss.join("\n")] : []),
+      ...(evicted.length ? [targetLines(evicted, "Pod")] : []),
+    ].join("\n\n"),
     yes: "Drain",
   };
 }
@@ -729,4 +873,17 @@ export function questionOf(a: Action, ts: ActionTarget[], context: string, reaso
   const why = reasons.join("\n");
   const list = ts.length > 1 ? targetLines(ts, kind) : a.kind === "delete" ? "It is deleted as soon as you confirm." : "";
   return { message, detail: [why, list].filter(Boolean).join("\n\n"), yes: ts.length > 1 ? `${verb} ${ts.length}` : verb };
+}
+
+/**
+ * The question before quitting (D23, and the security review of part 2, L9): sessions that close, drains that stop.
+ * A drain stopped this way leaves its node cordoned and its row in the action log as `stopped`.
+ */
+export function quitQuestion(sessions: number, drains: number): { message: string; detail: string } {
+  const what = [sessions ? count(sessions, "session") : "", drains ? count(drains, "drain") : ""].filter(Boolean).join(" and ");
+  const detail = [
+    sessions ? "Every shell and terminal open in Landlens closes with it." : "",
+    drains ? `${drains === 1 ? "The drain stops" : "The drains stop"}: no more pods are evicted, ${drains === 1 ? "its node stays" : "their nodes stay"} cordoned, and Recent actions says stopped.` : "",
+  ].filter(Boolean).join(" ");
+  return { message: `${what} will end`, detail };
 }

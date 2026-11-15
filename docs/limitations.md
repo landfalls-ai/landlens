@@ -81,14 +81,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
   If the log can't be written, actions are refused. "Ask Claude first" isn't offered differently to a session limited
   to some namespaces: the text from outside them is held back in the dock, not sent.
 - **Cordon and drain are preview only in a development build** (wave 8 part 2, D153), on every cluster, OrbStack
-  included: nothing is sent to a node unless `LANDLENS_NODE_WRITES` names the context. A packaged app has no such
-  guard. **No real drain has run live**: the run is tested against an in-memory API (`fake-api.ts`) and OrbStack sees
-  reads and dry-run evictions of the scenario's pods only (its one node is shared with the siblings); a test on a
-  throwaway two-node `kind` cluster is the person's call (spec, open question 2). **The agent has no cordon or drain
-  tool**: it can explain a plan (Ask Claude), the person runs it. A drain doesn't follow a pod's replacement to see it
-  scheduled elsewhere, and doesn't wait for a PodDisruptionBudget whose status is behind its spec (the API answers
-  429 and the run retries). Closing the sheet while a drain runs isn't offered (Stop first); the run is main's and
-  ends with its window.
+  included: the front door refuses every node write and every eviction, from any path (your actions, the YAML editor,
+  the agent's change cards, kube-mcp, kubectl in Landlens's terminals), unless `LANDLENS_NODE_WRITES` names the
+  cluster as `<context>@<host>:<port>`. A packaged app's rule allows every cluster. A pod's plain DELETE isn't a node
+  write, so it isn't refused by this guard (`kubectl drain` itself stops at its refused cordon). **No real drain has run live**: the run is tested against an in-memory
+  API (`fake-api.ts`) and OrbStack sees reads and dry-run evictions of the scenario's pods only (its one node is
+  shared with the siblings); a test on a throwaway two-node `kind` cluster is the person's call (spec, open question
+  2); the re-attach UI's e2e stubs main's run channels. **The agent has no cordon or drain tool**: it can explain a
+  plan (Ask Claude), the person runs it. A drain doesn't follow a pod's replacement to see it scheduled elsewhere, and
+  doesn't wait for a PodDisruptionBudget whose status is behind its spec (the API answers 429 and the run retries).
+  Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
+  main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
+  only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 13).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have

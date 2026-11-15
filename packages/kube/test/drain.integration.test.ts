@@ -5,7 +5,8 @@
 // pod's delete carries the dry run); this checks it live.
 //
 // What it touches: no node is written to, dry run or not. Every request that isn't a GET is a dry-run eviction of a
-// hands-* pod in landlens-dev, and a test-local fence refuses anything else before it leaves. The only real write is a
+// hands-* pod in landlens-dev, and a test-local fence refuses anything else before it leaves (its front door's rule
+// lets dry-run evictions through; the fence is the narrower of the two). The only real write is a
 // throwaway PodDisruptionBudget (hands-dry-*, labelled scenario=hands) made and deleted by kubectl in landlens-dev.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -54,7 +55,10 @@ describe.runIf(run)("drain's dry runs on OrbStack", () => {
   let unschedulable: unknown;
 
   beforeAll(async () => {
-    door = new FrontDoor(await loopbackCert(SIDECAR), () => {});
+    // The front door refuses every eviction, dry run or not, unless its rule names the cluster (D153, review of part 2,
+    // M5). This test's own door names it, for the dry runs below; the test-local fence is what keeps every request
+    // to reads and dry-run evictions of hands-* pods. LANDLENS_NODE_WRITES is not read or set here.
+    door = new FrontDoor(await loopbackCert(SIDECAR), () => {}, { nodeWrites: (c) => c.context === "orbstack" });
     clusters = new ClusterManager({ sidecarBinary: SIDECAR, frontDoor: door });
     await door.start();
     handle = (await clusters.connect("orbstack")).handle;

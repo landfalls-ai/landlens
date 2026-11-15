@@ -19,7 +19,33 @@ export type Upstream = {
   secret: string;
   /** Whether a kind is namespaced, from the cluster's discovery; for namespace-limited tokens. */
   scopeOf?: ScopeOf;
+  /** The kubeconfig context and API server this cluster was opened as: what D153's rule names (L8). */
+  context?: string;
+  server?: string;
 };
+
+/**
+ * D153, moved into the front door by the security review of wave 8 part 2 (M5): whether this build may send a node
+ * write or an eviction (dry run or not) to a cluster. Every caller goes through here (your actions, the YAML editor,
+ * the agent's change broker and its dry runs, kube-mcp, kubectl and helm in Landlens's terminals), so one rule covers
+ * them all. Absent: never. A packaged app passes a rule that always allows.
+ */
+export type FrontDoorOptions = { nodeWrites?: (cluster: { context: string; server: string }) => boolean };
+
+/** D153's words, in the front door's refusal and on the sheet. */
+export const NODE_WRITES_OFF = "Development build: preview only. Nothing is sent to nodes on this cluster.";
+
+/**
+ * A request that writes to a Node or evicts a pod, dry run or not (D153): anything but a read (GET, HEAD) on
+ * `/api/v1/nodes…` (the node, its status, its proxy, the collection), or on any `…/eviction`. Paths are canonical here
+ * (isCanonicalPath ran first); the fence in ActionService normalizes its own.
+ */
+export function nodeWrite(r: { method: string; path: string }): boolean {
+  const m = r.method.toUpperCase();
+  if (m === "GET" || m === "HEAD") return false;
+  const path = r.path.split("?")[0]!.replace(/\/+/g, "/");
+  return /^\/api\/v1\/nodes(?:\/|$)/.test(path) || /\/eviction\/?$/.test(path);
+}
 
 export type TokenGrant = {
   /** Shown in the audit trail, e.g. "ide" or "agent session 3". */
@@ -63,7 +89,14 @@ export class FrontDoor {
   constructor(
     private readonly tls: LoopbackCert,
     private readonly onAudit: (e: AuditEntry) => void = () => {},
+    private readonly opts: FrontDoorOptions = {},
   ) {}
+
+  /** D153 (M5): a cluster whose context and server the rule doesn't name gets no node write; absent rule, none. */
+  private mayWriteNodes(u: Upstream): boolean {
+    if (!this.opts.nodeWrites || u.context === undefined || u.server === undefined) return false;
+    return this.opts.nodeWrites({ context: u.context, server: u.server });
+  }
 
   /** The certificate tools must trust (PEM): this run's CA, which signed only the front door's certificate. */
   get certificate(): string {
@@ -162,6 +195,10 @@ export class FrontDoor {
     // headers too; refusing here makes it an error rather than a silent request as the user.
     if (Object.keys(req.headers).some((h) => h.startsWith("impersonate-"))) {
       return { ok: false, status: 403, reason: "impersonation is not allowed through Landlens", label, handle, path, access: grant.policy.access };
+    }
+    // D153 (M5): before the policy, for every token, full access included; nothing is proxied.
+    if (nodeWrite({ method: req.method ?? "GET", path }) && !this.mayWriteNodes(upstream)) {
+      return { ok: false, status: 403, reason: NODE_WRITES_OFF, label, handle, path, access: grant.policy.access };
     }
     const parsed = parseRequest(req.method ?? "GET", path);
     const decision = authorize(grant.policy, parsed, upstream.scopeOf);

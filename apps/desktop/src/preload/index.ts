@@ -12,7 +12,7 @@ const CHANNELS: readonly Channel[] = [
   "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:auto-run", "mcp:remove", "mcp:calls", "mcp:try",
   "mcp:app-open", "mcp:app-call", "mcp:app-close", "mcp:app-link",
   "logs:open", "logs:close", "terminal:open", "terminal:local", "terminal:input", "terminal:resize", "terminal:ack", "terminal:close",
-  "edit:review", "edit:create", "edit:apply", "edit:discard", "action:review", "action:apply", "action:discard", "action:stop", "action:log",
+  "edit:review", "edit:create", "edit:apply", "edit:discard", "action:review", "action:apply", "action:discard", "action:stop", "action:runs", "action:log",
   "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
   "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",

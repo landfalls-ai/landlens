@@ -1,8 +1,8 @@
 // The status bar: connection, what is being watched, what Claude is doing, and the problem counts (to Overview).
-import { Activity, ArrowLeftRight, CircleX, Database, History, PlugZap, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
+import { Activity, ArrowLeftRight, CircleX, Database, History, LoaderCircle, PlugZap, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import { Ic } from "./icons";
 
-export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void; actions?: number; actionsOpen?: boolean; onActions?: () => void }) {
+export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void; actions?: number; actionsOpen?: boolean; onActions?: () => void; drains?: { run: string; node: string }[]; onDrain?: (run: string) => void }) {
   return (
     <footer className="statusbar">
       <span className="sb-item"><i className="dot tone-ok" aria-hidden="true" />Connected</span>
@@ -15,6 +15,12 @@ export function StatusBar(props: { server: string; watching: string; claude?: st
       {props.forwards ? (
         <button className="sb-item forwards" onClick={props.onForwards} title="Port forwards"><Ic icon={ArrowLeftRight} size={11} />{props.forwards} forward{props.forwards === 1 ? "" : "s"}</button>
       ) : null}
+      {/* A drain running in main (security review of part 2, M4): its sheet, with Stop, is one click away. */}
+      {(props.drains ?? []).map((d) => (
+        <button key={d.run} className="sb-item drain-run" onClick={() => props.onDrain?.(d.run)} title={`Drain of ${d.node} running: open it (Stop is there)`} aria-label={`Draining ${d.node}: open the drain`}>
+          <Ic icon={LoaderCircle} size={11} className="spin" />Draining {d.node}
+        </button>
+      ))}
       {props.onActions ? (
         <button className="sb-item actions" onClick={props.onActions} aria-expanded={!!props.actionsOpen} title="Recent actions" aria-label={`Recent actions${props.actions ? `, ${props.actions} since Landlens started` : ""}`}>
           <Ic icon={History} size={11} />{props.actions ? props.actions : null}

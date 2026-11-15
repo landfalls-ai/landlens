@@ -426,6 +426,11 @@
 .dialog.action-sheet:focus { outline: none; box-shadow: var(--shadow-2); }
 /* The drain sheet (wave 8 part 2, D154): counts, ticks, then one column of cards-as-rows. */
 .drain-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+/* A drain running in main (security review of part 2, M4): the chip that opens it again, and the sheet's line about it. */
+.sb-item.drain-run { color: var(--warn-text); }
+.sb-item.drain-run:hover { color: var(--ink); }
+.sb-item.drain-run .spin { animation: spin 1s linear infinite; }
+.drain-detach { margin: 0 0 8px; }
 .drain-ticks { border: 0; margin: 0 0 10px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--t-125); color: var(--ink-2); }
 .drain-ticks label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
 .drain-ticks input { accent-color: var(--accent); width: 14px; height: 14px; }

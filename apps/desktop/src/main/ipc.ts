@@ -274,6 +274,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "action:apply": (r, event) => actions.apply(r, event.sender, nativeConfirm(event)),
     "action:discard": async ({ id }, event) => (actions.discard(id, event.sender), { ok: true }),
     "action:stop": async ({ run }, event) => (actions.stop(run, event.sender), { ok: true }),
+    "action:runs": async ({ handle }, event) => ({ runs: actions.runsOf(handle, event.sender) }),
     "action:log": async ({ handle, limit }) => ({ entries: actions.history(handle, limit) }),
     // Port-forwards belong to the app, not a window (docs/workbench.md#port-forward).
     "forward:list": async () => ({ forwards: forwards.list() }),

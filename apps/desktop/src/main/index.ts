@@ -16,7 +16,7 @@ import { ClicklandHistory } from "./clickland-history";
 import { SiblingText } from "./sibling-text";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
-import { ActionService, nodeWritesFrom } from "./actions";
+import { ActionService, nodeWritesFrom, quitQuestion } from "./actions";
 import { ActionLog } from "./action-log";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
@@ -60,10 +60,13 @@ async function start() {
   /** Landlens's own telemetry (wave 7 part 5): off until the person turns it on. */
   let telemetry: TelemetryService | undefined;
   // The front door's audit trail: the MCP call log files each landlens-kube call's requests under it; telemetry counts it.
+  // D153 lives in the front door (security review of wave 8 part 2, M5): an unpackaged build sends no node write and no
+  // eviction through any token unless LANDLENS_NODE_WRITES names the cluster's context and API server; packaged, any.
+  const nodeWrites = nodeWritesFrom(process.env, app.isPackaged);
   const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => {
     mcp?.onAudit(e);
     telemetry?.audit(e);
-  });
+  }, { nodeWrites });
   await frontDoor.start();
   const clusters = new ClusterManager({
     sidecarBinary: binary,
@@ -292,8 +295,10 @@ async function start() {
     clusters, frontDoor,
     log: new ActionLog(join(app.getPath("userData"), "actions.json")),
     counted: (a) => tel.action(a),
-    nodeWrites: nodeWritesFrom(process.env, app.isPackaged),
+    nodeWrites,
   });
+  liveDrains = () => actions.liveRuns();
+  endDrains = () => actions.quit();
   registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions);
   const service = mcp;
   shutdown = async () => {
@@ -343,16 +348,21 @@ app.on("window-all-closed", () => app.quit());
 let quitting = false;
 /** Shells and terminals that quitting would end (D23): asked about once. */
 let liveSessions = () => 0;
+/** Drains running in main (security review of part 2, L9): quitting asks, then stops them and writes their rows. */
+let liveDrains = () => 0;
+let endDrains = () => {};
 app.on("before-quit", (event) => {
   if (quitting || !shutdown) return;
   const n = liveSessions();
-  if (n) {
+  const d = liveDrains();
+  if (n || d) {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-    const opts = { type: "question" as const, buttons: ["Quit", "Cancel"], defaultId: 0, cancelId: 1, message: `${n} session${n === 1 ? "" : "s"} will end`, detail: "Every shell and terminal open in Landlens closes with it." };
+    const opts = { type: "question" as const, buttons: ["Quit", "Cancel"], defaultId: 0, cancelId: 1, ...quitQuestion(n, d) };
     const choice = win && !win.isDestroyed() ? dialog.showMessageBoxSync(win, opts) : dialog.showMessageBoxSync(opts);
     if (choice === 1) return event.preventDefault();
   }
   event.preventDefault();
   quitting = true;
+  endDrains();
   void shutdown().finally(() => app.quit());
 });

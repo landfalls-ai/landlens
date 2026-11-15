@@ -153,8 +153,13 @@ export type FactInput = {
   nodes?: any[] | Unread;
 };
 
-/** A Node that takes new pods: Ready, and not cordoned. */
-export const schedulable = (n: any) => n?.spec?.unschedulable !== true && (n?.status?.conditions ?? []).some((c: any) => c?.type === "Ready" && c?.status === "True");
+/**
+ * A Node that takes new pods: Ready, not cordoned, and with no NoSchedule or NoExecute taint (security review of part
+ * 2, L10: a tainted node takes only pods that tolerate it, which Landlens doesn't count on).
+ */
+export const schedulable = (n: any) => n?.spec?.unschedulable !== true
+  && !(Array.isArray(n?.spec?.taints) && n.spec.taints.some((t: any) => t?.effect === "NoSchedule" || t?.effect === "NoExecute"))
+  && (n?.status?.conditions ?? []).some((c: any) => c?.type === "Ready" && c?.status === "True");
 
 /** Whether a label selector (matchLabels and matchExpressions) selects these labels. An empty selector selects all. */
 export function selects(sel: any, labels: Record<string, string> | undefined): boolean {

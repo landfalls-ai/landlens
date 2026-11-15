@@ -80,7 +80,7 @@ export class ClusterManager {
     const info: ClusterInfo = { handle, context, server: sidecar.server, version };
     const entry: Connected = { info, client, sidecar };
     this.clusters.set(handle, entry);
-    this.opts.frontDoor.addCluster(handle, { url: sidecar.url, secret: sidecar.secret, scopeOf: (k) => entry.scope?.get(k) });
+    this.opts.frontDoor.addCluster(handle, { url: sidecar.url, secret: sidecar.secret, scopeOf: (k) => entry.scope?.get(k), context, server: sidecar.server });
     void sidecar.exited.then(() => this.forget(handle, "exited"));
     for (const fn of this.connectedListeners) fn(info);
     return info;

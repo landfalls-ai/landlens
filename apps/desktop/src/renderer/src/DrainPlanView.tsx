@@ -1,16 +1,20 @@
 // The drain sheet (wave 8 part 2, D154): the plan main built from reads and the API server's dry runs, then the run.
-// Head: the node and three counts, each with its icon. Two ticks above the list re-review on change (300 ms). The list
-// is one column of cards-as-rows: Blocked first (a bad edge), Will be evicted, Stay (folded); each row the pod in mono,
-// its namespace, its owner as a link, and chips. Apply reads "Drain…" and asks in main's own dialog; it is off while
-// anything waits on a tick, the plan is partial, or the build may not write to this cluster's nodes (D153). During the
-// run the same list shows each pod's state, Stop and the elapsed time; at the end, the summary and Uncordon. "Ask
-// Claude" sends the plan as names, classes and counts only, quoted as data, with a fixed question.
-import type { ActionReview, DrainPlan, DrainPod, DrainProgress } from "@landlens/contracts";
+// Head: the node and three counts, each with its icon. Two ticks above the list re-review on change (300 ms); a change
+// drops the review on screen at once, and only the latest review's answer lands (security review of part 2, M2). The
+// list is one column of cards-as-rows: Blocked first (a bad edge), Will be evicted, Stay (folded); each row the pod in
+// mono, its namespace, its owner as a link, and chips. Apply reads "Drain…" and asks in main's own dialog; it is off
+// while anything waits on a tick, the plan is partial, the review's ticks aren't the boxes', or the build may not write
+// to this cluster's nodes (D153). During the run the same list shows each pod's state, Stop and the elapsed time; the
+// sheet listens from its first moment and asks main for the run's latest state (M1), and it can be closed: the run
+// goes on in main and the status bar's chip opens it again (M4). At the end, the summary as main read it and
+// Uncordon. "Ask Claude" sends the plan as names, classes and counts only, quoted as data, with a fixed question.
+import type { ActionReview, DrainPlan, DrainPod, DrainProgress, DrainRun } from "@landlens/contracts";
 import { ChevronRight, CircleCheck, CircleSlash, CircleX, Clock, Info, LoaderCircle, LogOut, Pause, Sparkles, TriangleAlert, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ACTION_ASKS, PREVIEW_ONLY } from "./actionAsks";
 import type { SheetProps } from "./ActionSheet";
 import { api, type ApiError } from "./api";
+import { canApplyDrain, endingLine, hasEnded, newer, ProgressBuffer, running as runningRuns, Turns, withProgress } from "./drainRuns";
 import { Ic } from "./icons";
 import type { AskContext } from "./quotes";
 
@@ -83,6 +87,7 @@ function Row({ p, run, onOwner }: { p: DrainPod; run?: { state: string; note?: s
           onOwner ? <button className="link-btn small" onClick={() => onOwner(p)}>{p.owner.kind} {p.owner.name}</button> : <span className="small dim">{p.owner.kind} {p.owner.name}</span>
         ) : <span className="chip">bare</span>}
         {p.class === "daemonset" ? <span className="chip">DaemonSet</span> : null}
+        {p.orphan ? <span className="chip">its DaemonSet is gone</span> : null}
         {p.class === "mirror" ? <span className="chip">static pod</span> : null}
         {p.class === "finished" ? <span className="chip">finished</span> : null}
         {p.class === "terminating" ? <span className="chip">terminating</span> : null}
@@ -124,11 +129,36 @@ export function DrainPlanView({ plan, progress, onOwner }: { plan: DrainPlan; pr
   );
 }
 
+/**
+ * This window's drains on a cluster, as main lists them (M4): read when the workspace opens, kept up by the pushes, and
+ * read again when a push names a run the list doesn't have. Only those still running are returned.
+ */
+export function useDrainRuns(handle: string): DrainRun[] {
+  const [runs, setRuns] = useState<DrainRun[]>([]);
+  useEffect(() => {
+    let live = true;
+    const read = () => void api.invoke("action:runs", { handle }).then((r) => live && setRuns(r.runs), () => {});
+    read();
+    const off = api.on("action:progress", (p: DrainProgress) => {
+      setRuns((rs) => {
+        if (!rs.some((r) => r.progress.run === p.run)) {
+          read();
+          return rs;
+        }
+        return withProgress(rs, p);
+      });
+    });
+    return () => void ((live = false), off());
+  }, [handle]);
+  return runningRuns(runs);
+}
+
 /** Owner kinds a row can open in their list. */
 const OWNER_KINDS = new Set(["ReplicaSet", "StatefulSet", "DaemonSet", "Job", "Deployment", "CronJob"]);
 
 export function DrainSheet(props: SheetProps) {
   const node = props.draft.objects[0]!.metadata.name;
+  const attach = props.draft.run;
   const [ticks, setTicks] = useState({ bare: false, emptyDir: false });
   const [stage, setStage] = useState<Stage>({ s: "checking" });
   const [now, setNow] = useState(Date.now());
@@ -138,31 +168,85 @@ export function DrainSheet(props: SheetProps) {
   reviewId.current = stage.s === "plan" ? stage.review.id : undefined;
   const runId = useRef<string>(undefined);
   runId.current = stage.s === "running" ? stage.run : undefined;
+  const turns = useRef(new Turns());
+  const buffer = useRef(new ProgressBuffer());
 
-  // A review left open when the sheet goes is dropped in main too. (A run goes on: main owns it; Stop ends it.)
+  // A review left open when the sheet goes is dropped in main too. A run goes on in main: the status bar's chip opens
+  // it again, with Stop (M4).
   useEffect(() => () => {
     if (reviewId.current) void api.invoke("action:discard", { id: reviewId.current }).catch(() => {});
   }, []);
 
-  const review = async (t: typeof ticks) => {
+  // The run's progress, pushed by main to this window only, heard from the sheet's first moment (M1): a push that
+  // comes before Apply answers is kept by run id and taken when the run is known.
+  useEffect(() => {
+    const off = api.on("action:progress", (p: DrainProgress) => {
+      const best = buffer.current.add(p);
+      if (p.run !== runId.current) return;
+      setStage((s) => (s.s === "running" && s.run === p.run ? { ...s, progress: newer(s.progress, best) } : s));
+      if (hasEnded(best)) props.onApplied();
+    });
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => (off(), clearInterval(clock));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Main's latest state of a run (M1, M4): what the sheet shows when it enters the run, or re-attaches to it. */
+  const fetchRun = async (run: string) => {
+    try {
+      const { runs } = await api.invoke("action:runs", { handle: props.cluster.handle });
+      return runs.find((r) => r.progress.run === run);
+    } catch {
+      return undefined;
+    }
+  };
+  const enterRun = async (review: ActionReview, run: string) => {
+    setStage({ s: "running", review, run, ...(buffer.current.get(run) ? { progress: buffer.current.get(run)! } : {}) });
+    const got = await fetchRun(run);
+    if (got) {
+      const best = buffer.current.add(got.progress);
+      setStage((s) => (s.s === "running" && s.run === run ? { ...s, progress: newer(s.progress, best) } : s));
+      if (hasEnded(best)) props.onApplied();
+    }
+  };
+
+  /** Drop the review on screen (a tick changed, M2): no Apply on a review the boxes no longer say. */
+  const dropReview = () => {
     if (reviewId.current) void api.invoke("action:discard", { id: reviewId.current }).catch(() => {});
-    setStage((s) => ({ s: "checking", ...(s.s === "plan" ? { last: s.review } : {}) }));
+    reviewId.current = undefined;
+    setStage((s) => (s.s === "plan" ? { s: "checking", last: s.review } : s));
+  };
+  const review = async (t: typeof ticks) => {
+    const turn = turns.current.next();
+    if (reviewId.current) void api.invoke("action:discard", { id: reviewId.current }).catch(() => {});
+    setStage((s) => ({ s: "checking", ...(s.s === "plan" ? { last: s.review } : s.s === "checking" && s.last ? { last: s.last } : {}) }));
     try {
       const r = await api.invoke("action:review", { handle: props.cluster.handle, action: { kind: "drain", node, bare: t.bare, emptyDir: t.emptyDir } });
+      // Only the latest review lands (M2); an older one's id is given back.
+      if (!turns.current.isLatest(turn)) {
+        if (r.id) void api.invoke("action:discard", { id: r.id }).catch(() => {});
+        return;
+      }
       if (r.plan) {
         shownAt.current = Date.now();
         setStage({ s: "plan", review: r });
       } else setStage({ s: "problems", messages: (r.problems ?? []).map((p) => p.message) });
     } catch (e) {
-      setStage({ s: "problems", messages: [(e as ApiError).message] });
+      if (turns.current.isLatest(turn)) setStage({ s: "problems", messages: [(e as ApiError).message] });
     }
   };
-  // Opens on the review; a tick re-reviews after 300 ms of quiet.
+  // Opens on the review (or, re-attaching, on main's run); a tick re-reviews after 300 ms of quiet.
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
       first.current = false;
       box.current?.focus();
+      if (attach) {
+        void fetchRun(attach).then((got) => {
+          if (!got) return setStage({ s: "problems", messages: ["This drain is no longer listed. Recent actions has how it ended."] });
+          void enterRun({ plan: got.plan }, attach);
+        });
+        return;
+      }
       void review(ticks);
       return;
     }
@@ -170,26 +254,15 @@ export function DrainSheet(props: SheetProps) {
     return () => clearTimeout(t);
   }, [ticks.bare, ticks.emptyDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The run's progress, pushed by main to this window only.
-  useEffect(() => {
-    if (stage.s !== "running") return;
-    const off = api.on("action:progress", (p: DrainProgress) => {
-      if (p.run !== runId.current) return;
-      setStage((s) => (s.s === "running" ? { ...s, progress: p } : s));
-      if (p.state !== "cordoning" && p.state !== "evicting") props.onApplied();
-    });
-    const clock = setInterval(() => setNow(Date.now()), 1000);
-    return () => (off(), clearInterval(clock));
-  }, [stage.s]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const plan = stage.s === "plan" || stage.s === "asking" || stage.s === "running" ? stage.review.plan : stage.s === "checking" ? stage.last?.plan : undefined;
   const rv = stage.s === "plan" || stage.s === "asking" || stage.s === "running" ? stage.review : undefined;
   const progress = stage.s === "running" ? stage.progress : undefined;
-  const ended = !!progress && progress.state !== "cordoning" && progress.state !== "evicting";
+  const ended = hasEnded(progress);
   const needsTick = !!plan?.pods.some((p) => p.blocked === "needs-bare" || p.blocked === "needs-emptydir");
-  const canApply = stage.s === "plan" && !!rv?.id && !!rv.digest && !rv.previewOnly && !plan?.partial && !needsTick;
+  const canApply = stage.s === "plan" && canApplyDrain(rv, ticks);
   const running = stage.s === "running" && !ended;
-  const busy = stage.s === "asking" || running;
+  // Only main's own dialog holds the sheet; a run doesn't: closing leaves it running, and the chip opens it again.
+  const busy = stage.s === "asking";
   const close = () => !busy && props.onClose();
 
   // A held key repeats into the button: a keyboard press counts only when its keydown wasn't a repeat (L4).
@@ -207,7 +280,7 @@ export function DrainSheet(props: SheetProps) {
     setStage({ s: "asking", review: r });
     try {
       const out = await api.invoke("action:apply", { handle: props.cluster.handle, id: r.id!, digest: r.digest! });
-      if ("run" in out) setStage({ s: "running", review: r, run: out.run });
+      if ("run" in out) await enterRun(r, out.run);
       else setStage({ s: "problems", messages: ["Landlens didn't start the drain."] });
     } catch (e) {
       const err = e as ApiError;
@@ -216,8 +289,17 @@ export function DrainSheet(props: SheetProps) {
       setStage({ s: "problems", messages: [err.message] });
     }
   };
-  const stop = () => {
-    if (stage.s === "running") void api.invoke("action:stop", { run: stage.run }).catch(() => {});
+  const stop = async () => {
+    if (stage.s !== "running") return;
+    const run = stage.run;
+    try {
+      await api.invoke("action:stop", { run });
+    } catch {
+      // Main doesn't know the run as running: show what it last said, or that it is gone.
+      const got = await fetchRun(run);
+      if (got) setStage((s) => (s.s === "running" && s.run === run ? { ...s, progress: newer(s.progress, buffer.current.add(got.progress)) } : s));
+      else setStage({ s: "problems", messages: ["This drain is no longer running."] });
+    }
   };
   const ask = () => {
     if (!plan) return;
@@ -229,12 +311,14 @@ export function DrainSheet(props: SheetProps) {
     props.onClose();
     props.onOpen!({ kind: p.owner.kind, name: p.owner.name, namespace: p.namespace });
   } : undefined;
+  const setTick = (k: "bare" | "emptyDir", v: boolean) => {
+    dropReview();
+    setTicks((t) => ({ ...t, [k]: v }));
+  };
 
   const c = plan?.counts;
   const tally = progress ? {
     gone: progress.pods.filter((p) => p.state === "gone").length,
-    blocked: progress.pods.filter((p) => p.state === "blocked").length,
-    failed: progress.pods.filter((p) => p.state === "failed").length,
     left: progress.pods.filter((p) => p.state === "waiting" || p.state === "evicting" || p.state === "evicted").length,
   } : undefined;
 
@@ -268,15 +352,17 @@ export function DrainSheet(props: SheetProps) {
           ) : null}
           {stage.s !== "running" ? (
             <fieldset className="drain-ticks" disabled={stage.s === "asking"}>
-              <label><input type="checkbox" checked={ticks.bare} onChange={(e) => setTicks((t) => ({ ...t, bare: e.target.checked }))} />Delete pods that nothing will recreate</label>
-              <label><input type="checkbox" checked={ticks.emptyDir} onChange={(e) => setTicks((t) => ({ ...t, emptyDir: e.target.checked }))} />Lose emptyDir data</label>
+              <label><input type="checkbox" checked={ticks.bare} onChange={(e) => setTick("bare", e.target.checked)} />Delete pods that nothing will recreate</label>
+              <label><input type="checkbox" checked={ticks.emptyDir} onChange={(e) => setTick("emptyDir", e.target.checked)} />Lose emptyDir data</label>
             </fieldset>
           ) : null}
           {rv?.previewOnly || (stage.s === "checking" && stage.last?.previewOnly) ? <div className="change-fact preview-only" role="note"><Ic icon={Info} size={12} />{PREVIEW_ONLY}</div> : null}
           {plan?.partial ? <div className="change-fact bad" role="note"><Ic icon={TriangleAlert} size={12} />{plan.partial} Apply stays off.</div> : null}
+          {(rv?.facts ?? []).map((f) => <div key={f.code} className={`change-fact ${f.tone}`} role="note"><Ic icon={f.tone === "bad" ? TriangleAlert : Info} size={12} />{f.text}</div>)}
           {rv?.disagree ? <div className="change-fact warn" role="note"><Ic icon={TriangleAlert} size={12} />The cluster disagrees with Landlens's reading on {rv.disagree} pod{rv.disagree === 1 ? "" : "s"}; the rows show the cluster's answer.</div> : null}
           {rv?.problems?.length ? <div className="change-fact bad" role="alert"><Ic icon={CircleX} size={12} />{rv.problems.map((p) => p.message).join(" ")}</div> : null}
           {progress?.note ? <div className="change-fact bad" role="alert"><Ic icon={CircleX} size={12} />{progress.note}</div> : null}
+          {running ? <p className="small dim drain-detach">Closing this sheet leaves the drain running; the status bar shows it, with Stop.</p> : null}
           {stage.s === "checking" && !plan ? (
             <div className="action-checking" role="status" aria-live="polite">
               <div className="skel" /><div className="skel short" /><div className="skel" />
@@ -284,29 +370,27 @@ export function DrainSheet(props: SheetProps) {
             </div>
           ) : stage.s === "problems" ? (
             <div className="action-problems" role="alert">
-              <div className="change-fact bad"><Ic icon={CircleX} size={13} />Landlens couldn't plan this drain. Nothing was changed.</div>
+              <div className="change-fact bad"><Ic icon={CircleX} size={13} />{attach ? "Landlens can't show this drain." : "Landlens couldn't plan this drain. Nothing was changed."}</div>
               <ul>{stage.messages.slice(0, 20).map((m, i) => <li key={i} className="small">{m}</li>)}</ul>
             </div>
           ) : plan ? (
             <div className={stage.s === "checking" ? "drain-stale" : ""} aria-busy={stage.s === "checking"}>
-              <DrainPlanView plan={plan} {...(progress ? { progress } : {})} {...(onOwner ? { onOwner } : {})} />
+              <DrainPlanView plan={plan} {...(progress ? { progress } : stage.s === "running" ? { progress: { run: stage.run, node, state: "cordoning", pods: [], startedAt: Date.now(), seq: 0 } } : {})} {...(onOwner ? { onOwner } : {})} />
             </div>
           ) : null}
         </div>
         <footer className="dialog-foot">
-          {ended && tally ? (
+          {ended && progress ? (
             <>
-              <span className="grow small" role="status">
-                {progress!.state === "stopped" ? "Stopped. " : progress!.state === "timed-out" ? "Time's up. " : progress!.state === "failed" ? "" : "Done. "}
-                {tally.gone} gone, {tally.blocked} blocked{tally.failed ? `, ${tally.failed} failed` : ""}{tally.left ? `, ${tally.left} still going` : ""}. The node stays cordoned.
-              </span>
-              {props.onUncordon ? <button className="secondary" onClick={() => (props.onClose(), props.onUncordon!())}>Uncordon…</button> : null}
+              <span className="grow small" role="status">{endingLine(progress)}</span>
+              {props.onUncordon && progress.cordoned !== false ? <button className="secondary" onClick={() => (props.onClose(), props.onUncordon!())}>Uncordon…</button> : null}
               <button className="primary" autoFocus onClick={props.onClose}>Done</button>
             </>
-          ) : running ? (
+          ) : stage.s === "running" ? (
             <>
-              <span className="grow small dim" role="status"><span className="spinner" />{progress?.state === "cordoning" ? "Cordoning…" : `Evicting… ${tally ? `${tally.gone} gone, ${tally.left} to go` : ""}`}</span>
-              <button className="secondary" onClick={stop}><Ic icon={CircleSlash} size={13} />Stop</button>
+              <span className="grow small dim" role="status"><span className="spinner" />{!progress || progress.state === "cordoning" ? "Cordoning…" : `Evicting… ${tally ? `${tally.gone} gone, ${tally.left} to go` : ""}`}</span>
+              <button className="secondary" onClick={close}>Close</button>
+              <button className="danger" onClick={() => void stop()}><Ic icon={CircleSlash} size={13} />Stop</button>
             </>
           ) : (
             <>

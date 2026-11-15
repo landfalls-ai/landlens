@@ -12,9 +12,9 @@ export const PREVIEW_ONLY = "Development build: preview only. Nothing is sent to
 
 /**
  * What the sheet is asked to do: an action on objects of one kind, as the window has them. `suspend`: suspend (true)
- * or resume; `on`: cordon (true) or uncordon.
+ * or resume; `on`: cordon (true) or uncordon; `run`: a drain running in main to re-attach to (M4).
  */
-export type ActionDraft = { kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean };
+export type ActionDraft = { kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean; run?: string };
 
 /** The question each action's "Ask Claude first" sends (Landlens's own words). */
 export const ACTION_ASKS: Record<ActionVerb, { label: string; question: string }> = {

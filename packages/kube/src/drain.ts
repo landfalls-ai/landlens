@@ -9,10 +9,17 @@
 // a budget and never deletes a pod: every pod leaves through the eviction API, with its uid as a precondition and the
 // pod's own grace period.
 //
-// The run (D152) cordons with the request the review kept, then evicts exactly the pods the review listed, by uid,
-// four at a time: a 429 is retried every 5 s until the run's 10 minutes are up (then the pod is `blocked`), a 404 or a
-// 409 (the name now belongs to another pod) is `gone`, anything else `failed` in a fixed sentence. Stop sends no new
-// eviction. The node is never uncordoned here: it stays cordoned in every ending.
+// The run (D152) first reads the node and its pods again (security review of part 2, M3, L7): the same node, still
+// cordoned if the review found it so, and only the reviewed pods still on it with what the ticks allowed (a pod whose
+// controller went since is not evicted without the bare tick). It cordons with the request the review kept (pinned to
+// the node's version; on a 409 it re-reads and, for the same node still schedulable, sends once more with the new
+// version, L5), then evicts exactly the pods the review listed, by uid, four at a time, reading the node before each
+// pass and stopping if it was uncordoned. A budget's 429 is retried every 5 s, another 429 after its Retry-After
+// (L4), until the run's 10 minutes are up, and no eviction is sent after them (L2); a 404 or a 409 (the name now
+// belongs to another pod) is `gone`, anything else `failed` in a fixed sentence. Evicted pods are followed by name, or
+// past 20 by one list from the API server's cache (L3). Stop sends no new eviction. At the end it reads the node and
+// its pods once more: whether it is still cordoned, and how many pods arrived after the preview (M3). The node is
+// never uncordoned here.
 import type { DrainBlock, DrainPlan, DrainPod, DrainPodState, DrainProgress } from "@landlens/contracts";
 import { selects } from "./actions.js";
 import type { Send } from "./changes.js";
@@ -24,11 +31,19 @@ export type { DrainPlan, DrainPod } from "@landlens/contracts";
 export const MAX_DRAIN_PODS = 2000;
 export const MAX_BUDGETS = 2000;
 const PAGE = 500;
-/** A run's whole time, how often a 429 is tried again, and how often the pod list is read while pods terminate. */
+/** A run's whole time, how often a 429 is tried again, and how often evicted pods are looked at while they terminate. */
 export const DRAIN_LIMIT_MS = 10 * 60_000;
 export const DRAIN_RETRY_MS = 5_000;
 export const DRAIN_FOLLOW_MS = 2_000;
 export const DRAIN_PARALLEL = 4;
+/** The longest a 429's Retry-After is honoured (L4). */
+export const DRAIN_RETRY_AFTER_MAX_MS = 30_000;
+/** Evicted pods followed one GET each (as kubectl does); past this, one list of the node's pods from the cache (L3). */
+export const FOLLOW_BY_NAME = 20;
+/** Past FOLLOW_BY_NAME, the list is read at most this often. */
+export const DRAIN_FOLLOW_LIST_MS = 5_000;
+/** DaemonSets read for a plan, to find pods whose DaemonSet is gone (L12). */
+const MAX_DAEMONSETS = 200;
 
 const SUBDOMAIN = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/;
 const LABEL = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/;
@@ -46,17 +61,26 @@ export class DrainError extends Error {
   }
 }
 
+/** A pod's controller owner reference, if it has one. */
+const controllerOf = (p: any) => (p?.metadata?.ownerReferences ?? []).find((r: any) => r?.controller === true);
+/** The key of a DaemonSet in `orphans`: `<namespace>/<name>`. */
+export const daemonSetKey = (namespace: string, ds: string) => `${namespace}/${ds}`;
+
 /** One pod, classed (D150). Pods whose names aren't Kubernetes names are left out by the caller. */
-function classify(p: any, pdbs: any[], opts: DrainOpts): DrainPod {
+function classify(p: any, pdbs: any[], opts: DrainOpts, orphans?: ReadonlySet<string>): DrainPod {
   const meta = p.metadata ?? {};
-  const ref = (meta.ownerReferences ?? []).find((r: any) => r?.controller === true);
+  const ref = controllerOf(p);
   const owner = ref && KIND.test(String(ref.kind)) && name(ref.name) ? { kind: String(ref.kind), name: String(ref.name) } : undefined;
   const phase = p.status?.phase;
+  // A DaemonSet pod whose DaemonSet is gone comes back from nothing: it is evicted as a bare pod (L12), as kubectl
+  // refuses it without --force.
+  const orphan = ref?.kind === "DaemonSet" && !!orphans?.has(daemonSetKey(meta.namespace, String(ref.name)));
   const cls: DrainPod["class"] = meta.deletionTimestamp ? "terminating"
     : meta.annotations?.["kubernetes.io/config.mirror"] !== undefined ? "mirror"
-    : ref?.kind === "DaemonSet" ? "daemonset"
+    : ref?.kind === "DaemonSet" && !orphan ? "daemonset"
     : phase === "Succeeded" || phase === "Failed" ? "finished"
     : "evict";
+  const bare = !ref || orphan;
   const emptyDir = (p.spec?.volumes ?? []).filter((v: any) => v?.emptyDir && name(v.name)).map((v: any) => String(v.name));
   const matching = pdbs.filter((b) => b?.metadata?.namespace === meta.namespace && selects(b?.spec?.selector, meta.labels));
   const budgets = matching.map((b) => name(b?.metadata?.name)).filter((x): x is string => !!x);
@@ -65,7 +89,7 @@ function classify(p: any, pdbs: any[], opts: DrainOpts): DrainPod {
   let blocked: DrainBlock | undefined;
   if (cls === "evict") {
     // The person's ticks first: they are what stops Apply; a budget only makes the run wait.
-    if (!ref && !opts.bare) blocked = "needs-bare";
+    if (bare && !opts.bare) blocked = "needs-bare";
     else if (emptyDir.length && !opts.emptyDir) blocked = "needs-emptydir";
     else if (matching.length > 1) blocked = "many-budgets";
     else if (matching.length === 1 && allowed <= 0) blocked = "budget";
@@ -73,9 +97,10 @@ function classify(p: any, pdbs: any[], opts: DrainOpts): DrainPod {
   return {
     namespace: meta.namespace, name: meta.name, uid: meta.uid,
     ...(owner ? { owner } : {}),
-    class: cls, bare: !ref, emptyDir,
+    class: cls, bare, emptyDir,
     ...(budget && (cls === "evict") ? { budget } : {}),
     ...(blocked ? { blocked } : {}),
+    ...(orphan && cls !== "terminating" && cls !== "mirror" ? { orphan: true as const } : {}),
   };
 }
 
@@ -87,12 +112,15 @@ export function countPlan(pods: DrainPod[]): DrainPlan["counts"] {
   return { evict: pods.filter((p) => moves(p) && !p.blocked).length, blocked, skipped: pods.filter((p) => !moves(p)).length };
 }
 
-/** The drain plan (D150): pure, from the Node, the pods on it and the cluster's PodDisruptionBudgets. */
-export function drainPlan(node: any, pods: any[], pdbs: any[], opts: DrainOpts, partial?: string): DrainPlan {
+/**
+ * The drain plan (D150): pure, from the Node, the pods on it and the cluster's PodDisruptionBudgets. `orphans`: the
+ * DaemonSets (daemonSetKey) read as gone (L12).
+ */
+export function drainPlan(node: any, pods: any[], pdbs: any[], opts: DrainOpts, partial?: string, orphans?: ReadonlySet<string>): DrainPlan {
   const nodeName = String(node?.metadata?.name ?? "");
   const out = pods
     .filter((p) => p?.spec?.nodeName === nodeName && ns(p?.metadata?.namespace) && name(p?.metadata?.name) && UID.test(String(p?.metadata?.uid ?? "")))
-    .map((p) => classify(p, pdbs, opts));
+    .map((p) => classify(p, pdbs, opts, orphans));
   // Blocked first, then what is evicted, then what stays; by namespace and name within each.
   const rank = (p: DrainPod) => (p.blocked ? 0 : moves(p) ? 1 : 2);
   out.sort((a, b) => rank(a) - rank(b) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name));
@@ -151,9 +179,12 @@ async function listAll(send: Send, path: string, cap: number): Promise<{ items: 
   }
 }
 
-/** The pods on a node, all namespaces, by field selector. */
-export const podsOnNode = (send: Send, node: string, cap = MAX_DRAIN_PODS) =>
-  listAll(send, `/api/v1/pods?fieldSelector=${encodeURIComponent(`spec.nodeName=${node}`)}`, cap);
+/**
+ * The pods on a node, all namespaces, by field selector. `cached`: from the API server's watch cache
+ * (`resourceVersion=0`), not a consistent read through etcd (L3); for following a run, never for a plan.
+ */
+export const podsOnNode = (send: Send, node: string, cap = MAX_DRAIN_PODS, cached = false) =>
+  listAll(send, `/api/v1/pods?fieldSelector=${encodeURIComponent(`spec.nodeName=${node}`)}${cached ? "&resourceVersion=0" : ""}`, cap);
 
 /**
  * The reads a plan is made from, as you (D150): the Node, its pods, and the budgets. Only GETs. Past 2,000 pods or
@@ -183,14 +214,45 @@ export async function readDrain(send: Send, node: string, opts: DrainOpts): Prom
         continue;
       }
       pdbs.push(...one.items);
-      if (pdbs.length > MAX_BUDGETS) partial ??= `More than ${MAX_BUDGETS.toLocaleString("en")} disruption budgets; Landlens can't check them all.`;
+      // One namespace past the cap is cut at it (L1): `more`, not only the sum, says so.
+      if (one.more || pdbs.length > MAX_BUDGETS) partial ??= `More than ${MAX_BUDGETS.toLocaleString("en")} disruption budgets; Landlens can't check them all.`;
     }
   } else if (all.status && all.status !== 404) partial = `Landlens couldn't list disruption budgets (HTTP ${all.status}).`;
   else {
     pdbs = all.items;
     if (all.more) partial ??= `More than ${MAX_BUDGETS.toLocaleString("en")} disruption budgets; Landlens can't check them all.`;
   }
-  return { node: n, plan: drainPlan(n, pods.items, pdbs, opts, partial) };
+  return { node: n, plan: drainPlan(n, pods.items, pdbs, opts, partial, await goneDaemonSets(send, pods.items)) };
+}
+
+/**
+ * The DaemonSets that own pods on the node and are gone (L12): each read once, four at a time; a 404 is gone, anything
+ * else leaves the pod where kubectl would (it stays). Only GETs.
+ */
+async function goneDaemonSets(send: Send, pods: any[]): Promise<Set<string>> {
+  const keys = new Map<string, { namespace: string; name: string }>();
+  for (const p of pods) {
+    const ref = controllerOf(p);
+    const space = p?.metadata?.namespace;
+    if (ref?.kind !== "DaemonSet" || !ns(space) || !name(ref.name) || p?.metadata?.deletionTimestamp) continue;
+    keys.set(daemonSetKey(space, ref.name), { namespace: space, name: ref.name });
+  }
+  const gone = new Set<string>();
+  await inOrder([...keys].slice(0, MAX_DAEMONSETS), DRAIN_PARALLEL, async ([k, d]) => {
+    try {
+      const r = await send({ method: "GET", path: `/apis/apps/v1/namespaces/${d.namespace}/daemonsets/${d.name}` });
+      if (r.status === 404) gone.add(k);
+    } catch (e) {
+      if ((e as { status?: number }).status === 504) throw e;
+    }
+  });
+  return gone;
+}
+
+/** Every Node, in pages (L10): the drain's and cordon's "the only node that takes new pods". */
+export async function listNodes(send: Send): Promise<{ items: any[]; status?: number }> {
+  const all = await listAll(send, "/api/v1/nodes", 5000);
+  return all.status ? { items: [], status: all.status } : { items: all.items };
 }
 
 /**
@@ -233,9 +295,12 @@ export async function dryRunEvictions(send: Send, plan: DrainPlan): Promise<{ pl
 // ---- The run (D152) ----------------------------------------------------------------------------------------------
 
 export type KeptRequest = { method: string; path: string; contentType: string; body: string };
-/** What a drain review keeps: the cordon request (none when the node was already cordoned) and the pods to evict. */
-export type DrainKept = { node: string; cordon?: KeptRequest; pods: { namespace: string; name: string; uid: string }[] };
-export type RunState = Omit<DrainProgress, "run" | "startedAt">;
+/**
+ * What a drain review keeps: the node's uid, the ticks it was reviewed with, the cordon request (none when the node was
+ * already cordoned) and the pods to evict.
+ */
+export type DrainKept = { node: string; nodeUid?: string; ticks: DrainOpts; cordon?: KeptRequest; pods: { namespace: string; name: string; uid: string }[] };
+export type RunState = Omit<DrainProgress, "run" | "startedAt" | "seq">;
 export type RunEnd = RunState & { evicted: number; blocked: number; failed: number };
 
 const CORDON_FAIL: Record<number, string> = {
@@ -243,12 +308,38 @@ const CORDON_FAIL: Record<number, string> = {
   403: "Your role can't cordon this node. Nothing was evicted.",
   404: "The node is gone. Nothing was evicted.",
 };
+/** The run's fixed sentences (M3, L6). */
+export const RUN_NOTES = {
+  unreachable: "Landlens couldn't reach the cluster. Nothing was evicted.",
+  cordonLost: "Landlens didn't hear back from the cordon. Nothing was evicted; the node may be cordoned.",
+  uncordoned: "The node was uncordoned since the preview. Nothing was evicted.",
+  replaced: "The node was replaced since the preview. Nothing was evicted.",
+  podsUnread: "Landlens couldn't read the pods on the node again. Nothing was evicted.",
+  uncordonedDuring: "The node was uncordoned during the drain. Landlens stopped evicting.",
+} as const;
 /** A failed eviction, in a fixed sentence per status (never the API's text). */
 export function evictionFailure(status: number): string {
   if (status === 403) return "Your role can't evict pods here.";
   if (status === 500) return "The cluster couldn't evict it (HTTP 500); it may be under more than one disruption budget.";
   if (status === 400 || status === 422) return `The cluster refused the eviction (HTTP ${status}).`;
   return `The cluster answered HTTP ${status}.`;
+}
+
+/** A 429's Status: whether it names a disruption budget, and the Retry-After the API server put in its details (L4). */
+function tooMany(text: string): { budget: boolean; retryAfterMs?: number } {
+  try {
+    const body = JSON.parse(text);
+    const after = Number(body?.details?.retryAfterSeconds);
+    return { budget: budgetCause(text), ...(Number.isFinite(after) && after > 0 ? { retryAfterMs: Math.min(after * 1000, DRAIN_RETRY_AFTER_MAX_MS) } : {}) };
+  } catch {
+    return { budget: false };
+  }
+}
+
+/** The kept cordon with another resourceVersion (L5): the same patch, pinned to the version just read. */
+function repin(r: KeptRequest, version: string): KeptRequest {
+  const body = JSON.parse(r.body);
+  return { ...r, body: JSON.stringify({ ...body, metadata: { ...(body.metadata ?? {}), resourceVersion: version } }) };
 }
 
 export async function runDrain(o: {
@@ -268,14 +359,18 @@ export async function runDrain(o: {
   const retry = o.retryMs ?? DRAIN_RETRY_MS;
   const follow = o.followMs ?? DRAIN_FOLLOW_MS;
   const deadline = now() + limit;
-  type Row = { namespace: string; name: string; uid: string; state: DrainPodState; note?: string; next: number; tried429?: boolean; accepted?: boolean };
+  const node = o.kept.node;
+  type Cause = "budget" | "busy" | "unreachable";
+  type Row = { namespace: string; name: string; uid: string; state: DrainPodState; note?: string; next: number; cause?: Cause; accepted?: boolean; lost?: boolean };
   const rows: Row[] = o.kept.pods.map((p) => ({ ...p, state: "waiting", next: 0 }));
   let state: RunState["state"] = "cordoning";
   let note: string | undefined;
+  let after: { cordoned?: boolean; arrived?: number } = {};
   const view = (): RunState => ({
-    node: o.kept.node, state,
+    node, state,
     pods: rows.map((r) => ({ namespace: r.namespace, name: r.name, state: r.state, ...(r.note ? { note: r.note } : {}) })),
     ...(note ? { note } : {}),
+    ...after,
   });
   const tell = () => o.onProgress(view());
   const end = (): RunEnd => ({
@@ -284,82 +379,188 @@ export async function runDrain(o: {
     blocked: rows.filter((r) => r.state === "blocked").length,
     failed: rows.filter((r) => r.state === "failed").length,
   });
+  const failed = (why: string) => {
+    state = "failed";
+    note = why;
+    tell();
+    return end();
+  };
+  const readNode = async (): Promise<{ status: number; node?: any }> => {
+    try {
+      const r = await o.send({ method: "GET", path: `/api/v1/nodes/${node}` });
+      return r.status === 200 ? { status: 200, node: JSON.parse(r.text) } : { status: r.status };
+    } catch {
+      return { status: -1 };
+    }
+  };
+  const nodeFail = (status: number) => (status === -1 ? RUN_NOTES.unreachable : CORDON_FAIL[status] ?? `The cluster answered HTTP ${status}. Nothing was evicted.`);
+  const sameNode = (n: any) => !o.kept.nodeUid || n?.metadata?.uid === o.kept.nodeUid;
   tell();
 
-  // 1. Cordon, with the request the review kept (pinned to the node's version).
-  if (o.kept.cordon) {
-    let status: number;
-    try {
-      status = (await o.send(o.kept.cordon)).status;
-    } catch {
-      status = -1;
+  // 0. The node and its pods as they are now (M3, L7): the same node; cordoned still, if the review found it so; and
+  //    of the reviewed pods only those still on it, still what the ticks allowed.
+  const first = await readNode();
+  if (first.status !== 200) return failed(nodeFail(first.status));
+  if (!sameNode(first.node)) return failed(RUN_NOTES.replaced);
+  if (!o.kept.cordon && first.node?.spec?.unschedulable !== true) return failed(RUN_NOTES.uncordoned);
+  let live: Awaited<ReturnType<typeof podsOnNode>>;
+  try {
+    live = await podsOnNode(o.send, node);
+  } catch {
+    return failed(RUN_NOTES.podsUnread);
+  }
+  if (live.status || live.more) return failed(RUN_NOTES.podsUnread);
+  const byUid = new Map(live.items.map((p) => [p?.metadata?.uid, p]));
+  for (const r of rows) {
+    const p = byUid.get(r.uid);
+    if (!p) (r.state = "gone", r.note = "It was already gone");
+    else if (p.metadata?.deletionTimestamp) (r.state = "gone", r.note = "It was already going");
+    else if (!controllerOf(p) && !o.kept.ticks.bare) (r.state = "blocked", r.note = "Nothing recreates it now (its controller went since the preview). Not evicted.");
+  }
+
+  // 1. Cordon, with the request the review kept (pinned to the node's version). Already cordoned: nothing to send.
+  if (o.kept.cordon && first.node?.spec?.unschedulable !== true) {
+    const cordon = async (r: KeptRequest) => {
+      try {
+        return (await o.send(r)).status;
+      } catch {
+        return -1;
+      }
+    };
+    let status = await cordon(o.kept.cordon);
+    if (status === 409) {
+      // L5: the kubelet moves a Node's version every few minutes. The same node, still schedulable: once more, pinned
+      // to the version just read; cordoned by someone else meanwhile: it is what the run needs.
+      const again = await readNode();
+      if (again.status === 200 && sameNode(again.node)) {
+        status = again.node?.spec?.unschedulable === true ? 200 : await cordon(repin(o.kept.cordon, String(again.node?.metadata?.resourceVersion ?? "")));
+      }
     }
-    if (status < 200 || status >= 300) {
-      state = "failed";
-      note = status === -1 ? "Landlens couldn't reach the cluster. Nothing was evicted." : CORDON_FAIL[status] ?? `The cluster answered HTTP ${status}. Nothing was evicted.`;
-      tell();
-      return end();
-    }
+    if (status === -1) return failed(RUN_NOTES.cordonLost);
+    if (status < 200 || status >= 300) return failed(CORDON_FAIL[status] ?? `The cluster answered HTTP ${status}. Nothing was evicted.`);
   }
   state = "evicting";
   tell();
 
   const settled = (r: Row) => r.state === "gone" || r.state === "failed" || r.state === "blocked";
   const evict = async (r: Row) => {
-    if (o.stopped()) return; // no new eviction after Stop
+    if (o.stopped() || now() >= deadline) return; // no new eviction after Stop, or after the run's time (L2)
     r.state = "evicting";
     delete r.note;
     tell();
     let status: number;
+    let text = "";
     try {
-      status = (await o.send(evictionRequest(r, false))).status;
+      const got = await o.send(evictionRequest(r, false));
+      status = got.status;
+      text = got.text;
     } catch {
       status = -1;
     }
-    if (status >= 200 && status < 300) (r.state = "evicted", r.accepted = true);
-    else if (status === 429) (r.state = "waiting", r.tried429 = true, r.next = now() + retry, r.note = "Waiting for its disruption budget");
-    else if (status === 404) (r.state = "gone", r.note = "It was already gone");
+    if (status >= 200 && status < 300) (r.state = "evicted", r.accepted = true, delete r.cause);
+    else if (status === 429) {
+      const t = tooMany(text);
+      r.state = "waiting";
+      r.cause = t.budget ? "budget" : "busy";
+      r.next = now() + Math.max(retry, t.budget ? 0 : t.retryAfterMs ?? 0);
+      r.note = t.budget ? "Waiting for its disruption budget" : "The cluster is busy; trying again";
+    } else if ((status === 404 || status === 409) && r.lost) {
+      // An earlier answer was lost (L6): the pod left after it, so that eviction was most likely accepted.
+      (r.state = "gone", r.accepted = true, r.note = "Evicted");
+    } else if (status === 404) (r.state = "gone", r.note = "It was already gone");
     else if (status === 409) (r.state = "gone", r.note = "Another pod has its name now; not evicted");
-    else if (status === -1) (r.state = "waiting", r.next = now() + retry, r.note = "Landlens couldn't reach the cluster; trying again");
+    else if (status === -1) (r.state = "waiting", r.lost = true, r.cause = "unreachable", r.next = now() + retry, r.note = "Landlens didn't hear back; trying again");
     else (r.state = "failed", r.note = evictionFailure(status));
+    tell();
+  };
+
+  // Evicted pods are followed until their uid is gone from the node (L3): one GET each, or past FOLLOW_BY_NAME one
+  // list of the node's pods from the API server's cache, at most every 5 s.
+  let listedAt = -Infinity;
+  const followEvicted = async () => {
+    const evicted = rows.filter((r) => r.state === "evicted");
+    if (!evicted.length) return;
+    if (evicted.length <= FOLLOW_BY_NAME) {
+      await inOrder(evicted, DRAIN_PARALLEL, async (r) => {
+        try {
+          const got = await o.send({ method: "GET", path: `/api/v1/namespaces/${r.namespace}/pods/${r.name}` });
+          if (got.status === 404 || (got.status === 200 && JSON.parse(got.text)?.metadata?.uid !== r.uid)) (r.state = "gone", r.note = "Evicted");
+        } catch {
+          // the next round looks again
+        }
+      });
+    } else if (now() - listedAt >= DRAIN_FOLLOW_LIST_MS) {
+      listedAt = now();
+      try {
+        const got = await podsOnNode(o.send, node, MAX_DRAIN_PODS, true);
+        if (!got.status && !got.more) {
+          const uids = new Set(got.items.map((p) => p?.metadata?.uid));
+          for (const r of evicted) if (!uids.has(r.uid)) (r.state = "gone", r.note = "Evicted");
+        }
+      } catch {
+        // the next round reads again
+      }
+    }
     tell();
   };
 
   for (;;) {
     if (o.stopped()) {
       state = "stopped";
+      for (const r of rows) if (r.state === "waiting") r.note = "Not evicted: the drain was stopped";
       break;
     }
     if (now() >= deadline) {
       state = "timed-out";
-      for (const r of rows) if (r.state === "waiting" && r.tried429) (r.state = "blocked", r.note = "Its disruption budget didn't allow it in time");
+      // Every row still waiting says why it wasn't evicted (L4): only a budget's 429 is "blocked".
+      for (const r of rows) {
+        if (r.state !== "waiting") continue;
+        if (r.cause === "budget") (r.state = "blocked", r.note = "Its disruption budget didn't allow it in time");
+        else if (r.cause === "busy") (r.state = "failed", r.note = "The cluster was too busy to take it in time");
+        else if (r.cause === "unreachable") (r.state = "failed", r.note = "Landlens didn't hear back in time");
+        else (r.state = "failed", r.note = "Not tried: the drain's time was up");
+      }
       break;
     }
     const due = rows.filter((r) => r.state === "waiting" && r.next <= now());
-    if (due.length) await inOrder(due, DRAIN_PARALLEL, evict);
-    // Evicted pods are followed in the node's pod list until their uid is gone from it.
-    if (rows.some((r) => r.state === "evicted")) {
-      try {
-        const live = await podsOnNode(o.send, o.kept.node);
-        if (!live.status && !live.more) {
-          const uids = new Set(live.items.map((p) => p?.metadata?.uid));
-          for (const r of rows) if (r.state === "evicted" && !uids.has(r.uid)) (r.state = "gone", r.note = "Evicted");
-          tell();
-        }
-      } catch {
-        // the next round reads again
+    if (due.length) {
+      // The cordon is kept (M3): before each pass the node is read; uncordoned or replaced, no more evictions.
+      const n = await readNode();
+      if (n.status === 200 && (!sameNode(n.node) || n.node?.spec?.unschedulable !== true)) {
+        state = "failed";
+        note = RUN_NOTES.uncordonedDuring;
+        for (const r of rows) if (r.state === "waiting") (r.state = "failed", r.note = "Not evicted: the node was uncordoned");
+        break;
       }
+      if (n.status === 200) await inOrder(due, DRAIN_PARALLEL, evict);
     }
+    await followEvicted();
     if (rows.every(settled)) {
       state = "done";
       break;
     }
-    // Wait for the next retry or the next look at the pod list, waking for Stop.
+    // Wait for the next retry or the next look at evicted pods, waking for Stop.
     const nextRetry = Math.min(...rows.filter((r) => r.state === "waiting").map((r) => r.next), Infinity);
     const wait = Math.max(0, Math.min(rows.some((r) => r.state === "evicted") ? follow : Infinity, nextRetry - now(), deadline - now()));
     const until = now() + wait;
     while (now() < until && !o.stopped()) await sleep(Math.min(250, until - now()));
   }
+
+  // The end, read once more (M3): is the node still cordoned, and did pods arrive after the preview?
+  const n = await readNode();
+  if (n.status === 200) after.cordoned = sameNode(n.node) && n.node?.spec?.unschedulable === true;
+  try {
+    const got = await podsOnNode(o.send, node);
+    if (!got.status) {
+      const reviewed = new Set(o.kept.pods.map((p) => p.uid));
+      const plan = drainPlan(n.node ?? { metadata: { name: node } }, got.items, [], { bare: true, emptyDir: true });
+      const arrived = plan.pods.filter((p) => moves(p) && !reviewed.has(p.uid)).length;
+      if (arrived) after.arrived = arrived;
+    }
+  } catch {
+    // said by its absence: the sheet doesn't claim what it didn't read
+  }
+  after = { ...after };
   tell();
   return end();
 }

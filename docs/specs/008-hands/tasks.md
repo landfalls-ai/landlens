@@ -55,7 +55,24 @@ Departures from the spec, and why:
 - [x] `DrainPlanView.tsx` (the drain sheet), cordon on the action card, the node menu, ⌘K verbs (D149, D154)
 - [x] The [check]: a dry-run eviction reports a budget's block without spending it, live (`drain.integration.test.ts`)
 - [x] `nodes.e2e` (reads only), docs
-- [ ] Fable's security review of part 2
+- [x] Fable's security review of part 2 (no High, 6 Medium, 12 Low), every finding fixed with a test that fails
+  without its fix (checked by reverting each, 40 cases):
+  - M1: main keeps each run's latest state, numbered (`seq`), and answers `action:runs`; the sheet listens from its
+    first moment, so a run that ends before Apply answers ends the sheet; Close is always there.
+  - M2: the ticks are in the review, its digest and main's dialog, which names bare pods ("deleted for good") and
+    emptyDir losses; the sheet drops a review when a tick changes and uses only the latest review's answer.
+  - M3: the run reads the node first (another node, or uncordoned since a cordoned preview: nothing evicted), reads
+    it before each pass (uncordoned: stop), and at the end says whether it is cordoned and how many pods arrived.
+  - M4: the status bar's **Draining node** chip re-opens the sheet on the run, with Stop; closing the sheet leaves
+    the run going; ended runs are kept ten minutes.
+  - M5: the D153 guard is in the front door, for every token and path (YAML editor, the agent's patch and its dry
+    run, kube-mcp, terminals' kubectl), before the policy.
+  - M6: tests for the cluster gone, two per cluster, navigation and destroy, Stop mid-pass, a bare pod unticked.
+  - L1 a namespace's budgets past 2,000 make the plan partial; L2 no eviction after the deadline; L3 evicted pods
+    followed by name (past 20, a cached list every 5 s); L4 a 429's cause and Retry-After; L5 the cordon re-pinned
+    once on a 409; L6 lost answers; L7 the pods read again at the start; L8 `context@host:port`; L9 quit asks, stops
+    and settles; L10 taints and paged nodes for "the only node", said in the drain's sheet and dialog; L11 one drain
+    review per window and node; L12 a pod whose DaemonSet is gone is bare.
 
 The [check] (D151), settled: the source (kubernetes v1.36.0, `pkg/registry/core/pod/storage/eviction.go`:
 `checkAndDecrement` decrements a copy and returns before `UpdateStatus` on a dry run; `addConditionAndDeletePod`
@@ -84,7 +101,8 @@ Departures from the spec, and why:
   spent, and checks a wrong uid answers 409.
 - **Pending pods**: the eviction API lets a Pending pod go without a budget check; the plan still shows its budget
   (if any) as Landlens reads it, and the dry run's answer corrects the row.
-- **Closing the sheet while a drain runs isn't offered**: Stop first (the run is main's and ends with its window).
+- **Closing the sheet while a drain runs** was not offered at first (Stop first); since the security review the
+  sheet closes and the status bar's chip re-opens it (M4).
 
 ## Part 3: tables and asks (D155–D160)
 

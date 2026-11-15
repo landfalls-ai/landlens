@@ -871,6 +871,11 @@ export type ActionReview = EditReview & {
   previewOnly?: true;
   /** Pods where the cluster's dry run and Landlens's reading disagree (the row shows the cluster's answer). */
   disagree?: number;
+  /**
+   * A drain's two ticks as main reviewed them (security review of part 2, M2): in the digest, named in main's dialog,
+   * and the sheet enables Apply only while its boxes say the same.
+   */
+  ticks?: { bare: boolean; emptyDir: boolean };
 };
 export type ActionOutcome = "applied" | "conflict" | "failed" | "gone";
 export type ActionResult = { target: string; outcome: ActionOutcome; message?: string };
@@ -897,6 +902,8 @@ export type DrainPod = {
   blocked?: DrainBlock;
   /** The API server's answer to a dry-run eviction (D151): 2xx would go; 429 a budget; 403 your role. */
   dry?: { status: number; reason?: "budget" | "forbidden" | "other" };
+  /** Its DaemonSet is gone (security review of part 2, L12): nothing recreates it, so it is evicted as a bare pod. */
+  orphan?: true;
 };
 export type DrainPlan = {
   node: string;
@@ -915,9 +922,17 @@ export type DrainProgress = {
   pods: { namespace: string; name: string; state: DrainPodState; note?: string }[];
   /** When the run started (ms since the epoch), for the elapsed time. */
   startedAt: number;
-  /** A run that ended before any eviction: why, in a fixed sentence. */
+  /** A run that ended before any eviction, or stopped evicting: why, in a fixed sentence. */
   note?: string;
+  /** Each push's number in its run: the window keeps the highest it has seen (security review of part 2, M1). */
+  seq: number;
+  /** At the end, read again (M3): whether the node is still cordoned. */
+  cordoned?: boolean;
+  /** At the end, read again (M3): pods a drain would evict that arrived after the preview and are still on the node. */
+  arrived?: number;
 };
+/** A window's drain on a cluster (M4): its latest state and the plan it runs, so the window can re-attach to it. */
+export type DrainRun = { progress: DrainProgress; plan: DrainPlan; ended: boolean };
 /** One kept row per action the person applied (D147): names and closed words only, never a diff, a message or a value. */
 export type ActionLogEntry = {
   id: string;
@@ -1072,6 +1087,8 @@ export const channels = {
   "action:discard": z.object({ id: EditId }).strict(),
   /** Stop a drain's run (D152): no new eviction is sent; those in flight finish; the node stays cordoned. */
   "action:stop": z.object({ run: EditId }).strict(),
+  /** This window's drains on this cluster, running and lately ended, with their latest state (M1, M4). */
+  "action:runs": z.object({ handle: Handle }).strict(),
   /** The connected cluster's rows: its context and its API server's hash both match (security review, L7). */
   "action:log": z.object({ handle: Handle, limit: z.number().int().min(1).max(200).optional() }).strict(),
   "forward:list": z.object({}),
@@ -1246,6 +1263,7 @@ export type Responses = {
   "action:apply": { results: ActionResult[] } | { run: string };
   "action:discard": { ok: true };
   "action:stop": { ok: true };
+  "action:runs": { runs: DrainRun[] };
   "action:log": { entries: ActionLogEntry[] };
   "forward:list": ForwardsPush;
   "forward:suggest": { port: number };

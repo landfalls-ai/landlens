@@ -344,10 +344,21 @@ at most four times a second to the window that started it. One run per node, two
 window or its cluster (the node stays cordoned; the action log says `stopped`). The token (`you · <context> · drain
 <node>`, `full`) lives for the run and is revoked at its end.
 
+*Amended after the security review of part 2 (M1, M3, M4, L2–L7, L9).* The run first reads the node and its pods
+again: another node under the name, or a node cordoned at the preview and not now, ends it with nothing evicted; a
+reviewed pod no longer there is `gone` unasked. The cordon's 409 is re-read and re-pinned once for the same,
+still-schedulable node. The node is read before each pass of evictions; uncordoned, the run stops. No eviction is
+sent after the 10 minutes; a 429's cause (budget or busy) and Retry-After decide its wait and ending. Evicted pods are
+followed by name (past 20, a cached list every 5 s). At the end the node and its pods are read: `DrainProgress` gains
+`seq`, `cordoned` and `arrived`, and the sheet says only what was read. Main keeps the runs (`action:runs`), the
+sheet can close, and the status bar's chip re-opens it with Stop. Quitting asks, then stops and settles the row.
+
 **D153. A development build never cordons or drains a cluster it wasn't told it may.** OrbStack has one node, shared
 with the siblings. In an unpackaged build, `ActionService` refuses every node write, its dry runs and the dry-run
-evictions of D151 unless the context is named in `LANDLENS_NODE_WRITES` (comma-separated context names, read only
-when `!app.isPackaged`, as `LANDLENS_GKE_REAL` is). Refused, the drain review is still built from reads (the plan
+evictions of D151 unless the cluster is named in `LANDLENS_NODE_WRITES` (comma-separated `<context>@<host>:<port>`,
+read only when `!app.isPackaged`, as `LANDLENS_GKE_REAL` is). *Amended after the security review of part 2 (M5,
+L8):* the front door holds the rule, so every path (the YAML editor, the agent's change broker, kube-mcp, the
+terminals' kubectl) is refused node writes and evictions, not only `ActionService`. Refused, the drain review is still built from reads (the plan
 without `dry`), marked `previewOnly`, and the sheet says "Development build: preview only. Nothing is sent to nodes
 on this cluster." with Apply off; cordon's sheet says the same. No test sets the variable to `orbstack`; the e2e
 strips it from the environment it inherits. A packaged app has no such guard.

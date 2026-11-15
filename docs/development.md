@@ -81,7 +81,8 @@ tests, against the in-memory API in `packages/kube/test/fake-api.ts` (`drain.tes
 `packages/kube` sends reads and dry-run evictions of the scenario's own pods only (a test-local fence refuses
 anything else) and makes and deletes one throwaway PodDisruptionBudget; `test/nodes.e2e.test.ts` in `apps/desktop`
 is reads only (screenshots `w8p2-*`). An unpackaged build sends no node write and no dry-run eviction unless
-`LANDLENS_NODE_WRITES` names the context (comma-separated): leave it unset. OrbStack's one node runs the siblings
+`LANDLENS_NODE_WRITES` names the cluster as `<context>@<host>:<port>` (comma-separated; the front door refuses
+every other node write and eviction): leave it unset. OrbStack's one node runs the siblings
 (landflow-dev, clickland-dev, kube-system); never cordon or drain it.
 
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`

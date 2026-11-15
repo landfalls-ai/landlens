@@ -20,7 +20,7 @@ vi.mock("@landlens/kube-mcp", () => ({
 }));
 import type { ActionReview, DrainProgress } from "@landlens/contracts";
 import { FakeApi } from "../../../packages/kube/test/fake-api";
-import { ActionService, cardDigest, fenced, nodeWrite, nodeWritesFrom, PREVIEW_ONLY } from "../src/main/actions";
+import { ActionService, cardDigest, drainQuestion, ENDED_KEEP_MS, fenced, nodeWrite, nodeWritesFrom, PREVIEW_ONLY, quitQuestion, SUPERSEDED } from "../src/main/actions";
 
 const types = [
   { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false, verbs: ["get", "list", "patch", "delete"] },
@@ -50,14 +50,17 @@ function cluster() {
   return api;
 }
 
-function setup(o: { writes?: (c: string) => boolean } = {}) {
+const SERVER = "https://127.0.0.1:26443";
+const KIND = { context: "kind-fake", server: SERVER };
+
+function setup(o: { writes?: (c: { context: string; server: string }) => boolean; sleep?: (ms: number) => Promise<void> } = {}) {
   sent.length = 0;
   cluster();
   let n = 0;
   const issue = vi.fn(() => String(++n % 10).repeat(64));
   const revoke = vi.fn();
   let gone: (h: string) => void = () => {};
-  const clusters = { get: (h: string) => (h === H ? { info: { context: "orbstack", server: "https://127.0.0.1:26443" } } : (() => { throw Object.assign(new Error("not connected"), { status: 404 }); })()), onGone: (f: (h: string) => void) => (gone = f), discovery: async () => types };
+  const clusters = { get: (h: string) => (h === H ? { info: { context: "kind-fake", server: SERVER } } : (() => { throw Object.assign(new Error("not connected"), { status: 404 }); })()), onGone: (f: (h: string) => void) => (gone = f), discovery: async () => types };
   const door = { issueToken: issue, revokeToken: revoke, clusterUrl: () => "https://127.0.0.1:1/c/h", certificate: "" };
   const rows: any[] = [];
   const counted: any[] = [];
@@ -73,9 +76,9 @@ function setup(o: { writes?: (c: string) => boolean } = {}) {
   const svc = new ActionService({
     clusters: clusters as any, frontDoor: door as any, log: log as any, counted: (a) => counted.push(a),
     ...(o.writes ? { nodeWrites: o.writes } : {}),
-    now: () => t, sleep: async (ms) => void (t += ms), drainLimitMs: 30_000,
+    now: () => t, sleep: o.sleep ?? (async (ms) => void (t += ms)), drainLimitMs: 30_000,
   });
-  return { svc, issue, revoke, rows, counted, gone: (h: string) => gone(h) };
+  return { svc, issue, revoke, rows, counted, gone: (h: string) => gone(h), tick: (ms: number) => void (t += ms) };
 }
 
 /** Requests that wrote to a node or evicted a pod, or carried a dry run (D153's test). */
@@ -116,7 +119,7 @@ describe("D153: a development build sends nothing to nodes unless told", () => {
   });
 
   it("listed: the cordon's dry run and the dry-run evictions are sent, and the reviews can be applied", async () => {
-    const { svc } = setup({ writes: nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-x, orbstack" }, false) });
+    const { svc } = setup({ writes: nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-x@10.0.0.1:6443, kind-fake@127.0.0.1:26443" }, false) });
     const c = await svc.review({ handle: H, action: { kind: "cordon", node: "node-1", on: true } }, window());
     expect(c.id).toMatch(/^ed/);
     expect(c.previewOnly).toBeUndefined();
@@ -132,12 +135,18 @@ describe("D153: a development build sends nothing to nodes unless told", () => {
     expect(api.podsOn("node-1")).toHaveLength(5);
   });
 
-  it("packaged ignores the variable; unpackaged takes exact names only", () => {
-    expect(nodeWritesFrom({}, true)("orbstack")).toBe(true);
-    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "" }, true)("anything")).toBe(true);
-    expect(nodeWritesFrom({}, false)("orbstack")).toBe(false);
-    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "orbstack-2" }, false)("orbstack")).toBe(false);
-    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "*" }, false)("orbstack")).toBe(false);
+  it("packaged ignores the variable; unpackaged takes exact context@server entries only (L8)", () => {
+    expect(nodeWritesFrom({}, true)(KIND)).toBe(true);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "" }, true)({ context: "anything", server: "https://x" })).toBe(true);
+    expect(nodeWritesFrom({}, false)(KIND)).toBe(false);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-fake-2@127.0.0.1:26443" }, false)(KIND)).toBe(false);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "*" }, false)(KIND)).toBe(false);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-fake@127.0.0.1:26443" }, false)(KIND)).toBe(true);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-fake@https://127.0.0.1:26443" }, false)(KIND)).toBe(true);
+    // L8: a context's name alone no longer names a cluster; nor does the name with another server.
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-fake" }, false)(KIND)).toBe(false);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-fake@127.0.0.1:26443" }, false)({ context: "kind-fake", server: "https://10.1.2.3:6443" })).toBe(false);
+    expect(nodeWritesFrom({ LANDLENS_NODE_WRITES: "kind-fake@127.0.0.1" }, false)(KIND)).toBe(false);
   });
 
   it("the fence refuses every node write and eviction, dry run or not, however the path is spelled; reads pass", async () => {
@@ -164,7 +173,7 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     const { svc, rows, issue } = setup({ writes: ALLOW });
     const a = window();
     const r = await svc.review({ handle: H, action: { kind: "cordon", node: "node-1", on: true } }, a);
-    expect(issue).toHaveBeenLastCalledWith(expect.objectContaining({ label: "you · orbstack · cordon node-1" }));
+    expect(issue).toHaveBeenLastCalledWith(expect.objectContaining({ label: "you · kind-fake · cordon node-1" }));
     expect(r.facts).toEqual([{ tone: "info", code: "pods-stay", text: "5 pods keep running; new ones go elsewhere." }]);
     expect(r.operations![0]!.risk).toContain("cluster-scoped");
     api.requests.length = 0;
@@ -203,8 +212,8 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     const asked: any[] = [];
     await expect(svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toMatchObject({ status: 409, message: "Cancelled." });
     expect(asked).toEqual([{
-      message: "Drain node-1 on orbstack?",
-      detail: "2 pods will be evicted, 2 are blocked by a disruption budget and will be retried, 1 DaemonSet pod stay.\nThe node stays cordoned until you uncordon it.\n\n4 Pods: 4 in landlens-dev.\n\nlandlens-dev/bare\nlandlens-dev/cache\nlandlens-dev/web-a\nlandlens-dev/web-b",
+      message: "Drain node-1 on kind-fake?",
+      detail: "2 pods will be evicted, 2 are blocked by a disruption budget and will be retried, 1 DaemonSet pod stay.\nThe node stays cordoned until you uncordon it.\n\n1 pod is recreated by nothing and deleted for good:\nlandlens-dev/bare\n\n1 pod loses emptyDir data:\nlandlens-dev/cache (cache)\n\n4 Pods: 4 in landlens-dev.\n\nlandlens-dev/bare\nlandlens-dev/cache\nlandlens-dev/web-a\nlandlens-dev/web-b",
       yes: "Drain",
     }]);
     expect(api.requests).toEqual([]);
@@ -235,13 +244,14 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
   }
 
   it("runs in main: answers at once, cordons, evicts only the reviewed uids with its own token, pushes progress to its window, logs one row", async () => {
-    const { a, r, run, rows, revoke, issue, counted, rowsAtFirstWrite } = await started();
+    const st = await started();
+    const { a, r, run, rows, revoke, issue, counted } = st;
     expect(run).toBe(r.id);
-    // The row was written, as sent, before the cordon went (security review of part 1, M3).
-    expect(rowsAtFirstWrite).toEqual(["sent"]);
     await vi.waitFor(() => expect(rows[0]?.outcome).not.toBe("sent"));
+    // The row was written, as sent, before the cordon went (security review of part 1, M3).
+    expect(st.rowsAtFirstWrite).toEqual(["sent"]);
     expect(rows).toHaveLength(1);
-    expect(issue).toHaveBeenCalledWith(expect.objectContaining({ label: "you · orbstack · drain node-1" }));
+    expect(issue).toHaveBeenCalledWith(expect.objectContaining({ label: "you · kind-fake · drain node-1" }));
     const token = sent[0]!.token;
     expect(sent.every((s) => s.token === token)).toBe(true);
     expect(revoke).toHaveBeenLastCalledWith(token);
@@ -259,7 +269,9 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     expect(last).toMatchObject({ run, node: "node-1", state: "timed-out" });
     expect(last.pods.filter((p) => p.state === "blocked").map((p) => p.name).sort()).toEqual(["web-a", "web-b"]);
     expect(api.get("/api/v1/nodes/node-1").spec.unschedulable).toBe(true);
-    expect(rows[0]).toMatchObject({ action: "drain", kind: "Node", names: ["node-1"], detail: "2 evicted, 2 blocked", outcome: "partial" });
+    // The late pod is still on the node: the row says so (M3).
+    expect(last).toMatchObject({ cordoned: true, arrived: 1 });
+    expect(rows[0]).toMatchObject({ action: "drain", kind: "Node", names: ["node-1"], detail: "2 evicted, 2 blocked, 1 arrived after the preview", outcome: "partial" });
     expect(counted.at(-1)).toEqual({ action: "drain", outcome: "partial" });
   });
 
@@ -313,15 +325,228 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
   });
 
   it("one run per node; a digest that isn't the review's drops it; another window can't apply it", async () => {
-    const s = setup({ writes: ALLOW });
+    const s = setup({ writes: ALLOW, sleep: () => new Promise(() => {}) }); // runs wait for good once they wait
     const a = window();
+    const b = window();
     const r1 = await s.svc.review(drain(), a);
-    const r2 = await s.svc.review(drain(), a);
+    const r2 = await s.svc.review(drain(), b);
     await expect(s.svc.apply({ handle: H, id: r1.id!, digest: r1.digest! }, window(), async () => true)).rejects.toMatchObject({ status: 404 });
     await s.svc.apply({ handle: H, id: r1.id!, digest: r1.digest! }, a, async () => true);
-    await expect(s.svc.apply({ handle: H, id: r2.id!, digest: r2.digest! }, a, async () => true)).rejects.toMatchObject({ status: 409, message: "A drain of this node is already running." });
-    const r3 = await s.svc.review(drain(), a);
-    await expect(s.svc.apply({ handle: H, id: r3.id!, digest: "0".repeat(64) }, a, async () => true)).rejects.toMatchObject({ status: 409 });
-    await expect(s.svc.apply({ handle: H, id: r3.id!, digest: r3.digest! }, a, async () => true)).rejects.toMatchObject({ status: 404 });
+    await expect(s.svc.apply({ handle: H, id: r2.id!, digest: r2.digest! }, b, async () => true)).rejects.toMatchObject({ status: 409, message: "A drain of this node is already running." });
+    const r3 = await s.svc.review(drain(), b);
+    await expect(s.svc.apply({ handle: H, id: r3.id!, digest: "0".repeat(64) }, b, async () => true)).rejects.toMatchObject({ status: 409 });
+    await expect(s.svc.apply({ handle: H, id: r3.id!, digest: r3.digest! }, b, async () => true)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+/** A gate the runs' waits hang on, so a test holds runs live and lets them go when it wants. */
+function gate() {
+  const waiting: (() => void)[] = [];
+  return { sleep: () => new Promise<void>((r) => waiting.push(r)), open: () => waiting.splice(0).forEach((r) => r()) };
+}
+const ALLOW_ALL = () => true;
+
+describe("the security review of part 2 (M1–M6, L8–L11), in main", () => {
+  it("M1: a run that ends in the same tick as Apply's answer is still there for the window to read, ended", async () => {
+    const s = setup({ writes: ALLOW_ALL });
+    // Already cordoned, and only a DaemonSet pod: nothing to cordon, nothing to evict.
+    for (const p of ["web-a", "web-b", "cache", "bare"]) api.objects.delete(`/api/v1/namespaces/landlens-dev/pods/${p}`);
+    api.get("/api/v1/nodes/node-1").spec.unschedulable = true;
+    const a = window();
+    const r = await s.svc.review(drain(false, false), a);
+    expect(r.id).toBeDefined();
+    const out = await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true) as { run: string };
+    await vi.waitFor(() => expect(s.rows[0]?.outcome).not.toBe("sent"));
+    // The pushes are long gone; main still answers with the end, the plan with it.
+    const runs = s.svc.runsOf(H, a);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ ended: true, progress: { run: out.run, state: "done", cordoned: true }, plan: { node: "node-1" } });
+    expect(runs[0]!.progress.seq).toBeGreaterThan(0);
+    // Stop on an ended run answers 404, which the sheet reads as "show the end".
+    expect(() => s.svc.stop(out.run, a)).toThrow(/no such run/);
+  });
+
+  it("M1: every push is numbered, and main's latest is never behind the window's", async () => {
+    const g = gate();
+    const s = setup({ writes: ALLOW_ALL, sleep: g.sleep });
+    const a = window();
+    const r = await s.svc.review(drain(), a);
+    const out = await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true) as { run: string };
+    await vi.waitFor(() => expect(s.svc.runsOf(H, a)[0]!.progress.state).toBe("evicting"));
+    const pushed = a.pushed.map((p: { payload: DrainProgress }) => p.payload.seq);
+    expect(pushed).toEqual([...pushed].sort((x: number, y: number) => x - y));
+    expect(s.svc.runsOf(H, a)[0]!.progress.seq).toBeGreaterThanOrEqual(Math.max(...pushed));
+    s.svc.stop(out.run, a);
+    g.open();
+    await vi.waitFor(() => expect(s.rows[0]?.outcome).toBe("stopped"));
+  });
+
+  it("M2: main's dialog names the bare pods deleted for good and the emptyDir data lost; the ticks are in the digest", async () => {
+    const { svc } = setup({ writes: ALLOW_ALL });
+    const a = window();
+    const r = await svc.review(drain(true, true), a);
+    expect(r.ticks).toEqual({ bare: true, emptyDir: true });
+    const asked: any[] = [];
+    await expect(svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toThrow(/Cancelled/);
+    expect(asked[0].detail).toContain("1 pod is recreated by nothing and deleted for good:\nlandlens-dev/bare");
+    expect(asked[0].detail).toContain("1 pod loses emptyDir data:\nlandlens-dev/cache (cache)");
+    const { digest, ...card } = r;
+    const kept = (svc as any).reviews.get(r.id).drain;
+    expect(kept.ticks).toEqual({ bare: true, emptyDir: true });
+    expect(cardDigest({ ...card, ticks: { bare: false, emptyDir: true } }, kept)).not.toBe(digest);
+    // Unticked, nothing is said of them: none is evicted.
+    const plain = drainQuestion("node-1", "kind-fake", { ...r.plan!, pods: r.plan!.pods.filter((p) => !p.bare && !p.emptyDir.length) });
+    expect(plain.detail).not.toMatch(/deleted for good|emptyDir/);
+  });
+
+  it("M2, L11: a newer drain review of the node in the same window replaces the older: it stops sending, gets no id, and a kept one is dropped", async () => {
+    const { svc } = setup({ writes: ALLOW_ALL });
+    const a = window();
+    const kept = await svc.review(drain(), a);
+    // Two at once: the first is still at work when the second starts.
+    const first = svc.review(drain(true, false), a);
+    const second = svc.review(drain(false, true), a);
+    const [r1, r2] = await Promise.all([first, second]);
+    expect(r1.id).toBeUndefined();
+    expect(r1.problems).toEqual([{ message: SUPERSEDED }]);
+    expect(r2.ticks).toEqual({ bare: false, emptyDir: true });
+    await expect(svc.apply({ handle: H, id: kept.id!, digest: kept.digest! }, a, async () => true)).rejects.toMatchObject({ status: 404 });
+    // Another window's review of the same node is its own.
+    const other = await svc.review(drain(), window());
+    expect(other.id).toBeDefined();
+  });
+
+  it("M4: main lists a window's runs on a cluster, running and lately ended; another window sees none; old endings go", async () => {
+    const g = gate();
+    const s = setup({ writes: ALLOW_ALL, sleep: g.sleep });
+    const a = window();
+    const r = await s.svc.review(drain(), a);
+    const out = await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true) as { run: string };
+    await vi.waitFor(() => expect(s.svc.runsOf(H, a)[0]?.progress.state).toBe("evicting"));
+    expect(s.svc.runsOf(H, a)).toEqual([expect.objectContaining({ ended: false, plan: r.plan })]);
+    expect(s.svc.runsOf(H, window())).toEqual([]);
+    expect(s.svc.liveRuns()).toBe(1);
+    s.svc.stop(out.run, a);
+    g.open();
+    await vi.waitFor(() => expect(s.svc.runsOf(H, a)[0]?.ended).toBe(true));
+    expect(s.svc.liveRuns()).toBe(0);
+    s.tick(ENDED_KEEP_MS);
+    expect(s.svc.runsOf(H, a)).toEqual([]);
+  });
+
+  it("M6: a run stops when its cluster goes", async () => {
+    const g = gate();
+    const s = setup({ writes: ALLOW_ALL, sleep: g.sleep });
+    const a = window();
+    const r = await s.svc.review(drain(), a);
+    await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true);
+    await vi.waitFor(() => expect(s.svc.runsOf(H, a)[0]?.progress.state).toBe("evicting"));
+    s.gone(H);
+    g.open();
+    await vi.waitFor(() => expect(s.rows[0]?.outcome).toBe("stopped"));
+  });
+
+  it("M6: two runs per cluster, not three", async () => {
+    const g = gate();
+    const s = setup({ writes: ALLOW_ALL, sleep: g.sleep });
+    api.node("node-3");
+    for (const n of ["node-2", "node-3"]) api.pod("landlens-dev", `w-${n}`, { node: n, labels: { app: "web" }, owner: { kind: "ReplicaSet", name: "web-rs" } });
+    const a = window();
+    const run = async (node: string) => {
+      const r = await s.svc.review({ handle: H, action: { kind: "drain", node, bare: true, emptyDir: true } }, a);
+      return s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true);
+    };
+    await run("node-1");
+    await run("node-2");
+    await expect(run("node-3")).rejects.toMatchObject({ status: 429 });
+    expect(s.svc.liveRuns()).toBe(2);
+    for (const r of s.svc.runsOf(H, a)) s.svc.stop(r.progress.run, a);
+    g.open();
+  });
+
+  it("M6: a run stops on its window's navigation and when its window is destroyed", async () => {
+    for (const end of [(w: any) => w.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false }), (w: any) => w.emit("destroyed")]) {
+      const g = gate();
+      const s = setup({ writes: ALLOW_ALL, sleep: g.sleep });
+      const a = window();
+      const r = await s.svc.review(drain(), a);
+      await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true);
+      await vi.waitFor(() => expect(s.rows[0]).toBeDefined());
+      // A same-document navigation is not an end.
+      a.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+      expect(s.svc.liveRuns()).toBe(1);
+      end(a);
+      g.open();
+      await vi.waitFor(() => expect(s.rows[0]?.outcome).toBe("stopped"));
+    }
+  });
+
+  it("M6: Stop in main sends no new eviction (stopped while the first is in flight)", async () => {
+    const s = setup({ writes: ALLOW_ALL });
+    // More pods than one batch of four, so a pass that ignored Stop would go on to them.
+    for (let i = 0; i < 8; i++) api.pod("landlens-dev", `more-${i}`, { owner: { kind: "ReplicaSet", name: "more-rs" } });
+    const a = window();
+    const r = await s.svc.review(drain(), a);
+    let evictions = 0;
+    let after = 0;
+    let stopped = false;
+    const inner = api.send.bind(api);
+    (api as any).send = async (q: any) => {
+      if (q.path.endsWith("/eviction")) {
+        if (stopped) after++;
+        if (++evictions === 1) (s.svc.stop(r.id!, a), (stopped = true));
+      }
+      return inner(q);
+    };
+    await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true);
+    await vi.waitFor(() => expect(s.rows[0]?.outcome).toBe("stopped"));
+    // Those already in flight in the first batch of four finish; none is sent after.
+    expect(evictions).toBeGreaterThan(0);
+    expect(evictions).toBeLessThanOrEqual(4);
+    const sent = evictions;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(evictions).toBe(sent);
+    expect(after).toBeLessThanOrEqual(3);
+  });
+
+  it("M6: an unticked bare review has no id in main, as an unticked emptyDir one hasn't", async () => {
+    const { svc } = setup({ writes: ALLOW_ALL });
+    for (const [bare, emptyDir] of [[false, true], [true, false]] as const) {
+      const r = await svc.review(drain(bare, emptyDir), window());
+      expect([bare, emptyDir, r.id]).toEqual([bare, emptyDir, undefined]);
+    }
+  });
+
+  it("L9: quitting stops every running drain and settles its row now; the run's own end doesn't write it again", async () => {
+    const g = gate();
+    const s = setup({ writes: ALLOW_ALL, sleep: g.sleep });
+    const a = window();
+    const r = await s.svc.review(drain(), a);
+    await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true);
+    await vi.waitFor(() => expect(s.svc.runsOf(H, a)[0]?.progress.state).toBe("evicting"));
+    expect(s.svc.liveRuns()).toBe(1);
+    s.svc.quit();
+    expect(s.rows[0]).toMatchObject({ outcome: "stopped", detail: "Landlens quit during the drain" });
+    g.open();
+    await vi.waitFor(() => expect(s.svc.liveRuns()).toBe(0));
+    expect(s.rows[0]).toMatchObject({ outcome: "stopped", detail: "Landlens quit during the drain" });
+    expect(quitQuestion(0, 1)).toEqual({ message: "1 drain will end", detail: "The drain stops: no more pods are evicted, its node stays cordoned, and Recent actions says stopped." });
+    expect(quitQuestion(2, 1).message).toBe("2 sessions and 1 drain will end");
+  });
+
+  it("L10: a drain says when no other node takes new pods (a cordoned or NoSchedule-tainted one doesn't count), in its review and main's dialog", async () => {
+    const { svc } = setup({ writes: ALLOW_ALL });
+    api.get("/api/v1/nodes/node-2").spec.taints = [{ key: "dedicated", value: "x", effect: "NoSchedule" }];
+    const a = window();
+    const r = await svc.review(drain(), a);
+    expect(r.facts).toEqual([{ tone: "bad", code: "only-node", text: "No other node takes new pods: every pod evicted stays Pending." }]);
+    const asked: any[] = [];
+    await expect(svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toThrow(/Cancelled/);
+    expect(asked[0].detail).toContain("No other node takes new pods");
+    delete api.get("/api/v1/nodes/node-2").spec.taints;
+    expect((await svc.review(drain(), a)).facts).toBeUndefined();
+    // Cordon's fact too.
+    api.get("/api/v1/nodes/node-2").spec.taints = [{ key: "x", effect: "NoExecute" }];
+    expect((await svc.review({ handle: H, action: { kind: "cordon", node: "node-1", on: true } }, a)).facts![0]!.code).toBe("only-node");
   });
 });

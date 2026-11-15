@@ -44,6 +44,7 @@ import { useLandflow, useSent } from "./landflow";
 import { TriageSheet } from "./TriageSheet";
 import { FlowSheet, type FlowSubject } from "./FlowSheet";
 import { ActionSheet } from "./ActionSheet";
+import { useDrainRuns } from "./DrainPlanView";
 import type { ActionDraft } from "./actionAsks";
 import { ObjectMenu } from "./ObjectMenu";
 import { RecentActions, useActionLog } from "./RecentActions";
@@ -120,6 +121,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [actionsVersion, setActionsVersion] = useState(0);
   const [recentOpen, setRecentOpen] = useState(false);
   const actionLog = useActionLog(cluster.handle, actionsVersion);
+  // Drains running in main from this window (M4): the status bar's chip re-opens one, with Stop.
+  const drains = useDrainRuns(cluster.handle);
   const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number }>();
   const [leaving, setLeaving] = useState<string>();
   const beforeBench = useRef<HTMLElement | null>(null);
@@ -576,6 +579,13 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           actions={actionLog.since}
           actionsOpen={recentOpen}
           onActions={() => setRecentOpen((v) => !v)}
+          drains={drains.map((d) => ({ run: d.progress.run, node: d.progress.node }))}
+          onDrain={(run) => {
+            const d = drains.find((x) => x.progress.run === run);
+            if (!d) return;
+            const t = nav.find((x) => x.type.group === "" && x.type.resource === "nodes")?.type ?? { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false, verbs: [] };
+            setActionOn({ kind: "drain", type: t, objects: [{ metadata: { name: d.progress.node, uid: run } } as KubeObject], run });
+          }}
         />
       {recentOpen ? (
         <RecentActions entries={actionLog.entries} onClose={() => setRecentOpen(false)}
@@ -724,9 +734,14 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         />
       ) : null}
       {actionOn ? (
-        <ActionSheet key={`${actionOn.kind}/${actionOn.on ?? ""}/${actionOn.objects.map((o) => o.metadata.uid).join(",")}`} cluster={cluster} draft={actionOn}
+        <ActionSheet key={`${actionOn.kind}/${actionOn.on ?? ""}/${actionOn.run ?? ""}/${actionOn.objects.map((o) => o.metadata.uid).join(",")}`} cluster={cluster} draft={actionOn}
           onClose={() => setActionOn(undefined)} onAsk={askFirst} onApplied={() => setActionsVersion((n) => n + 1)}
-          onUncordon={() => setActionOn({ ...actionOn, kind: "cordon", on: false })} onOpen={go} />
+          onUncordon={() => {
+            // From a re-attached run the node's row may not be in the window: read it, then the cordon sheet.
+            const name = actionOn.objects[0]!.metadata.name;
+            void api.invoke("resource:get", { handle: cluster.handle, ref: { group: "", version: "v1", resource: "nodes", name } })
+              .then(({ object }) => setActionOn({ kind: "cordon", type: actionOn.type, objects: [object], on: false }), () => {});
+          }} onOpen={go} />
       ) : null}
       {triage ? <TriageSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} problem={triage} onClose={() => setTriage(undefined)} /> : null}
       {flowOn ? <FlowSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} subject={flowOn} onAsk={ask} onClose={() => setFlowOn(undefined)} /> : null}

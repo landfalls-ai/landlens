@@ -22,6 +22,8 @@ export class FakeApi {
   private uids = 0;
   /** Refuse a request with this status before the fake looks at it. */
   refuse?: (r: Recorded) => number | undefined;
+  /** Answer a request with this before the fake looks at it (a 429 from the API server's fairness, say). */
+  answer?: (r: Recorded) => { status: number; text: string; warnings: string[] } | undefined;
   /** After a real eviction: what a controller would do (make a replacement pod elsewhere). */
   onEvict?: (pod: any) => void;
   /** Lists of the node's pods an evicted pod stays in (terminating) before it is gone. */
@@ -39,6 +41,9 @@ export class FakeApi {
 
   pod(namespace: string, name: string, o: { node?: string; labels?: Record<string, string>; owner?: { kind: string; name: string }; emptyDir?: string[]; phase?: string; mirror?: boolean; deleting?: boolean; ready?: boolean } = {}) {
     const uid = `uid-${name}-${++this.uids}`;
+    // A DaemonSet pod's DaemonSet is there unless a test takes it away (L12 reads it).
+    const ds = `/apis/apps/v1/namespaces/${namespace}/daemonsets/${o.owner?.name}`;
+    if (o.owner?.kind === "DaemonSet" && !this.objects.has(ds)) this.put(ds, { apiVersion: "apps/v1", kind: "DaemonSet", metadata: { name: o.owner.name, namespace } });
     this.put(`/api/v1/namespaces/${namespace}/pods/${name}`, {
       apiVersion: "v1", kind: "Pod",
       metadata: {
@@ -114,6 +119,8 @@ export class FakeApi {
     this.requests.push(rec);
     const refused = this.refuse?.(rec);
     if (refused) return status(refused, `refused ${refused}`);
+    const answered = this.answer?.(rec);
+    if (answered) return answered;
     const [path, query = ""] = r.path.split("?") as [string, string?];
     const q = new URLSearchParams(query);
     const dryQuery = q.get("dryRun") === "All";
@@ -124,6 +131,14 @@ export class FakeApi {
       if (path === "/apis/policy/v1/poddisruptionbudgets") return this.list((p) => p.includes("/poddisruptionbudgets/"), q);
       const nsList = /^\/apis\/policy\/v1\/namespaces\/([^/]+)\/poddisruptionbudgets$/.exec(path);
       if (nsList) return this.list((p) => p.startsWith(`${path}/`), q);
+      // A pod leaving after an eviction stays readable by name for `linger` reads too.
+      const n = this.lingering.get(path);
+      if (n !== undefined) {
+        if (n <= 0) {
+          this.lingering.delete(path);
+          this.objects.delete(path);
+        } else this.lingering.set(path, n - 1);
+      }
       const o = this.objects.get(path);
       return o ? ok(o) : status(404, "not found", { reason: "NotFound" });
     }

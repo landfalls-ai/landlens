@@ -3,7 +3,7 @@
 // cordons first, evicts only the reviewed uids, retries a 429 and ends it blocked, treats a replaced pod as gone, stops
 // on Stop with the node left cordoned, and never deletes a pod or sends a zero grace period.
 import { describe, expect, it } from "vitest";
-import { drainPlan, dryRunEvictions, evictionRequest, readDrain, runDrain, runnable, toEvict, type DrainKept, type RunState } from "../src/drain.js";
+import { DRAIN_FOLLOW_LIST_MS, drainPlan, dryRunEvictions, evictionRequest, listNodes, readDrain, RUN_NOTES, runDrain, runnable, toEvict, type DrainKept, type RunState } from "../src/drain.js";
 import { prepareOp } from "../src/changes.js";
 import { cordonBody } from "../src/actions.js";
 import { FakeApi } from "./fake-api.js";
@@ -156,9 +156,10 @@ describe("a drain review against the fake API", () => {
 describe("a drain run against the fake API", () => {
   /** A review's kept requests, as main keeps them: the cordon dry-run-checked by prepareOp, and the pods to evict. */
   async function review(api: FakeApi, opts = { bare: true, emptyDir: true }): Promise<DrainKept> {
-    const { plan } = await readDrain(api.send, "node-1", opts);
+    const { node: n, plan } = await readDrain(api.send, "node-1", opts);
+    if (plan.cordoned) return { node: "node-1", nodeUid: n.metadata.uid, ticks: opts, pods: toEvict(plan) };
     const p = await prepareOp(api.send, { verb: "patch", patchType: "merge", type: { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false }, name: "node-1", body: cordonBody(true) }, { fieldManager: "landlens" });
-    return { node: "node-1", cordon: { method: p.method, path: p.path, contentType: p.contentType!, body: p.body! }, pods: toEvict(plan) };
+    return { node: "node-1", nodeUid: n.metadata.uid, ticks: opts, cordon: { method: p.method, path: p.path, contentType: p.contentType!, body: p.body! }, pods: toEvict(plan) };
   }
   function clock() {
     let t = 1_000_000;
@@ -220,10 +221,27 @@ describe("a drain run against the fake API", () => {
     api.objects.delete("/api/v1/namespaces/landlens-dev/pods/db-0");
     const fresh = api.pod("landlens-dev", "db-0", { labels: { app: "db" }, owner: { kind: "StatefulSet", name: "db" } });
     const c = clock();
+    api.requests.length = 0;
     const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...c, limitMs: 10_000 });
-    const db = end.pods.find((p) => p.name === "db-0")!;
-    expect(db).toMatchObject({ state: "gone", note: "Another pod has its name now; not evicted" });
+    // Seen at the run's first reading (L7): not even asked.
+    expect(end.pods.find((p) => p.name === "db-0")!).toMatchObject({ state: "gone", note: "It was already gone" });
+    expect(api.requests.some((r) => r.path.endsWith("/pods/db-0/eviction"))).toBe(false);
     expect(api.get("/api/v1/namespaces/landlens-dev/pods/db-0").metadata.uid).toBe(fresh);
+
+    // Replaced between that reading and its eviction: the uid precondition answers 409.
+    const api2 = hands();
+    const kept2 = await review(api2, { bare: true, emptyDir: true });
+    let fresh2 = "";
+    api2.answer = (r) => {
+      if (r.path.endsWith("/pods/db-0/eviction") && !fresh2) {
+        api2.objects.delete("/api/v1/namespaces/landlens-dev/pods/db-0");
+        fresh2 = api2.pod("landlens-dev", "db-0", { labels: { app: "db" }, owner: { kind: "StatefulSet", name: "db" } });
+      }
+      return undefined;
+    };
+    const end2 = await runDrain({ send: api2.send, kept: kept2, stopped: () => false, onProgress: () => {}, ...clock(), limitMs: 10_000 });
+    expect(end2.pods.find((p) => p.name === "db-0")!).toMatchObject({ state: "gone", note: "Another pod has its name now; not evicted" });
+    expect(api2.get("/api/v1/namespaces/landlens-dev/pods/db-0").metadata.uid).toBe(fresh2);
   });
 
   it("Stop sends no new eviction, and the node stays cordoned", async () => {
@@ -248,13 +266,246 @@ describe("a drain run against the fake API", () => {
     expect(api.requests.some((r) => r.method === "PATCH" && r.body?.spec?.unschedulable === null)).toBe(false);
   });
 
-  it("a node that changed since the preview stops the run before any eviction", async () => {
+  it("a node replaced since the preview stops the run before any request but reads", async () => {
     const api = hands();
     const kept = await review(api);
-    api.get("/api/v1/nodes/node-1").metadata.resourceVersion = "999";
+    api.get("/api/v1/nodes/node-1").metadata.uid = "another-node";
     api.requests.length = 0;
     const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock() });
-    expect(end).toMatchObject({ state: "failed", note: "The node changed since the preview. Nothing was evicted." });
-    expect(api.requests.some((r) => r.path.endsWith("/eviction"))).toBe(false);
+    expect(end).toMatchObject({ state: "failed", note: RUN_NOTES.replaced });
+    expect(api.requests.every((r) => r.method === "GET")).toBe(true);
+  });
+
+  it("L5: a node whose version moved since the preview is cordoned once more, pinned to the version just read", async () => {
+    const api = hands();
+    const kept = await review(api);
+    // The kubelet's status report moves the version; the node is the same and still schedulable.
+    api.get("/api/v1/nodes/node-1").metadata.resourceVersion = "999";
+    api.requests.length = 0;
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock(), limitMs: 10_000 });
+    const patches = api.requests.filter((r) => r.method === "PATCH");
+    expect(patches.map((r) => r.body.metadata.resourceVersion)).toEqual([JSON.parse(kept.cordon!.body).metadata.resourceVersion, "999"]);
+    expect(api.get("/api/v1/nodes/node-1").spec.unschedulable).toBe(true);
+    expect(end.state).not.toBe("failed");
+    expect(api.requests.some((r) => r.path.endsWith("/eviction"))).toBe(true);
+    // Moved again between the read and the second send: a conflict, and nothing evicted.
+    const api2 = hands();
+    const kept2 = await review(api2);
+    const node = api2.get("/api/v1/nodes/node-1");
+    node.metadata.resourceVersion = "999";
+    api2.requests.length = 0;
+    api2.answer = (r) => (r.method === "PATCH" ? (node.metadata.resourceVersion = String(Number(node.metadata.resourceVersion) + 1), undefined) : undefined);
+    const end2 = await runDrain({ send: api2.send, kept: kept2, stopped: () => false, onProgress: () => {}, ...clock() });
+    expect(end2).toMatchObject({ state: "failed", note: "The node changed since the preview. Nothing was evicted." });
+    expect(api2.requests.filter((r) => r.method === "PATCH")).toHaveLength(2);
+    expect(api2.requests.some((r) => r.path.endsWith("/eviction"))).toBe(false);
+  });
+
+  it("M3: a node cordoned at the preview and uncordoned since gets no eviction", async () => {
+    const api = hands();
+    api.get("/api/v1/nodes/node-1").spec.unschedulable = true;
+    const kept = await review(api);
+    expect(kept.cordon).toBeUndefined();
+    delete api.get("/api/v1/nodes/node-1").spec.unschedulable; // someone uncordons it in the review's 15 minutes
+    api.requests.length = 0;
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock() });
+    expect(end).toMatchObject({ state: "failed", note: RUN_NOTES.uncordoned });
+    expect(api.requests.every((r) => r.method === "GET")).toBe(true);
+  });
+
+  it("M3: uncordoned during the run, no more evictions; the end says the node isn't cordoned", async () => {
+    const api = hands();
+    const kept = await review(api);
+    let evictions = 0;
+    api.answer = (r) => {
+      // Someone uncordons the node after the first pass of evictions.
+      if (r.path.endsWith("/eviction") && ++evictions === 5) delete api.get("/api/v1/nodes/node-1").spec.unschedulable;
+      return undefined;
+    };
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock(), limitMs: 60_000 });
+    expect(end.state).toBe("failed");
+    expect(end.note).toBe(RUN_NOTES.uncordonedDuring);
+    // web-a and web-b were waiting on their budget: never tried again.
+    expect(api.requests.filter((r) => r.path.endsWith("/eviction")).length).toBe(5);
+    expect(end.cordoned).toBe(false);
+  });
+
+  it("M3: pods that arrived after the preview are counted at the end", async () => {
+    const api = hands();
+    api.get("/apis/policy/v1/namespaces/landlens-dev/poddisruptionbudgets/web-pdb").spec.minAvailable = 0;
+    api.recompute();
+    const kept = await review(api);
+    api.pod("landlens-dev", "late", { owner: { kind: "ReplicaSet", name: "late-rs" } });
+    api.pod("landlens-dev", "late-agent", { owner: { kind: "DaemonSet", name: "agent" } }); // stays: not counted
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock() });
+    expect(end.state).toBe("done");
+    expect(end).toMatchObject({ cordoned: true, arrived: 1 });
+    expect(api.get("/api/v1/namespaces/landlens-dev/pods/late")).toBeDefined();
+  });
+
+  it("L7: a reviewed pod whose controller went since is not evicted without the bare tick", async () => {
+    const api = hands();
+    const kept = await review(api, { bare: false, emptyDir: true });
+    expect(kept.pods.map((p) => p.name)).toContain("db-0");
+    delete api.get("/api/v1/namespaces/landlens-dev/pods/db-0").metadata.ownerReferences; // orphaned
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock(), limitMs: 10_000 });
+    expect(end.pods.find((p) => p.name === "db-0")).toMatchObject({ state: "blocked" });
+    expect(api.requests.some((r) => r.path === "/api/v1/namespaces/landlens-dev/pods/db-0/eviction")).toBe(false);
+    expect(api.get("/api/v1/namespaces/landlens-dev/pods/db-0")).toBeDefined();
+  });
+
+  it("L2: no eviction is sent after the run's time, even inside a pass", async () => {
+    const api = hands();
+    api.get("/apis/policy/v1/namespaces/landlens-dev/poddisruptionbudgets/web-pdb").spec.minAvailable = 0;
+    api.recompute();
+    const kept = await review(api);
+    const c = clock();
+    let t0 = 0;
+    const sentAt: number[] = [];
+    const send: typeof api.send = async (r) => {
+      if (r.path.endsWith("/eviction")) {
+        sentAt.push(c.now());
+        await c.sleep(20_000); // a slow API server: each eviction takes 20 s
+      }
+      return api.send(r);
+    };
+    t0 = c.now();
+    const end = await runDrain({ send, kept, stopped: () => false, onProgress: () => {}, ...c, limitMs: 30_000 });
+    expect(sentAt.length).toBeGreaterThan(0);
+    for (const at of sentAt) expect(at - t0).toBeLessThan(30_000);
+    expect(end.state).toBe("timed-out");
+    // Never reached: said as such, not left waiting.
+    expect(end.pods.filter((p) => p.state === "waiting")).toEqual([]);
+    expect(end.pods.some((p) => p.note === "Not tried: the drain's time was up")).toBe(true);
+  });
+
+  it("L3: evicted pods are followed by name, not by a cluster-wide list every round", async () => {
+    const api = hands();
+    api.get("/apis/policy/v1/namespaces/landlens-dev/poddisruptionbudgets/web-pdb").spec.minAvailable = 0;
+    api.recompute();
+    const kept = await review(api);
+    api.linger = 6;
+    api.requests.length = 0;
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...clock() });
+    expect(end.state).toBe("done");
+    const lists = api.requests.filter((r) => r.method === "GET" && r.path.startsWith("/api/v1/pods?"));
+    expect(lists).toHaveLength(2); // the run's first reading and its last
+    expect(api.requests.filter((r) => r.method === "GET" && /^\/api\/v1\/namespaces\/landlens-dev\/pods\/[a-z0-9-]+$/.test(r.path)).length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("L3: past 20 evicted pods, one list from the cache, at most every 5 s", async () => {
+    const api = new FakeApi().node("node-1");
+    for (let i = 0; i < 30; i++) api.pod("landlens-dev", `p-${i}`, { owner: { kind: "ReplicaSet", name: "rs" } });
+    const kept = await review(api);
+    api.linger = 40;
+    api.requests.length = 0;
+    const c = clock();
+    const at: number[] = [];
+    const send: typeof api.send = async (r) => {
+      if (r.path.includes("resourceVersion=0")) at.push(c.now());
+      return api.send(r);
+    };
+    await runDrain({ send, kept, stopped: () => false, onProgress: () => {}, ...c, limitMs: 60_000 });
+    expect(at.length).toBeGreaterThan(1);
+    for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(DRAIN_FOLLOW_LIST_MS);
+    expect(api.requests.some((r) => /^\/api\/v1\/namespaces\/landlens-dev\/pods\/p-\d+$/.test(r.path))).toBe(false);
+  });
+
+  it("L4: a 429 that isn't a budget's honours its Retry-After and ends 'too busy', not blocked", async () => {
+    const api = hands();
+    api.get("/apis/policy/v1/namespaces/landlens-dev/poddisruptionbudgets/web-pdb").spec.minAvailable = 0;
+    api.recompute();
+    const kept = await review(api);
+    const c = clock();
+    const tries: number[] = [];
+    api.answer = (r) => {
+      if (!r.path.endsWith("/pods/db-0/eviction")) return undefined;
+      tries.push(c.now());
+      return { status: 429, text: JSON.stringify({ kind: "Status", code: 429, reason: "TooManyRequests", details: { retryAfterSeconds: 20 } }), warnings: [] };
+    };
+    const end = await runDrain({ send: api.send, kept, stopped: () => false, onProgress: () => {}, ...c, limitMs: 60_000 });
+    expect(tries.length).toBeGreaterThan(1);
+    for (let i = 1; i < tries.length; i++) expect(tries[i]! - tries[i - 1]!).toBeGreaterThanOrEqual(20_000);
+    expect(end.pods.find((p) => p.name === "db-0")).toMatchObject({ state: "failed", note: "The cluster was too busy to take it in time" });
+    expect(end.blocked).toBe(0);
+  });
+
+  it("L6: a cordon whose answer is lost says the node may be cordoned; an eviction lost then 404 counts as evicted", async () => {
+    const api = hands();
+    const kept = await review(api);
+    const lost: typeof api.send = async (r) => {
+      if (r.method === "PATCH") throw Object.assign(new Error("timeout"), { status: 504 });
+      return api.send(r);
+    };
+    const end = await runDrain({ send: lost, kept, stopped: () => false, onProgress: () => {}, ...clock() });
+    expect(end).toMatchObject({ state: "failed", note: RUN_NOTES.cordonLost });
+
+    const api2 = hands();
+    api2.get("/apis/policy/v1/namespaces/landlens-dev/poddisruptionbudgets/web-pdb").spec.minAvailable = 0;
+    api2.recompute();
+    const kept2 = await review(api2);
+    let first = true;
+    const once: typeof api2.send = async (r) => {
+      if (r.path.endsWith("/pods/bare/eviction") && first) {
+        first = false;
+        await api2.send(r); // the cluster takes it; the answer never arrives
+        throw Object.assign(new Error("timeout"), { status: 504 });
+      }
+      return api2.send(r);
+    };
+    const end2 = await runDrain({ send: once, kept: kept2, stopped: () => false, onProgress: () => {}, ...clock() });
+    expect(end2.state).toBe("done");
+    expect(end2.evicted).toBe(5);
+    expect(end2.pods.find((p) => p.name === "bare")).toMatchObject({ state: "gone", note: "Evicted" });
+  });
+});
+
+describe("the plan's edges (security review of part 2)", () => {
+  it("L1: a namespace with more than 2,000 budgets is partial when the cluster-wide list is refused; so is a cluster-wide list past 2,000", async () => {
+    const put = (api: FakeApi, ns: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        api.objects.set(`/apis/policy/v1/namespaces/${ns}/poddisruptionbudgets/b-${i}`, {
+          kind: "PodDisruptionBudget", metadata: { name: `b-${i}`, namespace: ns, uid: `b${i}`, resourceVersion: "1" },
+          spec: { selector: { matchLabels: { app: `none-${i}` } } }, status: { disruptionsAllowed: 1 },
+        });
+      }
+    };
+    const one = new FakeApi().node("node-1");
+    one.pod("landlens-dev", "a", { owner: { kind: "ReplicaSet", name: "rs" } });
+    put(one, "landlens-dev", 2001);
+    one.refuse = (r) => (r.path.startsWith("/apis/policy/v1/poddisruptionbudgets") ? 403 : undefined);
+    const p = await readDrain(one.send, "node-1", NONE);
+    expect(p.plan.partial).toMatch(/More than 2,000 disruption budgets/);
+    expect(runnable(p.plan)).toBe(false);
+
+    const all = new FakeApi().node("node-1");
+    all.pod("landlens-dev", "a", { owner: { kind: "ReplicaSet", name: "rs" } });
+    put(all, "default", 2001);
+    const q = await readDrain(all.send, "node-1", NONE);
+    expect(q.plan.partial).toMatch(/More than 2,000 disruption budgets/);
+  });
+
+  it("L12: a DaemonSet pod whose DaemonSet is gone is evicted as a bare pod; one whose DaemonSet is there stays", async () => {
+    const api = new FakeApi().node("node-1");
+    api.pod("landlens-dev", "lost-agent", { owner: { kind: "DaemonSet", name: "gone-ds" } });
+    api.pod("landlens-dev", "agent", { owner: { kind: "DaemonSet", name: "agent" } });
+    api.objects.delete("/apis/apps/v1/namespaces/landlens-dev/daemonsets/gone-ds");
+    const p = await readDrain(api.send, "node-1", NONE);
+    const by = Object.fromEntries(p.plan.pods.map((x) => [x.name, x]));
+    expect(by["lost-agent"]).toMatchObject({ class: "evict", bare: true, orphan: true, blocked: "needs-bare" });
+    expect(by.agent).toMatchObject({ class: "daemonset", bare: false });
+    expect(by.agent!.orphan).toBeUndefined();
+    const ticked = await readDrain(api.send, "node-1", { bare: true, emptyDir: false });
+    expect(toEvict(ticked.plan).map((x) => x.name)).toEqual(["lost-agent"]);
+    // Only reads.
+    expect(api.requests.every((r) => r.method === "GET")).toBe(true);
+  });
+
+  it("L10: the nodes are read in pages", async () => {
+    const api = new FakeApi();
+    for (let i = 0; i < 501; i++) api.node(`n-${i}`);
+    const got = await listNodes(api.send);
+    expect(got.items).toHaveLength(501);
+    expect(api.requests.filter((r) => r.path.startsWith("/api/v1/nodes?")).length).toBe(2);
   });
 });
