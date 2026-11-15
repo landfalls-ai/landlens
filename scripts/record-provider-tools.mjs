@@ -7,6 +7,15 @@
 //   node scripts/record-provider-tools.mjs linear     # a Linear API key (Read is enough)
 //
 // Writes packages/connections/test/fixtures/<provider>-tools.json. Then run `pnpm --filter @landlens/connections test`.
+//
+// The Land family (wave 7, D110): one tools/list call to a sibling's own MCP server, with your own key or token.
+//
+//   node scripts/record-provider-tools.mjs --family clickland http://localhost:4000   # a Clickland key (ck_…, read)
+//   node scripts/record-provider-tools.mjs --family landflow http://localhost:3000    # a Landflow API key (lf_…)
+//   node scripts/record-provider-tools.mjs --family landfall http://localhost:8080    # a Landfall access token (mcp:read)
+//
+// Writes packages/connections/test/fixtures/<sibling>-tools.json; then `pnpm --filter @landlens/mcp-gateway test`
+// checks Landlens's list of each sibling's reads against it.
 import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -18,9 +27,24 @@ const ENDPOINTS = {
 };
 const SHAPES = { github: /^(gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/, linear: /^lin_(api|oauth)_[A-Za-z0-9]{20,255}$/ };
 
-const provider = process.argv[2];
-if (!ENDPOINTS[provider]) {
-  console.error("usage: node scripts/record-provider-tools.mjs github|linear");
+// A sibling's MCP endpoint on the address you give: http only on this machine.
+const FAMILY = { clickland: { path: "/api/mcp", shape: /^ck_[A-Za-z0-9_-]{16,255}$/ }, landflow: { path: "/api/mcp", shape: /^lf_[A-Za-z0-9_-]{16,255}$/ }, landfall: { path: "/mcp", shape: /^[A-Za-z0-9._~+/=-]{16,4096}$/ } };
+const family = process.argv[2] === "--family";
+const provider = family ? process.argv[3] : process.argv[2];
+let familyOrigin;
+if (family) {
+  let u;
+  try {
+    u = new URL(process.argv[4] ?? "");
+  } catch {}
+  const local = u && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+  if (!FAMILY[provider] || !u || !(u.protocol === "https:" || (u.protocol === "http:" && local))) {
+    console.error("usage: node scripts/record-provider-tools.mjs --family clickland|landflow|landfall <https address, or http on this machine>");
+    process.exit(2);
+  }
+  familyOrigin = u.origin;
+} else if (!ENDPOINTS[provider]) {
+  console.error("usage: node scripts/record-provider-tools.mjs github|linear  |  --family clickland|landflow|landfall <address>");
   process.exit(2);
 }
 
@@ -55,13 +79,13 @@ async function readToken() {
 }
 
 const token = await readToken();
-if (!SHAPES[provider].test(token)) {
+if (!(family ? FAMILY[provider].shape : SHAPES[provider]).test(token)) {
   console.error(`That isn't shaped like a ${provider} token.`);
   process.exit(2);
 }
 
 async function list(url) {
-  const headers = { Authorization: `Bearer ${token}`, ...ENDPOINTS[provider].headers };
+  const headers = { Authorization: `Bearer ${token}`, ...(family ? {} : ENDPOINTS[provider].headers) };
   const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers }, fetch: (i, init) => fetch(i, { ...init, redirect: "error" }) });
   const client = new Client({ name: "landlens-record", version: "0.1.0" });
   await client.connect(transport);
@@ -78,6 +102,22 @@ async function list(url) {
   } finally {
     await client.close();
   }
+}
+
+if (family) {
+  try {
+    const tools = await list(`${familyOrigin}${FAMILY[provider].path}`);
+    const out = join(root, "packages/connections/test/fixtures", `${provider}-tools.json`);
+    const doc = { recorded: true, note: `Recorded ${new Date().toISOString().slice(0, 10)} with scripts/record-provider-tools.mjs --family.`, tools };
+    const text = JSON.stringify(doc, null, 1);
+    if (text.includes(token)) throw new Error("the listing contains the token; not written");
+    writeFileSync(out, text + "\n");
+    console.log(`${provider}: ${tools.length} tools, ${tools.filter((t) => t.annotations?.readOnlyHint === true).length} marked read-only → ${out}`);
+  } catch (err) {
+    console.error(`Recording failed: ${String(err?.message ?? err).replaceAll(token, "…")}`);
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 try {

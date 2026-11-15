@@ -9,7 +9,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, type AnyProvider, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
 import type { AuditEntry } from "@landlens/kube";
 import { APP_HTML, CALL_META, type AgentCluster } from "@landlens/kube-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -20,7 +20,7 @@ import { appMayCall, drifted, modelMayCall, preAllowed, readsOnly, toolUi, type 
 import { Autonomy, WHY } from "./autonomy.js";
 import { CallLog, newCallId } from "./calls.js";
 import { Pairing, TOOL_USE_META } from "./pairing.js";
-import { providerResult, providerTool, type ProviderRules } from "./providers/index.js";
+import { familyHeld, familyReadTools, isSibling, providerResult, providerTool, type ProviderRules } from "./providers/index.js";
 import { BuiltinUpstream, describeError, rawError, RemoteUpstream, type RemoteSpec, type Upstream } from "./upstream.js";
 
 const MAX_BODY = 1_000_000;
@@ -173,7 +173,7 @@ export class GatewaySession {
     this.forgetRules(server);
     if (what !== "drop") return;
     const provider = this.init.remotes.find((r) => r.name === server)?.provider;
-    if (provider) this.autonomy.get(provider.id)?.stop("you");
+    if (provider && !isSibling(provider.id)) this.autonomy.get(provider.id)?.stop("you");
     for (const m of [this.upstreams, this.readUpstreams]) {
       const u = m.get(server);
       m.delete(server);
@@ -276,6 +276,14 @@ export class McpGateway {
       }
     }));
     const answered = listed.filter((l): l is ListedServer => !!l);
+    // A family sibling's reads, from the listing this session got (D110): Landlens's list and the server's hints of
+    // that listing, so what main listed earlier can't make a tool a read here. One that didn't list has none.
+    for (const r of init.remotes) {
+      if (!r.provider || !isSibling(r.provider.id)) continue;
+      const l = answered.find((x) => x.name === r.name);
+      r.provider = { ...r.provider, readTools: familyReadTools(r.provider.id, l?.tools) };
+      if (l) l.provider = r.provider;
+    }
     // A connection's read-only endpoint is pinned too: its reads run without asking only while both halves hold.
     for (const l of answered) {
       const ro = session.readUpstreams.get(l.name);
@@ -297,12 +305,14 @@ export class McpGateway {
     }
     // A connection's autonomous mode, off; it can be turned on only while the session's listing is the accepted one
     // (D80, D82). Views and Preview have none.
+    // A family sibling has none (D113): its writes always ask.
     if (init.origin === "agent") {
       for (const r of init.remotes) {
-        if (!r.provider) continue;
+        if (!r.provider || isSibling(r.provider.id)) continue;
         const listedOk = answered.some((l) => l.name === r.name);
         const blocked = !r.pin ? AUTONOMY_UNACCEPTED : changed.includes(r.name) ? AUTONOMY_DRIFT : !listedOk ? AUTONOMY_UNLISTED : undefined;
-        session.autonomy.set(r.provider.id, new Autonomy(r.provider.id, {
+        const id = r.provider.id;
+        session.autonomy.set(id, new Autonomy(id, {
           session: () => session.id, mode: r.provider.mode, ...(blocked ? { blocked } : {}),
           ...(this.opts.now ? { now: this.opts.now } : {}),
           changed: (st) => this.opts.onAutonomy?.(st),
@@ -349,7 +359,7 @@ export class McpGateway {
    * write in scope within the budget, passes. A failure on the rules counts toward the three in a row that turn it
    * off. Nothing is counted on a pass: run() checks the arguments that arrive and counts then.
    */
-  async autonomyCheck(acpSession: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider; write?: boolean }> {
+  async autonomyCheck(acpSession: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: AnyProvider; write?: boolean }> {
     const m = /^mcp__([a-z][a-z0-9-]{0,30}[a-z0-9])__([A-Za-z0-9_.-]{1,128})$/.exec(toolName);
     const s = this.agentSession(acpSession);
     if (!m || !s || isBuiltin(m[1]!)) return { ok: false };
@@ -357,7 +367,8 @@ export class McpGateway {
     const up = spec?.provider ? s.upstreams.get(spec.name) : undefined;
     if (!spec?.provider || !up) return { ok: false };
     const provider = spec.provider.id;
-    const a = s.autonomy.get(provider);
+    // A family sibling has no autonomous mode (D113): its writes go to the dock, marked as its.
+    const a = isSibling(provider) ? undefined : s.autonomy.get(provider);
     // A provider's write is never offered "always allow" (M1), autonomous or not: `write` tells main so.
     if (spec.provider.readTools.has(m[2]!)) return { ok: false, provider };
     if (!a?.on) return { ok: false, provider, write: true };
@@ -482,12 +493,14 @@ export class McpGateway {
     // A connection's server: reads are what its vendor's read-only listing says, not what a tool says of itself. Its
     // tools get no views (M3): their MCP Apps metadata is set aside, and views can't call them.
     const provider = s.init.remotes.find((r) => r.name === server)?.provider;
-    if (provider) t = providerTool(t);
+    if (provider) t = providerTool(t, !!provider.views);
     const readOnly = readsOnly(t, provider);
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
       // Google Cloud data enters the session: its writes ask from now on, before this read runs (W1).
       if (server === GCP_MCP_SERVER) for (const a of s.autonomy.values()) a.hold(WHY.gcp);
+      // So does a sibling's text (D113): any call to a family server holds the session's GitHub and Linear autonomy.
+      if (provider && isSibling(provider.id)) for (const a of s.autonomy.values()) a.hold(familyHeld(provider.id));
       const rule = `mcp__${server}__${tool}`;
       if (!isBuiltin(server)) {
         if (s.allow.includes(rule)) this.log.gate(id, "read");
@@ -497,7 +510,7 @@ export class McpGateway {
           if (kind === "autonomous") {
             // The check that counts (D82): on the arguments that arrived, not the ones the question showed. Only then
             // is the write counted against the budget and forwarded.
-            const a = provider ? s.autonomy.get(provider.id) : undefined;
+            const a = provider && !isSibling(provider.id) ? s.autonomy.get(provider.id) : undefined;
             const r = a ? a.check(t, args) : { why: "autonomous is off", rules: false };
             if (r) {
               if (r.rules) a?.refused();
@@ -510,7 +523,9 @@ export class McpGateway {
       }
       this.pairing.call({ id, session: s.id, server, tool, args, ...(toolUseId ? { toolUseId } : {}) });
     } else if (origin === "app") {
-      if (provider || !appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
+      // A connection's tools have no views (M3); Clickland's views call its own server's tools (D112), and a write
+      // still asks you first.
+      if ((provider && !provider.views) || !appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
       if (!readOnly) {
         const yes = this.opts.approve ? await this.opts.approve({ label: s.label, server, tool, args, origin }).catch(() => false) : false;
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
@@ -628,7 +643,7 @@ export class McpGateway {
       try {
         const provider = session.init.remotes.find((r) => r.name === name)?.provider;
         const tools = await this.listTools(up);
-        return { tools: provider ? tools.map(providerTool) : tools.filter(modelMayCall) };
+        return { tools: provider ? tools.filter((t) => !provider.views || modelMayCall(t)).map((t) => providerTool(t, !!provider.views)) : tools.filter(modelMayCall) };
       } catch (err) {
         this.opts.log?.(`[mcp] ${session.label}: ${name} didn't list its tools: ${rawError(err)}`);
         return { tools: [] };

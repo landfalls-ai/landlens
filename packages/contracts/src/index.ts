@@ -196,8 +196,11 @@ export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fat
 
 /** The built-in server's name; no remote server may take it or anything starting with "landlens". */
 export const BUILTIN_MCP_SERVER = "landlens-kube";
-/** Server names Connections serves on the gateway (wave 6): a server you add can't take one. */
-export const RESERVED_MCP_NAMES = ["github", "linear", "landlens-gcp"] as const;
+/**
+ * Server names Connections serves on the gateway (wave 6, and the Land family's in wave 7 D107): a server you add can't
+ * take one.
+ */
+export const RESERVED_MCP_NAMES = ["github", "linear", "landlens-gcp", "clickland", "landflow", "landfall"] as const;
 /** How a remote server is named in Claude Code (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */
 export const McpServerName = z
   .string()
@@ -303,6 +306,12 @@ export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo }
 // browser sign-in) or family:set (the triage webhook's secret); no channel sends one back.
 export const Sibling = z.enum(["clickland", "landflow", "landfall"]);
 export type Sibling = z.infer<typeof Sibling>;
+/** A sibling as a provider on the gateway (D107): its server's name is the sibling's. */
+export const FamilyProvider = Sibling;
+export type FamilyProvider = Sibling;
+/** Any server the gateway treats as a provider's: a wave 6 connection or a family sibling. */
+export const AnyProvider = z.enum(["github", "linear", "clickland", "landflow", "landfall"]);
+export type AnyProvider = z.infer<typeof AnyProvider>;
 /**
  * A Landflow personal API key (`lf_` and 32 random bytes, base64url). Not an instance MCP token (`lf_mcp_`, which acts
  * for nobody), a debug token (`lf_dbg_`) or a Landfall key (`lf_key_`).
@@ -330,11 +339,13 @@ export type FamilyInfo = {
   account?: FamilyAccount;
   /** As the sibling reported them. */
   scopes?: string[];
-  /** "Give to Claude sessions" (D108): off when first connected. Served from wave 7 part 2. */
+  /** "Tools for Claude" (D108): its MCP server is given to every agent session. Off when first connected. */
   toSessions: boolean;
-  /** Reads run without asking (D110): on when first connected. Used from wave 7 part 2. */
+  /** "Reads run without asking" (D110): on when first connected. */
   readsAuto: boolean;
+  /** The accepted listing's reads and writes (D110: Landlens's list, the server's hint and the pin together). */
   tools?: { read: number; write: number };
+  /** Its tools changed since you accepted them (D111): every tool of its server asks until you accept again. */
   drift?: boolean;
   /** One of FAMILY_NOTES. */
   note?: string;
@@ -370,6 +381,9 @@ export const FAMILY_NOTES = {
   landfallTimeout: "The sign-in wasn't finished within 5 minutes. Sign in again.",
   landfallExpired: "Landfall's sign-in ran out. Sign in again.",
   landfallUnreachable: "Couldn't reach Landfall.",
+  drift: "Its tools changed since you accepted them. Review them, then accept.",
+  unaccepted: "Its tools aren't accepted yet. Check them, then accept, so its reads can run without asking.",
+  nameTaken: "A server you added on the MCP page has this name, so its tools stay off. Rename that server first.",
 } as const;
 /** "<Sibling> answered HTTP <n>.": the one note with a number in it. */
 export const familyHttpNote = (name: "Clickland" | "Landflow" | "Landfall", status: number) => `${name} answered HTTP ${Math.trunc(status)}.`;
@@ -649,7 +663,6 @@ export const channels = {
   "mcp:enable": z.object({ id: McpServerId, context: z.string().min(1).max(253), enabled: z.boolean() }),
   "mcp:auto-run": z.object({ id: McpServerId, enabled: z.boolean(), context: z.string().min(1).max(253).optional() }),
   "mcp:remove": z.object({ id: McpServerId }),
-  "mcp:preset": z.object({ preset: z.literal("clickland") }),
   "mcp:calls": z.object({}),
   /** Run one read-only tool that needs no arguments, as you, to see what it returns and its app. */
   "mcp:try": z.object({ handle: Handle, server: z.string().min(1).max(32), tool: McpToolName }),
@@ -684,6 +697,8 @@ export const channels = {
     .refine((r) => r.console === undefined || r.sibling === "clickland", "only Clickland has a console address")
     .refine((r) => r.triage === undefined || r.sibling === "landflow", "only Landflow has a triage webhook"),
   "family:test": z.object({ sibling: Sibling }),
+  /** Accept the listing the last family:test showed (D111). */
+  "family:repin": z.object({ sibling: Sibling }),
   "family:disconnect": z.object({ sibling: Sibling }),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
@@ -765,7 +780,6 @@ export type Responses = {
   "mcp:enable": McpServerInfo;
   "mcp:auto-run": McpServerInfo;
   "mcp:remove": { ok: true };
-  "mcp:preset": McpServerInfo;
   "mcp:calls": { calls: McpCall[] };
   "mcp:try": McpCall;
   "mcp:app-open": McpAppView;
@@ -786,6 +800,7 @@ export type Responses = {
   "family:signin": { flow: string };
   "family:set": FamilyInfo;
   "family:test": McpTest;
+  "family:repin": FamilyInfo;
   "family:disconnect": FamilyInfo;
   "agent:autonomy": AutonomyState;
   "gcp:status": GcpStatus;
@@ -823,8 +838,11 @@ export type McpServerInfo = {
   id: string;
   name: string;
   builtin: boolean;
-  /** Served from Connections (wave 6): managed on the Connections page, not edited or removed here ("gcp": landlens-gcp). */
-  connection?: ConnProvider | "gcp";
+  /**
+   * Served from Connections (wave 6; the Land family from wave 7): managed on the Connections page, not edited or
+   * removed here ("gcp": landlens-gcp).
+   */
+  connection?: ConnProvider | Sibling | "gcp";
   url: string;
   /** The header Landlens adds, and whether a value is stored. The value itself never leaves main. */
   header?: { name: string; stored: boolean };
@@ -849,10 +867,14 @@ export type McpServers = {
   gateway: string;
   servers: McpServerInfo[];
   canStore: boolean;
-  /** Servers Landlens knows how to add in one step, when they answer. */
-  presets: { id: "clickland"; name: string; url: string; reachable: boolean; hasKey: boolean; added: boolean }[];
 };
-export type McpTest = { ok: boolean; steps: { name: string; ok: boolean; detail: string }[]; tools?: McpToolInfo[] };
+export type McpTest = {
+  ok: boolean;
+  steps: { name: string; ok: boolean; detail: string }[];
+  tools?: McpToolInfo[];
+  /** A family sibling's listing against the accepted one, by tool name (D111): what Review shows. */
+  diff?: { added: string[]; removed: string[]; changed: string[] };
+};
 /** A front-door request behind a landlens-kube call, from the front door's audit. */
 export type McpFrontDoorRequest = { at: string; method: string; path: string; allowed: boolean; status?: number; reason?: string };
 /** One MCP call through the gateway: by an agent session, by an app's view, or by you (Preview). */
@@ -1091,8 +1113,8 @@ export type AgentPermissionRequest = {
   session: string;
   toolCall: { toolCallId: string; title?: string | null; kind?: string | null; rawInput?: unknown };
   options: { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" }[];
-  /** A connection's tool (GitHub, Linear): the dock shows its mark and its arguments as a table. */
-  provider?: ConnProvider;
+  /** A connection's or a family sibling's tool: the dock shows its mark and its arguments as a table. */
+  provider?: AnyProvider;
   /** Autonomous was on, and this write asks anyway: why (D82), e.g. "not one of the routine writes". */
   reason?: string;
 };

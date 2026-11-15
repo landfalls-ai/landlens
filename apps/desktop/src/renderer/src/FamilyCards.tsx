@@ -2,11 +2,16 @@
 // with its mark, a state chip, the address, who the key or sign-in is, and one line per thing it is used for. Keys and
 // tokens come in here (a pasted Landflow key, the triage webhook's secret) and never come back: the page knows
 // FamilyInfo only. Clickland's key is set in the Clickland settings dialog, as from the graphs.
-import { LANDFLOW_KEY_SHAPE, TriageHeader, TriagePath, TriageSecret, type FamilyInfo, type FamilyList, type McpTest, type Sibling } from "@landlens/contracts";
+//
+// From part 2 each ready card has two more rows (D108, D110): Tools for Claude (its MCP server in every session, off
+// until turned on) and Reads run without asking; a listing that changed since it was accepted says so, with Review
+// (the diff by tool name) and Accept (D111).
+import { FAMILY_NOTES, LANDFLOW_KEY_SHAPE, TriageHeader, TriagePath, TriageSecret, type FamilyInfo, type FamilyList, type McpTest, type Sibling } from "@landlens/contracts";
 import { CircleAlert, CircleCheck, CircleDashed, CircleX, KeyRound, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, type ApiError } from "./api";
 import { ClicklandSettings } from "./ClicklandSettings";
+import { ToolRow } from "./ConnectionsPage";
 import { Ic, SiblingMark } from "./icons";
 
 const NAME: Record<Sibling, string> = { clickland: "Clickland", landflow: "Landflow", landfall: "Landfall" };
@@ -124,6 +129,87 @@ function Row(props: { label: string; say: ReactNode; state: string; tone: "ok" |
   );
 }
 
+/**
+ * Tools for Claude and Reads run without asking (D108, D110), as two rows, and below the list the review of its tools:
+ * Check's steps, what changed since they were accepted (D111), the tools as Landlens counts them, and Accept.
+ */
+function useTools(info: FamilyInfo, onInfo: (i: FamilyInfo) => void) {
+  const s = info.sibling;
+  const name = NAME[s];
+  const { busy, error, setError, act } = useAct();
+  const [review, setReview] = useState<McpTest | "running">();
+  const set = (p: { toSessions?: boolean; readsAuto?: boolean }) => act(() => api.invoke("family:set", { sibling: s, ...p }), onInfo);
+  const runReview = () => {
+    setReview("running");
+    setError(undefined);
+    api.invoke("family:test", { sibling: s }).then(setReview, (e: ApiError) => (setReview(undefined), setError(e.message)));
+  };
+  const accept = () => act(() => api.invoke("family:repin", { sibling: s }), (i) => (onInfo(i), setReview(undefined)));
+  const n = info.tools;
+  const counts = n ? `${n.read} read · ${n.write} ask` : undefined;
+  const asks = info.drift || info.note === FAMILY_NOTES.unaccepted;
+  const rows = (
+    <>
+      <Row label="Tools for Claude"
+        say={info.toSessions ? <>Every Claude session, on every cluster, gets the <span className="mono">{s}</span> MCP tools. A write always asks you.</> : "Off: Claude sessions don't get its tools."}
+        state={info.toSessions ? (counts ?? "On") : "Off"} tone={info.toSessions ? (asks ? "warn" : "ok") : "muted"}>
+        <label className="switch fam-switch">
+          <input type="checkbox" role="switch" checked={info.toSessions} disabled={busy} onChange={() => set({ toSessions: !info.toSessions })} aria-label={`${name}: tools for Claude`} />
+        </label>
+      </Row>
+      <Row label="Reads run without asking"
+        say={info.readsAuto ? <>Reads are the tools Landlens's list and {name} both call reads. Their arguments go to {name} without a prompt.</> : "Off: every tool asks."}
+        state={info.readsAuto ? (info.drift ? "Paused" : "On") : "Off"} tone={info.readsAuto && info.toSessions && !info.drift ? "ok" : "muted"}>
+        <label className="switch fam-switch">
+          <input type="checkbox" role="switch" checked={info.readsAuto} disabled={busy} onChange={() => set({ readsAuto: !info.readsAuto })} aria-label={`${name}: reads run without asking`} />
+        </label>
+      </Row>
+    </>
+  );
+  const done = review && review !== "running" ? review : undefined;
+  const diff = done?.diff;
+  const changed = diff && (diff.added.length || diff.removed.length || diff.changed.length);
+  const panel = (
+    <>
+      {error ? <p className="tone-bad small" role="alert">{error}</p> : null}
+      {info.toSessions && info.state === "ready" ? (
+        <div className="fam-acts">
+          <button className={asks ? "primary sm" : "secondary sm"} onClick={runReview} disabled={review === "running"}>{asks ? "Review tools" : "Check tools"}</button>
+          <span className="dim small">{asks ? (info.drift ? "Its tools changed since you accepted them." : "Its tools aren't accepted yet.") : "List its tools again and compare them with the ones you accepted."}</span>
+        </div>
+      ) : null}
+      {review === "running" ? <p className="test-line dim conn-test"><span className="spinner" />Listing its tools…</p> : done ? (
+        <div className="fam-check" aria-label={`${name} tools review`} role="group">
+          <ul className="test-steps conn-test" aria-label="Test result">
+            {done.steps.map((x, i) => (
+              <li key={`${x.name}-${i}`}><Ic icon={x.ok ? CircleCheck : CircleX} size={13} className={x.ok ? "tone-ok" : "tone-bad"} /><b>{x.name}</b><span>{x.detail}</span></li>
+            ))}
+          </ul>
+          {changed ? (
+            <dl className="fam-diff small" aria-label="What changed">
+              {diff.added.length ? <div><dt>New</dt><dd className="mono">{diff.added.join(", ")}</dd></div> : null}
+              {diff.changed.length ? <div><dt>Changed</dt><dd className="mono">{diff.changed.join(", ")}</dd></div> : null}
+              {diff.removed.length ? <div><dt>Gone</dt><dd className="mono">{diff.removed.join(", ")}</dd></div> : null}
+            </dl>
+          ) : null}
+          {done.tools?.length ? (
+            <ul className="ov-list conn-tools" aria-label={`${name} tools`}>
+              {[...done.tools].sort((a, b) => Number(b.readOnly) - Number(a.readOnly) || a.name.localeCompare(b.name)).map((t) => (
+                <ToolRow key={t.name} tool={t} free={t.readOnly && info.readsAuto && !info.drift} />
+              ))}
+            </ul>
+          ) : null}
+          <div className="conn-accept">
+            {done.ok === false && info.drift ? <button className="primary" onClick={accept} disabled={busy}>Accept these tools</button> : null}
+            <button className="link-btn small" onClick={() => setReview(undefined)}>Close</button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+  return { rows, panel };
+}
+
 function Address(props: { url: string }) {
   return props.url ? <p className="fam-addr small"><span className="dim">Address</span> <span className="mono">{props.url}</span></p> : null;
 }
@@ -158,6 +244,7 @@ function ClicklandCard(props: { info: FamilyInfo; context?: string; handle?: str
   const { busy, error, setError, act } = useAct();
   const [settings, setSettings] = useState(false);
   const check = useCheck("clickland", setError);
+  const tools = useTools(c, props.onInfo);
   const on = c.state !== "off";
   const disconnect = () => {
     if (!window.confirm("Forget Clickland's key? Graphs fall back to the cluster's Prometheus or metrics-server until a key is saved again.")) return;
@@ -178,7 +265,9 @@ function ClicklandCard(props: { info: FamilyInfo; context?: string; handle?: str
       {error ? <p className="tone-bad small" role="alert">{error}</p> : null}
       <ul className="fam-rows" aria-label="What Clickland is used for">
         <Row label="Graphs" say="CPU and memory history on the Metrics tab and the Overview, through this key." state={c.state === "ready" ? "In use" : "Not in use"} tone={c.state === "ready" ? "ok" : "muted"} />
+        {c.state === "ready" ? tools.rows : null}
       </ul>
+      {c.state === "ready" ? tools.panel : null}
       {on ? (
         <div className="fam-acts">
           <button className="secondary sm" onClick={check.run} disabled={check.running}>Check</button>
@@ -200,6 +289,7 @@ function LandflowCard(props: { info: FamilyInfo; canStore: boolean; onInfo: (i: 
   const { busy, error, setError, act } = useAct();
   const check = useCheck("landflow", setError);
   const [editTriage, setEditTriage] = useState(false);
+  const tools = useTools(c, props.onInfo);
   const connected = c.state === "ready";
   const disconnect = () => {
     if (!window.confirm("Disconnect Landflow? Landlens deletes the key and the webhook's secret here. To revoke the key, open Landflow → Settings → API keys.")) return;
@@ -224,7 +314,9 @@ function LandflowCard(props: { info: FamilyInfo; canStore: boolean; onInfo: (i: 
               state={c.triage ? (c.triage.hasSecret ? "Secret stored" : "No secret") : "Not set up"} tone={c.triage?.hasSecret ? "ok" : c.triage ? "warn" : "muted"}>
               {!editTriage ? <button className="secondary sm" onClick={() => setEditTriage(true)}>{c.triage ? "Edit" : "Set up"}</button> : null}
             </Row>
+            {tools.rows}
           </ul>
+          {tools.panel}
           {editTriage ? <TriageForm info={c} onDone={(i) => (i && props.onInfo(i), setEditTriage(false))} /> : null}
           <div className="fam-acts">
             <button className="secondary sm" onClick={check.run} disabled={check.running}>Check</button>
@@ -336,6 +428,7 @@ function LandfallCard(props: { info: FamilyInfo; canStore: boolean; onInfo: (i: 
   const c = props.info;
   const { busy, error, setError, act } = useAct();
   const check = useCheck("landfall", setError);
+  const tools = useTools(c, props.onInfo);
   const [url, setUrl] = useState(c.url);
   const [flow, setFlow] = useState<string>();
   useEffect(() => {
@@ -387,7 +480,9 @@ function LandfallCard(props: { info: FamilyInfo; canStore: boolean; onInfo: (i: 
       ) : null}
       <ul className="fam-rows" aria-label="What Landfall is used for">
         <Row label="War rooms" say="War rooms open through Landflow's triage flow. Landlens never opens one itself." state="Through Landflow" tone="muted" />
+        {c.state === "ready" ? tools.rows : null}
       </ul>
+      {c.state === "ready" ? tools.panel : null}
       {signedIn ? (
         <div className="fam-acts">
           <button className="secondary sm" onClick={check.run} disabled={check.running}>Check</button>

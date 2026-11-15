@@ -1,9 +1,11 @@
 // MCP in main (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers you added, the call
 // log the MCP page and the dock read, Preview (you running a read-only tool from the MCP page), and MCP App views.
-import { BUILTIN_MCP_SERVER, CONN_NOTES, GCP_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
+// GitHub and Linear (Connections) and the Land family's servers (Clickland, Landflow, Landfall; docs/family.md) are
+// served after the servers you added, under their reserved names.
+import { BUILTIN_MCP_SERVER, CONN_NOTES, FAMILY_NOTES, GCP_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type FamilyInfo, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries, type Sibling } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
-import { BuiltinUpstream, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { BuiltinUpstream, isSibling, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import { gcpMcpServer, type GcpReader } from "@landlens/gcp-mcp";
 import type { SessionMcp } from "@landlens/acp-host";
 import { AppViews, viewCsp } from "./app-views";
@@ -19,6 +21,13 @@ export type ConnectionServers = {
   drifted(p: ConnProvider): void;
   /** The connection as the page sees it: autonomous needs it ready, at Ask for writes, its tools accepted. */
   info?(p: ConnProvider): ConnInfo;
+};
+
+/** The Land family as the MCP side needs it (main's FamilyService): its upstreams, its panels, drift (D107). */
+export type FamilyServers = {
+  remotes(): Promise<RemoteSpec[]>;
+  servers(): McpServerInfo[];
+  drifted(s: Sibling): void;
 };
 
 export type Ask = {
@@ -49,6 +58,8 @@ export class McpService {
     ask: Ask;
     /** GitHub and Linear, served to every session after the servers you added (docs/connections.md). */
     connections?: ConnectionServers;
+    /** Clickland, Landflow and Landfall, served after the connections, when Tools for Claude is on (docs/family.md). */
+    family?: FamilyServers;
     /** Google Cloud for landlens-gcp (GcpService.agentReader): undefined while Claude may not read it. */
     gcp?: { reader(): Promise<{ reader: GcpReader; projects: string[] } | undefined> };
     log?: (l: string) => void;
@@ -61,7 +72,12 @@ export class McpService {
       }),
       ...(deps.log ? { log: deps.log } : {}),
       // Every RemoteSpec the gateway gets comes from the store, with its id, or from Connections, with its provider.
-      onDrift: (spec) => (spec.provider ? deps.connections?.drifted(spec.provider.id) : deps.store.drifted((spec as RemoteSpec & { id: string }).id)),
+      onDrift: (spec) => {
+        const p = spec.provider?.id;
+        if (!p) deps.store.drifted((spec as RemoteSpec & { id: string }).id);
+        else if (isSibling(p)) deps.family?.drifted(p);
+        else deps.connections?.drifted(p);
+      },
       ...(deps.pushAutonomy ? { onAutonomy: deps.pushAutonomy } : {}),
     });
     this.gateway.log.subscribe(deps.push);
@@ -84,11 +100,13 @@ export class McpService {
         const remotes = await this.remotesFor(context);
         const gcp = await this.gcpBuiltin();
         const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes, ...(gcp ? { builtins: [gcp.spec] } : {}) });
-        const providers = remotes.flatMap((r) => (r.provider ? [PROVIDER_LABEL[r.provider.id]] : []));
+        const providers = remotes.flatMap((r) => (r.provider && !isSibling(r.provider.id) ? [PROVIDER_LABEL[r.provider.id]] : []));
+        // The Land family's servers get their own paragraph in the standing rules (D114).
+        const family = remotes.flatMap((r) => (r.provider && isSibling(r.provider.id) ? [PROVIDER_LABEL[r.provider.id]] : []));
         // The standing rules say a connection's reads run without asking only when this session lets them (L3).
         const readsFree = remotes.flatMap((r) => (r.provider && s.allow.some((a) => a.startsWith(`mcp__${r.name}__`)) ? [PROVIDER_LABEL[r.provider.id]] : []));
         return {
-          servers: s.servers(), allow: s.allow, ...(providers.length ? { providers, readsFree } : {}), ...(gcp ? { gcp: gcp.projects } : {}),
+          servers: s.servers(), allow: s.allow, ...(providers.length || family.length ? { providers, readsFree } : {}), ...(family.length ? { family } : {}), ...(gcp ? { gcp: gcp.projects } : {}),
           bind: (id) => s.bind(id), close: () => s.close(),
         };
       },
@@ -112,8 +130,9 @@ export class McpService {
   }
 
   /**
-   * A session's remote servers: the ones you added and turned on for the cluster, then the connections (whose names
-   * a server of yours can't take; one that already has such a name keeps it, and that connection stays off).
+   * A session's remote servers: the ones you added and turned on for the cluster, then the connections, then the Land
+   * family's (whose names a server of yours can't take; one that already has such a name keeps it, and that connection
+   * or sibling stays off).
    */
   private async remotesFor(context: string): Promise<RemoteSpec[]> {
     const mine = this.deps.store.remotesFor(context);
@@ -121,7 +140,26 @@ export class McpService {
       this.deps.log?.(`[mcp] connections: ${rawError(err)}`);
       return [];
     }) ?? [];
-    return [...mine, ...conns.filter((c) => !mine.some((m) => m.name === c.name))];
+    const family = await this.deps.family?.remotes().catch((err) => {
+      this.deps.log?.(`[mcp] family: ${rawError(err)}`);
+      return [];
+    }) ?? [];
+    const out: RemoteSpec[] = [...mine];
+    for (const r of [...conns, ...family]) if (!out.some((m) => m.name === r.name)) out.push(r);
+    return out;
+  }
+
+  /**
+   * A sibling changed (FamilyService's push), and open sessions follow at once, as connections do (M2): one signed out,
+   * expired, taken from sessions or blocked by a server of yours with its name leaves every session that has it; one
+   * whose reads stopped running without asking (the switch, or its tools changed) has its reads ask again. Preview
+   * sessions are closed, to be opened again as the sibling is now.
+   */
+  familyChanged(info: FamilyInfo) {
+    const served = info.state === "ready" && info.toSessions && info.note !== FAMILY_NOTES.nameTaken;
+    const readsFree = info.readsAuto && !info.drift;
+    this.gateway.restrictProvider(info.sibling, () => (!served ? "drop" : readsFree ? undefined : "reads"));
+    for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
   }
 
   /**
@@ -187,14 +225,10 @@ export class McpService {
     };
     const remotes = this.deps.store.list(context);
     const gcp = await this.gcpInfo();
-    const c = this.deps.clickland.view();
-    const url = clicklandMcpUrl(c.url);
     return {
       gateway: this.gateway.url,
-      servers: [builtin, ...(this.deps.connections?.servers() ?? []), ...(gcp ? [gcp] : []), ...remotes],
+      servers: [builtin, ...(this.deps.connections?.servers() ?? []), ...(this.deps.family?.servers() ?? []), ...(gcp ? [gcp] : []), ...remotes],
       canStore: this.deps.store.canStore,
-      // Only a Clickland you connected is probed: Landlens doesn't knock on addresses you haven't given it a key for.
-      presets: [{ id: "clickland", name: "Clickland", url, reachable: c.hasKey ? await reachable(url) : false, hasKey: c.hasKey, added: remotes.some((s) => s.url === url) }],
     };
   }
 
@@ -266,19 +300,6 @@ export class McpService {
   remove(id: string) {
     this.deps.store.remove(id);
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
-  }
-
-  /** Clickland in one step: its MCP endpoint, with the read key Connect Clickland stored. */
-  async preset(): Promise<McpServerInfo> {
-    const c = this.deps.clickland.config();
-    if (!c) throw fail(409, "Connect Clickland first (Graphs → Connect Clickland), or add it as a server with a key.");
-    const url = clicklandMcpUrl(c.url);
-    if (!(await reachable(url))) throw fail(424, `Clickland isn't answering at ${url}.`);
-    const existing = this.deps.store.list().find((s) => s.url === url);
-    const name = existing?.name ?? (this.deps.store.list().some((s) => s.name === "clickland") ? `clickland-${Date.now().toString(36).slice(-4)}` : "clickland");
-    const saved = this.deps.store.save({ ...(existing ? { id: existing.id } : {}), name, url, header: { name: "Authorization", value: `Bearer ${c.key}` } });
-    await this.test({ id: saved.id });
-    return this.deps.store.info(saved.id);
   }
 
   // ---- calls and Preview -----------------------------------------------------------------------------------------
@@ -408,14 +429,36 @@ export class McpService {
 
 export const clicklandMcpUrl = (base: string) => `${base.replace(/\/+$/, "")}/api/mcp`;
 
-/** Whether anything answers HTTP at the address within 1.5 s (any status counts). */
-async function reachable(url: string): Promise<boolean> {
+/** Two server addresses that are the same endpoint: scheme, host, port and path, a trailing slash aside. */
+function sameEndpoint(a: string, b: string): boolean {
   try {
-    await fetch(url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(1500) });
-    return true;
+    const x = new URL(a);
+    const y = new URL(b);
+    return x.origin === y.origin && x.pathname.replace(/\/+$/, "") === y.pathname.replace(/\/+$/, "") && !x.search && !y.search;
   } catch {
     return false;
   }
+}
+
+/**
+ * D109, once on start: a server Add Clickland made (its address is the connected Clickland's /api/mcp) leaves
+ * mcp-servers.json and Clickland's Tools for Claude goes on, with Reads run without asking as its "Run read-only tools
+ * without asking" was. A server you typed with another address, even one named clickland, is left alone.
+ */
+export function moveClicklandServer(o: {
+  store: Pick<McpServerStore, "list" | "remove">;
+  clickland: Pick<ClicklandSettingsStore, "keyOrigin" | "config">;
+  family: { adoptClickland(old: { autoRun: boolean }): boolean };
+  log?: (l: string) => void;
+}): boolean {
+  const origin = o.clickland.config() ? o.clickland.keyOrigin() : undefined;
+  if (!origin) return false;
+  const url = clicklandMcpUrl(origin);
+  const old = o.store.list().filter((s) => sameEndpoint(s.url, url));
+  if (!old.length || !o.family.adoptClickland({ autoRun: old.some((s) => s.autoRun) })) return false;
+  for (const s of old) o.store.remove(s.id);
+  o.log?.(`[mcp] moved ${old.map((s) => s.name).join(", ")} (${url}) to the Land family's clickland server; see Connections → Land family`);
+  return true;
 }
 
 /** A cluster that answers nothing: enough to list landlens-kube's tools for the MCP page. */

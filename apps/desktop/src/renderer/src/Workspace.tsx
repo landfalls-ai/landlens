@@ -430,7 +430,6 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             {...(mcpCall ? { selected: mcpCall } : {})}
             onSelect={setMcpCall}
             onOpenObject={go}
-            onConnectClickland={() => setSettings(true)}
             onOpenConnections={() => pick("connections")}
             version={metricsVersion}
           />

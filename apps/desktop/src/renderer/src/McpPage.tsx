@@ -1,10 +1,10 @@
 // The MCP page (docs/mcp.md): the servers an agent session gets through Landlens's gateway, and every call made
-// through it. Servers: landlens-kube (built in, always on) with its tools, and the remote servers you added, each
-// turned on per cluster, tested, edited or removed; Clickland in one step when it answers. Calls: the live log, with
-// filters; a row opens the call in the drawer.
+// through it. Servers: landlens-kube (built in, always on) with its tools; GitHub, Linear and the Land family's
+// Clickland, Landflow and Landfall from Connections; and the remote servers you added, each turned on per cluster,
+// tested, edited or removed. Calls: the live log, with filters; a row opens the call in the drawer.
 import { BUILTIN_MCP_SERVER, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import {
-  Ban, Cable, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Cloud, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X, Zap,
+  Ban, Cable, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Cloud, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, Plus, Server, Trash2, X, Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { age } from "@landlens/kube/status";
@@ -27,10 +27,9 @@ export function McpPage(props: {
   selected?: string;
   onSelect: (call: string) => void;
   onOpenObject: (t: ObjectTarget) => void;
-  onConnectClickland: () => void;
-  /** GitHub and Linear are managed on the Connections page. */
+  /** GitHub, Linear and the Land family are managed on the Connections page. */
   onOpenConnections?: () => void;
-  /** Bumped when Clickland's settings change, so the preset re-checks. */
+  /** Bumped when Clickland's settings change, so the family's clickland server shows as it is now. */
   version: number;
 }) {
   const [servers, setServers] = useState<McpServers>();
@@ -87,48 +86,21 @@ function Servers(props: {
   onChanged: () => void;
   onError: (m?: string) => void;
   onOpenObject: (t: ObjectTarget) => void;
-  onConnectClickland: () => void;
   onOpenConnections?: () => void;
 }) {
   const s = props.servers;
-  const preset = s?.presets.find((p) => p.id === "clickland");
-  const [adding, setAdding] = useState(false);
   if (!s) return <div className="skel" style={{ height: 220 }} />;
-  const addClickland = () => {
-    setAdding(true);
-    props.onError(undefined);
-    api.invoke("mcp:preset", { preset: "clickland" }).then(
-      (srv) => api.invoke("mcp:enable", { id: srv.id, context: props.context, enabled: true }).then(props.onChanged),
-      (e: ApiError) => props.onError(e.message),
-    ).finally(() => setAdding(false));
-  };
   return (
     <>
       <div className="mcp-intro">
         <p className="dim">
           Every MCP call an agent session makes goes through Landlens's gateway on <span className="mono">{new URL(s.gateway).host}</span> and is logged
           under Calls. landlens-kube's tools run without asking; a remote server's tools ask you in the dock unless you let its read-only tools run.
-          GitHub and Linear come from Connections.
+          GitHub, Linear, Clickland, Landflow and Landfall come from Connections.
           Remote servers' keys stay encrypted in the main process.
         </p>
         <button className="secondary mcp-add" onClick={props.onAdd}><Ic icon={Plus} size={14} />Add server</button>
       </div>
-      {preset && !preset.added && preset.reachable ? (
-        <section className="panel mcp-preset" aria-label="Clickland preset">
-          <div className="mcp-preset-row">
-            <span className="kind-tile sm"><Ic icon={PlugZap} size={15} /></span>
-            <div className="ov-main">
-              <div className="ov-name"><span>Clickland answers at</span><span className="mono">{preset.url}</span></div>
-              <div className="ov-detail">{preset.hasKey ? "Add it with the read key Connect Clickland stored, on for this cluster." : "Connect Clickland first; its read key is what the MCP endpoint takes."}</div>
-            </div>
-            {preset.hasKey ? (
-              <button className="primary" onClick={addClickland} disabled={adding}>{adding ? <span className="spinner" /> : <Ic icon={Plus} size={14} />}Add Clickland</button>
-            ) : (
-              <button className="secondary" onClick={props.onConnectClickland}>Connect Clickland</button>
-            )}
-          </div>
-        </section>
-      ) : null}
       {s.servers.map((srv) => (
         <ServerPanel key={srv.id} server={srv} {...props} />
       ))}
@@ -153,9 +125,10 @@ function ServerPanel(props: {
   onOpenConnections?: () => void;
 }) {
   const srv = props.server;
-  // GitHub or Linear; landlens-gcp is built in and comes from Connections too, with the Cloud mark.
+  // GitHub, Linear or a family sibling; landlens-gcp is built in and comes from Connections too, with the Cloud mark.
   const conn = srv.connection === "gcp" ? undefined : srv.connection;
   const gcp = srv.connection === "gcp";
+  const family = conn === "clickland" || conn === "landflow" || conn === "landfall";
   const st = STATUS[srv.status];
   const [test, setTest] = useState<McpTest | "running">();
   const [busy, setBusy] = useState(false);
@@ -218,7 +191,11 @@ function ServerPanel(props: {
       {conn ? (
         <div className="mcp-auto">
           <span className="dim small">
-            {srv.autoRun ? "Its reads (the tools its read-only endpoint lists) run without asking; its writes ask you in the dock." : "Every tool asks you in the dock."} Change it on the Connections page.
+            {srv.autoRun
+              ? family
+                ? "Its reads (the tools Landlens's list and the server both call reads) run without asking; everything else asks you in the dock."
+                : "Its reads (the tools its read-only endpoint lists) run without asking; its writes ask you in the dock."
+              : "Every tool asks you in the dock."} Change it on the Connections page.
           </span>
           {srv.autoRunNote ? <span className="tone-warn small" role="status"><Ic icon={CircleAlert} size={13} /> {srv.autoRunNote}</span> : null}
         </div>

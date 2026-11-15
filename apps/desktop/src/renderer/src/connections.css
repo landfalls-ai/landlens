@@ -86,6 +86,15 @@ button.secondary.sm { height: 24px; padding: 0 8px; font-size: var(--t-12); }
 .fam-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--line); }
 .fam-check { display: grid; gap: 6px; justify-items: start; }
 .fam-form .field .dim.mono { flex: none; padding-left: 2px; }
+/* Part 2: Tools for Claude and Reads run without asking (a switch at the row's right), and a review's diff. */
+.fam-switch { margin-left: 4px; }
+.fam-switch input { margin: 0; }
+.fam-check { width: 100%; }
+.fam-check .conn-tools { width: 100%; }
+.fam-diff { margin: 0; display: grid; gap: 4px; }
+.fam-diff > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; }
+.fam-diff dt { color: var(--ink-2); }
+.fam-diff dd { margin: 0; overflow-wrap: anywhere; }
 .fam-form-say { margin: 0; }
 .fam-form .conn-token-acts .link-btn { margin-right: auto; }
 @container main (max-width: 640px) {

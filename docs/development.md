@@ -71,7 +71,11 @@ A packaged app reads none of them, and anything but a loopback address is ignore
 (`packages/connections/test/fixtures/*-tools.json`) are hand-made until recorded: `node
 scripts/record-provider-tools.mjs github` (or `linear`) asks for your token without echo, lists the full and the
 read-only endpoint (two `tools/list` calls, nothing written to the provider) and writes the fixture. Only the person
-runs it, with their own token; no test or agent does.
+runs it, with their own token; no test or agent does. For the Land family (wave 7, [family.md](family.md)): `node
+scripts/record-provider-tools.mjs --family clickland|landflow|landfall <address>` asks for your key (or Landfall
+access token) the same way, makes one `tools/list` call to the sibling's own MCP server (`/api/mcp`, Landfall's
+`/mcp`; https, or plain http only on this machine) and writes `fixtures/<sibling>-tools.json`;
+`packages/mcp-gateway/test/family.test.ts` then checks `FAMILY_READS` against it (skipped while none is recorded).
 
 Google Cloud ([gcp.md](gcp.md)): `pnpm test` runs `@landlens/gcp`'s unit tests against
 `packages/gcp/test/fake-gcp.ts` (a loopback server for Resource Manager, Cloud Asset and Kubernetes Engine that

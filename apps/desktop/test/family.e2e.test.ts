@@ -3,6 +3,9 @@
 // Clickland's read key through its settings dialog, Landflow by a pasted key with its triage webhook, and Landfall in
 // the (played) browser; checks that family:list and the profile folder carry no secret in the clear, and that the fake
 // Landfall was never asked for a trigger. Then the cards in the workspace at the narrowest window.
+// Part 2: Tools for Claude on for all three (each listing accepted, its counts on the card), the MCP page's family
+// servers (no Add Clickland card), a changed Clickland listing reviewed and accepted, and, with `claude`, a live session
+// in which a Clickland read runs without asking and a Landflow write asks.
 // LANDLENS_INTEGRATION=orbstack npx vitest run test/family.e2e.test.ts  (screenshots to $LANDLENS_SHOTS)
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync } from "node:fs";
@@ -10,10 +13,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FAMILY_NOTES } from "@landlens/contracts";
 import { CK_READ, FakeClickland, FakeLandfall, FakeLandflow, LF_KEY, TRIAGE_SECRET } from "../../../packages/connections/test/fake-family";
 
+const FAMILY_DRIFT = FAMILY_NOTES.drift;
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
+const claude = flags.includes("claude");
 const shots = process.env.LANDLENS_SHOTS;
 const shot = async (page: Page, name: string, colorScheme: "dark" | "light" = "dark") => {
   if (!shots) return;
@@ -162,6 +168,30 @@ describe.runIf(run)("the Land family against the fake siblings", { timeout: 90_0
     expect(clickland.carrying(CK_READ).every((r) => r.path === "/api/auth/me")).toBe(true);
   });
 
+  it("turns Tools for Claude on: each listing is accepted and the card counts its reads and asks (D108, D110, D111)", async () => {
+    for (const [n, counts] of [["Clickland", "18 read · 5 ask"], ["Landflow", "21 read · 7 ask"], ["Landfall", "21 read · 0 ask"]] as const) {
+      const c = card(n);
+      await c.scrollIntoViewIfNeeded();
+      const sw = c.getByRole("switch", { name: `${n}: tools for Claude` });
+      await expect(sw.isChecked()).resolves.toBe(false);
+      await sw.click();
+      await c.getByText(counts, { exact: true }).waitFor({ timeout: 20_000 });
+      await expect(c.getByRole("switch", { name: `${n}: reads run without asking` }).isChecked()).resolves.toBe(true);
+    }
+    await card("Clickland").scrollIntoViewIfNeeded();
+    await both(page, "w7p2-01-tools-on");
+    // Reads off asks for every tool; on again.
+    const reads = card("Landflow").getByRole("switch", { name: "Landflow: reads run without asking" });
+    await reads.click();
+    await expect.poll(() => reads.isChecked()).toBe(false);
+    await reads.click();
+    await expect.poll(() => reads.isChecked()).toBe(true);
+    // Only the fakes' MCP endpoints were asked for a listing, each with its own key.
+    expect(clickland.carrying(CK_READ).every((r) => ["/api/auth/me", "/api/mcp"].includes(r.path))).toBe(true);
+    expect(landflow.carrying(LF_KEY).every((r) => ["/api/auth/me", "/api/mcp"].includes(r.path))).toBe(true);
+    expect(landfall.forbidden).toEqual([]);
+  });
+
   it("in the workspace at the narrowest window, the cards keep one line per use", async () => {
     await page.getByRole("button", { name: "Clusters" }).click();
     await page.getByRole("button", { name: /orbstack/ }).first().click();
@@ -178,6 +208,85 @@ describe.runIf(run)("the Land family against the fake siblings", { timeout: 90_0
       expect(Math.abs(label!.y - state!.y)).toBeLessThan(12);
     }
     await page.setViewportSize({ width: 1440, height: 880 });
+  });
+
+  it("lists the family's servers on the MCP page, from Connections, and has no Add Clickland card (D106, D109)", async () => {
+    await page.getByRole("button", { name: "MCP", exact: true }).click();
+    const ck = page.getByRole("region", { name: "MCP server clickland" });
+    await ck.waitFor();
+    const names = await page.locator(".mcp-server h3").allInnerTexts();
+    expect(names.slice(0, 4)).toEqual(["landlens-kube", "clickland", "landflow", "landfall"]);
+    for (const n of ["clickland", "landflow", "landfall"]) {
+      const r = page.getByRole("region", { name: `MCP server ${n}` });
+      await expect(r.innerText()).resolves.toContain("From Connections");
+      await r.getByRole("button", { name: "Manage in Connections" }).waitFor();
+      await expect(r.getByRole("button", { name: new RegExp(`^(Edit|Remove) ${n}$`) }).count()).resolves.toBe(0);
+    }
+    await expect(page.getByText("Add Clickland", { exact: false }).count()).resolves.toBe(0);
+    await expect(page.locator(".mcp-preset").count()).resolves.toBe(0);
+    // The page never sees a key or token.
+    const listed = JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:servers", { context: "orbstack" })));
+    for (const k of [CK_READ, LF_KEY, ...landfall.valid.keys()]) expect(listed).not.toContain(k);
+    await page.evaluate(() => (globalThis as any).document.querySelector('[aria-label="MCP server clickland"]').scrollIntoView({ block: "start" }));
+    await both(page, "w7p2-02-mcp-page");
+  });
+
+  it("a changed Clickland listing asks for everything until it is reviewed and accepted (D111)", async () => {
+    clickland.tools = [...clickland.tools, { name: "export_everything", description: "Exports every log line.", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    const c = card("Clickland");
+    await c.scrollIntoViewIfNeeded();
+    await c.getByRole("button", { name: "Check tools" }).click();
+    const review = c.getByRole("group", { name: "Clickland tools review" });
+    await review.waitFor({ timeout: 20_000 });
+    await review.getByRole("definition").filter({ hasText: "export_everything" }).waitFor();
+    await c.getByText(FAMILY_DRIFT).first().waitFor();
+    await expect(c.getByText("Paused", { exact: true }).count()).resolves.toBeGreaterThan(0);
+    await review.getByRole("button", { name: "Accept these tools" }).scrollIntoViewIfNeeded();
+    await page.evaluate(() => (globalThis as any).document.querySelector('[aria-label="What changed"]').scrollIntoView({ block: "center" }));
+    await both(page, "w7p2-03-drift-review");
+    await review.getByRole("button", { name: "Accept these tools" }).click();
+    // The new tool isn't on Landlens's list: it asks, whatever Clickland says of it.
+    await c.getByText("18 read · 6 ask", { exact: true }).waitFor({ timeout: 20_000 });
+    await expect(c.getByText(FAMILY_DRIFT).count()).resolves.toBe(0);
+    await both(page, "w7p2-04-accepted");
+  });
+
+  it.runIf(claude)("in a live session, a Clickland read runs without asking and a Landflow write asks (D110, D113)", async () => {
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+j" : "Control+j");
+    const dock = page.getByRole("complementary", { name: "Claude Code" });
+    const box = dock.getByRole("combobox", { name: "Message Claude Code" });
+    await expect.poll(() => box.isEnabled({ timeout: 2_000 }).catch(() => false), { timeout: 90_000 }).toBe(true);
+    await box.fill(
+      "This is a test of Landlens's Land family tools. Do exactly two tool calls and nothing else: first call the clickland " +
+        "MCP tool list_services; then call the landflow MCP tool execute_workflow with workflowId wf_e2e. Then say done.",
+    );
+    await box.press("Enter");
+    const ask = dock.getByRole("region", { name: "Claude asks" });
+    await ask.waitFor({ timeout: 180_000 });
+    const asked = await ask.innerText();
+    expect(asked).toMatch(/Landflow · execute workflow/i);
+    await both(page, "w7p2-05-session-write-asks");
+    const calls = await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:calls", {}));
+    const fam = (calls.calls as { server: string; tool: string; status: string; origin: string }[]).filter((x) => x.origin === "agent");
+    expect(fam.map((x) => `${x.server}:${x.tool}:${x.status}`)).toContain("clickland:list_services:ok");
+    const runs = () => landflow.requests.filter((r) => r.body.includes('"name":"execute_workflow"'));
+    expect(runs()).toEqual([]);
+    await ask.getByRole("button", { name: /reject|deny|no/i }).first().click();
+    await dock.getByRole("button", { name: "Stop" }).click().catch(() => {});
+    expect(runs()).toEqual([]);
+    // Clickland's text (with its injected line) reached the model only under its data line.
+    const detail = JSON.stringify(calls);
+    expect(detail).not.toContain(CK_READ);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+j" : "Control+j");
+  }, 300_000);
+
+  it("with the family's tools on (and, with claude, after a session), the profile folder and mcp:calls carry no secret", async () => {
+    const calls = JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:calls", {})));
+    for (const k of [CK_READ, LF_KEY, ...landfall.valid.keys()]) {
+      expect(calls).not.toContain(k);
+      expect(() => execFileSync("/usr/bin/grep", ["-rlF", k, userData], { encoding: "utf8" })).toThrow();
+    }
   });
 
   it("signs out of Landfall, revoking both tokens", async () => {

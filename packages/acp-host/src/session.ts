@@ -39,8 +39,10 @@ export interface SessionMcp {
     allow: string[];
     /** The connections served to the session ("GitHub", "Linear"), for the standing rules. */
     providers?: string[];
-    /** Those of them whose reads run without asking in this session (the standing rules say so only for these). */
+    /** Those of them (and of `family`) whose reads run without asking in this session (the standing rules say so only for these). */
     readsFree?: string[];
+    /** The Land family's servers in the session ("Clickland", "Landflow", "Landfall"; wave 7 D114), for the standing rules. */
+    family?: string[];
     /** The Google Cloud projects landlens-gcp reads in this session, when it has them (wave 6, D93). */
     gcp?: string[];
     /** Tell the gateway Claude Code's id for the session, so the call log and the dock agree. */
@@ -160,7 +162,7 @@ export async function startClusterSession(deps: {
     mcpServers: mcp.servers.map((m) => ({ type: "http" as const, ...m })),
     systemPrompt: {
       mode: "append",
-      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes, ...(mcp.providers?.length ? { providers: mcp.providers, readsFree: mcp.readsFree ?? [] } : {}), ...(mcp.gcp?.length ? { gcp: mcp.gcp } : {}) }) }],
+      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes, ...(mcp.providers?.length || mcp.family?.length ? { providers: mcp.providers ?? [], readsFree: mcp.readsFree ?? [] } : {}), ...(mcp.family?.length ? { family: mcp.family } : {}), ...(mcp.gcp?.length ? { gcp: mcp.gcp } : {}) }) }],
     },
     _meta: { claudeCode: { options: sessionOptions({
       home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), mcpAllow: mcp.allow,

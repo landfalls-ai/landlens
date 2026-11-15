@@ -12,7 +12,7 @@ import { registerIpc } from "./ipc";
 import { DoctorService } from "./doctor";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
-import { McpService } from "./mcp";
+import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
 import { gcpMode, GcpService } from "./gcp";
@@ -100,9 +100,17 @@ async function start() {
     overrides: familyOverrides(process.env, app.isPackaged),
     // Only an address on the Landfall origin being signed in to reaches this (family.ts checks).
     openExternal: (url) => shell.openExternal(url),
-    push: (info) => send("family:update", info),
+    // Open sessions follow a sibling's change at once, as a connection's (M2).
+    push: (info) => {
+      send("family:update", info);
+      mcp?.familyChanged(info);
+    },
+    // A server you added under clickland, landflow or landfall keeps that name, and the sibling's tools stay off.
+    takenNames: () => mcpStore.list().map((s) => s.name),
     log: (l) => console.log(l),
   });
+  // D109: the server Add Clickland made on the MCP page becomes the family's clickland server, once.
+  moveClicklandServer({ store: mcpStore, clickland: settings, family, log: (l) => console.log(l) });
   // Google Cloud (docs/gcp.md): gcloud's sign-in, read-only. An unpackaged build is off unless it has a loopback fake
   // (LANDLENS_GCP_ENDPOINT, with LANDLENS_GCLOUD for a fake gcloud) or the person set LANDLENS_GCP_REAL=1.
   const gcp = new GcpService({
@@ -119,6 +127,8 @@ async function start() {
   mcp = new McpService({
     store: mcpStore,
     connections,
+    // Clickland, Landflow and Landfall (D107): served after the connections when Tools for Claude is on.
+    family,
     // landlens-gcp (D93): read-only Google Cloud tools for sessions, when you turned "Claude can read" on.
     gcp: { reader: () => gcp.agentReader((context) => clusters.list().some((c) => c.context === context)) },
     clickland: settings,

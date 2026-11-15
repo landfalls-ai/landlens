@@ -44,4 +44,15 @@ describe("the ask card's arguments", () => {
     expect(json).not.toContain(`ghp_${"A".repeat(36)}`);
     expect(JSON.parse(json.replace(/<redacted[^>]*>/g, "x")).files[0].path).toBe("a");
   });
+  it("names a Land family write's workflow, run, node, incident, view and panel, and shows its text as the body (wave 7)", () => {
+    const rows = providerArgRows({ workflowId: "wf_1", executionId: "ex_2", nodeId: "n3", input: { a: 1 } });
+    expect(rows.slice(0, 4)).toEqual([
+      { label: "Workflow", value: "wf_1" }, { label: "Run", value: "ex_2" }, { label: "Node", value: "n3" }, { label: "Input", value: '{"a":1}' },
+    ]);
+    expect(row({ incident_id: "INC-9" }, "Incident")).toBe("INC-9");
+    expect(row({ viewId: "v1", index: 2 }, "View")).toBe("v1");
+    expect(row({ viewId: "v1", index: 2 }, "Panel")).toBe("2");
+    const note = providerArgRows({ text: "a note for the room" });
+    expect(note.at(-1)).toEqual({ label: "Body", value: "a note for the room", body: true });
+  });
 });

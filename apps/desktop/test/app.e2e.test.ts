@@ -538,7 +538,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await page.getByRole("button", { name: "MCP", exact: true }).click();
       await page.getByRole("button", { name: "Add server" }).click();
       const dialog = page.getByRole("dialog", { name: "Add an MCP server" });
-      await dialog.getByLabel("Server name").fill("clickland");
+      await dialog.getByLabel("Server name").fill("my-clickland"); // "clickland" is the Land family's (wave 7, D107)
       await dialog.getByLabel("Server address").fill(`${CLICKLAND_URL}/api/mcp`);
       await dialog.getByLabel("Header name").fill("Authorization");
       await dialog.getByLabel("Header value").fill(`Bearer ${key}`);
@@ -549,16 +549,16 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await expect(dialog.locator(".test-steps .tone-bad").count()).resolves.toBe(0);
       await shot(page, "35-mcp-add-server");
       await dialog.getByRole("button", { name: "Save" }).click();
-      const panel = page.getByRole("region", { name: "MCP server clickland" });
+      const panel = page.getByRole("region", { name: "MCP server my-clickland" });
       await panel.waitFor();
-      await expect(panel.getByRole("switch", { name: "Use clickland on orbstack" }).isChecked()).resolves.toBe(true);
+      await expect(panel.getByRole("switch", { name: "Use my-clickland on orbstack" }).isChecked()).resolves.toBe(true);
       // A remote server's own "read-only" is only its claim: nothing runs without asking until you say so.
-      const auto = panel.getByRole("switch", { name: "Run clickland's read-only tools without asking" });
+      const auto = panel.getByRole("switch", { name: "Run my-clickland's read-only tools without asking" });
       await expect(auto.isChecked()).resolves.toBe(false);
       // The header never comes back to the page.
       expect(JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:servers", { context: "orbstack" })))).not.toContain(key);
       await panel.getByRole("button", { name: "Test" }).click();
-      await panel.getByRole("list", { name: "clickland tools" }).waitFor({ timeout: 20_000 });
+      await panel.getByRole("list", { name: "my-clickland tools" }).waitFor({ timeout: 20_000 });
       expect(await panel.locator(".mcp-tool .badge", { hasText: "Read-only" }).count()).toBe(0);
       await auto.click();
       await expect.poll(() => auto.isChecked()).toBe(true);
@@ -572,7 +572,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await panel.scrollIntoViewIfNeeded();
       await shot(page, "36-mcp-clickland-view");
       await page.getByRole("tab", { name: /Calls/ }).click();
-      await page.getByRole("list", { name: "MCP calls" }).locator(".mcp-call", { hasText: "clickland · list_services" }).first().click();
+      await page.getByRole("list", { name: "MCP calls" }).locator(".mcp-call", { hasText: "my-clickland · list_services" }).first().click();
       await page.getByRole("complementary", { name: "MCP call" }).waitFor();
       await shot(page, "37-mcp-clickland-call");
       await page.keyboard.press("Escape");

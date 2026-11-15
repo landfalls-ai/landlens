@@ -1,6 +1,6 @@
-// A GitHub or Linear write's arguments as the dock's ask card shows them (D84; M5 of the part 3 review): a short
-// table first, and every argument behind "Show all arguments", so nothing you approve is hidden. What the table
-// cuts says how much it cut. Pure, so tests can read it without a window.
+// A GitHub, Linear or Land family write's arguments as the dock's ask card shows them (D84; M5 of the part 3 review;
+// wave 7 D113): a short table first, and every argument behind "Show all arguments", so nothing you approve is hidden.
+// What the table cuts says how much it cut. Pure, so tests can read it without a window.
 import { redactText } from "@landlens/kube/redact";
 
 export type ArgRow = { label: string; value: string; body?: boolean };
@@ -52,6 +52,13 @@ export function providerArgRows(args: unknown): ArgRow[] {
     used.add("owner").add("repo");
   }
   take("Team", ["team", "teamId", "teamKey"]);
+  // Landflow: the workflow, the run, the node; Landfall: the incident; Clickland: the view and its panel.
+  take("Workflow", ["workflowId", "workflow_id"]);
+  take("Run", ["executionId", "execution_id"]);
+  take("Node", ["nodeId", "node_id"]);
+  take("Incident", ["incidentId", "incident_id", "incident"]);
+  take("View", ["viewId", "view_id"]);
+  take("Panel", ["panelId", "panel_id", "index"]);
   take("Issue", ["issue_number", "issueId"]);
   take("Pull request", ["pullNumber", "pull_number"]);
   take("Id", ["id", "comment_id", "commentId"]);
@@ -68,7 +75,8 @@ export function providerArgRows(args: unknown): ArgRow[] {
     const shown = paths.slice(0, FILES_SHOWN).join(", ");
     return `${v.length}: ${shown}${paths.length > FILES_SHOWN ? `, and ${n(paths.length - FILES_SHOWN)} more` : ""}`;
   });
-  take("Body", ["body", "description", "content", "message"], (v) => (typeof v === "string" ? cutSaying(redactText(v), BODY_SHOWN) : undefined));
+  take("Input", ["input"]);
+  take("Body", ["body", "description", "content", "message", "text", "note", "summary"], (v) => (typeof v === "string" ? cutSaying(redactText(v), BODY_SHOWN) : undefined));
   if (rows.at(-1)?.label === "Body") rows.at(-1)!.body = true;
   const others = Object.entries(a).filter(([k, v]) => !used.has(k) && v !== undefined);
   for (const [k, v] of others.slice(0, OTHERS_SHOWN)) rows.push({ label: k, value: oneLine(v, 160) });

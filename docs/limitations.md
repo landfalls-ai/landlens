@@ -178,13 +178,16 @@ person's check reads them), and Ask Claude sends one problem at a time.
   pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
 - **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
   Clickland (wave 7 part 5).
-- **The Land family is connections only so far** (wave 7 part 1, [family.md](family.md)). Landlens signs in to
-  Clickland, Landflow and Landfall, but nothing uses those sign-ins beyond who-am-I and **Check** yet: no family
-  tools in Claude sessions (part 2, so the cards have no **Tools for Claude** or **Reads run without asking** rows,
-  though the switches are stored), no Clickland logs, traces or console links (part 3; the console address can be
-  set only over IPC), no triage or flows from a resource (part 4; the webhook is stored, not sent), and no
-  telemetry or brain (part 5). No live link was checked with a real key: making a key writes to a sibling, so that
-  waits for the person. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in was checked
+- **The Land family is connections and session tools so far** (wave 7 parts 1–2, [family.md](family.md)).
+  Landlens signs in to Clickland, Landflow and Landfall and gives Claude sessions their own MCP servers (reads by
+  Landlens's list, the server's hint and the accepted listing; every write asks). Not built yet: Clickland logs,
+  traces or console links (part 3; the console address can be set only over IPC), triage or flows from a resource
+  (part 4; the webhook is stored, not sent), and telemetry or the brain (part 5). No live link was checked with a real
+  key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
+  listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` is checked against fakes made from the
+  siblings' code. A sibling's writes have no autonomous mode, by design (D113), and the family's tools are on for every
+  cluster or none. A Clickland view can call Clickland's writes behind the native dialog, as an added server's view
+  can. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in and its MCP server were checked
   only against the fake. A Landflow key that can change workflows is kept, with a note. Landbright sign-in for
   Landlens itself is not planned until a sibling accepts Landbright tokens (D104). The Land family cards were checked
   at 1024×700. Below the page's 640px container width they have a rule, but no test is narrow enough to reach it.

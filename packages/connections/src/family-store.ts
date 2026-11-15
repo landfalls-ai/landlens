@@ -38,7 +38,14 @@ type Entry = {
   expiresAt?: number;
   /** A refresh was refused: the person has to sign in again. */
   expired?: boolean;
+  /** The tool listing the person accepted for its server (D111), for the origin it was listed at. */
+  pin?: FamilyPin;
 };
+/**
+ * An accepted listing (D111): its hash (approval.ts listingHash), each tool's short hash by name (for Review's diff),
+ * and its reads and writes as Landlens counted them (D110). Bound to the origin it was listed at.
+ */
+export type FamilyPin = { origin: string; hash: string; tools: Record<string, string>; read: number; write: number };
 type File = Partial<Record<Sibling, Entry>>;
 
 const line = z.string().max(4096);
@@ -59,6 +66,13 @@ const ENTRY = z.object({
   client: blob.optional(),
   expiresAt: z.number().optional(),
   expired: z.boolean().optional(),
+  pin: z.object({
+    origin: z.string().max(300),
+    hash: z.string().regex(/^[0-9a-f]{64}$/),
+    tools: z.record(z.string().max(128), z.string().regex(/^[0-9a-f]{16}$/)).refine((t) => Object.keys(t).length <= 500, "at most 500 tools"),
+    read: z.number().int().min(0).max(500),
+    write: z.number().int().min(0).max(500),
+  }).strict().optional(),
 }).strict();
 
 /** Off until the person turns it on (D108); reads run without asking once it is (D110). */
@@ -318,6 +332,19 @@ export class FamilyStore {
     });
   }
 
+  /** The accepted listing, if it was accepted for this origin (D111). */
+  pin(s: Sibling, origin: string | undefined): FamilyPin | undefined {
+    const p = this.read()[s]?.pin;
+    return p && sameOrigin(p.origin, origin) ? p : undefined;
+  }
+
+  /** Accept a listing for a sibling's server at an origin (D111): at Tools for Claude, Check, or Accept. */
+  setPin(s: Sibling, pin: FamilyPin) {
+    this.update(s, (e) => {
+      e.pin = { ...pin, origin: new URL(pin.origin).origin };
+    });
+  }
+
   /** Clickland's key changed: who the old one was no longer counts. */
   forgetClicklandWho() {
     const all = this.read();
@@ -377,6 +404,8 @@ export class FamilyStore {
     if (e.toSessions !== undefined) next.toSessions = e.toSessions;
     if (e.readsAuto !== undefined) next.readsAuto = e.readsAuto;
     if (e.triage) next.triage = e.triage;
+    // The accepted listing stays, bound to its origin: signing in there again finds a changed listing (D111).
+    if (e.pin) next.pin = e.pin;
     all[s] = next;
     this.write(all);
   }

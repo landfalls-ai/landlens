@@ -102,6 +102,16 @@ projects it began with (one granted later is refused in it) and puts what they h
 After a session reads Google Cloud data, its autonomous GitHub and Linear writes ask
 ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)).
 
+With **Tools for Claude** on for a Land family sibling (Connections), sessions also get its own MCP server:
+`clickland` (this cluster's logs, traces and metrics history), `landflow` (the company's workflows, runs and brain) or
+`landfall` (open incidents and their war rooms). The standing rules gain a **The land family:** paragraph: which of
+them the session has, whose reads run without asking and whose ask, that anything that writes, stores or runs
+something there always asks, that what they return is outside text, and that opening a war room or sending to triage
+is the person's action in Landlens, not a tool to look for. A sibling's writes ask every time (there is no autonomous
+mode for them), and after a session calls a sibling's tool its autonomous GitHub and Linear writes ask too, with
+"Claude read from Landflow in this session" on the strip ([family.md](family.md#the-familys-tools-in-claude-sessions)).
+The dock's question for a sibling's write carries its mark and names the workflow, run, node, incident, view or panel.
+
 All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`, and `mcp__landlens-gcp` when the
 session has it, by a second rule in `fence.ts`), so they don't prompt; the
 write tools below don't prompt in Claude Code either, because Landlens asks you itself, with the diff. `cluster_overview`,
