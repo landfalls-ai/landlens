@@ -115,15 +115,18 @@ row. Secrets stay locked: their Edit is disabled and says so.
   `resourceVersion` you started from, as `PATCH …?fieldManager=landlens&dryRun=All`. The editor gives way to a card
   of your own ("Your edit", no iris ring: that belongs to the agent's asks): risk badges as wave 3's cards have them,
   the diff of the live object against the dry run's result, warnings, "Dry run passed. Nothing has changed yet.",
-  **Apply** (Enter; a danger risk asks a second time), **Back to editing** (Esc) and **Ask Claude to check it**,
-  which adds the diff to the dock's composer as a chip.
+  **Apply** (a danger risk asks a second time, with Back focused), **Back to editing** (Esc) and **Ask Claude to
+  check it**, which adds the change to the dock's composer as a chip, scrubbed as the agent's reads are. Focus moves
+  to Apply only if it was in the editor, and a key press there in the first half second is ignored, so a held ⌘⏎
+  can't review and apply at once. A long diff is capped; Apply then reads **Show the whole change** until you have.
 - **Apply sends exactly the request the review dry-ran**, without `dryRun`. Only the window that reviewed it can
   send it, on the same cluster, within 15 minutes, once. The tab then shows the read-only YAML with "Applied ·
   deployment landlens-dev/shop-web · +1 −1" above it (D31).
 - **Refused** (D28): a 422's causes mark their lines red, with the cluster's message beneath ("Invalid value: -1:
   must be greater than or equal to 0"); the foot says "The cluster refused this: 1 problem, on line 12. Nothing has
   changed." Causes without a field go in the foot. A YAML syntax error marks its line the same way, before anything
-  is sent; changing `apiVersion`, `kind`, the name or the namespace is refused, as is "Nothing changed".
+  is sent, as does a plain number with a leading zero (`0600`: YAML 1.1 reads it as octal, 1.2 as decimal; write
+  `0o600` or `"0600"`); changing `apiVersion`, `kind`, the name or the namespace is refused, as is "Nothing changed".
 - **Someone changed it** (D29): when the object's `resourceVersion` moves while you edit, your changes are moved
   onto the new version and a banner says what they changed. Where you both changed a field, yours is kept and the
   banner names it. A review that is already showing goes back to the editor ("review again"); an apply whose version
@@ -131,8 +134,8 @@ row. Secrets stay locked: their Edit is disabled and says so.
 - **Another owner** (D30): if a field you changed is managed by another field manager (an HPA's replicas, a
   controller's annotations), the review card says "spec.replicas is managed by horizontal-pod-autoscaler. It may set
   it back." `kubectl` and Landlens's own managers aren't counted.
-- **Leaving with changes asks first**: Esc, Discard, another row, closing the drawer, another page, a namespace or a
-  cluster switch ask "Discard 1 changed line?" in the foot (D31).
+- **Leaving with changes asks first**: Esc, Discard, another row, another drawer tab, closing the drawer, another
+  page, a namespace or a cluster switch ask "Discard 1 changed line?" in the foot (D31).
 
 Every review and apply runs **as you**: main issues a front-door token for that one call (`you · <context> · edit`,
 full access to that cluster), sends through the front door, and revokes the token after, so each request is in the
@@ -145,7 +148,7 @@ Job) with the toolbar's namespace filled in, and the same Review and Apply. A do
 the toolbar's; up to ten documents, split with `---`. The review dry-runs a `POST` per document and shows one
 operation each. An object that already exists marks its name ("ConfigMap landlens-dev/x already exists: open it and
 edit it instead"); a kind the cluster doesn't serve, a cluster-scoped kind with a namespace, or a Secret is refused
-before anything is sent. After Apply the first object opens in the drawer.
+before anything is created (the kind's path comes from the cluster's discovery). After Apply the first object opens in the drawer.
 
 Code: `YamlEdit.tsx` (the editor's stages, rebase, the review card), `CodeEditor.tsx` (CodeMirror with line marks
 and messages), `CreateSheet.tsx`, `editGuard.ts`, `packages/kube/src/edits.ts` (`EditBroker`: review, create,

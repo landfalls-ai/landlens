@@ -13,6 +13,7 @@ import { MetricsTab, metricsScope } from "./MetricsTab";
 import type { LogSource, ShellTarget } from "./benchState";
 import { logSourceOf, LogsView } from "./LogsView";
 import { direct, shellable, ShellMenu, targetOf, useCanExec } from "./ShellMenu";
+import { leaveEdit } from "./editGuard";
 import { YamlEdit } from "./YamlEdit";
 import type { ClusterInfo } from "@landlens/contracts";
 
@@ -62,7 +63,7 @@ export function Details(props: {
   };
   const showLogs = (container?: string) => {
     setLogContainer(container);
-    setTab("logs");
+    leaveEdit(() => setTab("logs"));
   };
   useEffect(() => {
     if (!props.show) return;
@@ -87,7 +88,7 @@ export function Details(props: {
       if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== "[" && e.key !== "]")) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest("input, textarea, select, [contenteditable]") || t.closest(".dock"))) return;
-      setTab((cur) => TABS[(TABS.indexOf(cur) + (e.key === "]" ? 1 : TABS.length - 1)) % TABS.length]!);
+      leaveEdit(() => setTab((cur) => TABS[(TABS.indexOf(cur) + (e.key === "]" ? 1 : TABS.length - 1)) % TABS.length]!));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -152,7 +153,7 @@ export function Details(props: {
       </header>
       <nav className="tabs" role="tablist" aria-label="Details">
         {TABS.map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
+          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => (t === tab ? undefined : leaveEdit(() => setTab(t)))}>
             {t === "yaml" ? "YAML" : t[0]!.toUpperCase() + t.slice(1)}
             {t === "events" && Array.isArray(events) && events.length ? <span className={"count" + (warnings ? " warn" : "")} aria-hidden="true">{events.length}</span> : null}
           </button>

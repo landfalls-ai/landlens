@@ -217,7 +217,8 @@ export type EditProblem = { message: string; field?: string; line?: number };
 /** Another manager owns a field you changed (managedFields): it may set it back. */
 export type EditOwner = { path: string; manager: string; line?: number };
 /** A dry run of your edit: the operations to show, kept under `id` for Apply; or the problems; or a conflict. */
-export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean };
+/** `agent`: the diff (or created objects) scrubbed as the agent's own reads are: what "Ask Claude to check it" sends. */
+export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean; agent?: string };
 
 /** How a session ended: the shell exited, the connection dropped, or the cluster refused it (status says why). */
 export type TerminalEnd = "exit" | "lost" | "refused";

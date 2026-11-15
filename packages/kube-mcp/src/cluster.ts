@@ -116,6 +116,9 @@ export const pathFor = apiPath;
  * Any request through the front door with a token, for the approval broker's dry runs and approved writes (its own
  * token, which only main holds). Answers the status, the body and the API server's warnings.
  */
+/** The most of one answer a broker reads (a list of ReplicaSets, an object with its managedFields). */
+export const MAX_ANSWER = 32 * 1024 * 1024;
+
 export function frontDoorSend(opts: { url: string; certificate: string; token: string }): Send {
   return (r) =>
     new Promise((resolve, reject) => {
@@ -127,7 +130,11 @@ export function frontDoorSend(opts: { url: string; certificate: string; token: s
         let text = "";
         const raw = res.headers.warning;
         const warnings = (Array.isArray(raw) ? raw : raw ? [raw] : []).flatMap(splitWarnings);
-        res.setEncoding("utf8").on("data", (d) => (text += d)).on("end", () => resolve({ status: res.statusCode ?? 0, text, warnings }));
+        // An answer bigger than any object Landlens edits is refused, not read into memory.
+        res.setEncoding("utf8").on("data", (d: string) => {
+          text += d;
+          if (text.length > MAX_ANSWER) req.destroy(new Error(`the cluster's answer is over ${MAX_ANSWER / 1024 / 1024} MB`));
+        }).on("end", () => resolve({ status: res.statusCode ?? 0, text, warnings }));
       });
       req.on("timeout", () => req.destroy(new Error("the cluster took longer than 30 s")));
       req.on("error", reject);

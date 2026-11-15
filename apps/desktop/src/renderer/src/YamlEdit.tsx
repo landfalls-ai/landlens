@@ -25,6 +25,8 @@ type Stage =
   | { s: "applying"; review: EditReview }
   | { s: "done"; results: string[]; ops: ChangeOperation[] };
 
+const inside = (el: Element | null, box: HTMLElement | null) => !!el && !!box && (box.contains(el) || el === document.body);
+
 /** The changed lines of `text` against `base` (the green edge), and the summary "+2 −1". */
 function changes(base: string, text: string) {
   const d = diffLines(base, text, 0);
@@ -51,6 +53,13 @@ export function YamlEdit(props: {
   const [asking, setAsking] = useState<() => void>();
   const editor = useRef<CodeEditorHandle>(null);
   const applyBtn = useRef<HTMLButtonElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  // A review left open when the editor goes (a tab switch, the drawer closing) is dropped in main too.
+  const reviewId = useRef<string>(undefined);
+  reviewId.current = stage.s === "review" ? stage.review.id : undefined;
+  useEffect(() => () => {
+    if (reviewId.current) void api.invoke("edit:discard", { id: reviewId.current }).catch(() => {});
+  }, []);
   const ch = useMemo(() => changes(base.yaml, text), [base.yaml, text]);
   const what = `${type.kind.toLowerCase()} ${live.metadata.namespace ? `${live.metadata.namespace}/` : ""}${live.metadata.name}`;
   const dirty = ch.added + ch.removed > 0 && stage.s !== "done";
@@ -103,7 +112,8 @@ export function YamlEdit(props: {
       });
       if (r.id && r.operations) {
         setStage({ s: "review", review: r });
-        setTimeout(() => applyBtn.current?.focus(), 0);
+        // Focus moves to Apply only if it was still in the editor: never pulled from the dock or a terminal.
+        if (inside(document.activeElement, host.current)) setTimeout(() => applyBtn.current?.focus(), 0);
       } else setStage({ s: "edit", problems: r.problems ?? [], ...(r.conflict ? { note: "Someone changed it since you started; your lines will move onto theirs." } : {}) });
     } catch (e) {
       setStage({ s: "edit", problems: [{ message: (e as ApiError).message }] });
@@ -154,7 +164,7 @@ export function YamlEdit(props: {
   if (stage.s === "done") return null;
 
   const body = (
-    <div className={"yaml-edit" + (wide ? " wide" : "")} role={wide ? "dialog" : undefined} aria-label={wide ? `Edit ${what}` : undefined}>
+    <div ref={host} className={"yaml-edit" + (wide ? " wide" : "")} role={wide ? "dialog" : undefined} aria-label={wide ? `Edit ${what}` : undefined}>
       <div className="yaml-bar">
         <Ic icon={Pencil} size={12} />
         <span>Editing {what}. Status and bookkeeping aren't shown.</span>
@@ -182,11 +192,9 @@ export function YamlEdit(props: {
           applyRef={applyBtn}
           onApply={apply}
           onBack={back}
-          onAsk={() => {
-            const op = stage.review.operations![0]!;
-            const text = op.diff.lines.map((l) => `${l.t}${l.text}`).join("\n");
-            props.onAsk({ label: `My edit · ${live.metadata.name}`, text: `Dry-run diff of my edit to ${what} (live → after):\n${text}`, source: `my edit of ${what}`, kind: "edit" });
-          }}
+          {...(stage.review.agent ? {
+            onAsk: () => props.onAsk({ label: `My edit · ${live.metadata.name}`, text: `Dry-run diff of my edit to ${what} (live → after):\n${stage.review.agent}`, source: `the cluster's dry run of my edit to ${what}, scrubbed as your reads are`, kind: "edit" }),
+          } : {})}
         />
       ) : (
         <>
@@ -251,11 +259,22 @@ export function ReviewCard(props: {
   const [confirm, setConfirm] = useState(false);
   const [uncapped, setUncapped] = useState<Set<number>>(new Set());
   const warnings = ops.flatMap((o) => o.warnings);
+  // Apply is a press of the Apply button itself (Enter on it, or a click), not Enter anywhere in the card, and not in
+  // the first half second, so a key meant for something else can't send it (security review, part 2, finding 2).
+  const shownAt = useRef(Date.now());
+  const capped = ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
+  const apply = (e: React.MouseEvent) => {
+    // A keyboard press (detail 0) in the first half second is a key meant for something else; a click is deliberate.
+    if (e.detail === 0 && Date.now() - shownAt.current < 500) return;
+    // The whole change is on screen before it can be sent.
+    if (capped) return setUncapped(new Set(ops.map((_, i) => i)));
+    if (danger && !confirm) return setConfirm(true);
+    props.onApply();
+  };
   return (
     <section className="change mine" aria-label="Review your edit"
       onKeyDown={(e) => {
         if (e.key === "Escape" && !props.applying) (e.preventDefault(), e.stopPropagation(), props.onBack());
-        if (e.key === "Enter" && !danger && !props.applying && !(e.target as HTMLElement).closest("button.secondary, button.link-btn")) (e.preventDefault(), props.onApply());
       }}>
       <div className="change-head">
         <div className="change-eyebrow"><Ic icon={User} size={13} /><span>Your edit</span></div>
@@ -278,7 +297,12 @@ export function ReviewCard(props: {
           <Diff op={op} capped={op.diff.lines.length > SHORT && !uncapped.has(i)} create={op.verb === "create"} onUncap={() => setUncapped((s) => new Set(s).add(i))} />
         </div>
       ))}
-      {warnings.length ? <ul className="change-warnings">{warnings.slice(0, 5).map((w, i) => <li key={i}><Ic icon={TriangleAlert} size={12} />{w}</li>)}</ul> : null}
+      {warnings.length ? (
+        <div className="change-warnings">
+          <span className="change-fact">The cluster's warnings, in its words:</span>
+          <ul>{warnings.slice(0, 5).map((w, i) => <li key={i}><Ic icon={TriangleAlert} size={12} />{w}</li>)}</ul>
+        </div>
+      ) : null}
       <div className="change-foot">
         <div className="change-fact"><Ic icon={ShieldCheck} size={12} />Dry run passed. Nothing has changed yet.</div>
         {props.applying ? (
@@ -286,15 +310,18 @@ export function ReviewCard(props: {
         ) : confirm ? (
           <div className="change-actions">
             <span className="change-fact bad"><Ic icon={TriangleAlert} size={12} />{risks.filter((r) => RISK[r].level === "danger").map((r) => RISK[r].words).join(", ")}. Apply anyway?</span>
-            <button className="danger" autoFocus onClick={props.onApply}>Apply</button>
-            <button className="secondary" onClick={() => setConfirm(false)}>Back</button>
+            {/* Not focused, and Enter doesn't press it: the danger needs a deliberate click. */}
+            <button className="danger" onClick={props.onApply} onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}>Apply</button>
+            <button className="secondary" autoFocus onClick={() => setConfirm(false)}>Back</button>
           </div>
         ) : (
           <div className="change-actions">
-            {danger ? (
-              <button ref={props.applyRef} className="danger" onClick={() => setConfirm(true)}><Ic icon={TriangleAlert} size={13} />Apply…</button>
+            {capped ? (
+              <button ref={props.applyRef} className="primary" onClick={apply}>Show the whole change</button>
+            ) : danger ? (
+              <button ref={props.applyRef} className="danger" onClick={apply}><Ic icon={TriangleAlert} size={13} />Apply…</button>
             ) : (
-              <button ref={props.applyRef} className="primary" onClick={props.onApply}><Ic icon={Check} size={13} />Apply<kbd aria-hidden="true">↵</kbd></button>
+              <button ref={props.applyRef} className="primary" onClick={apply}><Ic icon={Check} size={13} />Apply<kbd aria-hidden="true">↵</kbd></button>
             )}
             <button className="secondary" onClick={props.onBack}>Back to editing<kbd aria-hidden="true">esc</kbd></button>
             {props.onAsk ? <button className="link-btn small" onClick={props.onAsk}><Ic icon={Sparkles} size={12} />Ask Claude to check it</button> : null}

@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import type { EditReview, LogsEnd, LogsPush, Request, TerminalData, TerminalStatus } from "@landlens/contracts";
-import { AUTO_SHELL, EditBroker, followLogs, openExec, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor, type Send } from "@landlens/kube";
+import { AUTO_SHELL, EDIT_TTL_MS, EditBroker, followLogs, openExec, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor, type Send } from "@landlens/kube";
 import { frontDoorSend } from "@landlens/kube-mcp";
 import type { IPty } from "node-pty";
 import type { WebContents } from "electron";
@@ -48,6 +48,8 @@ export class Flow {
   }
 }
 
+/** Reviews a window may hold at once. */
+const MAX_REVIEWS = 20;
 const SHELLS = { auto: AUTO_SHELL, bash: ["bash", "-il"], sh: ["sh", "-i"] } as const;
 /** Terminal output is sent at most this often, in one message. */
 const FLUSH_MS = 8;
@@ -116,8 +118,8 @@ export class WorkbenchService {
   }
 
   private readonly edits = new EditBroker();
-  /** Each review belongs to the window and cluster it was made for. */
-  private readonly reviews = new Map<string, { wc: WebContents; handle: string }>();
+  /** Each review belongs to the window and cluster it was made for, until it expires (with the broker's). */
+  private readonly reviews = new Map<string, { wc: WebContents; handle: string; expires: number }>();
 
   /**
    * One request series as you: a token issued for it ("you · <context> · edit"), through the front door so it is
@@ -133,16 +135,28 @@ export class WorkbenchService {
     }
   }
 
+  /** Keep a review for its window: expired ones go, and a window holds at most 20 (the oldest goes first). */
   private remember(r: EditReview, wc: WebContents, handle: string): EditReview {
+    const now = Date.now();
+    for (const [k, v] of this.reviews) if (v.expires <= now) this.reviews.delete(k);
     if (r.id) {
       this.own(wc);
-      this.reviews.set(r.id, { wc, handle });
+      const mine = [...this.reviews].filter(([, v]) => v.wc === wc);
+      if (mine.length >= MAX_REVIEWS) this.discardEdit(mine[0]![0], wc);
+      this.reviews.set(r.id, { wc, handle, expires: now + EDIT_TTL_MS });
     }
     return r;
   }
 
-  reviewEdit(r: Request<"edit:review">, wc: WebContents): Promise<EditReview> {
-    return this.asYou(r.handle, (send) => this.edits.reviewEdit(send, r)).then((x) => this.remember(x, wc, r.handle));
+  /**
+   * The type comes from the cluster's discovery in main, not from the window: its kind and scope are main's, and the
+   * Secret check rests on what the cluster serves (security review, wave 4 part 2, finding 7).
+   */
+  async reviewEdit(r: Request<"edit:review">, wc: WebContents): Promise<EditReview> {
+    const t = (await this.deps.clusters.discovery(r.handle)).find((x) => x.group === r.type.group && x.version === r.type.version && x.resource === r.type.resource);
+    if (!t) throw Object.assign(new Error(`this cluster doesn't serve ${r.type.resource}`), { status: 404 });
+    const type = { group: t.group, version: t.version, resource: t.resource, kind: t.kind, namespaced: t.namespaced };
+    return this.asYou(r.handle, (send) => this.edits.reviewEdit(send, { ...r, type })).then((x) => this.remember(x, wc, r.handle));
   }
 
   async reviewCreate(r: Request<"edit:create">, wc: WebContents): Promise<EditReview> {
@@ -152,7 +166,8 @@ export class WorkbenchService {
 
   applyEdit(r: Request<"edit:apply">, wc: WebContents): Promise<{ results: string[] }> {
     const owner = this.reviews.get(r.id);
-    if (!owner || owner.wc !== wc || owner.handle !== r.handle) throw Object.assign(new Error("no such review"), { status: 404 });
+    if (!owner || owner.wc !== wc || owner.handle !== r.handle || owner.expires <= Date.now()) throw Object.assign(new Error("no such review"), { status: 404 });
+    this.deps.clusters.get(r.handle); // throws for a cluster that's gone, before the review is used up
     this.reviews.delete(r.id);
     return this.asYou(r.handle, (send) => this.edits.apply(send, r.id));
   }
@@ -345,10 +360,10 @@ export class WorkbenchService {
   private stopCluster(handle: string) {
     for (const [k, v] of this.logs) if (v.handle === handle) this.closeLogs(k);
     for (const [k, v] of this.terminals) if (v.handle === handle) this.closeTerminal(k);
+    for (const [k, v] of this.reviews) if (v.handle === handle) this.discardEdit(k, v.wc);
   }
 }
 
-/** Your environment, without Landlens's own variables or Electron's. */
 /** Your login shell: the account's, else $SHELL, if /etc/shells lists it; else zsh. */
 export function loginShell(shells = readShells(), account = safeUserShell(), env = process.env.SHELL): string {
   for (const s of [account, env]) if (s && shells.includes(s)) return s;
@@ -369,6 +384,7 @@ function safeUserShell(): string | undefined {
   }
 }
 
+/** Your environment, without Landlens's own variables or Electron's. */
 export function localEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {

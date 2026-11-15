@@ -112,7 +112,8 @@ export function CreateSheet(props: {
       const r = await api.invoke("edit:create", { handle: props.cluster.handle, ...(props.namespace ? { namespace: props.namespace } : {}), yaml: text });
       if (r.id && r.operations) {
         setStage({ s: "review", review: r });
-        setTimeout(() => applyBtn.current?.focus(), 0);
+        // The sheet is modal, but the focus still moves only if it was in the sheet.
+        if (document.activeElement?.closest(".create-sheet")) setTimeout(() => applyBtn.current?.focus(), 0);
       } else setStage({ s: "edit", problems: r.problems ?? [] });
     } catch (e) {
       setStage({ s: "edit", problems: [{ message: (e as ApiError).message }] });
@@ -185,7 +186,9 @@ export function CreateSheet(props: {
               applyRef={applyBtn}
               onApply={apply}
               onBack={back}
-              onAsk={() => props.onAsk({ label: `New objects · ${count}`, text: `YAML I am about to create on ${props.cluster.context}:\n${text}`, source: "my new YAML", kind: "edit" })}
+              {...(stage.review.agent ? {
+                onAsk: () => props.onAsk({ label: `New objects · ${count}`, text: `What I am about to create on ${props.cluster.context}, as the cluster's dry run returned it:\n${stage.review.agent}`, source: "the cluster's dry run of my new objects, scrubbed as your reads are", kind: "edit" }),
+              } : {})}
             />
           </div>
         ) : (

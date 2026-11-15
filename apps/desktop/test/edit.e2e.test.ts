@@ -54,6 +54,9 @@ describe.runIf(run)("the YAML editor on OrbStack", () => {
     if (run) {
       kubectl("scale", "deploy/shop-web", "--replicas=2");
       kubectl("delete", "configmap", CM, "--ignore-not-found");
+      // Leave two pods, as the other e2e files expect: wait for the third to go.
+      kubectl("wait", "--for=delete", "pod", "-l", "app=shop-web", "--field-selector=status.phase!=Running", "--timeout=60s");
+      kubectl("rollout", "status", "deploy/shop-web", "--timeout=120s");
     }
   });
 

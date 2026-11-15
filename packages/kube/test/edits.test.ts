@@ -130,4 +130,67 @@ describe("your edits", () => {
     expect(scoped.problems![0]).toMatchObject({ message: "Namespace is cluster-scoped: remove metadata.namespace", line: 5 });
     expect(c.sent.filter((x) => x.method !== "GET")).toHaveLength(1); // only "ok", dry-run, before the Secret refused the batch
   });
+
+  it("refuse a changed apiVersion, kind or namespace, YAML over 512 KB, a second document and an ambiguous 0600", async () => {
+    const c = cluster();
+    const b = new EditBroker();
+    const original = editableYaml(deploy);
+    const review = (edited: string) => b.reviewEdit(c.send, { type, namespace: "shop", name: "web", base: "41", original, edited });
+    expect((await review(original.replace("apiVersion: apps/v1", "apiVersion: apps/v2"))).problems![0]).toMatchObject({ field: "apiVersion", line: 1 });
+    expect((await review(original.replace("kind: Deployment", "kind: StatefulSet"))).problems![0]).toMatchObject({ field: "kind", line: 2 });
+    expect((await review(original.replace("namespace: shop", "namespace: other"))).problems![0]).toMatchObject({ field: "metadata.namespace" });
+    await expect(review(original + "#".repeat(512 * 1024))).rejects.toThrow(/512 KB/);
+    expect((await review(`${original}---\nkind: ConfigMap\n`)).problems![0]!.message).toMatch(/one object, in one document/);
+    const mode = await review(original.replace("replicas: 2", "replicas: 0600"));
+    expect(mode.problems![0]).toMatchObject({ message: expect.stringContaining("0o600"), line: original.split("\n").findIndex((l) => l.includes("replicas")) + 1 });
+    expect((await review(original.replace("replicas: 2", "replicas: 0o3"))).problems).toBeUndefined();
+    expect(c.sent.filter((x) => x.method === "PATCH")).toHaveLength(1);
+  });
+
+  it("forget a review after 15 minutes", async () => {
+    let now = 0;
+    const b = new EditBroker({ now: () => now });
+    const c = cluster();
+    const original = editableYaml(deploy);
+    const r = await b.reviewEdit(c.send, { type, namespace: "shop", name: "web", base: "41", original, edited: original.replace("replicas: 2", "replicas: 3") });
+    now = 15 * 60_000;
+    await expect(b.apply(c.send, r.id!)).rejects.toMatchObject({ status: 410 });
+  });
+
+  it("keep a __proto__ key and other own keys, and leave hidden annotations when every visible one goes", () => {
+    const p = mergePatch(JSON.parse('{"a":1,"toString":2}'), JSON.parse('{"__proto__":{"x":1}}')) as Record<string, unknown>;
+    expect(Object.keys(p).sort()).toEqual(["__proto__", "a", "toString"]);
+    expect(JSON.parse(JSON.stringify(p))).toEqual({ a: null, toString: null, ["__proto__"]: { x: 1 } });
+    expect(Object.getPrototypeOf(p)).toBe(Object.prototype);
+  });
+
+  it("send only visible annotations' removal, and give the agent a scrubbed diff", async () => {
+    const withEnv = structuredClone(deploy) as any;
+    withEnv.metadata.annotations = { "kubectl.kubernetes.io/last-applied-configuration": "{}", team: "shop" };
+    withEnv.spec.template.spec.containers[0].env = [{ name: "STRIPE_KEY", value: "rk_live_abcdefghijklmnop" }];
+    const c = cluster((r) => {
+      if (r.method === "GET") return { status: 200, text: JSON.stringify(withEnv) };
+      const after = structuredClone(withEnv);
+      after.spec.template.spec.containers[0].image = "web:2";
+      return { status: 200, text: JSON.stringify(after) };
+    });
+    const b = new EditBroker();
+    const original = editableYaml(withEnv);
+    const edited = original.replace(/  annotations:\n    team: shop\n/, "").replace("image: web:1", "image: web:2");
+    const r = await b.reviewEdit(c.send, { type, namespace: "shop", name: "web", base: "41", original, edited });
+    const body = JSON.parse(c.sent.find((x) => x.method === "PATCH")!.body!);
+    expect(body.metadata.annotations).toEqual({ team: null });
+    // The person's card shows the value; what the agent may get doesn't.
+    expect(r.operations![0]!.diff.lines.some((l) => l.text.includes("rk_live_abcdefghijklmnop"))).toBe(true);
+    expect(r.agent).toContain("image: web:2");
+    expect(r.agent).not.toContain("rk_live_abcdefghijklmnop");
+  });
+
+  it("cut what the cluster says to a readable length", () => {
+    const long = "x".repeat(5000);
+    const [p] = refusal(422, JSON.stringify({ details: { causes: [{ field: long, message: long }] } }), "a: 1\n");
+    expect(p!.message.length).toBeLessThanOrEqual(501);
+    expect(p!.field!.length).toBeLessThanOrEqual(301);
+  });
 });
+
