@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { certFacts } from "../src/certs.js";
+import { certFacts, parseSans, pemBlocks } from "../src/certs.js";
 
 // Public certificates only: the fixtures hold no keys.
 const dir = join(import.meta.dirname, "fixtures", "doctor");
@@ -43,5 +43,18 @@ describe("certFacts", () => {
     const nine = certFacts({ data: { "tls.crt": b64(leaf.repeat(9)) } });
     expect(nine.unreadable).toBeUndefined();
     expect(nine.subject).toBe("shop.example.test");
+  });
+
+  it("scans PEM blocks in linear time and reads quoted SANs", () => {
+    const t = Date.now();
+    expect(pemBlocks("-----BEGIN CERTIFICATE-----\n".repeat(9000), 8)).toEqual([]);
+    expect(Date.now() - t).toBeLessThan(100);
+    expect(parseSans('DNS:a.test, DNS:"b,c.test", IP Address:10.0.0.1, URI:x')).toEqual(["a.test", "b,c.test", "10.0.0.1"]);
+  });
+
+  it("doesn't call a Secret expired for a self-signed root it carries", () => {
+    // leaf + its CA: the CA is self-signed and lasts longer anyway; with the CA first it is the "leaf" and the real
+    // leaf (not self-signed) is the chain's earliest. A root after the leaf is never the date.
+    expect(certFacts({ data: { "tls.crt": b64(leaf + ca) } })).toMatchObject({ which: "leaf", notAfter: "2026-12-01T00:00:00.000Z" });
   });
 });

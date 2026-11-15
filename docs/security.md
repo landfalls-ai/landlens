@@ -174,6 +174,23 @@ Port-forwards are yours, like shells ([workbench.md](workbench.md#port-forward))
 | The agent can't start, see or stop a forward (no IPC or MCP channel), and its sandboxed shell can't reach one or see it listen: the sandbox allows only the front door's port, `lsof` can't inspect other processes and `netstat`'s sysctl is refused | live fence test (`acp-host`, `orbstack,claude`: curl, curl without the proxy, curl to [::1] and a raw socket all fail; `lsof` lists nothing; `netstat` "Operation not permitted") |
 | Other machines can't reach a forward. Any program of any user on this Mac can, and so can pages in your browser: a cross-site request to `127.0.0.1:<port>`, or DNS rebinding where the app behind the port doesn't check `Host`. The same as `kubectl port-forward`, but a kept forward is open whenever Landlens is connected, not only while a command runs | not a rule: see [limitations.md](limitations.md) |
 
+## The cluster doctor
+
+Wave 5 ([doctor.md](doctor.md)). Its problems are built from what workloads and anyone who may create events wrote,
+so its text is treated as data; and it reads TLS Secrets, so their values must stay in main.
+
+| Rule | How it's checked |
+|---|---|
+| Only checked text goes into a problem's title, detail, hint and id: object names (DNS names), kinds and reasons (words), image references, probe paths and ports of their own shapes; anything else is left out or replaced by a generic word ("Warning", "(path not shown)"). Events naming an object that isn't named like one are dropped. Messages (events, waiting and termination) are only matched by the hints' patterns, never copied into them; exec probe commands and env values are never carried | kube unit tests (`doctor.test.ts`: a marker in an image, a probe path, an event's kind, name and reason never reaches a title, detail, hint or id; a forged apiVersion gives no resource to open) |
+| Workload text the window shows (event, waiting and termination messages) is one line without control, format (bidi overrides, zero-width, tag) or separator characters, at most 500 characters | `doctor.test.ts` |
+| Bounded: 500 problems, 50 warning problems, 50 pod names and 20 events each; warning events in pages of 500, at most 2,000, each read capped at 32 MB as it streams (main's reads and the MCP server's); no spread of large arrays; a malformed object is skipped, not fatal; events dated more than 5 minutes ahead are dropped | `doctor.test.ts`, `health.test.ts` (paging, a failed page keeps the pages read) |
+| A cut or failed read is said, never read as "no problems": each source is `ok`, `forbidden`, `error`, `partial` or `off`, with its own sentence for the window and the agent | `health.test.ts`, `doctor-service.test.ts` |
+| TLS Secrets are read in main as you, for `tls.crt` alone: a metadata-only list (`type=kubernetes.io/tls`, at most 500), then one GET per changed Secret (1 MB, 10 s, 4 at a time). The API has no field projection, so main receives the whole Secret for the length of one parse; the key is never decoded, and only the certificate's dates, CN, SANs and self-signed flag are kept, cached by version. No Secret value, key or PEM crosses IPC or reaches the agent | `certs.test.ts` (a marker in `tls.key` and other keys never in the result), `doctor-service.test.ts` (the report's JSON has no marker and no `BEGIN`), `certs.integration.test.ts` on OrbStack |
+| Certificate parsing: at most 256 KiB of PEM and 8 certificates, found with `indexOf` (no regex over the input), each parsed with Node's `X509Certificate` inside a try; unreadable gives nothing of the content | `certs.test.ts` (garbage, oversize, 9 certificates, 9,000 BEGIN lines in under 100 ms) |
+| `doctor:list` and `doctor:evidence` are validated (handle, namespace, a one-line id of at most 600 characters). Evidence is given only for a problem in the scope's current report, so the window can't name a pod or container to read; the log tail is 200 lines, 64 KB and 10 s at most | contract schema; preload list test; `doctor-service.test.ts` (an unknown id, another scope's id → 404) |
+| The service reads only while asked: one shared pod watch per scope, at most 2 scopes per cluster, stopped 60 s after the last ask and when the cluster goes | `doctor-service.test.ts` with fake timers |
+| The scenarios touch only objects in `landlens-dev` on `orbstack` (the crash loop's Namespace document is skipped); their certificate pairs are made in a 0700 temp folder, removed afterwards, never committed | `deploy/scenarios/doctor/up.mjs`; the repository has public certificate fixtures only |
+
 ## MCP: the gateway and app views
 
 Every MCP call of an agent session goes through Landlens's gateway in main ([mcp.md](mcp.md)), and some tools come

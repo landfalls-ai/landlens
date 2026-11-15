@@ -18,32 +18,51 @@ const ns = (namespace: string | undefined, resource: string, group = "", version
   return `${base}${namespace ? `/namespaces/${namespace}` : ""}/${resource}`;
 };
 
-/** The sentence for each check that couldn't run (D56): fewer checks, said plainly. */
+/** The sentence for each check that couldn't run or ran on part of the data (D56): fewer checks, said plainly. */
 export const CHECK_SENTENCES: Record<Exclude<DoctorCheck, "pods">, string> = {
   certs: "Can't read Secrets here, so certificates aren't checked.",
   events: "Can't read events here, so failing probes and warning events aren't checked; pods that are running but not ready are still listed.",
   workloads: "Can't read Deployments, StatefulSets or DaemonSets here, so short workloads aren't checked.",
   nodes: "Can't read nodes here.",
 };
+const NOUNS: Record<DoctorCheck, string> = { pods: "pods", workloads: "Deployments, StatefulSets and DaemonSets", nodes: "nodes", events: "warning events", certs: "TLS Secrets" };
+export function checkSentence(k: DoctorCheck, s: DoctorCheckState): string | undefined {
+  if (s === "partial") return `Only part of the ${NOUNS[k]} could be read (a limit was reached or a page failed), so some problems may be missing.`;
+  if (s === "error") return `Couldn't read the ${NOUNS[k]} just now, so they weren't checked this time.`;
+  if (s === "forbidden" && k !== "pods") return CHECK_SENTENCES[k];
+  return undefined;
+}
 export function missingChecks(checks: Partial<Record<DoctorCheck, DoctorCheckState>> | undefined): string[] {
   const out: string[] = [];
-  for (const k of ["workloads", "events", "nodes", "certs"] as const) if (checks?.[k] === "forbidden" || checks?.[k] === "error") out.push(CHECK_SENTENCES[k]);
+  for (const k of ["pods", "workloads", "events", "nodes", "certs"] as const) {
+    const t = checks?.[k] ? checkSentence(k, checks[k]!) : undefined;
+    if (t) out.push(t);
+  }
   return out;
 }
 
-const state = (e: any): DoctorCheckState => (e?.status === 403 || e?.status === 401 || /\b403\b|forbidden/i.test(String(e?.message ?? "")) ? "forbidden" : "error");
+const state = (e: any): DoctorCheckState => (e?.status === 403 || e?.status === 401 ? "forbidden" : "error");
 
-/** Warning events, newest pages first, at most `max`. */
-export async function warningEvents(get: GetJson, namespace: string | undefined, max = 2000): Promise<KubeObject[]> {
+/**
+ * Warning events in pages of 500, at most `max`. A page that fails after others were read keeps those (partial);
+ * more than `max` is partial too. The API server can't sort, so the cap can leave out a busy namespace's newest.
+ */
+export async function warningEvents(get: GetJson, namespace: string | undefined, max = 2000): Promise<{ items: KubeObject[]; partial: boolean }> {
   const out: KubeObject[] = [];
   let cont: string | undefined;
   do {
     const q = new URLSearchParams({ limit: "500", fieldSelector: "type=Warning", ...(cont ? { continue: cont } : {}) });
-    const page = await get(`${ns(namespace, "events")}?${q}`);
-    out.push(...((page?.items ?? []) as KubeObject[]));
-    cont = page?.metadata?.continue || undefined;
+    let page: any;
+    try {
+      page = await get(`${ns(namespace, "events")}?${q}`);
+    } catch (e) {
+      if (!out.length) throw e;
+      return { items: out, partial: true };
+    }
+    out.push(...((Array.isArray(page?.items) ? page.items : []) as KubeObject[]));
+    cont = typeof page?.metadata?.continue === "string" && page.metadata.continue ? page.metadata.continue : undefined;
   } while (cont && out.length < max);
-  return out.slice(0, max);
+  return { items: out.slice(0, max), partial: !!cont || out.length > max };
 }
 
 export type HealthOptions = {
@@ -59,14 +78,22 @@ export async function clusterHealth(get: GetJson, opts: HealthOptions = {}): Pro
   const now = opts.now ?? Date.now();
   const namespace = opts.namespace;
   const checks: Record<DoctorCheck, DoctorCheckState> = { pods: "ok", workloads: "ok", nodes: namespace ? "off" : "ok", events: "ok", certs: "off" };
-  const pods = ((await get(`${ns(namespace, "pods")}?limit=5000`)).items ?? []) as KubeObject[];
-  const list = (path: string, check: DoctorCheck) => get(path).then((l) => (l.items ?? []) as KubeObject[], (e) => ((checks[check] = state(e)), undefined));
+  const podList = await get(`${ns(namespace, "pods")}?limit=5000`);
+  const pods = (Array.isArray(podList?.items) ? podList.items : []) as KubeObject[];
+  if (podList?.metadata?.continue) checks.pods = "partial";
+  const list = (path: string, check: DoctorCheck) => get(path).then((l) => {
+    if (l?.metadata?.continue && checks[check] === "ok") checks[check] = "partial";
+    return (Array.isArray(l?.items) ? l.items : []) as KubeObject[];
+  }, (e) => {
+    if (checks[check] === "ok" || state(e) === "forbidden") checks[check] = state(e);
+    return undefined;
+  });
   const [deployments, statefulsets, daemonsets, nodes, events, certs] = await Promise.all([
     list(`${ns(namespace, "deployments", "apps")}?limit=2000`, "workloads"),
     list(`${ns(namespace, "statefulsets", "apps")}?limit=2000`, "workloads"),
     list(`${ns(namespace, "daemonsets", "apps")}?limit=2000`, "workloads"),
     namespace ? Promise.resolve(undefined) : list("/api/v1/nodes", "nodes"),
-    warningEvents(get, namespace).catch((e) => ((checks.events = state(e)), undefined)),
+    warningEvents(get, namespace).then((r) => ((checks.events = r.partial ? "partial" : "ok"), r.items), (e) => ((checks.events = state(e)), undefined)),
     opts.certs ? opts.certs().then((c) => ((checks.certs = c ? "ok" : "forbidden"), c), () => ((checks.certs = "error"), undefined)) : Promise.resolve(undefined),
   ]);
   const report = diagnose({
@@ -81,19 +108,25 @@ export function healthCounts(podList: KubeObject[], deploymentList: KubeObject[]
   const pods = { total: 0, running: 0, succeeded: 0, pending: 0, failing: 0, restarts: 0 };
   const namespaces = new Set<string>();
   for (const p of podList) {
+    if (!p?.metadata) continue;
     pods.total++;
     namespaces.add(p.metadata.namespace ?? "");
-    pods.restarts += podRestarts(p).sort;
-    const status = podStatus(p);
-    if (status.tone === "bad") pods.failing++;
-    else if (p.status?.phase === "Succeeded") pods.succeeded++;
-    else if (p.status?.phase === "Running") pods.running++;
-    else pods.pending++;
+    try {
+      pods.restarts += podRestarts(p).sort;
+      const status = podStatus(p);
+      if (status.tone === "bad") pods.failing++;
+      else if (p.status?.phase === "Succeeded") pods.succeeded++;
+      else if (p.status?.phase === "Running") pods.running++;
+      else pods.pending++;
+    } catch {
+      pods.failing++; // a pod whose status can't be read isn't counted as healthy
+    }
   }
   let deployments: ClusterHealth["deployments"] = null;
   if (deploymentList) {
     deployments = { total: 0, available: 0 };
     for (const d of deploymentList) {
+      if (!d?.metadata) continue;
       deployments.total++;
       if ((d.status?.availableReplicas ?? 0) >= (d.spec?.replicas ?? 1)) deployments.available++;
     }
@@ -102,6 +135,7 @@ export function healthCounts(podList: KubeObject[], deploymentList: KubeObject[]
   if (nodeList) {
     nodes = { total: 0, ready: 0, items: [] };
     for (const n of nodeList) {
+      if (!n?.metadata?.name || (n.status?.conditions !== undefined && !Array.isArray(n.status.conditions)) || (n.status?.conditions ?? []).some((c: unknown) => !c)) continue;
       const ready = nodeStatus(n).tone === "ok";
       nodes.total++;
       if (ready) nodes.ready++;

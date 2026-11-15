@@ -37,8 +37,8 @@ export function hintFor(i: HintInput): Hint {
       const ref = i.image ? ` ${i.image}` : " its image";
       if (i.reason === "InvalidImageName") return { cause: `The image reference${ref} isn't valid.`, next: ["Fix the image field: registry/name:tag"] };
       if (/not found|manifest unknown|does not exist|no such manifest/i.test(m)) return { cause: `The image or tag${ref} doesn't exist in the registry.`, next: ["Check the name and tag against the registry", "Check that the build pushed this tag"] };
-      if (/unauthorized|denied|authenticat|forbidden|401|403/i.test(m)) return { cause: `The registry refuses to serve${ref} without credentials (imagePullSecrets).`, next: ["Add or fix imagePullSecrets on the pod or its ServiceAccount", "Check the pull secret's registry and expiry"] };
       if (/no such host|lookup|dial tcp|i\/o timeout|connection refused|context deadline|bad gateway|failed to do request|tls/i.test(m)) return { cause: `The node can't reach the registry for${ref}.`, next: ["Check the registry's host name", "Check the node's DNS and network to the registry"] };
+      if (/unauthorized|denied|authenticat|forbidden|\b40[13]\b/i.test(m)) return { cause: `The registry refuses to serve${ref} without credentials (imagePullSecrets).`, next: ["Add or fix imagePullSecrets on the pod or its ServiceAccount", "Check the pull secret's registry and expiry"] };
       return { cause: `The node can't pull${ref}.`, next: ["Check the image name and tag", "Check imagePullSecrets if the registry is private"] };
     }
     case "config":
@@ -65,7 +65,7 @@ export function hintFor(i: HintInput): Hint {
     case "notready":
       return { cause: "It runs but isn't ready: a readiness probe fails or a container is still starting.", next: ["Check its readiness probe and the containers' state"] };
     case "restarts":
-      return { cause: `It restarted ${i.restarts ?? "several"} times in the last hour. ${exitCause(i.exitCode, i.signal)}`, next: ["Read the previous run's log", "Check the last exit code and the Metrics tab"] };
+      return { cause: `It has restarted ${i.restarts ?? "several"} times, the last within the hour. ${exitCause(i.exitCode, i.signal)}`, next: ["Read the previous run's log", "Check the last exit code and the Metrics tab"] };
     case "unavailable":
       if (i.reason === "ProgressDeadlineExceeded") return { cause: "Its rollout stopped making progress.", next: ["Check the new ReplicaSet's pods and events", "Roll back if the new version is at fault"] };
       return { cause: `It has fewer available replicas than it wants (${i.available ?? "short"}).`, next: ["Check its pods' state and events"] };

@@ -53,10 +53,30 @@ describe("clusterHealth", () => {
   });
 
   it("leaves out what the access can't read", async () => {
-    const h = await clusterHealth(async (p) => (p.includes("nodes") || p.includes("deployments") ? Promise.reject(new Error("403")) : get(p)), { now });
+    const h = await clusterHealth(async (p) => (p.includes("nodes") || p.includes("deployments") ? Promise.reject(Object.assign(new Error("forbidden"), { status: 403 })) : get(p)), { now });
     expect(h.nodes).toBeNull();
     expect(h.deployments).toBeNull();
     expect(h.checks).toMatchObject({ nodes: "forbidden", workloads: "forbidden" });
     expect(healthText(h)).toContain("Not checked: Can't read Deployments, StatefulSets or DaemonSets here, so short workloads aren't checked. Can't read nodes here.");
+  });
+
+  it("keeps the event pages it read when a later one fails, and says the list is partial", async () => {
+    const pages: Record<string, any> = {
+      "": { items: [{ type: "Warning", reason: "A", lastTimestamp: "2026-11-14T11:59:00Z", involvedObject: { kind: "ConfigMap", namespace: "shop", name: "c" } }], metadata: { continue: "t1" } },
+    };
+    const h = await clusterHealth(async (p) => {
+      if (p.includes("/events")) {
+        const c = new URLSearchParams(p.split("?")[1]).get("continue") ?? "";
+        if (c in pages) return pages[c];
+        throw Object.assign(new Error("Expired"), { status: 410 });
+      }
+      return get(p);
+    }, { now });
+    expect(h.checks.events).toBe("partial");
+    expect(h.warnings.map((w) => w.reason)).toEqual(["A"]);
+    expect(healthText(h)).toContain("Only part of the warning events could be read");
+    const err = await clusterHealth(async (p) => (p.includes("/events") ? Promise.reject(Object.assign(new Error("boom"), { status: 500 })) : get(p)), { now });
+    expect(err.checks.events).toBe("error");
+    expect(healthText(err)).toContain("Couldn't read the warning events just now");
   });
 });

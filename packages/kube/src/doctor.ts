@@ -1,7 +1,7 @@
 // The cluster doctor's rules (wave 5, D46–D52, docs/doctor.md): one pure function from what was read to what is
 // wrong, grouped by owner, worst first. No I/O. Main's DoctorService and the agent's cluster_overview both use it.
 import type {
-  CertFact, DoctorCheck, DoctorCheckState, KubeObject, Problem, ProblemClass, ProblemEvent, ProblemFacts,
+  CertFact, DoctorCheck, DoctorCheckState, DoctorReport, KubeObject, Problem, ProblemClass, ProblemEvent, ProblemFacts,
 } from "@landlens/contracts";
 import { hintFor } from "./doctor-hints.js";
 import { age, nodeStatus, podReady } from "./status.js";
@@ -19,7 +19,6 @@ export type DoctorInput = {
   ingresses?: KubeObject[];
   checks?: Partial<Record<DoctorCheck, DoctorCheckState>>;
 };
-export type DoctorReport = { at: string; problems: Problem[]; cut: boolean; checks: Record<DoctorCheck, DoctorCheckState> };
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -41,18 +40,34 @@ const KINDS: Record<string, [group: string, version: string, resource: string]> 
   ReplicaSet: ["apps", "v1", "replicasets"], Job: ["batch", "v1", "jobs"], CronJob: ["batch", "v1", "cronjobs"],
   Ingress: ["networking.k8s.io", "v1", "ingresses"], HorizontalPodAutoscaler: ["autoscaling", "v2", "horizontalpodautoscalers"],
 };
-/** Where the window finds a kind: known kinds exactly, others from the event's apiVersion and a plural guess. */
+/** Object names (DNS subdomains), kinds and reasons (words), API groups and versions, image references, probe paths
+ * and ports: only text of these shapes is put into a title, detail, hint or id; anything else is left out (security
+ * review, wave 5 part 1, findings 1 and 3). */
+const NAME = /^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/;
+const WORD = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+const GROUP = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$/;
+const VERSION = /^v[0-9]{1,4}((alpha|beta)[0-9]{1,4})?$/;
+const IMAGE_REF = /^[a-z0-9]([a-z0-9._\-/:@]{0,298}[a-z0-9])?$/i;
+const PROBE_PATH = /^\/[\w\-./~%]{0,200}$/;
+const PORT = /^([0-9]{1,5}|[a-z0-9]([-a-z0-9]{0,13}[a-z0-9])?)$/;
+export const isName = (s: unknown): s is string => typeof s === "string" && NAME.test(s);
+export const isWord = (s: unknown): s is string => typeof s === "string" && WORD.test(s);
+export const isImageRef = (s: unknown): s is string => typeof s === "string" && IMAGE_REF.test(s);
+
+/** Where the window finds a kind: known kinds exactly; others from a checked apiVersion and a plural guess, else none. */
 export function resourceOf(kind: string, apiVersion?: string): { group: string; version: string; resource: string } {
   const k = KINDS[kind];
   if (k) return { group: k[0], version: k[1], resource: k[2] };
   const [g, v] = apiVersion?.includes("/") ? apiVersion.split("/") : ["", apiVersion || "v1"];
+  if (!isWord(kind) || (g && !GROUP.test(g)) || !v || !VERSION.test(v)) return { group: "", version: "", resource: "" };
   const lower = kind.toLowerCase();
-  return { group: g ?? "", version: v ?? "v1", resource: lower.endsWith("s") ? `${lower}es` : lower.endsWith("y") ? `${lower.slice(0, -1)}ies` : `${lower}s` };
+  return { group: g ?? "", version: v, resource: lower.endsWith("s") ? `${lower}es` : lower.endsWith("y") ? `${lower.slice(0, -1)}ies` : `${lower}s` };
 }
 
 /** Workload-written text for the window: no control characters, one line, capped. */
 export function cleanText(s: unknown, max: number = DOCTOR_LIMITS.text): string {
-  const t = String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  // Control, format (bidi overrides, zero-width, tag characters) and line/paragraph separators all go.
+  const t = String(s ?? "").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
@@ -61,6 +76,8 @@ const time = (s: unknown) => {
   return Number.isFinite(n) ? n : NaN;
 };
 const iso = (n: number) => (Number.isFinite(n) ? new Date(n).toISOString() : undefined);
+/** The smallest of many numbers without spreading them as arguments. */
+const least = (xs: number[]) => xs.reduce((a, x) => (x < a ? x : a), Infinity);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 type Subject = { kind: string; namespace?: string; name: string; apiVersion?: string };
@@ -69,10 +86,11 @@ const key = (s: Subject) => `${s.kind}/${s.namespace ?? ""}/${s.name}`;
 /** A pod's owner, found without reading it: a ReplicaSet with the pod's template hash is its Deployment's (D50). */
 export function subjectOf(pod: KubeObject): Subject {
   const ns = pod.metadata.namespace;
-  const ref = (pod.metadata.ownerReferences ?? []).find((r: any) => r.controller);
+  const refs = Array.isArray(pod.metadata.ownerReferences) ? pod.metadata.ownerReferences : [];
+  const ref = refs.find((r: any) => r?.controller && isName(r.name));
   if (ref?.kind === "ReplicaSet") {
     const hash = pod.metadata.labels?.["pod-template-hash"];
-    if (hash && ref.name.endsWith(`-${hash}`) && ref.name.length > hash.length + 1) return { kind: "Deployment", namespace: ns, name: ref.name.slice(0, -hash.length - 1) };
+    if (typeof hash === "string" && hash && ref.name.endsWith(`-${hash}`) && ref.name.length > hash.length + 1) return { kind: "Deployment", namespace: ns, name: ref.name.slice(0, -hash.length - 1) };
     return { kind: "ReplicaSet", namespace: ns, name: ref.name };
   }
   if (ref && (ref.kind === "StatefulSet" || ref.kind === "DaemonSet" || ref.kind === "Job")) return { kind: ref.kind, namespace: ns, name: ref.name };
@@ -83,15 +101,25 @@ type Ev = ProblemEvent & { kind: string; namespace?: string; name: string; apiVe
 function readEvents(events: KubeObject[] | undefined, now: number): Ev[] {
   const out: Ev[] = [];
   for (const e of (events ?? []) as any[]) {
-    if (e?.type && e.type !== "Warning") continue;
-    const last = time(e.series?.lastObservedTime ?? e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp);
-    if (!Number.isFinite(last) || now - last > HOUR) continue;
-    const first = time(e.firstTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp);
+    if (!e || typeof e !== "object" || (e.type && e.type !== "Warning")) continue;
+    // An event dated more than 5 minutes ahead (beyond clock skew) is dropped, so a forged one can't stay "recent"
+    // for ever (security review, part 1, finding 10); a little ahead counts as now.
+    const stamped = time(e.series?.lastObservedTime ?? e.lastTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp);
+    if (!Number.isFinite(stamped) || stamped > now + 5 * MIN) continue;
+    const last = Math.min(stamped, now);
+    if (now - last > HOUR) continue;
+    const first = Math.min(time(e.firstTimestamp ?? e.eventTime ?? e.metadata?.creationTimestamp), last);
     const o = e.involvedObject ?? e.regarding ?? {};
-    const container = /^spec\.(?:initC|c)ontainers\{([^}]{1,63})\}$/.exec(String(o.fieldPath ?? ""))?.[1];
+    // Events are written by anyone who may create them: an object that isn't named like one is dropped.
+    if (!isWord(o.kind) || !isName(o.name) || (o.namespace !== undefined && o.namespace !== "" && !isName(o.namespace))) continue;
+    const container = /^spec\.(?:initC|c)ontainers\{([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)\}$/.exec(String(o.fieldPath ?? ""))?.[1];
+    const count = Number(e.series?.count ?? e.count);
     out.push({
-      at: new Date(last).toISOString(), reason: cleanText(e.reason, 64), message: cleanText(e.message ?? e.note), count: Number(e.series?.count ?? e.count) || 1,
-      kind: cleanText(o.kind, 64), ...(o.namespace ? { namespace: String(o.namespace) } : {}), name: cleanText(o.name, 253), ...(o.apiVersion ? { apiVersion: String(o.apiVersion) } : {}),
+      at: new Date(last).toISOString(), reason: isWord(e.reason) ? e.reason : "Warning",
+      // The kubelet folds similar events into one "(combined from similar events): …" (finding 6).
+      message: cleanText(String(e.message ?? e.note ?? "").replace(/^\(combined from similar events\):\s*/i, "")),
+      count: Number.isFinite(count) && count > 0 ? Math.min(count, 1e9) : 1,
+      kind: o.kind, ...(o.namespace ? { namespace: o.namespace } : {}), name: o.name, ...(typeof o.apiVersion === "string" ? { apiVersion: o.apiVersion.slice(0, 300) } : {}),
       ...(container ? { container } : {}), first: Number.isFinite(first) ? first : last, last,
     });
   }
@@ -116,9 +144,13 @@ function mergeEvents(evs: ProblemEvent[]): ProblemEvent[] {
 /** A probe as one short phrase: "GET :8081/healthz/ready", "tcp :5432", "exec". The exec command is never carried. */
 function probeHow(p: any): string {
   if (!p) return "";
-  if (p.httpGet) return cleanText(`${p.httpGet.scheme === "HTTPS" ? "GET https " : "GET "}:${p.httpGet.port}${p.httpGet.path ?? "/"}`, 200);
-  if (p.tcpSocket) return cleanText(`tcp :${p.tcpSocket.port}`, 100);
-  if (p.grpc) return cleanText(`grpc :${p.grpc.port}`, 100);
+  const port = (v: unknown) => (PORT.test(String(v ?? "")) ? String(v) : "?");
+  if (p.httpGet) {
+    const path = p.httpGet.path ?? "/";
+    return `${p.httpGet.scheme === "HTTPS" ? "GET https " : "GET "}:${port(p.httpGet.port)}${PROBE_PATH.test(String(path)) ? path : " (path not shown)"}`;
+  }
+  if (p.tcpSocket) return `tcp :${port(p.tcpSocket.port)}`;
+  if (p.grpc) return `grpc :${port(p.grpc.port)}`;
   return "exec";
 }
 
@@ -167,20 +199,26 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
   };
 
   // Workloads first, so a pod's problem can say how many of its owner's replicas are available.
-  type Avail = { want: number; have: number; deadline: boolean; settled: number; observed: boolean; subject: Subject };
+  type Avail = { want: number; have: number; deadline: boolean; settled: number; observed: boolean; rolling: boolean; subject: Subject };
   const avail = new Map<string, Avail>();
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
   const workload = (kind: string, list: KubeObject[] | undefined) => {
     for (const w of (list ?? []) as any[]) {
+      if (!isName(w?.metadata?.name)) continue;
       const s = w.status ?? {};
-      const want = kind === "DaemonSet" ? s.desiredNumberScheduled ?? 0 : w.spec?.replicas ?? 1;
-      const have = kind === "DaemonSet" ? s.numberAvailable ?? 0 : kind === "StatefulSet" ? s.availableReplicas ?? s.readyReplicas ?? 0 : s.availableReplicas ?? 0;
-      const conds: any[] = s.conditions ?? [];
-      const settled = Math.max(time(w.metadata?.creationTimestamp) || 0, ...conds.map((c) => time(c.lastTransitionTime) || 0));
+      const want = kind === "DaemonSet" ? num(s.desiredNumberScheduled, 0) : num(w.spec?.replicas, 1);
+      const have = kind === "DaemonSet" ? num(s.numberAvailable, 0) : kind === "StatefulSet" ? num(s.availableReplicas ?? s.readyReplicas, 0) : num(s.availableReplicas, 0);
+      const conds: any[] = Array.isArray(s.conditions) ? s.conditions.filter(Boolean) : [];
+      const settled = conds.reduce((a, c) => Math.max(a, time(c.lastTransitionTime) || 0), time(w.metadata.creationTimestamp) || 0);
+      // A rollout in progress is short by design (maxUnavailable); it counts only once it has stalled (finding 7).
+      const rolling = kind === "Deployment" ? num(s.updatedReplicas, want) < want || num(s.replicas, want) > want
+        : kind === "StatefulSet" ? !!s.updateRevision && s.currentRevision !== s.updateRevision
+        : num(s.updatedNumberScheduled, want) < want;
       const subject = { kind, namespace: w.metadata.namespace, name: w.metadata.name };
       avail.set(key(subject), {
-        want, have, settled, subject,
+        want, have, settled, subject, rolling,
         deadline: conds.some((c) => c.type === "Progressing" && c.reason === "ProgressDeadlineExceeded"),
-        observed: (s.observedGeneration ?? 0) >= (w.metadata?.generation ?? 0),
+        observed: num(s.observedGeneration, 0) >= num(w.metadata.generation, 0),
       });
     }
   };
@@ -190,7 +228,16 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
 
   const podNames = new Map<string, Subject>();
   for (const pod of input.pods) {
-    if (pod.metadata.deletionTimestamp || pod.status?.phase === "Succeeded") continue;
+    // One malformed object mustn't take the whole report with it (finding 9).
+    try {
+      checkPod(pod);
+    } catch {
+      /* skipped */
+    }
+  }
+  function checkPod(pod: KubeObject) {
+    // Succeeded pods are done; Failed ones (evicted, node shutdown) won't run again, so they aren't crash loops.
+    if (!pod?.metadata || !isName(pod.metadata.name) || pod.metadata.deletionTimestamp || pod.status?.phase === "Succeeded" || pod.status?.phase === "Failed") return;
     const ns = pod.metadata.namespace;
     const subject = subjectOf(pod);
     podNames.set(key({ kind: "Pod", namespace: ns, name: pod.metadata.name }), subject);
@@ -198,11 +245,12 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
     const recent = (c: string | undefined, type: string) =>
       podEvents.filter((e) => e.reason === "Unhealthy" && now - e.last <= 10 * MIN && e.message.toLowerCase().startsWith(type) && (!c || !e.container || e.container === c));
     const base = { kind: subject.kind, ...(ns ? { namespace: ns } : {}), name: subject.name, pods: [pod.metadata.name] };
-    const specs: any[] = [...(pod.spec?.initContainers ?? []), ...(pod.spec?.containers ?? [])];
+    const specs: any[] = [...(Array.isArray(pod.spec?.initContainers) ? pod.spec.initContainers : []), ...(Array.isArray(pod.spec?.containers) ? pod.spec.containers : [])].filter(Boolean);
+    const arr = (v: unknown) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object") : []);
     const statuses: { c: any; init: boolean }[] = [
-      ...(pod.status?.initContainerStatuses ?? []).map((c: any) => ({ c, init: true })),
-      ...(pod.status?.containerStatuses ?? []).map((c: any) => ({ c, init: false })),
-    ];
+      ...arr(pod.status?.initContainerStatuses).map((c: any) => ({ c, init: true })),
+      ...arr(pod.status?.containerStatuses).map((c: any) => ({ c, init: false })),
+    ].filter(({ c }) => isName(c.name));
     let matched = false;
     for (const { c, init } of statuses) {
       const spec = specs.find((x) => x.name === c.name) ?? {};
@@ -236,7 +284,7 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
         const type = live[0]!.message.toLowerCase().startsWith("startup") ? "startup" : "liveness";
         const p = type === "startup" ? spec.startupProbe : spec.livenessProbe;
         add({
-          ...common, class: "probe", reason: type === "startup" ? "StartupProbe" : "LivenessProbe", tone: "bad", since: iso(Math.min(...live.map((e) => e.first))),
+          ...common, class: "probe", reason: type === "startup" ? "StartupProbe" : "LivenessProbe", tone: "bad", since: iso(least(live.map((e) => e.first))),
           facts: facts({ probe: { type, how: probeHow(p), ...probeNumbers(p), lastMessage: live[0]!.message } }),
         });
         matched = true;
@@ -252,42 +300,44 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
       add({ ...common, class: cls, reason: looping ? "CrashLoopBackOff" : waiting!, tone: "bad", ...(c.state?.waiting?.message ? { message: String(c.state.waiting.message).slice(0, 2000) } : {}), facts: facts() });
       matched = true;
     }
-    if (matched) continue;
+    if (matched) return;
 
     const created = time(pod.metadata.creationTimestamp);
     const phase = pod.status?.phase;
-    const conds: any[] = pod.status?.conditions ?? [];
+    const conds: any[] = arr(pod.status?.conditions);
     if (phase === "Pending" && now - created > 2 * MIN) {
       const unsched = conds.find((c) => c.type === "PodScheduled" && c.status === "False");
-      const reason = unsched ? cleanText(unsched.reason || "Unschedulable", 64) : podEvents[0]?.reason || "Pending";
+      // The reason is part of the id, so it must not flip between passes: the busiest event reason, then by name.
+      const reason = unsched ? (isWord(unsched.reason) ? unsched.reason : "Unschedulable") : busiestReason(podEvents) ?? "Pending";
       add({
         ...base, class: "pending", reason, tone: now - created > 15 * MIN ? "bad" : "warn", since: iso(created),
         ...(unsched?.message ? { message: String(unsched.message).slice(0, 2000) } : {}),
         facts: { ...(unsched?.message ? { scheduling: cleanText(unsched.message) } : {}), events: podEvents },
       });
-      continue;
+      return;
     }
-    if (phase !== "Running") continue;
+    if (phase !== "Running") return;
     const ready = recent(undefined, "readiness");
     if (ready.length) {
       const c = ready[0]!.container;
-      const spec = (pod.spec?.containers ?? []).find((x: any) => x.name === c) ?? (pod.spec?.containers ?? []).find((x: any) => x.readinessProbe) ?? {};
+      const containers: any[] = specs.filter((x) => isName(x.name));
+      const spec = containers.find((x) => x.name === c) ?? containers.find((x) => x.readinessProbe) ?? {};
       const owner = avail.get(key(subject));
       add({
-        ...base, class: "probe", reason: "ReadinessProbe", container: String(spec.name ?? c ?? ""), tone: owner && owner.have === 0 ? "bad" : "warn",
-        since: iso(Math.min(...ready.map((e) => e.first))),
+        ...base, class: "probe", reason: "ReadinessProbe", ...(isName(spec.name ?? c) ? { container: String(spec.name ?? c) } : {}), tone: owner && owner.have === 0 ? "bad" : "warn",
+        since: iso(least(ready.map((e) => e.first))),
         facts: { probe: { type: "readiness", how: probeHow(spec.readinessProbe), ...probeNumbers(spec.readinessProbe), lastMessage: ready[0]!.message }, events: podEvents },
       });
-      continue;
+      return;
     }
     const readyCond = conds.find((c) => c.type === "Ready");
     if (podReady(pod).tone !== "ok" && readyCond?.status !== "True" && now - (time(readyCond?.lastTransitionTime) || created) > 2 * MIN) {
       add({ ...base, class: "notready", reason: "NotReady", tone: "warn", since: iso(time(readyCond?.lastTransitionTime) || created), facts: { events: podEvents } });
-      continue;
+      return;
     }
-    const cs: any[] = pod.status?.containerStatuses ?? [];
+    const cs: any[] = arr(pod.status?.containerStatuses).filter((c: any) => isName(c.name));
     const restarts = cs.reduce((a, c) => a + (c.restartCount ?? 0), 0);
-    const lastKill = Math.max(0, ...cs.map((c) => time(c.lastState?.terminated?.finishedAt) || 0));
+    const lastKill = cs.reduce((a, c) => Math.max(a, time(c.lastState?.terminated?.finishedAt) || 0), 0);
     if (restarts >= 5 && now - lastKill <= HOUR) {
       const worst = [...cs].sort((a, b) => (b.restartCount ?? 0) - (a.restartCount ?? 0))[0];
       const t = worst?.lastState?.terminated;
@@ -300,18 +350,20 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
   }
 
   // A workload short of replicas: its pods' problems carry the count; with none, it is a problem of its own.
-  const hasProblem = new Set([...byId.values()].map((p) => key(p)));
+  const bySubject = new Map<string, Problem[]>();
+  for (const p of byId.values()) (bySubject.get(key(p)) ?? bySubject.set(key(p), []).get(key(p))!).push(p);
   for (const a of avail.values()) {
     if (a.have >= a.want) continue;
     const available = `${a.have}/${a.want}`;
-    if (hasProblem.has(key(a.subject))) {
-      for (const p of byId.values()) if (key(p) === key(a.subject)) {
+    const theirs = bySubject.get(key(a.subject));
+    if (theirs) {
+      for (const p of theirs) {
         p.facts.available = available;
         if (a.have === 0 && p.class === "probe") p.tone = "bad";
       }
       continue;
     }
-    if (!a.observed || now - a.settled <= 2 * MIN) continue;
+    if (!a.observed || now - a.settled <= 2 * MIN || (a.rolling && !a.deadline && a.have > 0)) continue;
     add({
       kind: a.subject.kind, ...(a.subject.namespace ? { namespace: a.subject.namespace } : {}), name: a.subject.name, class: "unavailable",
       reason: a.deadline ? "ProgressDeadlineExceeded" : "Unavailable", tone: a.have === 0 || a.deadline ? "bad" : "warn",
@@ -320,11 +372,12 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
   }
 
   for (const n of input.nodes ?? []) {
-    const name = n.metadata.name;
+    const name = n?.metadata?.name;
+    if (!isName(name) || (n.status?.conditions !== undefined && !Array.isArray(n.status.conditions)) || (n.status?.conditions ?? []).some((c: unknown) => !c || typeof c !== "object")) continue;
     const evs = evOf.get(key({ kind: "Node", name })) ?? [];
     if (nodeStatus(n).text.startsWith("NotReady")) add({ kind: "Node", name, class: "node", reason: "NotReady", tone: "bad", facts: { events: evs } });
     for (const c of (n.status?.conditions ?? []) as any[]) {
-      if (c.type !== "Ready" && c.status === "True") add({ kind: "Node", name, class: "node", reason: cleanText(c.type, 64), tone: "warn", ...(iso(time(c.lastTransitionTime)) ? { since: iso(time(c.lastTransitionTime)) } : {}), facts: { events: evs } });
+      if (c && isWord(c.type) && c.type !== "Ready" && c.status === "True") add({ kind: "Node", name, class: "node", reason: c.type, tone: "warn", ...(iso(time(c.lastTransitionTime)) ? { since: iso(time(c.lastTransitionTime)) } : {}), facts: { events: evs } });
     }
   }
 
@@ -351,15 +404,16 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
   for (const g of busiest.slice(0, DOCTOR_LIMITS.warnings)) {
     add({
       kind: g.subject.kind, ...(g.subject.namespace ? { namespace: g.subject.namespace } : {}), name: g.subject.name, ...(g.subject.apiVersion ? { apiVersion: g.subject.apiVersion } : {}),
-      class: "warning", reason: g.reason || "Warning", tone: "warn", since: iso(Math.min(...g.evs.map((e) => e.first))),
+      class: "warning", reason: g.reason || "Warning", tone: "warn", since: iso(least(g.evs.map((e) => e.first))),
       facts: { events: g.evs },
     });
   }
 
   const usedBy = new Map<string, string[]>();
   for (const ing of (input.ingresses ?? []) as any[]) {
-    for (const t of ing.spec?.tls ?? []) {
-      if (!t?.secretName) continue;
+    if (!isName(ing?.metadata?.name)) continue;
+    for (const t of Array.isArray(ing.spec?.tls) ? ing.spec.tls : []) {
+      if (!isName(t?.secretName)) continue;
       const k = `${ing.metadata.namespace}/${t.secretName}`;
       const l = usedBy.get(k) ?? usedBy.set(k, []).get(k)!;
       if (l.length < 10 && !l.includes(ing.metadata.name)) l.push(ing.metadata.name);
@@ -394,6 +448,12 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
   return { at: new Date(now).toISOString(), problems, cut: all.length > DOCTOR_LIMITS.problems, checks };
 }
 
+function busiestReason(evs: Ev[]): string | undefined {
+  const by = new Map<string, number>();
+  for (const e of evs) by.set(e.reason, (by.get(e.reason) ?? 0) + e.count);
+  return [...by.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0];
+}
+
 function probeNumbers(p: any) {
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
   const period = n(p?.periodSeconds) ?? 10;
@@ -418,7 +478,7 @@ function finish(p: Problem & { message?: string; exitCode?: number; signal?: num
   switch (p.class) {
     case "oom": title = `${n} ran out of memory`; detail = join(container, f.limit ? `limit ${f.limit}` : "no memory limit", restarts, pods); break;
     case "crashloop": title = `${n} is crash-looping`; detail = join(container, exit, restarts, pods); break;
-    case "image": title = `${n} can't pull its image`; detail = join(container, p.reason, f.image ?? "", pods); break;
+    case "image": title = `${n} can't pull its image`; detail = join(container, p.reason, isImageRef(f.image) ? f.image : "", pods); break;
     case "config": title = `${n} has a broken container config`; detail = join(container, p.reason, pods); break;
     case "start": title = `${n} can't start its container`; detail = join(container, p.reason, pods); break;
     case "pending": title = p.reason === "Unschedulable" ? `${n} can't be scheduled` : `${n} is stuck pending`; detail = join(p.reason, since, pods); break;
@@ -445,7 +505,7 @@ function finish(p: Problem & { message?: string; exitCode?: number; signal?: num
   }
   const hint = hintFor({
     class: p.class, reason: p.reason, name: n, ...(exitCode !== undefined ? { exitCode } : {}), ...(signal !== undefined ? { signal } : {}),
-    ...(message ? { message } : {}), ...(f.image ? { image: f.image } : {}),
+    ...(message ? { message } : {}), ...(isImageRef(f.image) ? { image: f.image } : {}),
     ...(f.probe ? { probe: { type: f.probe.type, how: f.probe.how } } : {}), ...(f.limit ? { limit: f.limit } : {}),
     ...(f.available ? { available: f.available } : {}), ...(p.restarts !== undefined ? { restarts: p.restarts } : {}),
   });

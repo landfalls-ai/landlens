@@ -59,8 +59,13 @@ export function frontDoorCluster(opts: {
           opts.url + path,
           { method: "GET", ca: opts.certificate, headers, timeout: 30_000 },
           (res) => {
+            // Each answer is capped as it streams in, so no list (events with long messages) can fill the server's
+            // memory (security review, wave 5 part 1, finding 4).
             let text = "";
-            res.setEncoding("utf8").on("data", (d) => (text += d)).on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+            res.setEncoding("utf8").on("data", (d: string) => {
+              text += d;
+              if (text.length > MAX_ANSWER) req.destroy(Object.assign(new Error(`an answer over ${MAX_ANSWER / 1048576} MB`), { status: 413 }));
+            }).on("end", () => resolve({ status: res.statusCode ?? 0, text }));
           },
         );
         req.on("timeout", () => req.destroy(new Error("the cluster took longer than 30 s")));
@@ -116,7 +121,7 @@ export const pathFor = apiPath;
  * Any request through the front door with a token, for the approval broker's dry runs and approved writes (its own
  * token, which only main holds). Answers the status, the body and the API server's warnings.
  */
-/** The most of one answer a broker reads (a list of ReplicaSets, an object with its managedFields). */
+/** The most of one answer a read or a broker brings back (a list of events, an object with its managedFields). */
 export const MAX_ANSWER = 32 * 1024 * 1024;
 
 export function frontDoorSend(opts: { url: string; certificate: string; token: string }): Send {

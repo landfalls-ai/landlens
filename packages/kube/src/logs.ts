@@ -37,6 +37,37 @@ export function logPath(r: LogRequest): string {
   return `/api/v1/namespaces/${encodeURIComponent(r.namespace)}/pods/${encodeURIComponent(r.pod)}/log?${q}`;
 }
 
+/**
+ * The last lines of a container's log, not followed, read with a byte cap and a time limit (the doctor's evidence,
+ * wave 5 D60). Lines keep their text only; past the cap the answer is cut and the partial last line dropped.
+ */
+export async function readLogTail(client: Pick<KubeClient, "request">, r: LogRequest, opts: { maxBytes: number; timeoutMs: number }): Promise<{ lines: string[]; cut: boolean }> {
+  const res = await client.request(logPath({ ...r, follow: false }), { signal: AbortSignal.timeout(opts.timeoutMs), headers: { Accept: "*/*" } });
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let cut = false;
+  const reader = res.body?.getReader();
+  while (reader) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const room = opts.maxBytes - size;
+    if (value.byteLength > room) {
+      chunks.push(value.subarray(0, Math.max(0, room)));
+      size = opts.maxBytes;
+      cut = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    size += value.byteLength;
+    chunks.push(value);
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  if (!res.ok) throw toKubeError(res.status, text);
+  const raw = text.split("\n");
+  if (cut) raw.pop();
+  return { lines: raw.filter((l) => l.length).map((l) => splitLine(l).text), cut };
+}
+
 /** "2026-11-15T10:00:00.123456789Z message" → its parts; a line without a timestamp keeps its text. */
 export function splitLine(raw: string): LogLine {
   const sp = raw.indexOf(" ");

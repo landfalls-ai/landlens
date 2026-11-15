@@ -1,7 +1,8 @@
 # The cluster doctor
 
 Wave 5 of the plan: what is wrong in a cluster right now, each problem with Landlens's own first suggestion and
-"Ask Claude" on it. This page grows with the wave's parts; part 1 is the engine and the scenarios.
+"Ask Claude" on it. This page grows with the wave's parts: part 1 is the engine and the scenarios, part 2 the service
+in main.
 
 ## The rules
 
@@ -28,7 +29,11 @@ For each container, the first rule that matches wins; a pod with no container pr
 | Warning events (`warning`) | Warning events of the last hour that no problem above covers, by owner and reason; the busiest 50 | To watch |
 | Certificate (`cert`) | A `kubernetes.io/tls` Secret's certificate: expired or 48 hours left (failing), 14 days left, not valid yet or unreadable (to watch) | As said |
 
-Init containers are checked like containers and named `init:<name>`. Events of pods that no longer exist are dropped.
+Init containers are checked like containers and named `init:<name>`. Succeeded and Failed pods (evicted, or on a node
+that shut down) aren't checked: they won't run again. A Deployment, StatefulSet or DaemonSet in the middle of a
+rollout isn't short until its rollout stalls. Events of pods that no longer exist are dropped, as are events dated
+more than 5 minutes ahead; the kubelet's folded "(combined from similar events): …" probe events are read like the
+rest.
 
 ## Grouping
 
@@ -40,6 +45,14 @@ to find owners, so a bare ReplicaSet that happens to carry the label shows as a 
 
 Failing comes before to watch; then the classes in the table's order, then the number of pods, then restarts. At most
 500 problems (the list says when it is cut), 50 pod names and 20 events each.
+
+## What goes into the text
+
+Problems are built from what workloads wrote and from events anyone who may create them wrote. Titles, details,
+hints and ids carry only text of known shapes: object names, kinds and reasons, image references, probe paths and
+ports. Anything else is left out ("(path not shown)") or replaced ("Warning"), and an event about an object that isn't
+named like one is dropped. Messages are kept as data in the facts (one line, no control, bidi or zero-width
+characters, 500 characters), shown as text, and given to the agent only as quoted data.
 
 ## The first suggestion
 
@@ -58,7 +71,36 @@ isn't asked.
 certificates, each parsed with Node's `X509Certificate` inside a try. It returns the leaf's subject and issuer (their
 CN), SANs (DNS and IP, at most 20), `notBefore`, the earliest `notAfter` in the chain and whether that is the leaf's,
 and whether it is self-signed. The key and the PEM are never kept; a certificate that can't be read gives nothing of
-its content. Which Secrets are read, and by whom, comes with the main-process service (part 2).
+its content. A self-signed root carried in the chain doesn't count toward the expiry: clients trust roots from their
+own store. Which Secrets are read, and how, is below.
+
+## The service in main
+
+`apps/desktop/src/main/doctor.ts` runs the doctor per connected cluster and scope (the window's namespace, or all), as
+you. It answers `cluster:health` (the Overview) and `doctor:list` (the report), and starts on the first ask:
+
+| Source | How | When |
+|---|---|---|
+| Pods | One subscription to the shared pod watch (the same one a Pods table of that scope uses), so no relists | Live |
+| Warning events | Pages of 500, at most 2,000; the last hour is used | When older than 15 s |
+| Deployments, StatefulSets, DaemonSets | One list each, at most 2,000 | When older than 30 s |
+| Nodes | One list, for the all-namespaces scope only | When older than 30 s |
+| TLS Secrets | A metadata-only list (`type=kubernetes.io/tls`, at most 500), then one GET per Secret whose version is new, 4 at a time; only the certificate's facts are kept. The first answer waits for them at most 3 s | When older than 10 min |
+| Ingresses | One list, for which Ingress uses a Secret | With the Secrets |
+
+Each read is capped at 32 MB as it streams in and given up after 15 s. The report is worked out again at most every 2
+seconds. Nothing runs between asks; a scope nobody asked about for 60 seconds stops, a cluster keeps at most two
+scopes (the older one stops), and all stop when the cluster disconnects.
+
+Each source's state is `ok`, `forbidden`, `error`, `partial` (a limit was reached or a page failed after others were
+read) or `off` (nodes in a namespace). Only pods are required: without them `cluster:health` answers 403 and the
+Overview shows its lock. Every other state has a sentence: "Can't read Secrets here, so certificates aren't
+checked."; "Only part of the warning events could be read …, so some problems may be missing."; "Couldn't read the
+nodes just now, …". The agent's `cluster_overview` ends with the same sentences.
+
+`doctor:evidence` gives, for a crash loop, an OOM kill, a start failure, restarts or a liveness or startup probe, the
+last 200 lines (64 KB, 10 s) of the first affected pod's container: the previous run when it has restarted, else the
+current one. Only an id in the scope's current report is answered, so the window can't name a pod to read.
 
 ## What the agent reads
 

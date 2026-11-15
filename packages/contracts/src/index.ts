@@ -20,6 +20,8 @@ export const ObjectName = z
   .regex(/^(?!\.{1,2}$)[\x21-\x7e]+$/, "not an object name")
   .regex(/^[^/%?#\\"<>`{}|^[\]]+$/, "not an object name");
 export const Handle = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, "not a cluster handle");
+/** A problem's id as the doctor makes it: one line, at most 600 characters. */
+export const ProblemId = z.string().min(1).max(600).regex(/^[^\u0000-\u001f\u007f]+$/, "not a problem id");
 export const Uid = z.string().regex(/^[A-Za-z0-9-]{1,64}$/, "not a uid");
 
 export const KubeContext = z.object({
@@ -299,6 +301,9 @@ export const channels = {
   "cluster:discovery": z.object({ handle: Handle }),
   "cluster:access": z.object({ handle: Handle, checks: z.array(AccessCheck).max(200) }),
   "cluster:health": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
+  // The cluster doctor (wave 5): its report for a scope, and evidence for one problem in it.
+  "doctor:list": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
+  "doctor:evidence": z.object({ handle: Handle, namespace: NamespaceName.optional(), id: ProblemId }),
   "resource:get": z.object({ handle: Handle, ref: ResourceRef }),
   "resource:events": z.object({ handle: Handle, namespace: NamespaceName.optional(), uid: Uid }),
   "watch:subscribe": WatchRequest,
@@ -395,6 +400,8 @@ export type Responses = {
   "cluster:discovery": { types: ResourceType[] };
   "cluster:access": { allowed: boolean[] };
   "cluster:health": ClusterHealth;
+  "doctor:list": DoctorReport;
+  "doctor:evidence": DoctorEvidence;
   "resource:get": { object: KubeObject };
   "resource:events": { items: KubeObject[] };
   "watch:subscribe": { subscription: string };
@@ -617,7 +624,8 @@ export type ProblemClass =
   | "restarts" | "unavailable" | "node" | "warning" | "cert";
 /** What the doctor could read; a missing check is said plainly rather than read as "no problems". */
 export type DoctorCheck = "pods" | "workloads" | "nodes" | "events" | "certs";
-export type DoctorCheckState = "ok" | "forbidden" | "error" | "off";
+/** ok; forbidden (no access); error (failed this time); partial (a cap or a failed page cut it); off (not for this scope). */
+export type DoctorCheckState = "ok" | "forbidden" | "error" | "partial" | "off";
 /** A TLS Secret's certificate as main reads it from `tls.crt`: dates and names, never the key or the PEM. */
 export type CertFact = {
   notBefore: string;
@@ -673,6 +681,11 @@ export type Problem = {
 };
 /** Kept for the callers that predate the doctor. */
 export type HealthProblem = Problem;
+export type DoctorReport = { at: string; problems: Problem[]; cut: boolean; checks: Record<DoctorCheck, DoctorCheckState> };
+/** On-demand evidence for one problem (D60): the previous run's last lines for a crash, an OOM kill or a probe kill. */
+export type DoctorEvidence = {
+  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean } | { error: string };
+};
 export type HealthEvent = {
   at: string;
   namespace?: string;

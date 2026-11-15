@@ -3,12 +3,50 @@
 // copied, cached or passed on; the window and the agent get a CertFact.
 import { X509Certificate } from "node:crypto";
 import type { CertFact } from "@landlens/contracts";
+import { apiPath, KubeError, type KubeClient } from "./client.js";
+import type { CertInput } from "./doctor.js";
 
 export const CERT_LIMITS = { pemBytes: 256 * 1024, certs: 8, sans: 20, text: 253 } as const;
 
-const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim().slice(0, CERT_LIMITS.text);
+const clean = (s: string) => s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").trim().slice(0, CERT_LIMITS.text);
 /** The CN of an X.509 name ("CN=shop.example\nO=…"), else the whole name. */
 const cn = (name: string) => clean(/(?:^|\n)CN=([^\n]*)/.exec(name)?.[1] ?? name);
+
+/** PEM certificate blocks, found with indexOf (a regex over 256 KiB of repeated BEGIN lines is quadratic). */
+export function pemBlocks(pem: string, max: number): string[] {
+  const BEGIN = "-----BEGIN CERTIFICATE-----";
+  const END = "-----END CERTIFICATE-----";
+  const out: string[] = [];
+  let at = 0;
+  while (out.length < max) {
+    const b = pem.indexOf(BEGIN, at);
+    if (b < 0) break;
+    const e = pem.indexOf(END, b + BEGIN.length);
+    if (e < 0) break;
+    out.push(pem.slice(b, e + END.length));
+    at = e + END.length;
+  }
+  return out;
+}
+
+/** Node's subjectAltName text: `DNS:a, DNS:"b,c", IP Address:10.0.0.1`; quoted values are JSON strings. */
+export function parseSans(s: string): string[] {
+  const out: string[] = [];
+  const re = /(DNS|IP Address):("(?:[^"\\]|\\.)*"|[^,]*)(?:,\s*|$)/g;
+  for (let m = re.exec(s); m && out.length < CERT_LIMITS.sans; m = re.exec(s)) {
+    if (!m[0]) break;
+    let v = m[2]!.trim();
+    if (v.startsWith('"')) {
+      try {
+        v = JSON.parse(v);
+      } catch {
+        continue;
+      }
+    }
+    if (v) out.push(v);
+  }
+  return out;
+}
 
 const UNREADABLE: CertFact = { notBefore: "", notAfter: "", which: "leaf", subject: "", issuer: "", sans: [], selfSigned: false, unreadable: true };
 
@@ -22,7 +60,7 @@ export function certFacts(secret: { data?: Record<string, unknown> } | undefined
   } catch {
     return UNREADABLE;
   }
-  const blocks = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]{1,65536}?-----END CERTIFICATE-----/g) ?? [];
+  const blocks = pemBlocks(pem, CERT_LIMITS.certs);
   if (!blocks.length) return UNREADABLE;
   const certs: X509Certificate[] = [];
   for (const b of blocks.slice(0, CERT_LIMITS.certs)) {
@@ -34,16 +72,13 @@ export function certFacts(secret: { data?: Record<string, unknown> } | undefined
   }
   const leaf = certs[0]!;
   const after = (c: X509Certificate) => Date.parse(c.validTo);
-  const earliest = certs.reduce((a, c) => (after(c) < after(a) ? c : a), leaf);
+  // A self-signed root in the chain is the client's to trust or not (its own store decides), so its date isn't the
+  // Secret's problem; the leaf's and the intermediates' are (security review, wave 5 part 1, finding 7).
+  const earliest = certs.reduce((a, c) => (c !== leaf && c.subject === c.issuer ? a : after(c) < after(a) ? c : a), leaf);
   const notBefore = Date.parse(leaf.validFrom);
   const notAfter = after(earliest);
   if (!Number.isFinite(notBefore) || !Number.isFinite(notAfter)) return UNREADABLE;
-  const sans = (leaf.subjectAltName ?? "")
-    .split(/,\s*/)
-    .map((x) => /^(?:DNS|IP Address):(.+)$/.exec(x.trim())?.[1])
-    .filter((x): x is string => !!x)
-    .slice(0, CERT_LIMITS.sans)
-    .map(clean);
+  const sans = parseSans(leaf.subjectAltName ?? "").slice(0, CERT_LIMITS.sans).map(clean);
   return {
     notBefore: new Date(notBefore).toISOString(),
     notAfter: new Date(notAfter).toISOString(),
@@ -53,4 +88,45 @@ export function certFacts(secret: { data?: Record<string, unknown> } | undefined
     sans,
     selfSigned: leaf.subject === leaf.issuer,
   };
+}
+
+const SECRETS = { group: "", version: "v1", resource: "secrets" };
+const META = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;q=0.9";
+/** TLS Secrets read per scope; more are left out and the result says so. */
+export const MAX_TLS_SECRETS = 500;
+
+/**
+ * The scope's TLS Secrets' certificates, as the caller (D54): a metadata-only list (`type=kubernetes.io/tls`, at
+ * most 500), then one capped GET for each Secret whose version isn't in `cache`. Only the CertFact is kept; a Secret
+ * that can't be read is left out. Throws the list's error (403 when Secrets can't be listed).
+ */
+export async function readCerts(client: KubeClient, namespace: string | undefined, cache: Map<string, CertInput>): Promise<{ certs: CertInput[]; cut: boolean }> {
+  const q = new URLSearchParams({ fieldSelector: "type=kubernetes.io/tls", limit: String(MAX_TLS_SECRETS) });
+  const { value: list } = await client.jsonText(`${apiPath(SECRETS, namespace)}?${q}`, { maxBytes: 8 * 1048576, headers: { Accept: META }, signal: AbortSignal.timeout(15_000) });
+  const metas = ((list?.items ?? []) as { metadata?: { name?: string; namespace?: string; resourceVersion?: string } }[])
+    .map((i) => ({ name: String(i.metadata?.name ?? ""), namespace: String(i.metadata?.namespace ?? ""), rv: String(i.metadata?.resourceVersion ?? "") }))
+    .filter((m) => m.name && m.namespace)
+    .slice(0, MAX_TLS_SECRETS);
+  const key = (m: { name: string; namespace: string; rv: string }) => `${m.namespace}/${m.name}@${m.rv}`;
+  const todo = metas.filter((m) => !cache.has(key(m)));
+  await pool(todo, 4, async (m) => {
+    try {
+      const secret = await client.jsonCapped(apiPath(SECRETS, m.namespace, m.name), { maxBytes: 1048576, timeoutMs: 10_000 });
+      // The Secret goes out of scope here: only its certificate's dates and names are kept.
+      cache.set(key(m), { namespace: m.namespace, name: m.name, fact: certFacts(secret) });
+    } catch (e) {
+      if (e instanceof KubeError && e.status === 413) cache.set(key(m), { namespace: m.namespace, name: m.name, fact: { ...UNREADABLE } });
+      // Gone since the list, or not readable by name: left out.
+    }
+  });
+  const live = new Set(metas.map(key));
+  for (const k of cache.keys()) if (!live.has(k)) cache.delete(k);
+  return { certs: metas.map((m) => cache.get(key(m))).filter((c): c is CertInput => !!c), cut: !!list?.metadata?.continue };
+}
+
+async function pool<T>(items: T[], n: number, f: (t: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (next < items.length) await f(items[next++]!);
+  }));
 }

@@ -5,7 +5,7 @@ import { contextBridge, ipcRenderer } from "electron";
 // Kept in step with @landlens/contracts (a sandboxed preload can't import zod at run time).
 const CHANNELS: readonly Channel[] = [
   "catalog:list", "cluster:connect", "cluster:disconnect", "cluster:discovery", "cluster:access",
-  "cluster:health", "resource:get", "resource:events", "watch:subscribe", "watch:unsubscribe",
+  "cluster:health", "doctor:list", "doctor:evidence", "resource:get", "resource:events", "watch:subscribe", "watch:unsubscribe",
   "agent:start", "agent:prompt", "agent:cancel", "agent:mode", "agent:config", "agent:answer", "agent:decide", "agent:close", "agent:history", "agent:resume", "agent:forget", "agent:settings", "agent:skills", "link:open",
   "metrics:series", "metrics:settings", "metrics:configure", "metrics:test", "metrics:disconnect",
   "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:auto-run", "mcp:remove", "mcp:preset", "mcp:calls", "mcp:try",
