@@ -240,7 +240,9 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     // A session's summary to the brain (D134–D135): a sheet per window; send names its digest.
     "brain:draft": async ({ session }, event) => report.brain.draft(session, event.sender),
     "brain:ask": ({ sheet }, event) => report.brain.ask(sheet, event.sender),
-    "brain:send": (req, event) => report.brain.send(req, event.sender),
+    "brain:cancel": ({ sheet }, event) => report.brain.cancel(sheet, event.sender),
+    // Team or org: main's own dialog shows the text and who will see it (review of part 5, M4).
+    "brain:send": (req, event) => report.brain.send(req, event.sender, nativeConfirm(event)),
     "brain:remove": ({ session }) => report.brain.remove(session),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),

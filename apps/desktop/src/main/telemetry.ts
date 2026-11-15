@@ -6,7 +6,7 @@
 // With "counts only" no cluster, namespace or object name goes. The Go sidecar sends nothing (D131): main reports its
 // exits. While off, no record is built and the queue is empty.
 import { randomBytes } from "node:crypto";
-import { DEFAULT_COLLECTOR, TELEMETRY_NOTES, type AgentChange, type ClusterInfo, type McpCall, type TelemetryInfo, type TelemetryRecord } from "@landlens/contracts";
+import { clusterLabel, DEFAULT_COLLECTOR, TELEMETRY_NOTES, type AgentChange, type ClusterInfo, type McpCall, type TelemetryInfo, type TelemetryRecord } from "@landlens/contracts";
 import { changeSpan, event, gauge, resourceOf, sum, TelemetryQueue, toolSpan, turnSpan, type AskOf, type EventName, type Severity, type SumLabels, type SumName } from "@landlens/telemetry";
 import type { AuditEntry } from "@landlens/kube";
 import type { StoredTelemetry } from "./clickland-settings";
@@ -15,7 +15,8 @@ import type { StoredTelemetry } from "./clickland-settings";
  * `settleMs`: how long a turn's span waits after the prompt's answer for ACP's last usage_update (the model and the
  * running cost), which the SDK may hand over after the answer although it was sent before it.
  */
-export const TELEMETRY = { metricsMs: 60_000, settleMs: 250 } as const;
+/** `stopMs`: the most a quit waits for the last flush (review of part 5, L5). */
+export const TELEMETRY = { metricsMs: 60_000, settleMs: 250, stopMs: 2_000 } as const;
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 const hex = (bytes: number) => randomBytes(bytes).toString("hex");
@@ -31,8 +32,22 @@ export type TelemetryDeps = {
   settings: { telemetry(): StoredTelemetry; setTelemetry(t: StoredTelemetry): void };
   /** The family's address rule with this build's overrides (main/family.ts). */
   allowed(url: string): boolean;
-  /** The cluster's name in Clickland, the one the person set for graphs. */
-  clusterName(context: string): string;
+  /**
+   * The cluster's name in Clickland, if the person set one for graphs. Without one, the context's own name goes only
+   * when it is plain (clusterLabel: no GKE project, EKS account id or user in it; review of part 5, L2).
+   */
+  clusterName(context: string): string | undefined;
+  /**
+   * Whether the doctor's report for this context names a problem about the object (and of the class, when given): a
+   * doctor brief's "Subject:" line is text in the prompt, so its names go only when main's own report has them (L1).
+   */
+  problemAbout?(context: string, subject: { kind?: string; namespace?: string; name?: string }, cls?: string): boolean;
+  /**
+   * Whether the tool is one the session's server listed as the person accepted it (a reserved server's pinned listing,
+   * a sibling's offered tools, Landlens's own): any other name is the agent's or the server's word and goes as
+   * `unknown` (L8).
+   */
+  knownTool?(session: string, server: string, tool: string): boolean;
   clusters(): ClusterInfo[];
   /** The doctor's problems per cluster, class and tone. */
   problems(): { handle: string; class: string; tone: string; n: number }[];
@@ -61,6 +76,8 @@ export class TelemetryService {
   private timer: ReturnType<typeof setInterval> | undefined;
   /** One collector dialog at a time. */
   private asking = false;
+  /** Turns waiting for their last usage_update: stop() builds them at once (L5). */
+  private readonly settling = new Map<ReturnType<typeof setTimeout>, () => void>();
 
   constructor(private readonly d: TelemetryDeps) {
     this.queue = new TelemetryQueue({
@@ -102,12 +119,24 @@ export class TelemetryService {
     this.timer.unref?.();
   }
 
+  /**
+   * Quitting: turns still settling are built now, the sums go, and the last flush gets at most TELEMETRY.stopMs; what
+   * hasn't gone by then is dropped and its POST aborted, so a collector that never answers can't hold the quit (L5).
+   */
   async stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    for (const [timer, finish] of this.settling) {
+      clearTimeout(timer);
+      finish();
+    }
+    this.settling.clear();
     if (this.on) {
       this.tick();
-      await this.queue.flush();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([this.queue.flush(), new Promise<void>((r) => (timer = setTimeout(r, TELEMETRY.stopMs)))]);
+      clearTimeout(timer);
+      this.queue.clear();
     }
     this.queue.stop();
   }
@@ -127,9 +156,11 @@ export class TelemetryService {
   }
 
   /**
-   * The card's switches (D133). Turning telemetry on, or giving another collector while it is on, asks in main's own
-   * dialog, which names the host: a window can't send Landlens's records anywhere the person didn't confirm. Off drops
-   * what waits, unsent.
+   * The card's switches (D133). Turning telemetry on, giving another collector while it is on, or turning names back on
+   * while it is on (review of part 5, M3) asks in main's own dialog, which names the host: a window can't send
+   * Landlens's records anywhere, or with more in them, than the person confirmed. Narrowing (off, counts only) never
+   * asks. Off, another collector or counts only drops what waits, unsent, and stops a send in flight (M2): a record is
+   * sent only to the collector, and with the names, it was made under.
    */
   async set(req: { on?: boolean; collector?: string; names?: boolean; team?: string | null }, confirm: (q: { message: string; detail: string; yes: string }) => Promise<boolean>): Promise<TelemetryInfo> {
     const t = this.stored();
@@ -140,28 +171,28 @@ export class TelemetryService {
       on, collector, names: req.names ?? t.names,
       ...(req.team === null ? {} : req.team !== undefined ? { team: req.team } : t.team ? { team: t.team } : {}),
     };
-    const newPlace = on && (!t.on || collector !== (t.collector ?? DEFAULT_COLLECTOR));
-    if (newPlace) {
+    const moved = collector !== (t.collector ?? DEFAULT_COLLECTOR);
+    const newPlace = on && (!t.on || moved);
+    const widened = on && t.on && next.names && !t.names;
+    if (newPlace || widened) {
       if (this.asking) throw fail(409, TELEMETRY_NOTES.dialogOpen);
       this.asking = true;
       let yes: boolean;
       try {
         const host = new URL(collector).host;
         yes = await confirm({
-          message: `Send Landlens's telemetry to ${host}?`,
+          message: newPlace ? `Send Landlens's telemetry to ${host}?` : `Send names with Landlens's telemetry to ${host}?`,
           detail: `Landlens will send its own spans, counts and events to the OpenTelemetry collector at:\n${collector}\n\nNo prompt or answer text, tool arguments, log lines, YAML or secrets. ${next.names ? "The names of the cluster, namespace and the object a question was about go with them." : "Counts only: no cluster, namespace or object names."}`,
           yes: "Send telemetry",
         });
       } finally {
         this.asking = false;
       }
-      if (!yes) throw fail(409, TELEMETRY_NOTES.declined);
+      if (!yes) throw fail(409, newPlace ? TELEMETRY_NOTES.declined : TELEMETRY_NOTES.namesDeclined);
     }
     this.d.settings.setTelemetry(next);
-    if (!on) {
-      this.queue.clear();
-      this.counters.clear();
-    }
+    if (!on || moved || (t.names && !next.names)) this.queue.clear();
+    if (!on) this.counters.clear();
     this.d.push?.();
     return this.info();
   }
@@ -205,9 +236,16 @@ export class TelemetryService {
     if (s) s.mode = mode;
   }
 
-  /** A prompt turn begins: its trace and span ids, so the gateway calls in it are its children. */
+  /**
+   * A prompt turn begins: its trace and span ids, so the gateway calls in it are its children. A doctor brief's subject
+   * stays only if the doctor's own report names a problem about it (L1).
+   */
   turnStarted(session: string, ask: AskOf) {
     const s = this.sessions.get(session);
+    if (ask.ask === "problem" && ask.subject && !(s && this.d.problemAbout?.(s.context, ask.subject, ask.problem))) {
+      const { subject: _gone, ...rest } = ask;
+      ask = rest;
+    }
     this.turns.set(session, { traceId: hex(16), spanId: hex(8), start: this.now, ask, mode: s?.mode ?? "default", ...(s?.cost !== undefined ? { cost0: s.cost } : {}) });
   }
 
@@ -230,8 +268,10 @@ export class TelemetryService {
     const at = this.now;
     const s = this.sessions.get(session);
     return new Promise((done) => {
-      const timer = setTimeout(() => (this.finishTurn(session, t, s, at, end), done()), TELEMETRY.settleMs);
+      const finish = () => (this.finishTurn(session, t, s, at, end), done());
+      const timer = setTimeout(() => (this.settling.delete(timer), finish()), TELEMETRY.settleMs);
       timer.unref?.();
+      this.settling.set(timer, finish);
     });
   }
 
@@ -239,7 +279,7 @@ export class TelemetryService {
     const tc = (e.meta as { quota?: { token_count?: Record<string, unknown> } } | undefined)?.quota?.token_count;
     const cost = s?.cost !== undefined ? s.cost - (t.cost0 ?? 0) : undefined;
     const names = this.names && s ? {
-      cluster: this.d.clusterName(s.context),
+      cluster: clusterLabel(this.d.clusterName(s.context), s.context),
       namespaces: s.namespaces,
       ...(t.ask.subject ? { subject: t.ask.subject } : {}),
       ...(t.ask.problem ? { problem: t.ask.problem } : {}),
@@ -271,7 +311,7 @@ export class TelemetryService {
     const turn = this.turns.get(c.session);
     this.push(toolSpan({
       traceId: turn?.traceId ?? hex(16), spanId: hex(8), ...(turn ? { parent: turn.spanId } : {}),
-      start: c.startedAt, end: c.endedAt ?? this.now, server, tool: c.tool, status,
+      start: c.startedAt, end: c.endedAt ?? this.now, server, tool: this.d.knownTool?.(c.session, c.server, c.tool) ? c.tool : undefined, status,
       gate: c.gate ? GATE[c.gate] : "auto", who: WHO[c.origin],
     }));
   }
@@ -319,7 +359,7 @@ export class TelemetryService {
       const byHandle = new Map(clusters.map((c) => [c.handle, c.context]));
       for (const p of this.d.problems()) {
         const ctx = byHandle.get(p.handle);
-        if (ctx) this.queue.push(gauge("landlens.doctor.problems", p.n, { cluster: this.d.clusterName(ctx), class: p.class, tone: p.tone }, now, this.names));
+        if (ctx) this.queue.push(gauge("landlens.doctor.problems", p.n, { cluster: clusterLabel(this.d.clusterName(ctx), ctx), class: p.class, tone: p.tone }, now, this.names));
       }
     }
     this.counters = new Map();

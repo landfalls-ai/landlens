@@ -3,7 +3,7 @@
 import type { Problem } from "@landlens/contracts";
 import { describe, expect, it } from "vitest";
 import {
-  allSections, badgeWords, isOpen, NO_FOLDS, OPEN_BY_DEFAULT, readNavFolds, rollUp, setAll, setOpen, shownRows, writeNavFolds,
+  allSections, badgeWords, isOpen, loadNavFolds, NO_FOLDS, OPEN_BY_DEFAULT, readNavFolds, rollUp, setAll, setOpen, shownRows, storeNavFolds, writeNavFolds,
 } from "../src/renderer/src/navState";
 
 const problem = (kind: string, tone: "bad" | "warn", podCount = 0): Problem =>
@@ -48,6 +48,19 @@ describe("the sidebar's folds", () => {
     expect(readNavFolds('{"closed":["Config","Config","Storage"],"opened":["Storage"]}')).toEqual({ closed: ["Config"], opened: [] });
     expect(readNavFolds(JSON.stringify({ closed: ["x".repeat(254)], opened: [] }))).toEqual(NO_FOLDS);
     expect(readNavFolds(JSON.stringify({ closed: Array.from({ length: 500 }, (_, i) => `g${i}`), opened: [] })).closed).toHaveLength(400);
+  });
+});
+
+describe("the folds' storage (review of part 5, L10)", () => {
+  it("never throws: a storage that throws reads as no choices, and a write says it didn't keep it", () => {
+    const f = setOpen(NO_FOLDS, "Config", false);
+    const kept = new Map<string, string>();
+    const ok = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) };
+    expect(storeNavFolds(ok, "k", f)).toBe(true);
+    expect(loadNavFolds(ok, "k")).toEqual(f);
+    const broken = { getItem: () => { throw new Error("SecurityError"); }, setItem: () => { throw new Error("QuotaExceededError"); } };
+    expect(storeNavFolds(broken, "k", f)).toBe(false);
+    expect(loadNavFolds(broken, "k")).toEqual(NO_FOLDS);
   });
 });
 

@@ -141,6 +141,26 @@ describe.runIf(run)("the ⌘K search on OrbStack", () => {
     await header("Workloads").waitFor();
     expect(await expanded("Workloads")).toBe("false");
     await header("Workloads").click();
+
+    // Storage that throws (full, or turned off): a fold still toggles and the sidebar stays, Problems included; it just
+    // isn't remembered (security review of part 5, L10).
+    await page.evaluate(() => {
+      const p = Storage.prototype as unknown as { setItem: unknown; keep?: unknown };
+      p.keep = p.setItem;
+      p.setItem = () => { throw new DOMException("The quota has been exceeded.", "QuotaExceededError"); };
+    });
+    try {
+      await header("Network").click();
+      await expect.poll(() => expanded("Network")).toBe("false");
+      await header("Network").click();
+      await expect.poll(() => expanded("Network")).toBe("true");
+      await sidebar.getByRole("button", { name: /^Problems/ }).waitFor({ timeout: 2_000 });
+    } finally {
+      await page.evaluate(() => {
+        const p = Storage.prototype as unknown as { setItem: unknown; keep?: unknown };
+        if (p.keep) p.setItem = p.keep;
+      });
+    }
     await page.keyboard.press("Meta+1");
   }, 120_000);
 

@@ -87,6 +87,12 @@ export class ClicklandSettingsStore {
     return this.read().clusters?.[context] ?? context;
   }
 
+  /** The name the person set for this context's graphs, if any (telemetry and the brain fall back by clusterLabel). */
+  namedCluster(context: string): string | undefined {
+    const c = this.read().clusters;
+    return c && Object.hasOwn(c, context) ? c[context] : undefined;
+  }
+
   set(input: { url: string; key?: string; cluster?: { context: string; name: string } }, context?: string): ClicklandSettings {
     const s = this.read();
     const moved = origin(input.url) !== origin(s.url ?? DEFAULT_CLICKLAND_URL);

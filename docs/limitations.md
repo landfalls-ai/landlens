@@ -219,13 +219,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
   a live Claude Code turn with telemetry on, and the brain's live check (`LANDLENS_LIVE_WRITES=1`) waits for the
   person. A turn's model and cost come from ACP's `usage_update`; a turn's span waits 250 ms after the answer for it,
   and a turn with none has neither. Cost is ACP's running total split by turn, so a turn that overlaps the brain's
-  draft turn counts both. The cluster's name is the one set for graphs (the context's name otherwise); with counts
-  only, neither it nor a change's kind is sent. Change verbs are the approval broker's (create, update, patch,
+  draft turn counts both. The cluster's name is the one set for graphs; without one, the context's own name goes only
+  when it is plain (one lowercase DNS label with no run of six digits), so a context named plainly after a project
+  (`acme-prod`) still goes: set a name for graphs, or choose counts only. With counts only, neither it nor a change's
+  kind is sent. "Ask Claude to draft" can't run without tools (ACP sets tools per session, not per prompt), so a tool
+  call cancels it rather than being impossible; the agent may still have read the session's folder in that turn. Change verbs are the approval broker's (create, update, patch,
   delete), not the tool's (scale, restart, undo). The events are the ones main sees (sessions, clusters, the sidecar's
   and the adapter's exits, a refused gateway call, drops); there is no `clickland.unreachable` or `cluster.unreachable`.
   The brain's draft counts tool calls, cluster reads and the problem in this launch only, so a session from an earlier
   launch drafts from its history's questions and changes. "Ask Claude to draft" is a turn in the session, so it shows
-  in the dock (marked) and in Claude Code's transcript; a session that is answering refuses it.
+  in the dock (marked) and in Claude Code's transcript; a session that is answering refuses it, and a question waits
+  until the draft is done or cancelled. During a collector outage records wait (up to 2,000) and are tried every 10 s;
+  a quit sends for at most 2 s.
   After the security review of part 4: a flow shared from another project is listed (marked "Shared from the project
   …") and can be run; Landlens only shows whose it is and refuses one that changed since the list. A ConfigMap's
   values are sent when its YAML is ticked, scrubbed (the keyed pattern now sees `DB_PASSWORD: …` in the YAML text),

@@ -9,7 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { listingHash, McpGateway, newCallId, testRemote, type GatewaySession, type RemoteSpec } from "../src/index.js";
+import { DRAFTING, listingHash, McpGateway, newCallId, testRemote, type GatewaySession, type RemoteSpec } from "../src/index.js";
 
 const types: ResourceType[] = [
   { group: "", version: "v1", resource: "pods", kind: "Pod", namespaced: true, verbs: ["get", "list"], shortNames: ["po"] },
@@ -200,6 +200,31 @@ describe("the MCP gateway", () => {
     expect(gateway.log.list().find((c) => c.tool === "refresh")).toMatchObject({ status: "refused", origin: "agent" });
     expect(events.some((e) => e.id === call.id && e.status === "running")).toBe(true);
     expect(events.some((e) => e.id === call.id && e.status === "ok")).toBe(true);
+  });
+
+  it("refuses every call of the agent's while Claude drafts the brain's summary (review of wave 7 part 5, L4)", async () => {
+    const c = await connect(`${gateway.url}/fake`, session.token);
+    gateway.drafting("acp-1", true);
+    const r: any = await c.callTool({ name: "list_things", arguments: { filter: "x" } });
+    expect(r.isError).toBe(true);
+    expect(r.content[0].text).toBe(`Landlens: ${DRAFTING}`);
+    gateway.drafting("acp-1", false);
+    const after: any = await c.callTool({ name: "list_things", arguments: { filter: "x" } });
+    expect(after.isError).toBeFalsy();
+    await c.close();
+  });
+
+  it("knows a tool by name only as its server listed it, pinned or Landlens's own (L8)", async () => {
+    expect(gateway.knownTool(session.id, "landlens-kube", "get_events")).toBe(true);
+    expect(gateway.knownTool(session.id, "fake", "list_things")).toBe(true);
+    expect(gateway.knownTool(session.id, "fake", "a_name_the_agent_made_up")).toBe(false);
+    expect(gateway.knownTool(session.id, "landlens-kube", "a_name_the_agent_made_up")).toBe(false);
+    expect(gateway.knownTool("not-a-session", "landlens-kube", "get_events")).toBe(false);
+    // A listing that isn't the pinned one: none of its names.
+    const changed = await gateway.open({ label: "agent 18 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [{ name: "fake", url: remoteUrl, headers: { "X-Api-Key": "k_secret" }, pin: "0".repeat(64) }] });
+    changed.bind("acp-18");
+    expect(gateway.knownTool(changed.id, "fake", "list_things")).toBe(false);
+    await changed.close();
   });
 
   it("serves landlens-kube at /mcp and records the front-door requests of each call", async () => {

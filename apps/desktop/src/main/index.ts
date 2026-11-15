@@ -147,7 +147,12 @@ async function start() {
   const tel = new TelemetryService({
     settings,
     allowed: (url) => family.urlAllowed(url),
-    clusterName: (context) => settings.clusterName(context),
+    // The name set for graphs; without one, a plain context name only (clusterLabel; review of part 5, L2).
+    clusterName: (context) => settings.namedCluster(context),
+    // A doctor brief's subject goes only when the doctor's own report names it (L1).
+    problemAbout: (context, subject, cls) => clusters.list().some((c) => c.context === context && doctor.reports(c.handle, subject, cls)),
+    // A tool's name goes only when its server listed it as the person accepted it (L8).
+    knownTool: (session, server, tool) => mcp?.gateway.knownTool(session, server, tool) ?? false,
     clusters: () => clusters.list(),
     problems: () => doctor.problemCounts(),
     version: app.getVersion(),
@@ -250,12 +255,14 @@ async function start() {
       mode: (id, m) => tel.modeChanged(id, m),
       exited: () => tel.adapterExited(),
     }],
-    // Tests only (unpackaged): a fake ACP agent in place of claude-agent-acp.
-    adapter: adapterEntry(process.env, app.isPackaged),
+    // Tests only (unpackaged): a fake ACP agent from test/fixtures in place of claude-agent-acp, with a warning (L9).
+    adapter: adapterEntry(process.env, app.isPackaged, resolve(app.getAppPath(), "test/fixtures"), (l) => console.warn(l)),
+    // While Claude drafts the brain's summary, the gateway refuses the agent's calls (L4).
+    onDraft: (session, on) => gateway.drafting(session, on),
     log: (l) => console.log(l),
   });
   agentRef = agent;
-  const brain = new BrainService({ family, history: agentHistory, agent });
+  const brain = new BrainService({ family, history: agentHistory, agent, clusterName: (context) => settings.namedCluster(context) });
   brainRef = brain;
   agent.addObserver(brain.observer);
   const workbench = new WorkbenchService({ clusters, frontDoor, dataDir: app.getPath("userData") });

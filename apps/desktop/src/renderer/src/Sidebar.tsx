@@ -7,7 +7,7 @@ import type { Badge } from "./health";
 import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import {
-  allSections, badgeWords, CLOUD, isOpen, NAV_KEY, navGroupsKey, PINNED, readNavFolds, rollUp, setAll, shownRows, WORKSPACE, writeNavFolds,
+  allSections, badgeWords, CLOUD, isOpen, loadNavFolds, NAV_KEY, navGroupsKey, PINNED, rollUp, setAll, shownRows, storeNavFolds, WORKSPACE,
   type NavFolds,
 } from "./navState";
 import { clusterTile } from "./present";
@@ -29,24 +29,22 @@ export type NavFoldState = {
   setGroups: (ids: readonly string[], open: boolean) => void;
 };
 
-/** The sidebar's folds, kept in localStorage (D139): sections for every cluster, API groups per context. */
+/**
+ * The sidebar's folds, kept in localStorage (D139): sections for every cluster, API groups per context. The updaters
+ * are pure; the write happens in an effect after the fold changed, and a storage that throws (full, disabled) only
+ * means the fold isn't remembered: it can't take the sidebar down (security review of part 5, L10).
+ */
 export function useNavFolds(context: string): NavFoldState {
-  const [folds, setFolds] = useState<NavFolds>(() => readNavFolds(localStorage.getItem(NAV_KEY)));
-  const [groups, setGroupFolds] = useState<NavFolds>(() => readNavFolds(localStorage.getItem(navGroupsKey(context))));
-  useEffect(() => setGroupFolds(readNavFolds(localStorage.getItem(navGroupsKey(context)))), [context]);
+  const [folds, setFolds] = useState<{ folds: NavFolds; dirty: boolean }>(() => ({ folds: loadNavFolds(localStorage, NAV_KEY), dirty: false }));
+  const [groups, setGroupFolds] = useState<{ context: string; folds: NavFolds; dirty: boolean }>(() => ({ context, folds: loadNavFolds(localStorage, navGroupsKey(context)), dirty: false }));
+  useEffect(() => setGroupFolds({ context, folds: loadNavFolds(localStorage, navGroupsKey(context)), dirty: false }), [context]);
+  useEffect(() => void (folds.dirty && storeNavFolds(localStorage, NAV_KEY, folds.folds)), [folds]);
+  useEffect(() => void (groups.dirty && storeNavFolds(localStorage, navGroupsKey(groups.context), groups.folds)), [groups]);
   return {
-    folds,
-    groups,
-    setSections: (ids, open) => setFolds((f) => {
-      const next = setAll(f, ids, open);
-      localStorage.setItem(NAV_KEY, writeNavFolds(next));
-      return next;
-    }),
-    setGroups: (ids, open) => setGroupFolds((g) => {
-      const next = setAll(g, ids, open);
-      localStorage.setItem(navGroupsKey(context), writeNavFolds(next));
-      return next;
-    }),
+    folds: folds.folds,
+    groups: groups.folds,
+    setSections: (ids, open) => setFolds((f) => ({ folds: setAll(f.folds, ids, open), dirty: true })),
+    setGroups: (ids, open) => setGroupFolds((g) => ({ ...g, folds: setAll(g.folds, ids, open), dirty: true })),
   };
 }
 

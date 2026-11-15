@@ -3,10 +3,11 @@
 // `work.session` event by rule, and keeps it under a sheet owned by the window that asked, with the digest of the
 // fields main fills. The window edits the text and sends with the sheet and the digest: main refuses a sheet it didn't
 // make, another window's, an old one, or a session that moved on since; refuses text whose scrub would change it (so
-// what is sent is what was shown); checks Landflow's own rules; then POSTs with the key it holds. Nothing is sent but
-// on the person's click, and the person's Landflow is the only place it goes.
+// what is sent is what was shown); checks Landflow's own rules; asks in main's own dialog, showing the text, before an
+// event anyone else will see (team or org; review of part 5, M4); then POSTs with the key it holds. Nothing is sent but
+// on the person's click, and the person's Landflow is the only place it goes. A window's sheets go with it (L7).
 import { createHash, randomBytes } from "node:crypto";
-import { BRAIN_NOTES, BRAIN_PROMPT, type AgentChange, type AgentHistoryEntry, type BrainDraft, type BrainSend, type McpCall, type WorkDraft, type WorkVisibility } from "@landlens/contracts";
+import { BRAIN_NOTES, BRAIN_PROMPT, clusterLabel, type AgentChange, type AgentHistoryEntry, type BrainDraft, type BrainSend, type McpCall, type WorkDraft, type WorkVisibility } from "@landlens/contracts";
 import { checkWork, draftWork, factLines, FamilyError, recordWork, removeWork, type SessionFacts } from "@landlens/connections";
 import { rawError } from "@landlens/mcp-gateway";
 import { redactText } from "@landlens/kube-mcp";
@@ -15,7 +16,10 @@ import type { AgentObserver } from "./agent";
 
 export const BRAIN = { sheetMs: 30 * 60_000, sheets: 20, draftChars: 500 } as const;
 
-type Owner = object;
+/** The window that asked: its WebContents in the app, which says when it is destroyed. */
+type Owner = object & { once?(event: "destroyed", f: () => void): unknown };
+type Confirm = (q: { message: string; detail: string; yes: string }) => Promise<boolean>;
+const AUDIENCE: Record<WorkVisibility, string> = { private: "only you", team: "your team", org: "everyone in your organisation" };
 type Ledger = { tools: number; reads: number; proposed: number; problem?: string };
 type Sheet = { owner: Owner; at: number; session: string; fixed: Omit<WorkDraft, "title" | "summary" | "visibility" | "team" | "initiative">; digest: string };
 
@@ -30,7 +34,9 @@ const fixedOf = (e: WorkDraft): Sheet["fixed"] => ({
 export type BrainDeps = {
   family: { landflowUse(): { origin: string; key: string; can: { brain: boolean } } | undefined; log(line: string): void };
   history: { get(session: string): AgentHistoryEntry | undefined };
-  agent: { isOpen(session: string): boolean; draft(session: string, prompt: string): Promise<string> };
+  agent: { isOpen(session: string): boolean; draft(session: string, prompt: string): Promise<string>; cancelDraft?(session: string): Promise<boolean> };
+  /** The name the person set for a context's graphs in Clickland, if any (the draft's title falls back by clusterLabel). */
+  clusterName?(context: string): string | undefined;
   fetch?: typeof fetch;
   now?: () => number;
 };
@@ -40,6 +46,10 @@ export class BrainService {
   private readonly sheets = new Map<string, Sheet>();
   /** Calls and changes already counted (each is reported more than once as it moves). */
   private readonly seen = new Set<string>();
+  /** Windows whose going away already drops their sheets. */
+  private readonly watched = new WeakSet<object>();
+  /** One audience dialog at a time. */
+  private asking = false;
 
   constructor(private readonly d: BrainDeps) {}
 
@@ -86,8 +96,10 @@ export class BrainService {
     const e = this.d.history.get(session);
     if (!e) return undefined;
     const l = this.ledgers.get(session) ?? { tools: 0, reads: 0, proposed: 0 };
+    // The cluster's name for graphs, else a plain context name; never a GKE project, an account id or a user (L3).
+    const cluster = clusterLabel(this.d.clusterName?.(e.context), e.context);
     return {
-      session, cluster: e.context, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), ...(l.problem ? { problem: l.problem } : {}),
+      session, ...(cluster ? { cluster } : {}), ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), ...(l.problem ? { problem: l.problem } : {}),
       createdAt: e.createdAt, updatedAt: e.updatedAt, questions: e.prompts, tools: l.tools, reads: l.reads,
       proposed: Math.max(l.proposed, e.applied + e.rejected), applied: e.applied, rejected: e.rejected,
     };
@@ -129,12 +141,18 @@ export class BrainService {
     if (this.sheets.size >= BRAIN.sheets) this.sheets.delete([...this.sheets.entries()].sort((a, b) => a[1].at - b[1].at)[0]![0]);
     const key = `bs${randomBytes(18).toString("base64url")}`;
     this.sheets.set(key, { owner, at: now, session, fixed, digest });
+    // The window's sheets go when it does (L7), as its watches do.
+    if (!this.watched.has(owner) && typeof owner.once === "function") {
+      this.watched.add(owner);
+      owner.once("destroyed", () => this.dropFor(owner));
+    }
     return { sheet: key, digest, to: new URL(lf.origin).host, event, facts: factLines(f), open: this.d.agent.isOpen(session) };
   }
 
   /**
    * "Ask Claude to draft" (D134): one turn in the open session with main's fixed prompt; the answer goes in the box,
-   * scrubbed and cut to 500 characters, still editable. The window's text never reaches the prompt.
+   * scrubbed and cut to 500 characters, still editable. The window's text never reaches the prompt. The turn runs with
+   * no tool (the agent refuses each; review of part 5, L4) and can be cancelled from the sheet.
    */
   async ask(key: string, owner: Owner): Promise<{ summary: string }> {
     const s = this.sheet(key, owner);
@@ -143,7 +161,10 @@ export class BrainService {
     try {
       text = await this.d.agent.draft(s.session, BRAIN_PROMPT);
     } catch (err) {
-      if ((err as { busy?: boolean })?.busy) throw fail(409, BRAIN_NOTES.busy);
+      const e = err as { busy?: boolean; cancelled?: boolean; tool?: boolean };
+      if (e?.busy) throw fail(409, BRAIN_NOTES.busy);
+      if (e?.tool) throw fail(409, BRAIN_NOTES.draftTool);
+      if (e?.cancelled) throw fail(409, BRAIN_NOTES.draftCancelled);
       throw err;
     }
     // The sheet was made before this turn: its digest still names the same fields (the history doesn't count it).
@@ -151,12 +172,18 @@ export class BrainService {
     return { summary: one.length > BRAIN.draftChars ? `${one.slice(0, BRAIN.draftChars - 1)}…` : one };
   }
 
+  /** The sheet's Cancel while Claude drafts: the draft's turn is cancelled (L4). */
+  async cancel(key: string, owner: Owner): Promise<{ ok: boolean }> {
+    const s = this.sheet(key, owner);
+    return { ok: (await this.d.agent.cancelDraft?.(s.session)) ?? false };
+  }
+
   /**
    * Send the sheet (D134–D135): main's fields as the sheet showed them (the digest), the person's text as typed. A
    * session that moved on since is refused (look again); text the scrub would change is refused with the scrubbed text,
    * so what goes is exactly what the person sees; then Landflow's own rules, then the POST.
    */
-  async send(req: { sheet: string; digest: string; title: string; summary: string; visibility: WorkVisibility; team?: string; initiative?: string }, owner: Owner): Promise<BrainSend> {
+  async send(req: { sheet: string; digest: string; title: string; summary: string; visibility: WorkVisibility; team?: string; initiative?: string }, owner: Owner, confirm?: Confirm): Promise<BrainSend> {
     const s = this.sheet(req.sheet, owner);
     if (s.digest !== req.digest) throw fail(409, BRAIN_NOTES.changed);
     const f = this.facts(s.session);
@@ -168,6 +195,28 @@ export class BrainService {
     const problem = checkWork(event);
     if (problem) return { saved: false, note: problem };
     const lf = this.landflow();
+    // An event others will see is the window's text under the person's name: main's own dialog shows it first (M4).
+    if (req.visibility !== "private") {
+      if (!confirm) return { saved: false, note: BRAIN_NOTES.declined };
+      if (this.asking) throw fail(409, BRAIN_NOTES.dialogOpen);
+      this.asking = true;
+      let yes: boolean;
+      try {
+        const host = new URL(lf.origin).host;
+        yes = await confirm({
+          message: `Share this summary with ${AUDIENCE[req.visibility]} in ${host}'s brain?`,
+          detail: [
+            `Landflow at ${host} will save it under your name, and ${AUDIENCE[req.visibility]} will see it:`, "",
+            `Title: ${event.title}`, "", `Summary: ${event.summary || "(none)"}`,
+            ...(event.team ? ["", `Team: ${event.team}`] : []), ...(event.initiative ? ["", `Initiative: ${event.initiative}`] : []),
+          ].join("\n"),
+          yes: req.visibility === "team" ? "Share with my team" : "Share with everyone",
+        });
+      } finally {
+        this.asking = false;
+      }
+      if (!yes) return { saved: false, note: BRAIN_NOTES.declined };
+    }
     let a;
     try {
       a = await recordWork({ origin: lf.origin, key: lf.key, event, ...(this.d.fetch ? { fetch: this.d.fetch } : {}) });

@@ -41,6 +41,8 @@ export type Origin = McpCall["origin"];
  */
 export const BUILTIN_SERVERS: ReadonlySet<string> = new Set([BUILTIN_MCP_SERVER, GCP_MCP_SERVER]);
 export const isBuiltin = (name: string) => BUILTIN_SERVERS.has(name);
+/** The refusal of a call made while Claude drafts the brain's summary (L4). */
+export const DRAFTING = "no tool runs while Claude drafts the brain's summary.";
 /** A built-in other than landlens-kube, for one session. */
 export type BuiltinSpec = { name: typeof GCP_MCP_SERVER; server: () => McpServer };
 
@@ -105,6 +107,14 @@ export class GatewaySession {
    * sibling that didn't list when the session opened offers none.
    */
   readonly offered = new Map<string, ReadonlySet<string>>();
+  /**
+   * Each server's tools as the person accepted them (security review of wave 7 part 5, L8): Landlens's own servers as
+   * listed; a connection's while its listing is the pinned one; a family sibling's as offered. Only these names are
+   * Landlens's to report (telemetry); any other is the agent's or the server's word.
+   */
+  readonly accepted = new Map<string, ReadonlySet<string>>();
+  /** "Ask Claude to draft" is running in this session: every call of the agent's is refused (L4). */
+  drafting = false;
 
   constructor(readonly gateway: McpGateway, readonly token: string, readonly init: SessionInit) {
     this.upstreams.set(BUILTIN_MCP_SERVER, new BuiltinUpstream(BUILTIN_MCP_SERVER, init.cluster));
@@ -319,6 +329,13 @@ export class McpGateway {
         return undefined;
       });
     }
+    // What telemetry may name (L8): Landlens's own tools, a sibling's offered ones, a pinned listing's while it holds.
+    for (const l of answered) {
+      const offered = session.offered.get(l.name);
+      if (isBuiltin(l.name)) session.accepted.set(l.name, new Set(l.tools.map((t) => t.name)));
+      else if (offered) session.accepted.set(l.name, offered);
+      else if (l.pin && listingHash(l.tools) === l.pin) session.accepted.set(l.name, new Set(l.tools.map((t) => t.name)));
+    }
     // Landlens's own servers are allowed whole: landlens-kube always, landlens-gcp when the session has it.
     session.allow = [...preAllowed(answered), ...[...session.upstreams.keys()].filter((n) => isBuiltin(n) && n !== BUILTIN_MCP_SERVER).map((n) => `mcp__${n}`)];
     const changed = drifted(answered);
@@ -350,6 +367,21 @@ export class McpGateway {
   /** An agent session by Claude Code's id for it. */
   private agentSession(acpSession: string): GatewaySession | undefined {
     return [...this.sessions.values()].find((x) => x.init.origin === "agent" && x.acpSession === acpSession && !x.closed);
+  }
+
+  /**
+   * Whether a call's tool is one its server listed as the person accepted it, in the gateway session the call log names
+   * (`McpCall.session`): what telemetry may report by name (L8).
+   */
+  knownTool(session: string, server: string, tool: string): boolean {
+    const s = [...this.sessions.values()].find((x) => x.id === session);
+    return !!s?.accepted.get(server)?.has(tool);
+  }
+
+  /** "Ask Claude to draft" starts or ends in an agent session: while on, the agent's calls are refused (L4). */
+  drafting(acpSession: string, on: boolean) {
+    const s = this.agentSession(acpSession);
+    if (s) s.drafting = on;
   }
 
   /** Each connection's autonomous mode in a session. */
@@ -540,6 +572,7 @@ export class McpGateway {
       return { content: [{ type: "text", text: `Landlens: ${why}` }], isError: true };
     };
     if (s.closed) return refuse("this session has ended.");
+    if (origin === "agent" && s.drafting) return refuse(DRAFTING);
     const up = s.upstreams.get(server);
     if (!up) return refuse(`no MCP server named ${server} in this session.`);
     let t: Tool | undefined;

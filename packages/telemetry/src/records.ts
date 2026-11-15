@@ -58,7 +58,13 @@ export const ENUM_VALUES: ReadonlySet<string> = new Set<string>([
 const oneOf = <T extends string>(set: readonly T[], v: unknown): T | undefined => (typeof v === "string" && (set as readonly string[]).includes(v) ? (v as T) : undefined);
 /** A value no secret pattern touches (a name shaped like a token is left out too). */
 const clean = (v: string) => redactText(v) === v;
-const shaped = (re: RegExp, max: number) => (v: unknown): string | undefined => (typeof v === "string" && v.length <= max && re.test(v) && clean(v) ? v : undefined);
+/**
+ * 32 or more hex characters in a row: a key, a digest or a token that redactText has no pattern for. A name holding one
+ * is left out (security review of part 5, L1); ids (trace and span) have their own checks.
+ */
+const LONG_HEX = /[0-9a-fA-F]{32,}/;
+const shaped = (re: RegExp, max: number, id = false) => (v: unknown): string | undefined =>
+  typeof v === "string" && v.length <= max && re.test(v) && clean(v) && (id || !LONG_HEX.test(v)) ? v : undefined;
 
 /** A Kubernetes object or namespace name (a DNS subdomain), or a cluster's name as a label value. */
 export const K8S_NAME = /^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$/;
@@ -81,7 +87,7 @@ export const TEAM = /^[a-z0-9](?:[-a-z0-9._]{0,58}[a-z0-9])?$/;
 export const teamName = shaped(TEAM, 60);
 export const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,6}(?:-[0-9A-Za-z.]{1,20})?$/;
 export const versionText = shaped(VERSION, 40);
-const hex = (n: number) => shaped(new RegExp(`^[0-9a-f]{${n}}$`), n);
+const hex = (n: number) => shaped(new RegExp(`^[0-9a-f]{${n}}$`), n, true);
 export const traceIdOf = hex(32);
 export const spanIdOf = hex(16);
 

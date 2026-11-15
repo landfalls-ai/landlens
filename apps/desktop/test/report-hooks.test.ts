@@ -2,15 +2,44 @@
 // window's channels can't set what main fills (the brain event's kind, source, id and times; telemetry's records).
 import { channels } from "@landlens/contracts";
 import { claudeAdapterEntry } from "@landlens/acp-host";
+import { mkdtempSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { adapterEntry, AgentService } from "../src/main/agent";
 
 describe("the adapter Landlens runs", () => {
+  const fixtures = resolve(__dirname, "fixtures");
+  const fake = join(fixtures, "fake-acp-agent.mjs");
+  const run = (env: NodeJS.ProcessEnv, packaged: boolean) => {
+    const logs: string[] = [];
+    return { entry: adapterEntry(env, packaged, fixtures, (l) => logs.push(l)), logs };
+  };
+
   it("is claude-agent-acp in a packaged app, whatever the environment says", () => {
-    expect(adapterEntry({ LANDLENS_ACP_AGENT: "/tmp/fake-acp-agent.mjs" }, true)).toBe(claudeAdapterEntry());
-    expect(adapterEntry({ LANDLENS_ACP_AGENT: "/tmp/fake-acp-agent.mjs" }, false)).toBe("/tmp/fake-acp-agent.mjs");
-    expect(adapterEntry({ LANDLENS_ACP_AGENT: "/bin/sh" }, false)).toBe(claudeAdapterEntry());
-    expect(adapterEntry({}, false)).toBe(claudeAdapterEntry());
+    expect(run({ LANDLENS_ACP_AGENT: fake }, true).entry).toBe(claudeAdapterEntry());
+    expect(run({}, false)).toEqual({ entry: claudeAdapterEntry(), logs: [] });
+  });
+
+  it("unpackaged, runs only a script in the repo's test fixtures, with a warning in main's log (review of part 5, L9)", () => {
+    const ok = run({ LANDLENS_ACP_AGENT: fake }, false);
+    expect(ok.entry).toBe(realpathSync(fake));
+    expect(ok.logs).toHaveLength(1);
+    expect(ok.logs[0]).toMatch(/^\[agent\] WARNING: LANDLENS_ACP_AGENT is set: the test agent .*fake-acp-agent\.mjs runs in place of Claude Code/);
+    // Anywhere else, a way out of the folder, a symlink into it from outside, or not a script: ignored, and said so.
+    const outside = join(mkdtempSync(join(tmpdir(), "landlens-adapter-")), "agent.mjs");
+    writeFileSync(outside, "");
+    const link = join(fixtures, `link-${process.pid}.mjs`);
+    symlinkSync(outside, link);
+    try {
+      for (const o of [outside, join(fixtures, "..", "report-hooks.test.ts"), join(fixtures, "../../package.json"), link, "/bin/sh", join(fixtures, "missing.mjs")]) {
+        const r = run({ LANDLENS_ACP_AGENT: o }, false);
+        expect(r.entry, o).toBe(claudeAdapterEntry());
+        expect(r.logs, o).toEqual([`[agent] LANDLENS_ACP_AGENT is ignored: only a .js or .mjs script in ${fixtures} may stand in for Claude Code.`]);
+      }
+    } finally {
+      unlinkSync(link);
+    }
   });
 });
 

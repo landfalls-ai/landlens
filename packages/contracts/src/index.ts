@@ -629,11 +629,24 @@ export type TelemetryInfo = {
   dropped: number;
 };
 export const DEFAULT_COLLECTOR = "http://127.0.0.1:4318";
+/**
+ * Whether a kubeconfig context's name may stand for its cluster when the person set no name for it (security review of
+ * wave 7 part 5, L2, L3): one DNS label (lowercase letters, digits and dashes, at most 63) with no run of six or more
+ * digits. So `orbstack`, `kind-dev` or `prod-eu-1` go; `gke_<project>_<zone>_<name>`, an EKS ARN with its account id,
+ * `user@cluster`, `default/api-host:6443/admin` or `acme-123456789012` don't.
+ */
+export const plainContextName = (context: string): boolean => /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(context) && !/\d{6,}/.test(context);
+/**
+ * The cluster's name Landlens sends to a sibling (telemetry's `landlens.cluster`, the brain's draft): the name the
+ * person set for Clickland's graphs, else the context's own name when it is plain, else none.
+ */
+export const clusterLabel = (set: string | undefined, context: string): string | undefined => set ?? (plainContextName(context) ? context : undefined);
 /** A team's name as `team.id`: at most 60 characters, a name (lowercase letters, digits, `-`, `.`, `_`). */
 export const TelemetryTeam = z.string().max(60).regex(/^[a-z0-9](?:[-a-z0-9._]{0,58}[a-z0-9])?$/, "a team name: lowercase letters, digits, - . _");
 export const TELEMETRY_NOTES = {
   off: "Telemetry is off. Nothing is sent.",
   declined: "Telemetry stays off: you didn't confirm the collector.",
+  namesDeclined: "Names stay off: you didn't confirm sending them.",
   dialogOpen: "A dialog is already open.",
   noConsole: "Set Clickland's console address first.",
   noSession: "Landlens has no such session.",
@@ -684,6 +697,11 @@ export const BRAIN_NOTES = {
   brainOff: "The brain is off on this Landflow.",
   refused: "Landflow refused the key.",
   busy: "Claude is busy in this session. Ask again when it has answered.",
+  declined: "Not sent: you didn't confirm who sees it.",
+  dialogOpen: "A dialog is already open.",
+  drafting: "Claude is drafting the brain's summary in this session. Ask when it is done, or cancel the draft.",
+  draftCancelled: "The draft was cancelled.",
+  draftTool: "Claude tried to use a tool while drafting, so Landlens stopped the draft. Write the summary, or ask again.",
 } as const;
 /** The one question "Ask Claude to draft" sends (D134): fixed, never the window's. */
 export const BRAIN_PROMPT = "Summarise this session in at most 400 characters: the question, what you found, what was changed. No names of people, no secrets.";
@@ -1040,6 +1058,7 @@ export const channels = {
   "telemetry:open": z.object({ session: SessionId }).strict(),
   "brain:draft": z.object({ session: SessionId }).strict(),
   "brain:ask": z.object({ sheet: BrainSheetId }).strict(),
+  "brain:cancel": z.object({ sheet: BrainSheetId }).strict(),
   "brain:send": z.object({ sheet: BrainSheetId, digest: BrainDigest, title: BrainTitle, summary: BrainSummary, visibility: WorkVisibility, team: BrainHint.optional(), initiative: BrainHint.optional() }).strict(),
   "brain:remove": z.object({ session: SessionId }).strict(),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
@@ -1161,6 +1180,7 @@ export type Responses = {
   "telemetry:open": { opened: boolean };
   "brain:draft": BrainDraft;
   "brain:ask": { summary: string };
+  "brain:cancel": { ok: boolean };
   "brain:send": BrainSend;
   "brain:remove": { ok: boolean; note: string };
   "agent:autonomy": AutonomyState;

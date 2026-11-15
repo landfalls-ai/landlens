@@ -51,8 +51,11 @@ export function checkWork(e: WorkDraft): string | undefined {
 /** What main knows of a session, counted by main: never a prompt, an answer or a tool's arguments. */
 export type SessionFacts = {
   session: string;
-  /** The cluster's context name. */
-  cluster: string;
+  /**
+   * The cluster's name as main may send it (clusterLabel: the name set for Clickland's graphs, else a plain context
+   * name); absent when there is none, and the draft says "a cluster" (security review of part 5, L3).
+   */
+  cluster?: string;
   namespaces?: string[];
   /** The first problem the session was asked about (a doctor title: "orders-api is crash-looping"). */
   problem?: string;
@@ -68,8 +71,11 @@ export type SessionFacts = {
 };
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-/** A context name fit for a title: one line of name characters, no path; else "a cluster". */
-const clusterWords = (c: string) => (/^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$/.test(c) && !containsMachinePath(c) ? c : "a cluster");
+/**
+ * A cluster's name fit for a title: a label (letters, digits, `-`, `_`, `.`; at most 63), else "a cluster". No `:`, `/`
+ * or `@`, so an EKS ARN or a `user@cluster` context never reaches the title (L3).
+ */
+const clusterWords = (c: string | undefined) => (c && /^[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/.test(c) ? c : "a cluster");
 
 /** The facts as the sheet lists them. */
 export function factLines(f: SessionFacts): string[] {

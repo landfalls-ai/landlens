@@ -13,8 +13,8 @@ import { sheetKeys } from "./TriageSheet";
 
 const VISIBILITY: Record<WorkVisibility, string> = {
   private: "Only you see it in your brain.",
-  team: "Your team sees it.",
-  org: "Everyone in your organisation sees it.",
+  team: "Your team sees it. Landlens shows you the text to confirm before it is shared.",
+  org: "Everyone in your organisation sees it. Landlens shows you the text to confirm before it is shared.",
 };
 
 /** What the family offers a session now: the brain (Landflow's key has brain:write) and Clickland's session search. */
@@ -89,6 +89,8 @@ export function BrainSheet({ session, onClose, onAsk }: { session: string; onClo
   const [visibility, setVisibility] = useState<WorkVisibility>("private");
   const [error, setError] = useState<string>();
   const [asking, setAsking] = useState(false);
+  /** The summary came from "Ask Claude to draft": said under the box, to read before sending (review of part 5, L4). */
+  const [drafted, setDrafted] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<BrainSend>();
   const first = useRef<HTMLInputElement>(null);
@@ -110,7 +112,16 @@ export function BrainSheet({ session, onClose, onAsk }: { session: string; onClo
     setAsking(true);
     setError(undefined);
     onAsk?.();
-    api.invoke("brain:ask", { sheet: d.sheet }).then((r) => setSummary(r.summary), (e: ApiError) => setError(e.message)).finally(() => setAsking(false));
+    api.invoke("brain:ask", { sheet: d.sheet }).then((r) => (setSummary(r.summary), setDrafted(true)), (e: ApiError) => setError(e.message)).finally(() => setAsking(false));
+  };
+  /** The draft's turn ends in main; its answer then says it was cancelled. */
+  const cancelDraft = () => {
+    if (d) void api.invoke("brain:cancel", { sheet: d.sheet }).catch(() => undefined);
+  };
+  /** Closing the sheet while Claude drafts cancels the draft too. */
+  const close = () => {
+    if (asking) cancelDraft();
+    onClose();
   };
   const send = () => {
     if (!d || sending) return;
@@ -134,12 +145,12 @@ export function BrainSheet({ session, onClose, onAsk }: { session: string; onClo
   const e = d?.event;
   const done = result?.saved;
   return (
-    <div className="palette-back" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div className="dialog lf-sheet brain-sheet" role="dialog" aria-modal="true" aria-labelledby="brain-title" onKeyDown={sheetKeys(onClose)}>
+    <div className="palette-back" onMouseDown={(ev) => ev.target === ev.currentTarget && close()}>
+      <div className="dialog lf-sheet brain-sheet" role="dialog" aria-modal="true" aria-labelledby="brain-title" onKeyDown={sheetKeys(close)}>
         <header className="dialog-head">
           <span className="lf-mark"><SiblingMark sibling="landflow" size={15} /></span>
           <h2 id="brain-title" className="grow">Send a summary to the brain</h2>
-          <button className="icon-btn sm" aria-label="Close" onClick={onClose}><Ic icon={X} size={14} /></button>
+          <button className="icon-btn sm" aria-label="Close" onClick={close}><Ic icon={X} size={14} /></button>
         </header>
         <div className="dialog-body lf-body">
           {!d && !error ? <div className="skel" style={{ height: 160 }} /> : null}
@@ -155,8 +166,11 @@ export function BrainSheet({ session, onClose, onAsk }: { session: string; onClo
                 <textarea value={summary} maxLength={500} rows={4} onChange={(x) => setSummary(x.target.value)} aria-label="Summary" />
                 <span className="brain-count small dim">
                   {summary.length}/500
-                  {d.open ? <button className="link-btn small" onClick={ask} disabled={asking}>{asking ? "Claude is writing…" : "Ask Claude to draft"}</button> : <span>{BRAIN_NOTES.closed}</span>}
+                  {!d.open ? <span>{BRAIN_NOTES.closed}</span> : asking ? (
+                    <span>Claude is writing… <button className="link-btn small" onClick={cancelDraft}>Cancel draft</button></span>
+                  ) : <button className="link-btn small" onClick={ask}>Ask Claude to draft</button>}
                 </span>
+                {drafted ? <span className="small dim" role="note">Claude's draft: check it before sending. It ran with no tools.</span> : null}
               </label>
               <div className="lf-field">
                 <span className="lf-label" id="brain-vis">Who sees it</span>
@@ -205,7 +219,7 @@ export function BrainSheet({ session, onClose, onAsk }: { session: string; onClo
           <span className="grow" />
           {done ? <button className="secondary" onClick={onClose}>Done</button> : (
             <>
-              <button className="secondary" onClick={onClose}>Cancel</button>
+              <button className="secondary" onClick={close}>Cancel</button>
               <button className="primary" disabled={!d || sending || asking || !title.trim()} onClick={send}>{sending ? "Sending…" : "Send"}</button>
             </>
           )}

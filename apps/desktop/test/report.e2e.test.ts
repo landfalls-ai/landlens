@@ -156,6 +156,8 @@ describe.runIf(run)("what Landlens reports, against the fake Clickland and Landf
     expect(landflow.brain).toEqual([]);
     await sheet.getByRole("button", { name: "Ask Claude to draft" }).click();
     await expect.poll(() => sheet.getByLabel("Summary").inputValue(), { timeout: 20_000 }).toBe("Checked the cluster's API resources; nothing was changed.");
+    await sheet.getByText("Claude's draft: check it before sending.").waitFor();
+    const before = (await asked()).length;
     await sheet.getByRole("button", { name: "Send", exact: true }).click();
     await sheet.getByText(BRAIN_NOTES.saved).waitFor({ timeout: 10_000 });
     await both(page, "w7p5-06-brain-saved");
@@ -164,6 +166,26 @@ describe.runIf(run)("what Landlens reports, against the fake Clickland and Landf
     expect(e).toMatchObject({ kind: "work.session", source: "landlens", sourceId: session, turns: 1, visibility: "private", title: "Worked on orbstack with Claude", summary: "Checked the cluster's API resources; nothing was changed." });
     expect(Object.keys(e).sort()).toEqual(["endedAt", "kind", "occurredAt", "source", "sourceId", "summary", "title", "turns", "visibility"]);
     expect(JSON.stringify(e)).not.toContain(SECRET);
+    expect((await asked()).length).toBe(before); // private: no dialog
+    await sheet.getByRole("button", { name: "Done" }).click();
+  });
+
+  it("asks in main's dialog, showing the text, before the summary is shared with the team (review of part 5, M4)", async () => {
+    await dock().getByRole("button", { name: "Session actions" }).click();
+    await dock().getByRole("menuitem", { name: "Send a summary to the brain…" }).click();
+    const sheet = page.getByRole("dialog", { name: "Send a summary to the brain" });
+    await expect.poll(() => sheet.getByLabel("Title").inputValue(), { timeout: 10_000 }).toBe("Worked on orbstack with Claude");
+    await sheet.getByLabel("Summary").fill("Checked the API resources for the team.");
+    await sheet.getByRole("radio", { name: "team" }).click();
+    const before = (await asked()).length;
+    await sheet.getByRole("button", { name: "Send", exact: true }).click();
+    await sheet.getByText(BRAIN_NOTES.savedTeam).waitFor({ timeout: 10_000 });
+    const q = (await asked()).slice(before);
+    expect(q).toHaveLength(1);
+    expect(q[0]).toContain(`Share this summary with your team in ${new URL(landflow.origin).host}'s brain?`);
+    expect(q[0]).toContain("Title: Worked on orbstack with Claude");
+    expect(q[0]).toContain("Summary: Checked the API resources for the team.");
+    expect(landflow.brain.at(-1)).toMatchObject({ visibility: "team", summary: "Checked the API resources for the team." });
     await sheet.getByRole("button", { name: "Done" }).click();
   });
 

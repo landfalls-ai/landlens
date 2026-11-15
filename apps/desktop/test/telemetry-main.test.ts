@@ -5,7 +5,7 @@ import { DEFAULT_COLLECTOR, TELEMETRY_NOTES, type AgentChange, type ClusterInfo,
 import { askOf } from "@landlens/telemetry";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClicklandSettingsStore } from "../src/main/clickland-settings";
-import { TelemetryService } from "../src/main/telemetry";
+import { TELEMETRY, TelemetryService } from "../src/main/telemetry";
 import { FakeClickland } from "../../../packages/connections/test/fake-family";
 import { fakeCrypto, tempFile } from "../../../packages/connections/test/helpers";
 import { familyUrlAllowed } from "@landlens/contracts";
@@ -28,7 +28,7 @@ const PROMPT = [
 ].join("\n");
 const CLUSTER: ClusterInfo = { handle: "h1", context: "orbstack", server: "https://127.0.0.1:6443" } as ClusterInfo;
 
-async function setup(o: { allowed?: (u: string) => boolean } = {}) {
+async function setup(o: { allowed?: (u: string) => boolean; named?: Record<string, string>; problems?: boolean; tools?: boolean; fetch?: typeof fetch } = {}) {
   const ck = new FakeClickland();
   await ck.start();
   stops.push(() => ck.stop());
@@ -39,7 +39,11 @@ async function setup(o: { allowed?: (u: string) => boolean } = {}) {
   const t = new TelemetryService({
     settings,
     allowed: o.allowed ?? ((u) => familyUrlAllowed(u, [])),
-    clusterName: (c) => c,
+    clusterName: (c) => o.named?.[c],
+    // The doctor reports orders-api's crash loop; a brief about anything else names nothing (L1).
+    problemAbout: (context, subj, cls) => (o.problems ?? true) && context === "orbstack" && subj.kind === "Deployment" && subj.namespace === "landlens-dev" && subj.name === "orders-api" && (!cls || cls === "crashloop"),
+    knownTool: (_s, server, tool) => (o.tools ?? true) && server === "landlens-kube" && tool === "get_resource",
+    ...(o.fetch ? { fetch: o.fetch } : {}),
     clusters: () => [CLUSTER],
     problems: () => [{ handle: "h1", class: "crashloop", tone: "bad", n: 2 }],
     version: "0.7.0",
@@ -54,8 +58,8 @@ async function setup(o: { allowed?: (u: string) => boolean } = {}) {
 }
 
 /** One session's turn with a gateway call and a change, as main's hooks feed it. */
-async function aTurn(t: TelemetryService, session = SESSION) {
-  t.sessionStarted({ session, context: "orbstack", namespaces: ["landlens-dev"], mode: "default" });
+async function aTurn(t: TelemetryService, session = SESSION, context = "orbstack") {
+  t.sessionStarted({ session, context, namespaces: ["landlens-dev"], mode: "default" });
   t.turnStarted(session, askOf(PROMPT, []));
   t.usage(session, { model: "claude-sonnet-4-5", cost: { amount: 0.042, currency: "USD" } });
   const call: McpCall = { id: "c1", session, label: "agent 1 · orbstack", server: "landlens-kube", tool: "get_resource", origin: "agent", args: { name: TOKEN }, startedAt: Date.now() - 50, endedAt: Date.now(), status: "ok" } as McpCall;
@@ -178,6 +182,98 @@ describe("telemetry in main", () => {
     expect(t.recent().records).toEqual([]);
     await t.queue.flush();
     expect(ck.otlp.traces).toEqual([]);
+  });
+
+  it("counts only drops what was queued with names, unsent (review of part 5, M2)", async () => {
+    const { t, confirm, ck, sent } = await setup();
+    await t.set({ on: true, collector: ck.origin }, confirm);
+    await aTurn(t);
+    t.tick();
+    expect(JSON.stringify(t.queue.recent())).toContain("orders-api");
+    await t.set({ names: false }, confirm);
+    expect(t.queue.waiting).toBe(0);
+    await aTurn(t);
+    await t.queue.flush();
+    expect(sent()).toContain("invoke_agent");
+    for (const name of ["orbstack", "landlens-dev", "orders-api"]) expect(sent()).not.toContain(name);
+  });
+
+  it("another collector drops what was queued for the old one (M2)", async () => {
+    const { t, confirm, ck } = await setup();
+    const other = new FakeClickland();
+    await other.start();
+    stops.push(() => other.stop());
+    await t.set({ on: true, collector: ck.origin }, confirm);
+    await aTurn(t);
+    await t.set({ collector: other.origin }, confirm);
+    expect(t.queue.waiting).toBe(0);
+    await t.queue.flush();
+    expect(ck.otlp).toEqual({ traces: [], metrics: [], logs: [] });
+    expect(other.otlp.traces).toEqual([]);
+  });
+
+  it("turning names back on asks in main's dialog; declining keeps counts only (M3)", async () => {
+    const { t, confirm, asked, say, settings } = await setup();
+    await t.set({ on: true, names: false }, confirm);
+    expect(asked).toHaveLength(1);
+    say(false);
+    await expect(t.set({ names: true }, confirm)).rejects.toMatchObject({ status: 409, message: TELEMETRY_NOTES.namesDeclined });
+    expect(settings.telemetry().names).toBe(false);
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toContain("Send names with Landlens's telemetry to 127.0.0.1:4318?");
+    expect(asked[1]).toContain("The names of the cluster, namespace and the object");
+    say(true);
+    expect((await t.set({ names: true }, confirm)).names).toBe(true);
+    // Narrowing never asks.
+    await t.set({ names: false }, confirm);
+    expect(asked).toHaveLength(3);
+  });
+
+  it("a brief's subject goes only when the doctor reports a problem about it (L1)", async () => {
+    const { t, confirm, ck } = await setup({ problems: false });
+    await t.set({ on: true, collector: ck.origin }, confirm);
+    await aTurn(t);
+    const turn = t.recent().records.find((r) => r.name === "invoke_agent landlens-claude")!;
+    expect(turn.attrs).toMatchObject({ "landlens.ask": "problem", "landlens.problem.class": "crashloop" });
+    for (const k of ["landlens.subject.kind", "landlens.subject.namespace", "landlens.subject.name"] as const) expect(turn.attrs[k]).toBeUndefined();
+  });
+
+  it("names a cluster by the name set for graphs, or a plain context; never a GKE project or an account id (L2)", async () => {
+    const gke = "gke_acme-prod-123_us-central1-a_main";
+    const eks = "arn:aws:eks:eu-west-1:123456789012:cluster/prod";
+    const { t, confirm, ck } = await setup({ named: { [eks]: "prod-eu" } });
+    await t.set({ on: true, collector: ck.origin }, confirm);
+    await aTurn(t, SESSION, gke);
+    await aTurn(t, "0b6e1c1e-5d1a-4c55-9a51-0d3c8e6d2f11", eks);
+    await aTurn(t, "0b6e1c1e-5d1a-4c55-9a51-0d3c8e6d2f12", "acme-123456789012");
+    const turns = t.recent().records.filter((r) => r.name === "invoke_agent landlens-claude");
+    expect(turns.map((r) => r.attrs["landlens.cluster"])).toEqual([undefined, "prod-eu", undefined]);
+    expect(JSON.stringify(t.recent())).not.toContain("acme");
+  });
+
+  it("names a tool only when its server listed it as accepted (L8)", async () => {
+    const { t, confirm, ck } = await setup({ tools: false });
+    await t.set({ on: true, collector: ck.origin }, confirm);
+    await aTurn(t);
+    const tools = t.recent().records.filter((r) => r.name.startsWith("execute_tool"));
+    expect(tools.map((r) => r.name)).toEqual(["execute_tool landlens-kube.unknown", "execute_tool remote.remote"]);
+  });
+
+  it("a quit waits at most 2 s for a collector that never answers, and sends the turn still settling (L5)", async () => {
+    const posted: string[] = [];
+    const hang = (async (_u: string | URL | Request, init?: RequestInit) => {
+      posted.push(String(init?.body));
+      return new Promise<Response>((_r, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    }) as unknown as typeof fetch;
+    const { t, confirm } = await setup({ fetch: hang });
+    await t.set({ on: true }, confirm);
+    t.sessionStarted({ session: SESSION, context: "orbstack" });
+    t.turnStarted(SESSION, askOf("hi", []));
+    void t.turnEnded(SESSION, { stopReason: "end_turn" });
+    const at = Date.now();
+    await t.stop();
+    expect(Date.now() - at).toBeLessThan(TELEMETRY.stopMs + 500);
+    expect(posted.join("\n")).toContain("invoke_agent landlens-claude");
   });
 
   it("opens a session's spans in the console only for a known session, after main's dialog", async () => {

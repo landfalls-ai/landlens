@@ -47,6 +47,27 @@ export function readNavFolds(raw: string | null): NavFolds {
 
 export const writeNavFolds = (f: NavFolds): string => JSON.stringify({ closed: f.closed, opened: f.opened });
 
+/**
+ * Read a stored value; storage that throws (disabled, or a SecurityError) is no choices. Write one; storage that throws
+ * (full, disabled) keeps the fold for this window only and says so with false. Never throws: the sidebar calls these
+ * from effects and initial state, never inside a state updater (security review of part 5, L10).
+ */
+export function loadNavFolds(storage: Pick<Storage, "getItem">, key: string): NavFolds {
+  try {
+    return readNavFolds(storage.getItem(key));
+  } catch {
+    return NO_FOLDS;
+  }
+}
+export function storeNavFolds(storage: Pick<Storage, "setItem">, key: string, f: NavFolds): boolean {
+  try {
+    storage.setItem(key, writeNavFolds(f));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Is a section open: what you chose, else its default (`byDefault`, or OPEN_BY_DEFAULT). */
 export function isOpen(f: NavFolds, id: string, byDefault: (id: string) => boolean = (s) => OPEN_BY_DEFAULT.includes(s)): boolean {
   if (f.opened.includes(id)) return true;

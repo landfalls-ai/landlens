@@ -157,6 +157,20 @@ export class DoctorService {
     return false;
   }
 
+  /**
+   * Whether the newest reports of this cluster hold a problem about the object (its kind, namespace and name, and the
+   * class when given): telemetry keeps a doctor brief's subject only then (security review of part 5, L1).
+   */
+  reports(handle: string, o: { kind?: string; namespace?: string; name?: string }, cls?: string): boolean {
+    if (!o.kind || !o.name) return false;
+    for (const s of this.scopes.get(handle)?.values() ?? []) {
+      for (const p of s.health?.problems ?? []) {
+        if (p.kind === o.kind && p.name === o.name && (p.namespace ?? undefined) === (o.namespace ?? undefined) && (!cls || p.class === cls)) return true;
+      }
+    }
+    return false;
+  }
+
   private async readEvidence(handle: string, p: Problem, stopped: AbortSignal): Promise<DoctorEvidence> {
     const ev = await this.readKubelet(handle, p, stopped);
     const log = ev.log;

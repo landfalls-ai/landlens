@@ -38,6 +38,10 @@ describe("draftWork", () => {
   it("titles a problem's session by the problem, and a context that isn't a name as 'a cluster'", () => {
     expect(draftWork({ ...FACTS, problem: "orders-api is crash-looping" }).title).toBe("Looked into orders-api is crash-looping on orbstack");
     expect(draftWork({ ...FACTS, namespaces: undefined, cluster: "/Users/me/.kube/config" }).title).toBe("Worked on a cluster with Claude");
+    // An account id in an ARN, a person's name, or no name at all (security review of part 5, L3).
+    for (const cluster of ["arn:aws:eks:eu-west-1:123456789012:cluster/prod", "alice@prod", undefined]) {
+      expect(draftWork({ ...FACTS, namespaces: undefined, cluster }).title, String(cluster)).toBe("Worked on a cluster with Claude");
+    }
     expect(factLines({ ...FACTS, proposed: 0, applied: 0 })).toEqual(["3 questions", "14 tool calls, 12 cluster reads", "no change proposed"]);
   });
 });

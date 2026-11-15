@@ -188,10 +188,18 @@ text. The dock's session menu (`…`) has **Open this session in Clickland** the
 record work, **Send a summary to the brain…** and **Remove from the brain**; a session that has answered also shows a
 quiet line offering the summary. The sheet and what is sent are on [family.md](family.md#a-sessions-summary-to-the-brain).
 Its **Ask Claude to draft** is one turn in the session with Landlens's fixed question; the dock marks it, and it isn't
-counted as one of your questions.
+counted as one of your questions. That turn runs with no tool (security review of part 5, L4). ACP's `session/prompt`
+takes no tool list (claude-agent-acp sets tools only at `session/new`), so main refuses them instead: the gateway
+refuses every call of the agent's while the draft runs, a permission request is answered "cancelled" without a card,
+and the first tool call cancels the turn, and the sheet says Claude tried to use a tool. A question sent from the dock
+meanwhile is refused (409, "Claude is drafting the brain's summary…"), so its answer can't mix into the box. The sheet
+has **Cancel draft** (`brain:cancel`), and closing it cancels the draft too.
 
 For tests, an unpackaged build runs another ACP agent's script in place of claude-agent-acp when `LANDLENS_ACP_AGENT`
-names a `.js` or `.mjs` file (`test/fixtures/fake-acp-agent.mjs`); a packaged app ignores it.
+names a `.js` or `.mjs` file inside the repo's `apps/desktop/test/fixtures` (`fake-acp-agent.mjs`); both paths are
+resolved, so a symlink or `..` can't lead out, and anything else is ignored with a line in main's log. When it is
+used, main's log carries a warning that the test agent runs in place of Claude Code with each session's front-door
+token and MCP headers (review of part 5, L9). A packaged app ignores it.
 
 ## Slash commands
 
