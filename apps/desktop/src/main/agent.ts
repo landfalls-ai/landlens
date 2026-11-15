@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { stringify } from "yaml";
 
 type Push = {
+  (channel: "agent:autonomy", payload: AutonomyState): void;
   (channel: "agent:update", payload: AgentUpdate): void;
   (channel: "agent:permission", payload: AgentPermissionRequest): void;
   (channel: "agent:status", payload: AgentStatus): void;
@@ -34,7 +35,15 @@ export type AutonomyHooks = {
   states(session: string): AutonomyState[];
   /** The person quoted a Google Cloud resource into the session: its writes ask from now on (part 5, W1). */
   gcpQuoted?(session: string): void;
+  /** Every autonomy of the session asks from now on, with this reason (a resumed session, wave 7 part 2 review M1). */
+  hold?(session: string, why: string): void;
 };
+
+/**
+ * Why a resumed session's GitHub and Linear writes ask, when its history recorded no hold (review of wave 7 part 2,
+ * M1): its transcript holds whatever it read before, which the new gateway session never saw.
+ */
+export const RESUMED_HELD = "this session was resumed, and what it read before could steer its writes";
 
 /**
  * A Google Cloud resource quoted into a question (quotes.ts writes its head, gcp:resource its brief). Text the person
@@ -167,10 +176,22 @@ export class AgentService {
     if (c.info.context !== e.context || (e.server && c.info.server !== e.server)) {
       throw Object.assign(new Error(`that session was on ${e.context}${e.server ? ` (${e.server})` : ""}; connect to it to resume`), { status: 409 });
     }
-    return this.open({ handle, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), resume: { sessionId: session, cwd: e.cwd } });
+    // A resumed session always starts held (M1 of the wave 7 part 2 review): the hold lived in the gateway session that
+    // ended, the transcript keeps what a sibling or Google Cloud said, and Landlens can't see into the transcript. The
+    // reason is the one the history recorded, if any.
+    return this.open({ handle, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), resume: { sessionId: session, cwd: e.cwd } }, e.held ?? RESUMED_HELD);
   }
 
-  private async open(req: Parameters<typeof startClusterSession>[1]): Promise<AgentSessionInfo> {
+  /**
+   * A connection's autonomous mode changed in a session (the gateway's push): the dock hears of it, and a hold is
+   * written to the session's history, so a resume holds with the same reason (M1).
+   */
+  autonomyChanged(st: AutonomyState) {
+    if (st.held) this.deps.history?.held(st.session, st.held);
+    this.deps.push("agent:autonomy", st);
+  }
+
+  private async open(req: Parameters<typeof startClusterSession>[1], held?: string): Promise<AgentSessionInfo> {
     const host = await this.ensure();
     const s = await startClusterSession({
       host, frontDoor: this.deps.frontDoor, clusters: this.deps.clusters, mcp: this.deps.mcp,
@@ -190,6 +211,7 @@ export class AgentService {
     }, req);
     this.sessions.set(s.id, s);
     this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, server: this.deps.clusters.get(s.handle).info.server, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
+    if (held) this.deps.autonomy?.hold?.(s.id, held);
     // Each connection's autonomous mode, off: a new or resumed session never starts autonomous (D82).
     const autonomy = this.deps.autonomy?.states(s.id) ?? [];
     return { ...info(s, s.response), ...(autonomy.length ? { autonomy } : {}) };

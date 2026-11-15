@@ -70,11 +70,13 @@ export type ToolDigest = Record<string, string>;
 
 /** What changed between the accepted listing and this one, by tool name. */
 export function listingDiff(accepted: ToolDigest, now: ToolDigest): { added: string[]; removed: string[]; changed: string[] } {
+  // Own names only (review of wave 7 part 2, L4): `constructor` or `toString` is New, not Changed.
+  const has = (d: ToolDigest, k: string) => Object.hasOwn(d, k);
   const a = Object.keys(accepted);
   const n = Object.keys(now);
   return {
-    added: n.filter((k) => !(k in accepted)).sort(),
-    removed: a.filter((k) => !(k in now)).sort(),
-    changed: n.filter((k) => k in accepted && accepted[k] !== now[k]).sort(),
+    added: n.filter((k) => !has(accepted, k)).sort(),
+    removed: a.filter((k) => !has(now, k)).sort(),
+    changed: n.filter((k) => has(accepted, k) && accepted[k] !== now[k]).sort(),
   };
 }

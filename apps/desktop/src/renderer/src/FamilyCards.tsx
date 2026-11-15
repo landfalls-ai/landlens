@@ -144,7 +144,8 @@ function useTools(info: FamilyInfo, onInfo: (i: FamilyInfo) => void) {
     setError(undefined);
     api.invoke("family:test", { sibling: s }).then(setReview, (e: ApiError) => (setReview(undefined), setError(e.message)));
   };
-  const accept = () => act(() => api.invoke("family:repin", { sibling: s }), (i) => (onInfo(i), setReview(undefined)));
+  // Accept names the listing this Review showed: main pins it only if it is still the one its last Check saw (M3).
+  const accept = (hash: string) => act(() => api.invoke("family:repin", { sibling: s, hash }), (i) => (onInfo(i), setReview(undefined)));
   const n = info.tools;
   const counts = n ? `${n.read} read · ${n.write} ask` : undefined;
   const asks = info.drift || info.note === FAMILY_NOTES.unaccepted;
@@ -200,7 +201,7 @@ function useTools(info: FamilyInfo, onInfo: (i: FamilyInfo) => void) {
             </ul>
           ) : null}
           <div className="conn-accept">
-            {done.ok === false && info.drift ? <button className="primary" onClick={accept} disabled={busy}>Accept these tools</button> : null}
+            {done.ok === false && info.drift && done.listing ? <button className="primary" onClick={() => accept(done.listing!)} disabled={busy}>Accept these tools</button> : null}
             <button className="link-btn small" onClick={() => setReview(undefined)}>Close</button>
           </div>
         </div>

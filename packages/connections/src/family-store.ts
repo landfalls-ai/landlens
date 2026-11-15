@@ -49,6 +49,12 @@ type Entry = {
   expired?: boolean;
   /** The tool listing the person accepted for its server (D111), for the origin it was listed at. */
   pin?: FamilyPin;
+  /** A session or a Check found another listing than the accepted one; kept across a restart (review of part 2, L8). */
+  drift?: boolean;
+  /** Clickland: D109's move from the MCP page ran (it runs once, review of part 2, M4). */
+  moved?: boolean;
+  /** Clickland: the move turned Tools for Claude on; the card says so until the person changes a switch. */
+  movedNote?: boolean;
   /** The seal's key: 32 random bytes, hex, encrypted with safeStorage (base64). */
   seal?: string;
   /** HMAC-SHA256 of the sibling and the rest of the entry under the seal's key. */
@@ -63,6 +69,20 @@ type File = Partial<Record<Sibling, Entry>>;
 
 const line = z.string().max(4096);
 const blob = z.string().max(65_536);
+const PIN = z.object({
+  origin: z.string().max(300),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+  tools: z.record(z.string().max(128), z.string().regex(/^[0-9a-f]{16}$/)).refine((t) => Object.keys(t).length <= 500, "at most 500 tools"),
+  read: z.number().int().min(0).max(500),
+  write: z.number().int().min(0).max(500),
+}).strict();
+
+/**
+ * Whether a listing's pin is one the store keeps (review of part 2, L5): a tool name over 128 characters, or more than
+ * 500 tools, would make the whole entry fail when read, and with it the sign-in.
+ */
+export const familyPinOk = (p: FamilyPin) => PIN.safeParse(p).success && Object.keys(p.tools).length === p.read + p.write;
+
 const ENTRY = z.object({
   url: z.string().max(300).optional(),
   method: z.enum(["key", "oauth"]).optional(),
@@ -79,13 +99,10 @@ const ENTRY = z.object({
   client: blob.optional(),
   expiresAt: z.number().optional(),
   expired: z.boolean().optional(),
-  pin: z.object({
-    origin: z.string().max(300),
-    hash: z.string().regex(/^[0-9a-f]{64}$/),
-    tools: z.record(z.string().max(128), z.string().regex(/^[0-9a-f]{16}$/)).refine((t) => Object.keys(t).length <= 500, "at most 500 tools"),
-    read: z.number().int().min(0).max(500),
-    write: z.number().int().min(0).max(500),
-  }).strict().optional(),
+  pin: PIN.optional(),
+  drift: z.boolean().optional(),
+  moved: z.boolean().optional(),
+  movedNote: z.boolean().optional(),
   seal: blob.optional(),
   mac: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 }).strict();
@@ -123,6 +140,8 @@ const resetSwitches = (e: Entry) => {
   delete e.toSessions;
   delete e.readsAuto;
   delete e.pin;
+  delete e.drift;
+  delete e.movedNote;
 };
 
 const sameOrigin = (a: string | undefined, b: string | undefined) => {
@@ -297,6 +316,8 @@ export class FamilyStore {
     this.update(s, (e) => {
       if (p.toSessions !== undefined) e.toSessions = p.toSessions;
       if (p.readsAuto !== undefined) e.readsAuto = p.readsAuto;
+      // A switch the person set says the move's note has been read.
+      delete e.movedNote;
     });
   }
 
@@ -419,10 +440,45 @@ export class FamilyStore {
     return p && sameOrigin(p.origin, origin) ? p : undefined;
   }
 
-  /** Accept a listing for a sibling's server at an origin (D111): at Tools for Claude, Check, or Accept. */
+  /**
+   * Accept a listing for a sibling's server at an origin (D111): at Tools for Claude, Check, or Accept. A pin the store
+   * couldn't read back is refused, so the entry and its sign-in are never lost to it (L5).
+   */
   setPin(s: Sibling, pin: FamilyPin) {
+    const p = { ...pin, origin: new URL(pin.origin).origin };
+    if (!familyPinOk(p)) throw new FamilyError(422, FAMILY_NOTES.badListing);
     this.update(s, (e) => {
-      e.pin = { ...pin, origin: new URL(pin.origin).origin };
+      e.pin = p;
+      delete e.drift;
+    });
+  }
+
+  /** Whether a session or a Check found another listing than the accepted one (L8: kept across a restart). */
+  drift(s: Sibling): boolean {
+    return !!this.read()[s]?.drift;
+  }
+
+  setDrift(s: Sibling, on: boolean) {
+    const e = this.read()[s];
+    if (!e || !!e.drift === on) return;
+    this.update(s, (x) => {
+      if (on) x.drift = true;
+      else delete x.drift;
+    });
+  }
+
+  /** Clickland: whether D109's move ran, and its note (M4). */
+  moved(): { ran: boolean; note: boolean } {
+    const e = this.read().clickland;
+    return { ran: !!e?.moved, note: !!e?.movedNote };
+  }
+
+  /** D109's move ran (once, M4); `note`: it turned Tools for Claude on, which the card says. */
+  markMoved(note: boolean) {
+    this.update("clickland", (e) => {
+      e.moved = true;
+      if (note) e.movedNote = true;
+      else delete e.movedNote;
     });
   }
 
@@ -492,6 +548,7 @@ export class FamilyStore {
     const next: Entry = {};
     if (e.url) next.url = e.url;
     if (e.triage) next.triage = e.triage;
+    if (e.moved) next.moved = true;
     all[s] = next;
     this.write(all);
   }

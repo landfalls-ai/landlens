@@ -205,3 +205,55 @@ describe("Fable's security review of wave 7 part 1, fixed", () => {
     expect(s.prefs("clickland")).toEqual({ toSessions: false, readsAuto: true });
   });
 });
+
+describe("Fable's security review of wave 7 part 2, fixed", () => {
+  it("L8: the accepted listing is sealed with its entry: a pin changed in the file, Clickland's too, isn't one", () => {
+    for (const sib of ["clickland", "landflow"] as const) {
+      const { s, file } = store();
+      if (sib === "landflow") s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: { name: "P" }, scopes: ["run"] });
+      s.setPrefs(sib, { toSessions: true });
+      s.setPin(sib, PIN("http://127.0.0.1:3000"));
+      const j = JSON.parse(readFileSync(file, "utf8"));
+      j[sib].pin.hash = "c".repeat(64);
+      j[sib].pin.tools = { list_workflows: "b".repeat(16), export_everything: "d".repeat(16) };
+      writeFileSync(file, JSON.stringify(j));
+      expect(s.pin(sib, "http://127.0.0.1:3000"), sib).toBeUndefined();
+      expect(s.prefs(sib).toSessions, sib).toBe(false);
+    }
+  });
+
+  it("L8: a changed listing is kept across a restart; accepting one clears it, as does another sign-in", () => {
+    const { s, file } = store();
+    s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: { name: "P" }, scopes: ["run"] });
+    s.setPin("landflow", PIN("http://127.0.0.1:3000"));
+    s.setDrift("landflow", true);
+    expect(new FamilyStore(file, fakeCrypto(true)).drift("landflow")).toBe(true);
+    s.setPin("landflow", PIN("http://127.0.0.1:3000"));
+    expect(s.drift("landflow")).toBe(false);
+    s.setDrift("landflow", true);
+    s.saveLandflow({ url: "http://127.0.0.1:3009", key: LF_KEY, account: { name: "P" }, scopes: ["run"] });
+    expect(s.drift("landflow")).toBe(false);
+  });
+
+  it("L5: a pin the store couldn't read back is refused, and the entry with its key stays", () => {
+    const { s } = store();
+    s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: { name: "P" }, scopes: ["run"] });
+    const long = `x${"y".repeat(199)}`;
+    expect(() => s.setPin("landflow", { ...PIN("http://127.0.0.1:3000"), tools: { [long]: "b".repeat(16) } })).toThrow(FAMILY_NOTES.badListing);
+    // Counts that don't add up to the tools aren't a listing Landlens made.
+    expect(() => s.setPin("landflow", { ...PIN("http://127.0.0.1:3000"), read: 5 })).toThrow(FAMILY_NOTES.badListing);
+    expect(s.landflowSecrets()?.key).toBe(LF_KEY);
+    expect(s.damaged).toBeUndefined();
+  });
+
+  it("M4: D109's move is marked once, and the mark outlives a Disconnect", () => {
+    const { s } = store();
+    expect(s.moved()).toEqual({ ran: false, note: false });
+    s.markMoved(true);
+    expect(s.moved()).toEqual({ ran: true, note: true });
+    s.setPrefs("clickland", { readsAuto: true });
+    expect(s.moved()).toEqual({ ran: true, note: false });
+    s.remove("clickland");
+    expect(s.moved().ran).toBe(true);
+  });
+});

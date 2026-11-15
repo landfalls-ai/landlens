@@ -389,6 +389,10 @@ export const FAMILY_NOTES = {
   drift: "Its tools changed since you accepted them. Review them, then accept.",
   unaccepted: "Its tools aren't accepted yet. Check them, then accept, so its reads can run without asking.",
   nameTaken: "A server you added on the MCP page has this name, so its tools stay off. Rename that server first.",
+  badListing: "Its tool listing isn't one Landlens accepts (a tool name over 128 characters, or over 500 tools).",
+  moved: "Moved from the MCP page: Claude sessions on every cluster get its tools now.",
+  siblingAddress: "This is the address of a Land family app you connected: its tools reach Claude through Connections → Land family, not here.",
+  reviewAgain: "Its tools changed since you reviewed them. Review them again, then accept.",
 } as const;
 /** "<Sibling> answered HTTP <n>.": the one note with a number in it. */
 export const familyHttpNote = (name: "Clickland" | "Landflow" | "Landfall", status: number) => `${name} answered HTTP ${Math.trunc(status)}.`;
@@ -702,8 +706,11 @@ export const channels = {
     .refine((r) => r.console === undefined || r.sibling === "clickland", "only Clickland has a console address")
     .refine((r) => r.triage === undefined || r.sibling === "landflow", "only Landflow has a triage webhook"),
   "family:test": z.object({ sibling: Sibling }),
-  /** Accept the listing the last family:test showed (D111). */
-  "family:repin": z.object({ sibling: Sibling }),
+  /**
+   * Accept the listing a family:test showed (D111), named by the hash that test returned: main refuses unless it is
+   * still the listing its last Check saw (review of part 2, M3).
+   */
+  "family:repin": z.object({ sibling: Sibling, hash: z.string().regex(/^[0-9a-f]{64}$/) }),
   "family:disconnect": z.object({ sibling: Sibling }),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
@@ -879,6 +886,8 @@ export type McpTest = {
   tools?: McpToolInfo[];
   /** A family sibling's listing against the accepted one, by tool name (D111): what Review shows. */
   diff?: { added: string[]; removed: string[]; changed: string[] };
+  /** A family sibling's listing, as a hash: Accept sends it back, so only the listing Review showed is pinned (M3). */
+  listing?: string;
 };
 /** A front-door request behind a landlens-kube call, from the front door's audit. */
 export type McpFrontDoorRequest = { at: string; method: string; path: string; allowed: boolean; status?: number; reason?: string };

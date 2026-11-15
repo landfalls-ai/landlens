@@ -43,6 +43,13 @@ export async function listAllTools(c: Client): Promise<Tool[]> {
     if (!r.nextCursor) break;
     cursor = r.nextCursor;
   }
+  // A listing that names one tool twice isn't one Landlens can tell apart (review of wave 7 part 2, L4): a permission
+  // rule is by name, and a call would take whichever came first. It is treated as a server that didn't list.
+  const seen = new Set<string>();
+  for (const t of all) {
+    if (seen.has(t.name)) throw new Error("Landlens: the server listed a tool name twice");
+    seen.add(t.name);
+  }
   return all.slice(0, 500);
 }
 
@@ -139,6 +146,12 @@ export type RemoteSpec = {
   readUrl?: string;
   /** The read-only endpoint's half of the accepted listing; its reads run without asking only while it holds. */
   readPin?: string;
+  /**
+   * A family sibling's accepted listing, tool by tool (approval.ts toolDigest): the model is offered only the tools
+   * whose digest is the accepted one, so a new or changed tool reaches it only after the person's Accept (review of
+   * wave 7 part 2, L3).
+   */
+  pinTools?: Record<string, string>;
 };
 
 /** Whether Landlens tells this server it shows MCP App views: not a connection's (M3), except Clickland's (D112). */

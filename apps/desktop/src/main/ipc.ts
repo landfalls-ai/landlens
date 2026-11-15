@@ -206,7 +206,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "family:set": async ({ sibling, toSessions, readsAuto, console, triage }) =>
       family.set(sibling, { ...(toSessions !== undefined ? { toSessions } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}), ...(console !== undefined ? { console } : {}), ...(triage !== undefined ? { triage } : {}) }),
     "family:test": ({ sibling }) => family.test(sibling),
-    "family:repin": async ({ sibling }) => family.repin(sibling),
+    "family:repin": async ({ sibling, hash }) => family.repin(sibling, hash),
     "family:disconnect": ({ sibling }) => family.disconnect(sibling),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),

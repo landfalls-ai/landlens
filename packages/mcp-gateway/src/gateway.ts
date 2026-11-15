@@ -16,11 +16,12 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { appMayCall, drifted, modelMayCall, preAllowed, readsOnly, toolUi, type ListedServer } from "./approval.js";
+import { appMayCall, drifted, holds, listingHash, modelMayCall, preAllowed, readsOnly, toolDigest, toolUi, type ListedServer } from "./approval.js";
 import { Autonomy, WHY } from "./autonomy.js";
 import { CallLog, newCallId } from "./calls.js";
 import { Pairing, TOOL_USE_META } from "./pairing.js";
-import { familyHeld, familyReadTools, isSibling, providerResult, providerTool, type ProviderRules } from "./providers/index.js";
+import { familyHeld, familyReadTools, isSibling, providerResult, providerTool, schemaTooLarge, type ProviderRules } from "./providers/index.js";
+import type { Sibling } from "@landlens/contracts";
 import { BuiltinUpstream, describeError, rawError, RemoteUpstream, type RemoteSpec, type Upstream } from "./upstream.js";
 
 const MAX_BODY = 1_000_000;
@@ -93,6 +94,17 @@ export class GatewaySession {
   readonly autonomy = new Map<ConnProvider, Autonomy>();
   /** Tools you said "don't ask again" for in this session. */
   private readonly always = new Set<string>();
+  /**
+   * The family siblings whose reads may skip the question in this session: the listing it got is the accepted one and
+   * Reads run without asking is on (review of wave 7 part 2, M5). A sibling not here has every tool treated as a write:
+   * a view's call asks, and the dock offers no "always allow". Leaves when the sibling's reads stop (restrict).
+   */
+  readonly readsFree = new Set<string>();
+  /**
+   * Each family sibling's tools the model is offered in this session: those whose digest is the accepted one (L3). A
+   * sibling that didn't list when the session opened offers none.
+   */
+  readonly offered = new Map<string, ReadonlySet<string>>();
 
   constructor(readonly gateway: McpGateway, readonly token: string, readonly init: SessionInit) {
     this.upstreams.set(BUILTIN_MCP_SERVER, new BuiltinUpstream(BUILTIN_MCP_SERVER, init.cluster));
@@ -171,6 +183,7 @@ export class GatewaySession {
    */
   restrict(server: string, what: "drop" | "reads") {
     this.forgetRules(server);
+    this.readsFree.delete(server);
     if (what !== "drop") return;
     const provider = this.init.remotes.find((r) => r.name === server)?.provider;
     if (provider && !isSibling(provider.id)) this.autonomy.get(provider.id)?.stop("you");
@@ -221,8 +234,11 @@ export class McpGateway {
   constructor(private readonly opts: {
     approve?: Approver;
     log?: (line: string) => void;
-    /** A remote server's listing changed since you let its read-only tools run without asking: they ask again. */
-    onDrift?: (server: RemoteSpec) => void;
+    /**
+     * A remote server's listing changed since you let its read-only tools run without asking: they ask again. `listing`
+     * is the hash of the listing the session got.
+     */
+    onDrift?: (server: RemoteSpec, listing: string) => void;
     /** A connection's autonomous mode changed in a session (turned on or off, a write counted). */
     onAutonomy?: (s: AutonomyState) => void;
     /** The clock autonomy's per-minute limit reads (tests). */
@@ -282,7 +298,15 @@ export class McpGateway {
       if (!r.provider || !isSibling(r.provider.id)) continue;
       const l = answered.find((x) => x.name === r.name);
       r.provider = { ...r.provider, readTools: familyReadTools(r.provider.id, l?.tools) };
-      if (l) l.provider = r.provider;
+      if (!l) continue;
+      l.provider = r.provider;
+      // Its reads skip the question only while this listing is the accepted one and the switch is on (M5).
+      if (holds(l) && r.provider.readsAuto) session.readsFree.add(r.name);
+      // The model is offered only the tools the person accepted, as accepted (L3): all of them while the listing holds;
+      // else those whose digest is unchanged. A new or changed tool waits for Accept.
+      const digest = toolDigest(l.tools);
+      const pinned = r.pinTools;
+      session.offered.set(r.name, new Set(l.tools.filter((t) => holds(l) || (!!pinned && Object.hasOwn(pinned, t.name) && pinned[t.name] === digest[t.name])).map((t) => t.name)));
     }
     // A connection's read-only endpoint is pinned too: its reads run without asking only while both halves hold.
     for (const l of answered) {
@@ -301,7 +325,8 @@ export class McpGateway {
     for (const name of changed) {
       this.opts.log?.(`[mcp] ${init.label}: ${name}'s tools changed since you allowed its read-only tools; they ask again`);
       const spec = init.remotes.find((r) => r.name === name);
-      if (spec) this.opts.onDrift?.(spec);
+      const l = answered.find((x) => x.name === name)!;
+      if (spec) this.opts.onDrift?.(spec, listingHash(l.tools));
     }
     // A connection's autonomous mode, off; it can be turned on only while the session's listing is the accepted one
     // (D80, D82). Views and Preview have none.
@@ -369,8 +394,9 @@ export class McpGateway {
     const provider = spec.provider.id;
     // A family sibling has no autonomous mode (D113): its writes go to the dock, marked as its.
     const a = isSibling(provider) ? undefined : s.autonomy.get(provider);
-    // A provider's write is never offered "always allow" (M1), autonomous or not: `write` tells main so.
-    if (spec.provider.readTools.has(m[2]!)) return { ok: false, provider };
+    // A provider's write is never offered "always allow" (M1), autonomous or not: `write` tells main so. A sibling's
+    // read counts as one only while the session's listing is the accepted one and its reads run without asking (M5).
+    if (this.freeRead(s, spec.name, m[2]!, spec.provider)) return { ok: false, provider };
     if (!a?.on) return { ok: false, provider, write: true };
     const t = await this.listTools(up).then((ts) => ts.find((x) => x.name === m[2]), () => undefined);
     if (!t) return { ok: false, provider, write: true, why: "not one of the routine writes" };
@@ -391,8 +417,41 @@ export class McpGateway {
    * writes ask, as after a landlens-gcp read (review of wave 6 part 5, W1).
    */
   gcpQuoted(acpSession: string) {
+    this.hold(acpSession, WHY.gcp);
+  }
+
+  /**
+   * A sibling's text entered this session another way than its tools (the workbench's quotes in parts 3 and 4): its
+   * GitHub and Linear writes ask from now on, as after a call to the sibling (review of wave 7 part 2, L8).
+   */
+  familyQuoted(acpSession: string, sibling: Sibling) {
+    this.hold(acpSession, familyHeld(sibling));
+  }
+
+  /**
+   * Every autonomy of one agent session asks from now on, with `why`: text it read could steer a write. Main calls it
+   * for a resumed session, whose transcript the gateway never saw (review of wave 7 part 2, M1).
+   */
+  hold(acpSession: string, why: string) {
     const s = this.agentSession(acpSession);
-    if (s) for (const a of s.autonomy.values()) a.hold(WHY.gcp);
+    if (s) for (const a of s.autonomy.values()) a.hold(why);
+  }
+
+  /**
+   * Whether a tool of a connection's or sibling's server is a read that may skip the question: by the provider's reads;
+   * for a sibling, also only while the session's listing is the accepted one and Reads run without asking is on (M5).
+   */
+  private freeRead(s: GatewaySession, server: string, tool: string, provider: ProviderRules): boolean {
+    return provider.readTools.has(tool) && (!isSibling(provider.id) || s.readsFree.has(server));
+  }
+
+  /**
+   * Whether the model and views may use a provider's tool in this session (L3): its schema isn't too large, and a
+   * sibling's is one the person accepted, as accepted.
+   */
+  private offers(s: GatewaySession, server: string, t: Tool, provider: ProviderRules): boolean {
+    if (schemaTooLarge(t)) return false;
+    return !isSibling(provider.id) || !!s.offered.get(server)?.has(t.name);
   }
 
   /** Called by GatewaySession.close(). */
@@ -437,7 +496,8 @@ export class McpGateway {
     // from a read, so its "always" is this call's yes too.
     const m = name ? /^mcp__([a-z0-9-]+)__(.+)$/.exec(name) : null;
     const prov = m ? s?.init.remotes.find((r) => r.name === m[1])?.provider : undefined;
-    const always = p.always && !!m && !(prov && !prov.readTools.has(m[2]!));
+    // A sibling's tool counts as a read here only while its reads skip the question in this session (M5).
+    const always = p.always && !!m && !(prov && !(s && this.freeRead(s, m[1]!, m[2]!, prov)));
     s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, always, !!p.autonomous);
   }
 
@@ -495,12 +555,16 @@ export class McpGateway {
     const provider = s.init.remotes.find((r) => r.name === server)?.provider;
     if (provider) t = providerTool(t, !!provider.views);
     const readOnly = readsOnly(t, provider);
+    // A tool the session doesn't offer (a sibling's new or changed one, an oversized schema) runs for nobody (L3).
+    const offered = !provider || this.offers(s, server, t, provider);
+    const unoffered = `${server} · ${tool} isn't one of the tools you accepted. Review its tools on the Connections page.`;
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
       // Google Cloud data enters the session: its writes ask from now on, before this read runs (W1).
       if (server === GCP_MCP_SERVER) for (const a of s.autonomy.values()) a.hold(WHY.gcp);
       // So does a sibling's text (D113): any call to a family server holds the session's GitHub and Linear autonomy.
       if (provider && isSibling(provider.id)) for (const a of s.autonomy.values()) a.hold(familyHeld(provider.id));
+      if (!offered) return refuse(unoffered);
       const rule = `mcp__${server}__${tool}`;
       if (!isBuiltin(server)) {
         if (s.allow.includes(rule)) this.log.gate(id, "read");
@@ -526,11 +590,16 @@ export class McpGateway {
       // A connection's tools have no views (M3); Clickland's views call its own server's tools (D112), and a write
       // still asks you first.
       if ((provider && !provider.views) || !appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
-      if (!readOnly) {
+      if (!offered) return refuse(unoffered);
+      // A sibling's read runs without asking only while its listing is the accepted one and its reads may (M5).
+      const free = readOnly && (!provider || !isSibling(provider.id) || s.readsFree.has(server));
+      if (!free) {
         const yes = this.opts.approve ? await this.opts.approve({ label: s.label, server, tool, args, origin }).catch(() => false) : false;
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
       }
-      if (!isBuiltin(server)) this.log.gate(id, readOnly ? "read" : "asked");
+      if (!isBuiltin(server)) this.log.gate(id, free ? "read" : "asked");
+    } else if (!offered) {
+      return refuse(unoffered);
     } else if (!readOnly) {
       return refuse(`${tool} doesn't say it only reads, so Landlens won't run it from the MCP page.`);
     } else if (!isBuiltin(server)) this.log.gate(id, "preview");
@@ -643,7 +712,8 @@ export class McpGateway {
       try {
         const provider = session.init.remotes.find((r) => r.name === name)?.provider;
         const tools = await this.listTools(up);
-        return { tools: provider ? tools.filter((t) => !provider.views || modelMayCall(t)).map((t) => providerTool(t, !!provider.views)) : tools.filter(modelMayCall) };
+        // A provider's tools as offered (L3): never an oversized schema, and of a sibling only what the person accepted.
+        return { tools: provider ? tools.filter((t) => (!provider.views || modelMayCall(t)) && this.offers(session, name, t, provider)).map((t) => providerTool(t, !!provider.views)) : tools.filter(modelMayCall) };
       } catch (err) {
         this.opts.log?.(`[mcp] ${session.label}: ${name} didn't list its tools: ${rawError(err)}`);
         return { tools: [] };

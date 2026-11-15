@@ -105,6 +105,13 @@ export function readTools(full: Pick<Tool, "name" | "inputSchema">[], readonly: 
   return new Set(full.filter((t) => ro.get(t.name) === canonical(t.inputSchema) && !namesAWrite(t.name)).map((t) => t.name));
 }
 
+/**
+ * The most a provider tool's input schema may weigh, as canonical JSON (review of wave 7 part 2, L3): a larger one is
+ * neither offered to the model nor run. The description and title are capped below; a schema can't be cut.
+ */
+export const PROVIDER_SCHEMA_MAX = 20_000;
+export const schemaTooLarge = (t: Pick<Tool, "inputSchema">) => canonical(t.inputSchema ?? {}).length > PROVIDER_SCHEMA_MAX;
+
 /** The most of a provider tool's description and title the model is offered (L2). */
 export const PROVIDER_DESCRIPTION_MAX = 2_000;
 export const PROVIDER_TITLE_MAX = 200;

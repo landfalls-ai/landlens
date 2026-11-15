@@ -51,8 +51,14 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
   every session, on every cluster, gets each ready sibling with **Tools for Claude** on, after the connections. Main
   adds the key (Landfall: its sign-in as the `authProvider`) and pins every request to the sibling's origin. A tool
   reads only when Landlens's list, the server's `readOnlyHint` (without `destructiveHint`) and the accepted listing
-  agree; the gateway works the reads out from the session's own listing. A sibling has no autonomous mode, and a call
-  to one holds the session's GitHub and Linear autonomy. Only Clickland keeps its views. The three names are reserved.
+  agree; the gateway works the reads out from the session's own listing, and a read skips the question only while
+  that listing is the accepted one and **Reads run without asking** is on (a view's call and **Always allow** too).
+  The model is offered only the tools accepted as they were. A sibling has no autonomous mode, and a call to one
+  holds the session's GitHub and Linear autonomy. Only Clickland keeps its views. The three names are reserved, and
+  a server you add at a connected sibling's address stays out of sessions, with a note on its panel.
+- **A listing that names one tool twice** is treated as a server that didn't list: nothing runs without asking and
+  no call goes through (wave 7 review of part 2, L4). A connection's or sibling's tool whose input schema is over
+  20,000 characters as JSON is never offered or run.
 - **Visibility** (MCP Apps `_meta.ui.visibility`). Tools for a view only (`["app"]`) are left out of the model's tool
   list and refused if the model calls them anyway; a view can call only tools offered to apps, on its own server.
 - **The call log** keeps the last 500 calls in memory: session, server, tool, who called (agent, view, you), the
@@ -86,9 +92,12 @@ arguments can Preview, which runs the tool as you (a read-only front-door token 
 the view, or the text; the others show why not in the same place (Needs arguments, Not read-only, Server off).
 
 The **Add Clickland** card is gone (wave 7, D109): Clickland's tools come from its card on the Connections page. On
-start, a server that card made (its address is the connected Clickland's `/api/mcp`) is removed from
-`mcp-servers.json` and moves to the family, with **Reads run without asking** following its old **Run read-only tools
-without asking**; a server you typed at another address stays. `mcp:preset` is gone with it.
+the first start with this version only, a server that card made (its address is the connected Clickland's
+`/api/mcp`) is removed from `mcp-servers.json`. One that was on for a cluster moves to the family (Tools for Claude on
+for every cluster, which the card says), with **Reads run without asking** following its old **Run read-only tools
+without asking** and its pin kept only if Clickland lists the same tools; one off everywhere is just removed
+([family.md](family.md#on-the-cards-and-the-mcp-page)). A server you typed at another address stays. `mcp:preset` is
+gone with it.
 
 **Calls.** The log, newest first, filtered by session, server and status (All, OK, Failed, Refused). A row shows the
 status icon, `server · tool` and its target (or its arguments as words, never raw JSON), the session (and "from a

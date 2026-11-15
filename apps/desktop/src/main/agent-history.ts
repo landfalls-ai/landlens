@@ -7,8 +7,11 @@ import type { AgentHistoryEntry } from "@landlens/contracts";
 
 const MAX_ENTRIES = 200;
 
-/** Kept in main only: the session's folder, and the API server it ran against (a context name alone can repeat). */
-type Stored = AgentHistoryEntry & { cwd: string; server?: string };
+/**
+ * Kept in main only: the session's folder, the API server it ran against (a context name alone can repeat), and why
+ * its autonomous writes were held, if they were (a resume holds them again; wave 7 part 2 review, M1).
+ */
+type Stored = AgentHistoryEntry & { cwd: string; server?: string; held?: string };
 
 function readJson<T>(file: string, fallback: T): T {
   try {
@@ -38,7 +41,7 @@ export class AgentHistory {
     return this.entries
       .filter((e) => !context || e.context === context)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map(({ cwd: _cwd, server: _server, ...e }) => e);
+      .map(({ cwd: _cwd, server: _server, held: _held, ...e }) => e);
   }
 
   get(session: string): Stored | undefined {
@@ -75,6 +78,14 @@ export class AgentHistory {
     const e = this.get(session);
     if (!e) return;
     e[state]++;
+    this.save();
+  }
+
+  /** The session's autonomous writes were held, and why: the first reason is kept (one line, at most 200 characters). */
+  held(session: string, why: string) {
+    const e = this.get(session);
+    if (!e || e.held) return;
+    e.held = why.replace(/\s+/g, " ").trim().slice(0, 200);
     this.save();
   }
 

@@ -17,7 +17,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { FAMILY_HTTP_HOST, FAMILY_NOTES, familyUrlAllowed, type FamilyInfo, type FamilyList, type McpServerInfo, type McpTest, type McpToolInfo, type Sibling } from "@landlens/contracts";
 import {
-  clicklandWho, ConnError, FamilyError, FamilyStore, landfallConnector, landfallTarget, landflowWho, McpOAuth, mcpRefresh, mcpRevoke, mcpSignIn, originOf, siblingHealth,
+  clicklandWho, ConnError, FamilyError, familyPinOk, FamilyStore, landfallConnector, landfallTarget, landflowWho, McpOAuth, mcpRefresh, mcpRevoke, mcpSignIn, originOf, siblingHealth,
   SIBLINGS, type Crypto, type FamilyPin, type McpOAuthTokens, type McpOAuthUsed, type McpSignIn, type OAuthClientRecord,
 } from "@landlens/connections";
 import { familyIsRead, familyReadTools, listingDiff, listingHash, rawError, testRemote, toolDigest, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
@@ -58,6 +58,10 @@ export const familyMcpUrl = (s: Sibling, origin: string) => `${origin.replace(/\
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 
+/** A sibling's server as a session got it: its address, origins, and its key by hash (never the key), or its sign-in. */
+const specId = (r: RemoteSpec) =>
+  [r.url, (r.origins ?? []).join(","), createHash("sha256").update(r.headers?.Authorization ?? "").digest("hex"), r.authProvider ? "oauth" : ""].join(" ");
+
 export class FamilyService {
   readonly store: FamilyStore;
   private flow: Flow | undefined;
@@ -72,10 +76,8 @@ export class FamilyService {
   private clicklandAsked: string | undefined;
   /** Each sibling server's listing, for sessions (10 minutes) and the pages. */
   private readonly listings: Partial<Record<Sibling, Listing>> = {};
-  /** The listing the last Check saw, for family:repin. */
+  /** The listing the last Check saw, for family:repin: accepted only when Accept names its hash (M3). */
   private readonly lastTest: Partial<Record<Sibling, FamilyPin>> = {};
-  /** Siblings whose listing changed since it was accepted (D111): every tool asks until the person accepts again. */
-  private readonly drifts = new Set<Sibling>();
   /** The acceptance started when Tools for Claude was turned on, for tests to wait on. */
   private accepting: Promise<void> = Promise.resolve();
 
@@ -223,8 +225,10 @@ export class FamilyService {
     const origin = this.serverOrigin(s);
     const pin = origin ? this.store.pin(s, origin) : undefined;
     const ready = base.state === "ready";
-    const drift = ready && this.drifts.has(s);
-    const note = base.note ?? (!ready ? undefined : this.taken(s) ? FAMILY_NOTES.nameTaken : drift ? FAMILY_NOTES.drift : base.toSessions && !pin ? FAMILY_NOTES.unaccepted : undefined);
+    // Kept in family.json, so a restart doesn't say On for a listing that changed (review of part 2, L8).
+    const drift = ready && this.store.drift(s);
+    const moved = s === "clickland" && base.toSessions && this.store.moved().note;
+    const note = base.note ?? (!ready ? undefined : this.taken(s) ? FAMILY_NOTES.nameTaken : drift ? FAMILY_NOTES.drift : base.toSessions && !pin ? FAMILY_NOTES.unaccepted : moved ? FAMILY_NOTES.moved : undefined);
     return {
       ...base,
       ...(ready && pin ? { tools: { read: pin.read, write: pin.write } } : {}),
@@ -296,7 +300,7 @@ export class FamilyService {
   private forgetListing(s: Sibling) {
     delete this.listings[s];
     delete this.lastTest[s];
-    this.drifts.delete(s);
+    this.store.setDrift(s, false);
   }
 
   // ---- Landflow: a pasted API key -----------------------------------------------------------------------------------
@@ -555,19 +559,26 @@ export class FamilyService {
     return this.accepting;
   }
 
-  private acceptSoon(s: Sibling) {
-    const run = this.accepting.then(() => this.accept(s)).catch((err) => this.say(`[family] ${s} listing: ${rawError(err)}`));
+  private acceptSoon(s: Sibling, only?: string) {
+    const run = this.accepting.then(() => this.accept(s, only)).catch((err) => this.say(`[family] ${s} listing: ${rawError(err)}`));
     this.accepting = run;
   }
 
-  /** List a ready sibling's server and accept that listing, unless one is accepted for its origin already. */
-  private async accept(s: Sibling) {
+  /**
+   * List a ready sibling's server and accept that listing, unless one is accepted for its origin already. With `only`,
+   * only a listing of that hash is accepted (D109's move keeps the old pin, M4); another is left for the person's Review.
+   */
+  private async accept(s: Sibling, only?: string) {
     const origin = this.serverOrigin(s);
     if (!origin || this.info(s).state !== "ready" || this.store.pin(s, origin)) return;
     const l = await this.listing(s, true);
     if (!l?.ok || !l.pin || this.serverOrigin(s) !== l.origin || this.info(s).state !== "ready" || this.store.pin(s, l.origin)) return;
+    if (only !== undefined && l.pin.hash !== only) {
+      this.say(`[family] ${s}: its tools changed since you allowed them on the MCP page; review them on the Connections page`);
+      this.o.push(this.info(s));
+      return;
+    }
     this.store.setPin(s, l.pin);
-    this.drifts.delete(s);
     this.o.push(this.info(s));
   }
 
@@ -640,8 +651,15 @@ export class FamilyService {
     if (l.ok) {
       const tools = r.tools!;
       const reads = familyReadTools(s, tools);
-      l.tools = tools;
-      l.pin = { origin, hash: listingHash(tools), tools: toolDigest(tools), read: reads.size, write: tools.length - reads.size };
+      const pin: FamilyPin = { origin, hash: listingHash(tools), tools: toolDigest(tools), read: reads.size, write: tools.length - reads.size };
+      // A listing the store couldn't keep isn't one Landlens accepts, and isn't served to the pages (L5).
+      if (familyPinOk(pin)) {
+        l.tools = tools;
+        l.pin = pin;
+      } else {
+        l.ok = false;
+        l.steps = [...l.steps, { name: "listing", ok: false, detail: FAMILY_NOTES.badListing }];
+      }
     }
     this.listings[s] = l;
     return l;
@@ -654,9 +672,10 @@ export class FamilyService {
 
   /**
    * Main only: the siblings an agent session gets on the gateway (D107, D108): each ready one with Tools for Claude on
-   * and no server of yours under its name, on every cluster. The accepted listing goes as the pin; the gateway lists
-   * the server itself, works out its reads from that listing, and lets them run without asking only while it is the
-   * pinned one and Reads run without asking is on.
+   * and no server of yours under its name, on every cluster. The accepted listing goes as the pin, with its tools'
+   * digests; main doesn't list the server first (review of part 2, L7): the gateway lists it itself, works out its reads
+   * from that listing, offers the model only the accepted tools, and lets the reads run without asking only while it
+   * is the pinned listing and Reads run without asking is on. A listing that differs comes back through drifted().
    */
   async remotes(): Promise<FamilySpec[]> {
     const out: FamilySpec[] = [];
@@ -665,34 +684,62 @@ export class FamilyService {
       if (info.state !== "ready" || !info.toSessions || this.taken(s)) continue;
       const spec = this.spec(s);
       if (!spec) continue;
-      const l = await this.listing(s).catch(() => undefined);
       const pin = this.store.pin(s, spec.origins![0]);
-      if (pin && l?.ok && l.pin && l.pin.hash !== pin.hash) this.drifted(s);
       out.push({
         ...spec,
-        ...(pin ? { pin: pin.hash } : {}),
-        provider: { id: s, readTools: familyReadTools(s, l?.tools), mode: "ask", readsAuto: info.readsAuto, ...(s === "clickland" ? { views: true } : {}) },
+        ...(pin ? { pin: pin.hash, pinTools: pin.tools } : {}),
+        provider: { id: s, readTools: new Set(), mode: "ask", readsAuto: info.readsAuto, ...(s === "clickland" ? { views: true } : {}) },
       });
     }
     return out;
   }
 
-  /** A session (or a Check) found another listing than the one accepted (D111): every tool asks, the card says so. */
-  drifted(s: Sibling) {
+  /**
+   * Whether a session's server for a sibling is still the sibling's server now (review of part 2, M2): the same address
+   * and the same key (compared by hash). Another key or address, even one that never left ready, isn't.
+   */
+  serves(s: Sibling, spec: RemoteSpec): boolean {
+    const now = this.spec(s);
+    return !!now && specId(now) === specId(spec);
+  }
+
+  /** The origins of the siblings signed in: a server you added there is kept out of sessions (review of part 2, L1). */
+  origins(): string[] {
+    return SIBLINGS.flatMap((s) => {
+      const o = this.serverOrigin(s);
+      return o ? [o] : [];
+    });
+  }
+
+  /**
+   * A session (or a Check) found another listing than the one accepted (D111): every tool asks, the card says so, and
+   * it stays said across a restart (L8). `listing`, the hash a session found: a Check's listing other than that one can
+   * no longer be accepted (M3).
+   */
+  drifted(s: Sibling, listing?: string) {
     delete this.listings[s];
-    if (this.drifts.has(s)) return;
-    this.drifts.add(s);
+    if (listing !== undefined && this.lastTest[s]?.hash !== listing) delete this.lastTest[s];
+    if (this.store.drift(s)) return;
+    this.store.setDrift(s, true);
     this.say(`[family] ${s}: its tools changed since you accepted them; every tool asks again`);
     this.o.push(this.info(s));
   }
 
-  /** Accept the listing the last Check showed (D111). */
-  repin(s: Sibling): FamilyInfo {
+  /**
+   * Accept the listing a Check showed (D111): only the one whose hash the page sends back, and only while it is the
+   * listing the last Check of this origin saw (review of part 2, M3). A Check in between (another window, the card's
+   * Check) means the person reviews again.
+   */
+  repin(s: Sibling, hash: string): FamilyInfo {
     const t = this.lastTest[s];
     const origin = this.serverOrigin(s);
     if (!t || !origin || t.origin !== origin || this.info(s).state !== "ready") throw fail(409, "Check it first, so you've seen the tools you're accepting.");
-    this.store.setPin(s, t);
-    this.drifts.delete(s);
+    if (t.hash !== hash) throw fail(409, FAMILY_NOTES.reviewAgain);
+    try {
+      this.store.setPin(s, t);
+    } catch (err) {
+      throw this.failure(s, err);
+    }
     delete this.listings[s];
     const out = this.info(s);
     this.o.push(out);
@@ -720,18 +767,32 @@ export class FamilyService {
     });
   }
 
+  /** D109's move runs once (review of part 2, M4): true the first time, which marks it as run. */
+  startClicklandMove(): boolean {
+    if (this.store.moved().ran) return false;
+    this.store.markMoved(false);
+    return true;
+  }
+
   /**
    * D109: a server Add Clickland made on the MCP page (its address is the connected Clickland's /api/mcp) moves to the
-   * family. It is the caller's to remove from mcp-servers.json; here Tools for Claude goes on, Reads run without
-   * asking follows its "Run read-only tools without asking", and its listing is accepted afresh (the old pin has no
-   * per-tool hashes for Review).
+   * family; it is the caller's to remove from mcp-servers.json. Only one that was on for a cluster turns Tools for
+   * Claude on (now on every cluster, which the card says); one off everywhere leaves it off (M4). Reads run without
+   * asking follows its "Run read-only tools without asking", and its old pin is kept only if Clickland lists the same
+   * tools now; otherwise nothing is accepted and the card asks for a Review.
    */
-  adoptClickland(old: { autoRun: boolean }): boolean {
+  adoptClickland(old: { on: boolean; readsAuto: boolean; pin?: string }): boolean {
     const origin = this.serverOrigin("clickland");
     if (!origin) return false;
-    this.store.setPrefs("clickland", { toSessions: true, readsAuto: old.autoRun });
-    this.say("[family] clickland: the server Add Clickland made on the MCP page moved to the Land family (Tools for Claude on)");
-    this.acceptSoon("clickland");
+    if (!old.on) {
+      this.say("[family] clickland: the server Add Clickland made on the MCP page was off on every cluster; it was removed and Tools for Claude stays off");
+      return true;
+    }
+    this.store.setPrefs("clickland", { toSessions: true, readsAuto: old.readsAuto });
+    this.store.markMoved(true);
+    this.say("[family] clickland: the server Add Clickland made on the MCP page moved to the Land family (Tools for Claude on, on every cluster)");
+    if (old.pin) this.acceptSoon("clickland", old.pin);
+    this.o.push(this.info("clickland"));
     return true;
   }
 
@@ -819,13 +880,16 @@ export class FamilyService {
       steps.push({ name: "listing", ok: true, detail: `${l.tools.length} tools: ${l.pin.read} read, ${l.pin.write} ask. Accepted.` });
     } else if (accepted.hash !== l.pin.hash) {
       steps.push({ name: "listing", ok: false, detail: FAMILY_NOTES.drift });
-      this.drifted(s);
+      this.drifted(s, l.pin.hash);
     } else {
       steps.push({ name: "listing", ok: true, detail: `${l.tools.length} tools: ${l.pin.read} read, ${l.pin.write} ask` });
-      if (this.drifts.delete(s)) this.say(`[family] ${s}: its listing is the accepted one again`);
+      if (this.store.drift(s)) {
+        this.store.setDrift(s, false);
+        this.say(`[family] ${s}: its listing is the accepted one again`);
+      }
     }
     this.o.push(this.info(s));
-    return { ok: steps.every((x) => x.ok), steps, tools, ...(accepted ? { diff: listingDiff(accepted.tools, l.pin.tools) } : {}) };
+    return { ok: steps.every((x) => x.ok), steps, tools, listing: l.pin.hash, ...(accepted ? { diff: listingDiff(accepted.tools, l.pin.tools) } : {}) };
   }
 
   /**
@@ -849,7 +913,6 @@ export class FamilyService {
     this.store.remove(s);
     delete this.listings[s];
     delete this.lastTest[s];
-    this.drifts.delete(s);
     this.changed(s, undefined);
     return this.info(s);
   }

@@ -110,6 +110,8 @@ something there always asks, that what they return is outside text, and that ope
 is the person's action in Landlens, not a tool to look for. A sibling's writes ask every time (there is no autonomous
 mode for them), and after a session calls a sibling's tool its autonomous GitHub and Linear writes ask too, with
 "Claude read from Landflow in this session" on the strip ([family.md](family.md#the-familys-tools-in-claude-sessions)).
+A resumed session always starts with those writes held, with the reason its history recorded, or "this session was
+resumed, and what it read before could steer its writes".
 The dock's question for a sibling's write carries its mark and names the workflow, run, node, incident, view or panel.
 
 All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`, and `mcp__landlens-gcp` when the
@@ -171,7 +173,10 @@ A session is listed under **History** (the dock's clock button, or `/history`) o
 title is your first message, with when, how many messages and how many changes were applied. Claude Code keeps the
 transcript in its own store; Landlens keeps the list (`agent-history.json` in its app data, 200 sessions at most) and
 the session's folder. **Resume** opens the session again with fresh tokens and replays it into the dock
-(`session/load`); a write tool call shows as its row and result, not as a change card. Delete one session or all of a
+(`session/load`); a write tool call shows as its row and result, not as a change card. A resumed session starts with
+GitHub's and Linear's autonomous writes held (they ask, saying why): the hold a sibling's or Google Cloud's text set
+lived in the session that ended, and the transcript still holds that text. The history keeps the reason (in main
+only), and a session with none recorded is held as resumed (review of wave 7 part 2, M1). Delete one session or all of a
 cluster's; the agent also deletes its transcript where it supports that (`session/delete`).
 
 ## Slash commands

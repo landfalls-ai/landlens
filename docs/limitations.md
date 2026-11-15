@@ -99,7 +99,9 @@ person's check reads them), and Ask Claude sends one problem at a time.
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
   clusters and sessions; a project granted later is readable only in a new session.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
-  asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
+  asking, and the scope is typed again each time; there is no default scope per connection. A resumed session is also
+  held for good: its routine writes ask even with autonomous on, since Landlens can't see what its transcript read
+  (wave 7 review of part 2, M1). Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones
   ([connections.md](connections.md#autonomous-mode)). Google Cloud data holds it (every write asks after), but
   cluster text (logs, events, annotations) doesn't: a hostile log line read in an autonomous session is the same
@@ -184,8 +186,12 @@ person's check reads them), and Ask Claude sends one problem at a time.
   traces or console links (part 3; the console address can be set only over IPC), triage or flows from a resource
   (part 4; the webhook is stored, not sent), and telemetry or the brain (part 5). No live link was checked with a real
   key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
-  listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` is checked against fakes made from the
-  siblings' code. A sibling's writes have no autonomous mode, by design (D113), and the family's tools are on for every
+  listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` was compared by hand with the siblings'
+  code ([family.md](family.md#what-the-lists-were-checked-against-review-of-part-2-m6)), and the three recorded-listing
+  tests show as `todo` until a listing is recorded. Clickland hints a new tool read-only by default: only Landlens's
+  list keeps it asking. Parts 3 and 4 must hold autonomy (`familyQuoted`) when they quote a sibling's text into a
+  prompt. A server you add at a connected sibling's address stays out of sessions rather than getting the sibling's
+  rules. A sibling's writes have no autonomous mode, by design (D113), and the family's tools are on for every
   cluster or none. A Clickland view can call Clickland's writes behind the native dialog, as an added server's view
   can. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in and its MCP server were checked
   only against the fake. A Landflow key that can change workflows is kept, with a note. Landbright sign-in for

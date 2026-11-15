@@ -173,6 +173,18 @@ are reserved names on the MCP page. A server you added under one of those names 
 sibling's tools stay off until you rename it; the card says "A server you added on the MCP page has this name, so its
 tools stay off. Rename that server first."
 
+A server you added on the MCP page at a connected sibling's address (any spelling of this machine: `localhost`,
+`127.0.0.1`, `[::1]`) stays out of sessions and Preview, and its panel says "This is the address of a Land family app
+you connected: its tools reach Claude through Connections → Land family, not here." It would be that sibling without
+the family's rules: no data line, its own hints for reads, and no hold on autonomy (review of part 2, L1).
+
+Open sessions follow a sibling at once. Disconnect, Tools for Claude off, a server of yours taking its name, or
+another key or address (Landflow connected again with a new key at the same address, which keeps the switches)
+takes its server out of every open session, with every standing yes for it; a call to it is then refused as no such
+server (review of part 2, M2). A push that changes nothing sessions get (who-am-I, a Check) leaves the MCP page's
+Preview open; one that does opens it again as the sibling is now (L6). Main doesn't list a sibling before a session
+opens: it hands the gateway the accepted pin and the gateway lists the server itself (L7).
+
 ### Which tools read (D110)
 
 A sibling has no read-only endpoint to compare with (wave 6's D78), so a tool is a read only when three things agree:
@@ -187,6 +199,43 @@ from the session's own listing, so main's list can't widen them. With **Reads ru
 without a prompt; off, every tool asks. There is no autonomous mode for a sibling's writes (D113): Clickland's
 `add_note` or Landflow's `execute_workflow` asks every time, and **Always allow** counts as once.
 
+The third condition holds everywhere a read skips the question, not only in the session's permission rules (review of
+part 2, M5): while the session's listing isn't the accepted one, or **Reads run without asking** is off (or goes off
+mid-session), a Clickland view's call to a read asks through the native dialog, and the dock offers no **Always
+allow** for it (one sent counts as once). The MCP page's Preview runs a read as before: you run it.
+
+What the model is offered is the accepted listing, tool by tool (L3): while a listing differs, the session offers only
+the tools whose short hash is the accepted one; a new or rewritten tool (its description, schema or hints) is left
+out of `tools/list` and refused if called, until you accept it. A provider tool whose input schema is over 20,000
+characters as JSON is never offered. A listing that names one tool twice is treated as a server that didn't list
+(L4), and one Landlens couldn't store (a tool name over 128 characters, over 500 tools) isn't accepted: the Check says
+"Its tool listing isn't one Landlens accepts", and the sign-in stays stored (L5).
+
+#### What the lists were checked against (review of part 2, M6)
+
+`FAMILY_READS` was compared by hand with each sibling's own tool definitions on 15 November 2026 (read only; no
+sibling was called). It matches all three: every tool on the list is defined read-only, and every write is off it.
+
+- **Clickland** (`apps/api/src/mcp.ts` and `agent-tools.ts`, main at `1c721c0`): 23 tools; `readOnlyHint` is
+  `config.readOnly ?? true`, so a tool is read-only unless it says otherwise. The 18 on the list are; `add_note`,
+  `render_view`, `update_view`, `add_panel` and `remove_panel` set `readOnly: false`. A tool Clickland adds later is
+  hinted read-only by default: only Landlens's list keeps it asking.
+- **Landflow** (`apps/web/src/lib/server/mcp/{instance,brain,debug,practice,project}-tools.ts`, main at
+  `76c16f70`): the 21 on the list carry `readOnlyHint: true`. `create_workflow`, `update_workflow` (also
+  `destructiveHint`), `execute_workflow`, `retry_execution`, `run_node`, `brain_suggest` and `record_work` carry
+  `readOnlyHint: false`; `practice_cite` and `practice_draft` carry no annotations at all, which Landlens treats as a
+  write. An API key sees only the tools its scopes cover (`TOOL_SCOPES` in `lib/shared/mcp.ts`).
+- **Landfall** (`libs/mcp-gateway/src/tools.ts`, `dev` at `b2340e81`; `main` is older and has six reads): the 21 on
+  the list have `readOnly: true`, which `mcp-gateway.service.ts` sends as `readOnlyHint`. `acknowledge_incident` is
+  the one write (`readOnly: false`, listed only with `mcp:ack`, which Landlens never asks for). `search` and `fetch`
+  are listed only with the connector's ChatGPT compatibility flag, `get_business_status` only with its business
+  impact flag.
+
+This is a check of the code, not of what a running sibling lists. The tests that compare the list with a recorded
+listing stay skipped, shown as `todo` in the test run, until the person records one with
+`scripts/record-provider-tools.mjs --family`; the unit test that compares the list with the fakes only checks the
+fakes, which were written from the same code.
+
 ### The pin, and a changed listing (D111)
 
 The accepted listing is stored per sibling in `family.json`, bound to the origin: its hash, a short hash of each tool
@@ -195,10 +244,18 @@ The accepted listing is stored per sibling in `family.json`, bound to the origin
 pin.
 
 When a session or **Check tools** sees another listing, every tool of that sibling asks, **Reads run without asking**
-shows **Paused**, and the card says "Its tools changed since you accepted them. Review them, then accept." **Review
-tools** lists the tools as Landlens counts them and **What changed**, by name (**New**, **Changed**, **Gone**).
-**Accept these tools** (`family:repin`) accepts the listing that review showed, and only that: it needs a Check of the
-current origin first.
+shows **Paused**, and the card says "Its tools changed since you accepted them. Review them, then accept." The card
+keeps saying so after a restart: the flag is in `family.json`, sealed with the entry, until a Check finds the accepted
+listing again or one is accepted (L8). **Review tools** lists the tools as Landlens counts them and **What changed**,
+by name (**New**, **Changed**, **Gone**); a tool named `__proto__`, `constructor` or `toString` is diffed as any other
+(L4). **Accept these tools** (`family:repin { sibling, hash }`) sends back the hash of the listing that review showed,
+and main pins it only while it is the listing its last Check of the current origin saw (review of part 2, M3). If a
+Check ran in between (the card's own **Check tools**, another window) or a session found yet another listing, Accept
+answers "Its tools changed since you reviewed them. Review them again, then accept." (or "Check it first"), and
+nothing is pinned.
+
+The pin is sealed with the rest of its `family.json` entry (part 1's M2): a pin changed in the file by anything but
+Landlens doesn't count, and the entry is moved aside as a damaged one.
 
 ### What reaches the model (D112, D114)
 
@@ -216,7 +273,14 @@ return is outside text, and that opening a war room or sending to triage is the 
 for.
 
 A session that called a sibling's tool holds its GitHub and Linear autonomy for the rest of the session (D113), with
-"Claude read from Clickland in this session" (or Landflow, or Landfall) on the strip, as `landlens-gcp` does.
+"Claude read from Clickland in this session" (or Landflow, or Landfall) on the strip, as `landlens-gcp` does. Any call
+holds it, a refused write included, before the call goes on; a GitHub write main already let run on its own is
+checked again when it arrives, and refused if a sibling was read in between. The hold is written to the session's
+history, and **a resumed session always starts held** (review of part 2, M1): with the recorded reason, or with "this
+session was resumed, and what it read before could steer its writes" when none was recorded. The transcript Claude
+Code resumes holds whatever was read before, which the new gateway session never saw, so Landlens takes the safe side
+rather than guessing from the history. The gateway's `familyQuoted(session, sibling)` holds a session the same way
+when a sibling's text enters it as a quote; parts 3 and 4 must call it for log lines and run text they put in a prompt.
 
 ### On the cards and the MCP page
 
@@ -225,11 +289,18 @@ ask") and **Reads run without asking** (a switch; **On**, **Off** or **Paused**)
 **Review tools** while a listing waits to be accepted) lists the tools again and compares them.
 
 The MCP page lists `clickland`, `landflow` and `landfall` after the connections, **From Connections**, with **Manage in
-Connections** and no Edit or Remove. Its **Add Clickland** card is gone (D109). On start, a server that card made (its
-address is the connected Clickland's `/api/mcp`) is removed from `mcp-servers.json` and moves to the family:
-**Tools for Claude** goes on, **Reads run without asking** follows its old "Run read-only tools without asking", and
-its listing is accepted afresh, since the old pin has no per-tool hashes. A server you typed at another address is
-left alone. Main's log says what moved.
+Connections** and no Edit or Remove. Its **Add Clickland** card is gone (D109). On the first start with this version,
+and only then (a `moved` flag in `family.json`; review of part 2, M4), a server that card made (its address is the
+connected Clickland's `/api/mcp`) is removed from `mcp-servers.json`:
+
+- if it was on for at least one cluster, it moves to the family: **Tools for Claude** goes on, now for every cluster,
+  and the card says "Moved from the MCP page: Claude sessions on every cluster get its tools now." until you change a
+  switch. **Reads run without asking** follows its old "Run read-only tools without asking", and its old pin is kept
+  only if Clickland lists the same tools now; otherwise nothing is accepted, and the card asks you to review them;
+- if it was off on every cluster, it is removed and **Tools for Claude** stays off.
+
+A server you typed at another address is left alone; one at Clickland's address after the move stays out of sessions
+(L1 above). Main's log says what moved.
 
 ## IPC
 
@@ -304,14 +375,23 @@ Clickland's `/api/search` and traces come with part 3.
   (before it is handled, or Landfall's refresh after its answer is made), grant a wider scope, and list what they
   issued.
 - `packages/mcp-gateway/test/family.test.ts` (part 2): the list matches the fakes' reads; the three conditions; the
-  session's own hint wins; no autonomy and **Always allow** as once; the hold; the data lines and Clickland's view; a
-  changed listing asks for everything; a spec on another origin sends no key. When you have recorded a sibling's
-  real listing (`scripts/record-provider-tools.mjs --family`, [development.md](development.md)), it checks the list
-  against it too.
+  session's own hint wins, in main's question and the dock's answer too; no autonomy and **Always allow** as once; the
+  hold, after a refused write and against a write main already let run; the data lines and Clickland's view, whose
+  write asks with the arguments it sends; a changed listing asks for everything, a view's read included, and offers
+  the model only the unchanged tools; an oversized schema; a tool listed twice; odd tool names in the diff; a spec on
+  another origin, or a sibling that redirects, sends no key elsewhere. The three recorded-listing checks show as
+  `todo` until you record a sibling's real listing (`scripts/record-provider-tools.mjs --family`,
+  [development.md](development.md)).
 - `apps/desktop/test/family-tools.test.ts` (part 2): only a ready sibling with Tools for Claude on and its name free
   is served, its key added in main and pinned to its origin; Landfall by its OAuth provider; accept on turning on,
-  drift and the diff at Check, repin only after a Check of the same origin; the MCP page's servers; McpService's
-  order, the prompt's names, a change followed in open sessions, and D109's move.
+  drift and the diff at Check, repin only with the hash of the listing the last Check saw; the MCP page's servers;
+  McpService's order, the prompt's names, a change followed in open sessions (another key at the same address
+  included), and D109's move (once, as on as it was, the old pin only for the same tools). The review's Low cases: a
+  server of yours at a sibling's address, a Landfall Check still waiting when another Landfall is signed in to, a
+  Landfall 401 naming metadata elsewhere, a listing with a 200-character name, Preview left open by a push that
+  changes nothing, no listing before a session, drift kept across a restart.
+- `apps/desktop/test/agent-resume.test.ts` (part 2 review, M1): a resumed session is held, with the reason its
+  history recorded or the resumed one, against a real gateway with a stand-in for Claude Code.
 - `apps/desktop/test/family.e2e.test.ts`, on the built app: it connects all three against the fakes. A plain-http
   name is refused before any request and `Authorization` is refused as the webhook header. Afterwards, neither
   `family:list` nor the profile folder holds a secret, and the fake Landfall saw no trigger. The cards are checked
@@ -327,7 +407,9 @@ yet.
 
 See [limitations.md](limitations.md):
 
-- Checking `FAMILY_READS` against the siblings' real listings: record them with the script and your own keys.
+- Checking `FAMILY_READS` against the siblings' real listings: record them with the script and your own keys (the
+  code was compared by hand, above).
+- Calling `familyQuoted` when parts 3 and 4 put a sibling's text in a prompt.
 - Clickland's console address in its dialog (part 3).
 - Sending to triage and running flows (part 4).
 - Telemetry and the brain (part 5).

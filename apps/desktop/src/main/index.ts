@@ -45,6 +45,8 @@ async function start() {
   hardenSession();
   const binary = sidecarBinary();
   let mcp: McpService | undefined;
+  /** The agent service, once made: the gateway's autonomy pushes go through it (M1 of the wave 7 part 2 review). */
+  let agentRef: AgentService | undefined;
   // The front door's audit trail: the MCP call log files each landlens-kube call's requests under it.
   const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => mcp?.onAudit(e));
   await frontDoor.start();
@@ -137,7 +139,8 @@ async function start() {
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     push: (call) => send("mcp:call", call),
-    pushAutonomy: (s) => send("agent:autonomy", s),
+    // The dock hears of it, and a hold goes into the session's history, so a resume holds again (M1).
+    pushAutonomy: (s) => (agentRef ? agentRef.autonomyChanged(s) : send("agent:autonomy", s)),
     ask: {
       confirm: async ({ message, detail, yes }) => {
         const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
@@ -166,6 +169,7 @@ async function start() {
       permit: (session, p) => mcpSvc.autonomyPermit(session, p),
       states: (session) => mcpSvc.autonomyStates(session),
       gcpQuoted: (session) => gateway.gcpQuoted(session),
+      hold: (session, why) => gateway.hold(session, why),
     },
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
@@ -173,6 +177,7 @@ async function start() {
     settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
     log: (l) => console.log(l),
   });
+  agentRef = agent;
   const workbench = new WorkbenchService({ clusters, frontDoor, dataDir: app.getPath("userData") });
   liveSessions = () => workbench.terminalCount();
   const forwards = new ForwardService({

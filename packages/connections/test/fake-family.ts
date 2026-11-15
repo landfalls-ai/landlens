@@ -98,6 +98,9 @@ abstract class FakeBase {
     await h.gate;
   }
 
+  /** Paths answered with a 307 to another address, before anything else (a sibling that redirects). */
+  readonly redirects = new Map<string, string>();
+
   /** Every request that carried this string anywhere (a header or the body). */
   carrying(secret: string): FamilyRecorded[] {
     return this.requests.filter((r) => Object.values(r.headers).some((v) => v.includes(secret)) || r.body.includes(secret));
@@ -149,6 +152,11 @@ abstract class FakeBase {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers[k] = v;
     this.requests.push({ method: req.method ?? "", path: url.pathname, authorization: req.headers.authorization, headers, body });
+    const to = this.redirects.get(url.pathname);
+    if (to) {
+      res.writeHead(307, { Location: to });
+      return void res.end();
+    }
     await this.held(url.pathname, false);
     await this.handle(req, res, url, body);
   }
@@ -219,6 +227,8 @@ export class FakeLandflow extends FakeBase {
   readonly executions = new Map<string, FakeExecution>();
   private readonly idem = new Map<string, string>();
   readonly brain: unknown[] = [];
+  /** Tools listed beside its own (a Landflow whose listing Landlens must refuse). */
+  extraTools: Tool[] = [];
 
   protected state() {
     return { requests: this.requests.map((r) => ({ method: r.method, path: r.path })), executions: [...this.executions.keys()], brain: this.brain.length };
@@ -296,7 +306,7 @@ export class FakeLandflow extends FakeBase {
     }
     if (p === "/api/mcp") {
       if (!known) return refuse();
-      return this.mcp(req, res, body, "landflow", LANDFLOW_TOOLS.filter((t) => can(t.scope)).map((t) => t.tool));
+      return this.mcp(req, res, body, "landflow", [...LANDFLOW_TOOLS.filter((t) => can(t.scope)).map((t) => t.tool), ...this.extraTools]);
     }
     return this.json(res, 404, { error: "not found" });
   }
@@ -314,6 +324,8 @@ export class FakeLandfall extends FakeBase {
   grantScope: string | undefined;
   /** The access token its next answer gives (a token Landlens must refuse). */
   nextAccess: string | undefined;
+  /** Where its 401 says the resource's metadata is, if not on its own origin (a Landfall that points elsewhere). */
+  metadataAt: string | undefined;
   /** Every pair it issued, in order. */
   readonly issued: { access: string; refresh: string }[] = [];
   readonly clients = new Map<string, { redirect_uris: string[] }>();
@@ -421,7 +433,7 @@ export class FakeLandfall extends FakeBase {
       case "/mcp": {
         const token = this.bearer(req);
         const scope = token ? this.valid.get(token) : undefined;
-        if (!scope) return this.json(res, 401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${this.origin}/.well-known/oauth-protected-resource/mcp"` });
+        if (!scope) return this.json(res, 401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${this.metadataAt ?? `${this.origin}/.well-known/oauth-protected-resource/mcp`}"` });
         return this.mcp(req, res, body, "landfall", scope.split(" ").includes("mcp:ack") ? [...LANDFALL_TOOLS, LANDFALL_ACK] : LANDFALL_TOOLS);
       }
       default:

@@ -57,7 +57,8 @@ export function listingHash(tools: Listed[]): string {
 
 /** Each tool of a listing by name, with a short hash of what listingHash reads of it: what a review diffs (D111). */
 export function toolDigest(tools: Listed[]): Record<string, string> {
-  const out: Record<string, string> = {};
+  // No prototype (review of wave 7 part 2, L4): a tool named __proto__ is kept as any other.
+  const out: Record<string, string> = Object.create(null);
   for (const t of tools) out[t.name] = createHash("sha256").update(canonical(row(t))).digest("hex").slice(0, 16);
   return out;
 }
@@ -73,7 +74,7 @@ export type ListedServer = {
 };
 
 /** Whether a server's listing (and, for a connection with a read-only endpoint, that one's too) is the pinned one. */
-function holds(s: ListedServer): boolean {
+export function holds(s: ListedServer): boolean {
   if (!s.pin || listingHash(s.tools) !== s.pin) return false;
   if (s.readPin !== undefined && (!s.readListing || listingHash(s.readListing) !== s.readPin)) return false;
   return true;
