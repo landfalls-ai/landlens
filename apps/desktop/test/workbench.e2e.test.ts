@@ -86,7 +86,7 @@ describe.runIf(run)("the workbench on OrbStack", () => {
     await panel.waitFor();
     await expect(panel.locator(".term-id").innerText()).resolves.toMatch(/Runs as you/);
     await expect(panel.locator(".term-id").innerText()).resolves.toMatch(/Claude Code can't see or type here/);
-    await expect.poll(() => screen(page), { timeout: 20_000 }).toMatch(/[#$] ?$/m);
+    await expect.poll(() => screen(page), { timeout: 20_000 }).toMatch(/[#$][ \u00a0]*$/m);
     await typeIn(page, "echo hello-$((6*7)); stty size");
     await expect.poll(() => screen(page), { timeout: 10_000 }).toContain("hello-42");
     await shot(page, "w4-03-pod-shell");
@@ -99,7 +99,7 @@ describe.runIf(run)("the workbench on OrbStack", () => {
     await expect.poll(() => screen(page), { timeout: 20_000 }).toContain("new session");
     // Typing goes to the new session once it is open: the ended bar goes, and the shell prints its prompt.
     await expect.poll(() => panel.locator(".term-bar").count(), { timeout: 20_000 }).toBe(0);
-    await expect.poll(async () => (await screen(page)).split("new session")[1] ?? "", { timeout: 20_000 }).toMatch(/[#$] ?$/m);
+    await expect.poll(async () => (await screen(page)).split("new session")[1] ?? "", { timeout: 20_000 }).toMatch(/[#$][ \u00a0]*$/m);
     await typeIn(page, "echo again-$((40+2))");
     await expect.poll(() => screen(page), { timeout: 10_000 }).toContain("again-42");
   }, 90_000);
