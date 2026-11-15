@@ -14,6 +14,7 @@ import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
+import { connectionOverrides, ConnectionsService } from "./connections";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
@@ -89,6 +90,16 @@ async function start() {
     log: (l) => console.log(l),
   });
   await mcp.start();
+  // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
+  const connections = new ConnectionsService({
+    file: join(app.getPath("userData"), "connections.json"),
+    crypto: safeStorage,
+    overrides: connectionOverrides(process.env, app.isPackaged),
+    // Only GitHub's device page or an address on Linear's own origin reach this (connections.ts checks).
+    openExternal: (url) => shell.openExternal(url),
+    push: (info) => send("conn:update", info),
+    log: (l) => console.log(l),
+  });
   registerAppProtocol(mcp.views);
   const gateway = mcp.gateway;
   const agent = new AgentService({
@@ -115,11 +126,12 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();
     metrics.stopAll();
+    connections.stop();
     await agent.stop();
     await service.stop();
     await hub.stopAll();

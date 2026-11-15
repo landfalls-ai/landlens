@@ -74,6 +74,8 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/mcp-gateway/src/` | The MCP gateway: endpoint, upstreams (in memory, streamable HTTP), approval rules, call log, card pairing ([mcp.md](mcp.md)) |
 | `apps/desktop/src/main/mcp.ts`, `mcp-store.ts`, `app-views.ts` | `McpService` (servers, Test, Preview, views, links), the server store (headers in safeStorage), the `landlens-app:` scheme |
 | `apps/desktop/src/renderer/src/McpPage.tsx`, `AppFrame.tsx`, `app-host.ts`, `mcpStore.ts` | The MCP page and call drawer, a view's frame, the MCP Apps host, the live call log |
+| `packages/connections/src/` | GitHub and Linear sign-in: provider origins (`providers.ts`), the encrypted store, the device flow, Linear's MCP OAuth and the loopback redirect ([connections.md](connections.md)) |
+| `apps/desktop/src/main/connections.ts` | `ConnectionsService`: sign-in flows per window, pasted tokens, test and pin, disconnect; the development overrides |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |
 | `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock: session, transcript, composer |
 | `apps/desktop/src/renderer/src/DockParts.tsx` | The dock's tool groups, wells, plan and permission ask |

@@ -48,4 +48,24 @@ describe("IPC contracts", () => {
     }
     expect(channels["forward:check"].safeParse({ port: 1023 }).success).toBe(false);
   });
+
+  it("hold connections to a provider, a flow id and a token of that provider's shape", () => {
+    const gh = "ghp_" + "a".repeat(36);
+    const lin = "lin_api_" + "b".repeat(40);
+    const token = channels["conn:token"];
+    expect(token.safeParse({ provider: "github", token: gh }).success).toBe(true);
+    expect(token.safeParse({ provider: "github", token: "github_pat_11AB" + "c".repeat(40) }).success).toBe(true);
+    expect(token.safeParse({ provider: "linear", token: lin }).success).toBe(true);
+    for (const bad of [
+      { provider: "github", token: lin }, { provider: "linear", token: gh }, { provider: "gitlab", token: gh },
+      { provider: "github", token: gh + "\n" }, { provider: "github", token: ` ${gh}` }, { provider: "github", token: "ghp_short" },
+      { provider: "github", token: "ghp_" + "a".repeat(400) }, { provider: "github", token: "Bearer " + gh },
+    ]) expect(token.safeParse(bad).success, JSON.stringify(bad).slice(0, 60)).toBe(false);
+    expect(channels["conn:cancel"].safeParse({ flow: "fl" + "A".repeat(16) }).success).toBe(true);
+    for (const flow of ["fl" + "A".repeat(15), "fl../../" + "A".repeat(10), "xx" + "A".repeat(16)]) expect(channels["conn:cancel"].safeParse({ flow }).success).toBe(false);
+    expect(channels["conn:linear-signin"].safeParse({ mode: "autonomous" }).success).toBe(false);
+    expect(channels["conn:set"].safeParse({ provider: "linear", mode: "read", readsAuto: false }).success).toBe(true);
+    // No channel takes an address.
+    expect(channels["conn:test"].safeParse({ provider: "github", url: "https://evil.example" }).data).not.toHaveProperty("url");
+  });
 });

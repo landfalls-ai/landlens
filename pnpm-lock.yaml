@@ -19,6 +19,9 @@ importers:
       '@landlens/acp-host':
         specifier: workspace:*
         version: link:../../packages/acp-host
+      '@landlens/connections':
+        specifier: workspace:*
+        version: link:../../packages/connections
       '@landlens/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -153,6 +156,28 @@ importers:
       '@landlens/mcp-gateway':
         specifier: workspace:*
         version: link:../mcp-gateway
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.12
+        version: 4.1.12(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
+
+  packages/connections:
+    dependencies:
+      '@landlens/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.2
+        version: 1.32.2(zod@4.6.7)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2

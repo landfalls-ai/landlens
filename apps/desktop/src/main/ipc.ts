@@ -11,14 +11,24 @@ import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
+import type { ConnectionsService } from "./connections";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
+  /** Windows that started a sign-in: when one goes, its sign-ins stop. */
+  const signingIn = new WeakSet<WebContents>();
+  const flowOwner = (wc: WebContents) => {
+    if (!signingIn.has(wc)) {
+      signingIn.add(wc);
+      wc.once("destroyed", () => connections.cancelFor(wc));
+    }
+    return wc;
+  };
 
   const handlers: Handlers = {
     "catalog:list": async () => {
@@ -135,6 +145,17 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:app-call": ({ view, name, arguments: args }) => mcp.viewCall(view, name, args ?? {}),
     "mcp:app-close": async ({ view }) => (mcp.views.close(view), { ok: true }),
     "mcp:app-link": async ({ view, url }) => ({ opened: await mcp.viewLink(view, url) }),
+    // Connections (docs/connections.md). A token comes in on conn:token; nothing sends one back. A sign-in belongs to
+    // the window that started it.
+    "conn:list": async () => connections.list(),
+    "conn:github-device": async (_r, event) => connections.githubDevice(flowOwner(event.sender)),
+    "conn:linear-signin": async ({ mode }, event) => connections.linearSignIn(mode, flowOwner(event.sender)),
+    "conn:token": ({ provider, token }) => connections.token(provider, token),
+    "conn:cancel": async ({ flow }, event) => (connections.cancel(flow, event.sender), { ok: true }),
+    "conn:set": async ({ provider, mode, readsAuto }) => connections.set(provider, { ...(mode ? { mode } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}) }),
+    "conn:test": ({ provider }) => connections.test(provider),
+    "conn:repin": async ({ provider }) => connections.repin(provider),
+    "conn:disconnect": ({ provider }) => connections.disconnect(provider),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

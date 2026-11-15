@@ -207,6 +207,64 @@ export const McpServerInput = z.object({
   appOrigins: z.array(McpAppOrigin).max(10).optional(),
 });
 
+// Connections (docs/connections.md, wave 6): Landlens's own sign-in to GitHub and Linear. Tokens come in on
+// conn:token and nothing ever sends one back; the page names a provider, never an address.
+export const ConnProvider = z.enum(["github", "linear"]);
+export type ConnProvider = z.infer<typeof ConnProvider>;
+/** "read": the read-only endpoint is the upstream; "ask": every write asks. Autonomous is per session, never stored. */
+export const ConnMode = z.enum(["read", "ask"]);
+export type ConnMode = z.infer<typeof ConnMode>;
+export type ConnMethod = "device" | "oauth" | "token";
+/** A sign-in in progress (a device code or a browser sign-in), made by main. */
+export const FlowId = z.string().regex(/^fl[A-Za-z0-9_-]{16}$/, "not a flow id");
+/** A GitHub token Landlens accepts pasted: classic (`ghp_…` and the other `gh?_` kinds) or fine-grained. */
+export const GITHUB_TOKEN_SHAPE = /^(gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/;
+/** A Linear API key or OAuth token. */
+export const LINEAR_KEY_SHAPE = /^lin_(api|oauth)_[A-Za-z0-9]{20,255}$/;
+export const ConnTokenInput = z
+  .object({ provider: ConnProvider, token: z.string().min(1).max(400).regex(/^[\x21-\x7e]+$/, "one line of printable characters") })
+  .refine((t) => (t.provider === "github" ? GITHUB_TOKEN_SHAPE : LINEAR_KEY_SHAPE).test(t.token), "not shaped like a token for that provider");
+/** Who a connection signed in as; each field one line, at most 100 characters. */
+export type ConnAccount = { login: string; name?: string; org?: string };
+/** What the renderer may know about a connection: never a token. */
+export type ConnInfo = {
+  provider: ConnProvider;
+  state: "off" | "connecting" | "ready" | "expired" | "failed";
+  method?: ConnMethod;
+  account?: ConnAccount;
+  /** As the provider reported them. */
+  scopes?: string[];
+  mode: ConnMode;
+  /** Its read tools run without asking (D79). */
+  readsAuto: boolean;
+  /** From the last listing (conn:test). */
+  tools?: { read: number; write: number };
+  /** One of CONN_NOTES. */
+  note?: string;
+  /** GitHub: a client id is built in, so the device flow is offered. */
+  canDevice?: boolean;
+};
+/** Every sentence a connection's note can be. */
+export const CONN_NOTES = {
+  cantStore: "This machine can't encrypt the token, so Landlens won't store it.",
+  githubRefused: "GitHub didn't accept the token.",
+  linearRefused: "Linear didn't accept the key.",
+  githubUnreachable: "Couldn't reach GitHub.",
+  linearUnreachable: "Couldn't reach Linear.",
+  githubAnswer: "GitHub's answer wasn't what Landlens expected.",
+  linearAnswer: "Linear's answer wasn't what Landlens expected.",
+  deviceExpired: "The code expired before it was entered. Connect again.",
+  deviceDenied: "The sign-in was turned down at GitHub.",
+  noDevice: "GitHub sign-in needs Landlens's app, which isn't registered yet. Use a token instead.",
+  linearDenied: "The sign-in was turned down at Linear.",
+  linearTimeout: "The sign-in wasn't finished within 5 minutes. Connect again.",
+  linearElsewhere: "Linear's sign-in named another server, so Landlens stopped.",
+  linearExpired: "Linear's sign-in ran out. Connect again.",
+  linearReadScope: "Linear was connected for reading only. Connect again to let Claude ask for writes.",
+  drift: "The tools changed since you accepted them. Look at them, then accept.",
+} as const;
+export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
+
 /** A container's name (a DNS label). */
 export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
 /** A log stream's or terminal's id, made by main. */
@@ -390,6 +448,16 @@ export const channels = {
   "mcp:app-call": z.object({ view: McpViewId, name: McpToolName, arguments: z.record(z.string(), z.unknown()).optional() }),
   "mcp:app-close": z.object({ view: McpViewId }),
   "mcp:app-link": z.object({ view: McpViewId, url: z.string().min(1).max(2000) }),
+  // Connections (docs/connections.md). A token comes in on conn:token; no channel sends one back.
+  "conn:list": z.object({}),
+  "conn:github-device": z.object({}),
+  "conn:linear-signin": z.object({ mode: ConnMode }),
+  "conn:token": ConnTokenInput,
+  "conn:cancel": z.object({ flow: FlowId }),
+  "conn:set": z.object({ provider: ConnProvider, mode: ConnMode.optional(), readsAuto: z.boolean().optional() }),
+  "conn:test": z.object({ provider: ConnProvider }),
+  "conn:repin": z.object({ provider: ConnProvider }),
+  "conn:disconnect": z.object({ provider: ConnProvider }),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -462,6 +530,15 @@ export type Responses = {
   "mcp:app-call": McpToolResult;
   "mcp:app-close": { ok: true };
   "mcp:app-link": { opened: boolean };
+  "conn:list": ConnList;
+  "conn:github-device": { flow: string; userCode: string; verificationUri: "https://github.com/login/device"; expiresIn: number };
+  "conn:linear-signin": { flow: string };
+  "conn:token": ConnInfo;
+  "conn:cancel": { ok: true };
+  "conn:set": ConnInfo;
+  "conn:test": McpTest;
+  "conn:repin": ConnInfo;
+  "conn:disconnect": ConnInfo;
 };
 
 /** A tool as the MCP page shows it. */
@@ -820,7 +897,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 /** Main → renderer push channels. */
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

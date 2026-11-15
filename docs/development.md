@@ -57,6 +57,22 @@ built-in server in memory). The e2e test opens the MCP page, previews `cluster_o
 (with `orbstack`); adds Clickland's MCP server with its own read key and shows Clickland's view (with `clickland`); and
 asks the agent to call `cluster_overview` and `describe` and checks both views inline in the dock (with `claude`).
 
+Connections ([connections.md](connections.md)): `pnpm test` runs `@landlens/connections`'s unit tests against
+`packages/connections/test/fake-provider.ts`, a loopback server that plays GitHub or Linear (MCP, OAuth, the device
+flow, `/user`, `/graphql`) and records every request; no test reaches GitHub or Linear. An unpackaged build reads:
+
+| Variable | What |
+|---|---|
+| `LANDLENS_GITHUB_ENDPOINT` | `http://127.0.0.1:<port>`: every GitHub origin (github.com, api.github.com, api.githubcopilot.com) becomes this fake |
+| `LANDLENS_LINEAR_ENDPOINT` | `http://127.0.0.1:<port>`: every Linear origin (mcp.linear.app, api.linear.app) becomes this fake |
+| `LANDLENS_GITHUB_CLIENT_ID` | A GitHub OAuth App's client id for the device flow, until one is built in |
+
+A packaged app reads none of them, and anything but a loopback address is ignored. The fake's tool listings
+(`packages/connections/test/fixtures/*-tools.json`) are hand-made until recorded: `node
+scripts/record-provider-tools.mjs github` (or `linear`) asks for your token without echo, lists the full and the
+read-only endpoint (two `tools/list` calls, nothing written to the provider) and writes the fixture. Only the person
+runs it, with their own token; no test or agent does.
+
 ## Where things start
 
 See [architecture.md](architecture.md), "Code map". New IPC: add the channel and its schema to

@@ -5,6 +5,7 @@
 import type { AgentCluster } from "@landlens/kube-mcp";
 import { kubeMcpServer, WRITE_CALL_TIMEOUT_MS, WRITE_TOOLS } from "@landlens/kube-mcp";
 import { BUILTIN_MCP_SERVER } from "@landlens/contracts";
+import { redactText } from "@landlens/kube-mcp";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -190,5 +191,6 @@ export function rawError(err: unknown): string {
   const e = err as { message?: string; cause?: { code?: string; message?: string } };
   const cause = e?.cause?.code ?? e?.cause?.message;
   const msg = String(e?.message ?? err).replace(/Bearer\s+\S+/gi, "Bearer …");
-  return (cause ? `${msg} (${cause})` : msg).slice(0, 500);
+  // Provider tokens (GitHub, Linear) and other credential shapes are cut too, wherever they appear.
+  return redactText(cause ? `${msg} (${cause})` : msg).slice(0, 500);
 }

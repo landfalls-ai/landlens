@@ -14,10 +14,11 @@ const CHANNELS: readonly Channel[] = [
   "edit:review", "edit:create", "edit:apply", "edit:discard",
   "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
+  "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update",
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */

@@ -55,6 +55,11 @@ describe("the Claude Code process's environment", () => {
     const env = agentEnv({ HOME: "/Users/me", LANG: "en_US.UTF-8", LC_ALL: "C", CLAUDE_CONFIG_DIR: "/c", AWS_SECRET_ACCESS_KEY: "x", GITHUB_TOKEN: "y", KUBECONFIG: "/k", LANDLENS_TOKEN: "z", CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "s", CLAUDE_CODE_MESSAGING_TOKEN: "m" }, { PATH: "/usr/bin" });
     expect(env).toEqual({ HOME: "/Users/me", LANG: "en_US.UTF-8", LC_ALL: "C", CLAUDE_CONFIG_DIR: "/c", PATH: "/usr/bin" });
   });
+
+  it("carries none of the connections' variables or tokens (wave 6)", () => {
+    const env = agentEnv({ HOME: "/h", GH_TOKEN: "ghp_x", GITHUB_PAT: "p", LINEAR_API_KEY: "lin_api_x", LANDLENS_GITHUB_ENDPOINT: "http://127.0.0.1:1", LANDLENS_LINEAR_ENDPOINT: "http://127.0.0.1:2", LANDLENS_GITHUB_CLIENT_ID: "c", LANDLENS_USER_DATA: "/u" }, { PATH: "/usr/bin" });
+    expect(env).toEqual({ HOME: "/h", PATH: "/usr/bin" });
+  });
 });
 
 describe("the standing rules", () => {
