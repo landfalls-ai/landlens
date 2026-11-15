@@ -180,18 +180,17 @@ person's check reads them), and Ask Claude sends one problem at a time.
   pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
 - **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
   Clickland (wave 7 part 5).
-- **The Land family is connections, session tools and Clickland's logs and traces so far** (wave 7 parts 1–3,
+- **The Land family is connections, session tools, Clickland's logs and traces, and Landflow on a resource so far** (wave 7 parts 1–4,
   [family.md](family.md)). Landlens signs in to Clickland, Landflow and Landfall, gives Claude sessions their own MCP
   servers (reads by Landlens's list, the server's hint and the accepted listing; every write asks), and shows
-  Clickland's stored lines and traces in the drawer ([metrics.md](metrics.md#logs-and-traces-from-clickland)). Not
-  built yet: triage or flows from a resource (part 4; the webhook is stored, not sent), and telemetry or the brain
-  (part 5). Clickland's reads were checked live (:4730, its development bootstrap key, reads only); no other live
+  Clickland's stored lines and traces in the drawer ([metrics.md](metrics.md#logs-and-traces-from-clickland)), and
+  sends a problem to Landflow's triage or runs a flow tagged `landlens` on an object, on your click
+  ([family.md](family.md#landflow-on-a-resource)). Not built yet: telemetry or the brain (part 5). Clickland's reads were checked live (:4730, its development bootstrap key, reads only); no other live
   link was checked with a real key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
   listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` was compared by hand with the siblings'
   code ([family.md](family.md#what-the-lists-were-checked-against-review-of-part-2-m6)), and the three recorded-listing
   tests show as `todo` until a listing is recorded. Clickland hints a new tool read-only by default: only Landlens's
-  list keeps it asking. Part 4 must hold autonomy (`familyQuoted`) when it quotes a sibling's text into a prompt,
-  as part 3 does. A server you add at a connected sibling's address stays out of sessions rather than getting the sibling's
+  list keeps it asking. A server you add at a connected sibling's address stays out of sessions rather than getting the sibling's
   rules. A sibling's writes have no autonomous mode, by design (D113), and the family's tools are on for every
   cluster or none. A Clickland view can call Clickland's writes behind the native dialog, as an added server's view
   can. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in and its MCP server were checked
@@ -200,6 +199,16 @@ person's check reads them), and Ask Claude sends one problem at a time.
   at 1024×700. Below the page's 640px container width they have a rule, but no test is narrow enough to reach it.
   Landfall names no account to Landlens, so every new Landfall sign-in starts with Tools for Claude off, even at the
   same address (wave 7 review, M3).
+- **Landflow on a resource** (wave 7 part 4, [family.md](family.md#landflow-on-a-resource)). Checked only against
+  the fake Landflow, built from Landflow's code: sending to a real triage flow writes to Landflow and can open a room
+  in Landfall, so that live check (D137) waits for the person, behind `LANDLENS_LIVE_WRITES=1`. The room's link needs
+  `executions:read` on the key and a walk of the run's node outputs (Landflow has no `landlens` alert format or
+  template that answers with the `TriggerResult` yet); without it you get "Sent to triage." and a link to the run.
+  Landflow dedups Landlens's alerts by its hash of source, title and service, not by the alert's `fingerprint`.
+  Following a run stops after 60 s until **Check again**, and only against the Landflow connected now. The flows
+  offered are the ones Landflow lists with the tag `landlens`, at most 50; their input has no declared contract on
+  Landflow's side, and a flow's output can say anything (it reaches a prompt only quoted, under the hold). A send Landflow holds (debounced or batched) has no run, so it
+  isn't remembered and leaves no chip. A problem's recovery isn't sent. Run a Landflow flow is a button in the object drawer's header (there is no ⋯ menu there).
 - **Clickland's history in the IDE** (wave 7 part 3, [metrics.md](metrics.md#logs-and-traces-from-clickland)).
   Traces are found by service name only (the pod's `app.kubernetes.io/name` or `app` label, else the workload's name),
   across namespaces and clusters (a workload's spans carry Kubernetes names only if it sends them, so Landlens doesn't

@@ -135,7 +135,8 @@ open the page with **Failing** or **To watch** chosen. The Overview keeps the wo
   reading. "No problems found" never stands alone when a check was skipped.
 - **The list**: "Failing", then "To watch", worst first. A row is the title, the subject's kind and namespace, the
   detail in mono and how long ago it started; **Ask** and **Open** (the subject's own list and drawer) show on hover,
-  focus or selection. ↑/↓ move, Enter opens the drawer, `a` asks Claude. Past 500 it says "Showing the first 500."
+  focus or selection. ↑/↓ move, Enter opens the drawer, `a` asks Claude. With Landflow's triage webhook set up,
+  **Triage** shows on hover too and `t` sends to triage ([below](#send-to-triage)). Past 500 it says "Showing the first 500."
 - **The drawer**: the reason as a pill, the subject's name, pods and age, **Ask Claude**, **Open <Kind>**. Tabs, `[`
   and `]` step:
   - **Summary**: "Likely cause", the hint, marked "From Landlens's rules, not from Claude"; then the facts the rule
@@ -148,12 +149,25 @@ open the page with **Failing** or **To watch** chosen. The Overview keeps the wo
   - When the problem leaves the report, the drawer stays with "No longer found at 12:03. This is the last evidence
     Landlens saw." until closed; changing the namespace closes it.
 - **⌘K**: problems are a group of their own (title and name match); `problems cart` searches only problems, and
-  `problems` alone lists the worst six. Enter opens the problem's drawer; Tab lists Open, Ask Claude and Open <Kind>.
+  `problems` alone lists the worst six. Enter opens the problem's drawer; Tab lists Open, Ask Claude and Open <Kind>,
+  and with Landflow connected, Send to triage… and Run a Landflow flow….
   **Show problems** is a command.
 
 Workload-written text (event and termination messages, the scheduler's message, log lines) is shown as text only.
-Code: `apps/desktop/src/renderer/src/Problems.tsx` (page and drawer), `problemRules.ts` (filters, chips, sections,
-which problems have logs, the held problem, ⌘K matching).
+Code: `apps/desktop/src/renderer/src/Problems.tsx` (page and drawer, the sent chips), `problemRules.ts` (filters,
+chips, sections, which problems have logs, the held problem, ⌘K matching), `TriageSheet.tsx`.
+
+## Send to triage
+
+Wave 7 part 4 ([family.md](family.md#landflow-on-a-resource)). With the Landflow you connected and its triage
+webhook set up, a problem can go to Landflow's triage flow: **Triage…** in the drawer beside Ask Claude, **Triage**
+on the row, `t` on the page, or Tab in ⌘K. The sheet shows the alert exactly as it will be sent: the problem's facts
+and events (not the hint), a severity you pick (failing starts at sev2, to watch at sev3), and the last 40 log lines
+only if you tick the box (the same evidence the Logs tab reads, scrubbed). **Send** is a click; Enter doesn't send.
+Landflow's triage decides whether a war room opens in Landfall; Landlens never opens one, and reads the room's link
+from the run. A problem sent shows **In triage** or **War room** on its row and drawer (the War room chip opens the
+room), and the chips above the list gain **In triage**. The problem is sent by its id in the scope's current report,
+as `doctor:evidence` reads it; one that has left the report can't be sent.
 
 ## Ask Claude on a problem
 

@@ -1,6 +1,6 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, X } from "lucide-react";
+import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, Workflow, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
@@ -52,6 +52,8 @@ export function Details(props: {
   printer?: PrinterColumn[];
   /** A definition's "Open <kind>": the kind's list. */
   onOpenKind?: (group: string, resource: string) => void;
+  /** Run a Landflow flow… on this object, while the Landflow key can list and run flows (wave 7 D125). */
+  onFlow?: () => void;
 }) {
   const { object: o, type, now } = props;
   const logs = logSourceOf(type.kind, o);
@@ -144,6 +146,9 @@ export function Details(props: {
               })}
             ><Ic icon={Sparkles} size={14} />Ask Claude</button>
           )}
+          {props.onFlow ? (
+            <button className="icon-btn" aria-label="Run a Landflow flow…" title="Run a Landflow flow…" onClick={props.onFlow}><Ic icon={Workflow} size={15} /></button>
+          ) : null}
           <button
             className="icon-btn"
             aria-label={copied ? "Name copied" : "Copy name"}

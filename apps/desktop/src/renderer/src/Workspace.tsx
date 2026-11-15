@@ -40,6 +40,9 @@ import { Boundary } from "./Boundary";
 import { CreateSheet } from "./CreateSheet";
 import { leaveEdit } from "./editGuard";
 import { clicklandScope, useClickland } from "./clickland";
+import { useLandflow, useSent } from "./landflow";
+import { TriageSheet } from "./TriageSheet";
+import { FlowSheet, type FlowSubject } from "./FlowSheet";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
@@ -127,6 +130,11 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [settings, setSettings] = useState(false);
   const [metricsVersion, setMetricsVersion] = useState(0);
   const ck = useClickland();
+  // Landflow on a resource (wave 7 part 4): Send to triage… on a problem, Run a Landflow flow… on an object.
+  const lf = useLandflow();
+  const sent = useSent(cluster.handle);
+  const [triage, setTriage] = useState<HealthProblem>();
+  const [flowOn, setFlowOn] = useState<FlowSubject>();
   useEffect(() => void api.invoke("metrics:settings", { context: cluster.context }).then(setClickland, () => undefined), [cluster.context]);
 
   useEffect(() => {
@@ -467,6 +475,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             onOpen={openSubject}
             onClearText={() => setFilter("")}
             {...(health.error && h ? { stale: health.error.message } : {})}
+            sent={sent}
+            {...(lf.triage ? { onTriage: setTriage } : {})}
           />
         ) : !list ? (
           <Overview
@@ -560,6 +570,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           }}
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
           {...(show ? { show } : {})}
+          {...(lf.flows ? { onFlow: () => setFlowOn({ kind: list.type.kind, ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: selected.metadata.name, ...(selected.metadata.namespace ? { namespace: selected.metadata.namespace } : {}) } }) } : {})}
         />
         </Boundary>
       ) : null}
@@ -582,6 +593,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             onOpen={openSubject}
             onNavigate={go}
             onFullLogs={(pod, ns, container) => void reach({ group: "", version: "v1", resource: "pods", kind: "Pod", name: pod, ...(ns ? { namespace: ns } : {}) }, "logs", container)}
+            {...(sent.get(problemSel.id) ? { sent: sent.get(problemSel.id)! } : {})}
+            {...(lf.triage ? { onTriage: setTriage } : {})}
           />
         </Boundary>
       ) : null}
@@ -654,6 +667,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             if (scope) void api.invoke("clickland:open", { handle: cluster.handle, scope, signal: "logs", range: "1h" }).catch((e: ApiError) => setReachError(`${t.kind} ${t.name}: ${e.message}`));
           } } : {})}
           {...(gcpRows ? { gcp: { ...gcpRows, onOpen: openGcp } } : {})}
+          {...(lf.triage ? { onTriage: setTriage } : {})}
+          {...(lf.flows ? { onFlow: (t: Target, p?: HealthProblem) => setFlowOn({ kind: t.kind, ref: { group: t.group, version: t.version, resource: t.resource, name: t.name, ...(t.namespace ? { namespace: t.namespace } : {}) }, ...(p ? { problem: p.id } : {}) }) } : {})}
           commands={{
             togglePanel: () => (bench.open ? bench.setOpen(false) : (bench.setOpen(true), focusBench())),
             newTerminal: () => (bench.openLocal(), focusBench()),
@@ -666,6 +681,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onClose={() => setJump(false)}
         />
       ) : null}
+      {triage ? <TriageSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} problem={triage} onClose={() => setTriage(undefined)} /> : null}
+      {flowOn ? <FlowSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} subject={flowOn} onAsk={ask} onClose={() => setFlowOn(undefined)} /> : null}
       {reachError ? (
         <div className="notice reach-error" role="alert">
           <Ic icon={CircleX} size={15} className="tone-bad" />

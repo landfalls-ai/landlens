@@ -17,6 +17,7 @@ const CHANNELS: readonly Channel[] = [
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
   "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",
   "family:list", "family:connect", "family:signin", "family:set", "family:test", "family:repin", "family:disconnect",
+  "landflow:alert", "landflow:triage", "landflow:flows", "landflow:input", "landflow:run", "landflow:follow", "landflow:sent", "landflow:open",
   "agent:autonomy",
   "gcp:status", "gcp:projects", "gcp:choose", "gcp:agent-read", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
 ];

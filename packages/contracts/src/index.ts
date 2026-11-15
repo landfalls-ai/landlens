@@ -448,6 +448,115 @@ export const FAMILY_NOTES = {
 /** "<Sibling> answered HTTP <n>.": the one note with a number in it. */
 export const familyHttpNote = (name: "Clickland" | "Landflow" | "Landfall", status: number) => `${name} answered HTTP ${Math.trunc(status)}.`;
 
+// Landflow on a resource (docs/family.md#landflow-on-a-resource, wave 7 part 4, D119–D126). Every send is the person's
+// click on a sheet that shows what leaves; main builds every body from the cluster's own report and the person's
+// choices, and the renderer sends only choices and the ids main gave it. A problem goes to Landflow's triage webhook as
+// a Generic alert; a flow tagged `landlens` runs as a manual run of the saved workflow. Landlens never calls Landfall:
+// a war room is opened only by Landflow's triage flow, and its link is read from the run.
+export const TriageSeverity = z.enum(["sev1", "sev2", "sev3", "sev4"]);
+export type TriageSeverity = z.infer<typeof TriageSeverity>;
+/** A sheet main prepared (an alert or a flow's input), owned by the window that asked for it. */
+export const LandflowSheetId = z.string().regex(/^ls[A-Za-z0-9_-]{20,40}$/, "not a sheet");
+/** A send or run main made: landflow:follow and landflow:open take it, never an address. */
+export const LandflowRunId = z.string().regex(/^lr[A-Za-z0-9_-]{20,40}$/, "not a run");
+/** A Landflow workflow id, as GET /api/workflows lists it (`wf_…`, or one a person chose). */
+export const LandflowFlowId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/, "not a workflow id");
+/**
+ * The Generic alert Landlens sends (D120): Normalize Alert reads title, severity, service, id, description, status and
+ * environment with its default paths; the rest rides along.
+ */
+export type TriageAlert = {
+  source: "landlens";
+  title: string;
+  severity: TriageSeverity;
+  service: string;
+  environment: string;
+  status: "firing";
+  id: string;
+  fingerprint: string;
+  description: string;
+  labels: { cluster: string; namespace?: string; kind: string; name: string; class: string; reason: string };
+  entity: { kind: string; id: string };
+};
+/** What the triage sheet shows: the alert exactly as it will be sent, where it goes, and the header's name. */
+export type AlertPreview = {
+  sheet: string;
+  /** `<Landflow>/api/webhook/<path>`. */
+  to: string;
+  header: string;
+  alert: TriageAlert;
+  /** Log lines asked for: how many went in, or why none did (a fixed sentence). */
+  logs?: { lines: number; note?: string };
+};
+/** The input a flow on a resource gets (D125): names, the problem it started from, the object's YAML if ticked. */
+export type FlowInput = {
+  landlens: 1;
+  cluster: string;
+  namespace?: string;
+  kind: string;
+  apiVersion: string;
+  name: string;
+  problem?: { class: string; reason: string; title: string };
+  /** The object as Ask Claude would attach it: no Secret, no env[].value, at most 32 KiB. */
+  yaml?: string;
+};
+export type FlowPreview = { sheet: string; to: string; input: FlowInput; yaml?: { note: string } };
+/** A flow tagged `landlens`: its name and description as text, one line each. */
+export type LandflowFlow = { id: string; name: string; description?: string };
+/** Landfall's TriggerResult outcomes, read from the triage run's node outputs (D122). */
+export type LandflowOutcome = "opened" | "attached" | "recorded" | "ignored" | "suppressed";
+export type LandflowRunStatus = "running" | "queued" | "waiting" | "success" | "error" | "canceled";
+/**
+ * A send to triage or a flow's run, as the window sees it (D122, D125): fixed sentences, the run's status, Landfall's
+ * outcome and the room's address (as text; opened only through landflow:open), and for a flow its last node's output,
+ * scrubbed and cut. Nothing else of the run crosses.
+ */
+export type LandflowRun = {
+  run?: string;
+  note: string;
+  tone: "ok" | "warn" | "bad" | "info";
+  /** Still worth asking again (landflow:follow). */
+  follow: boolean;
+  status?: LandflowRunStatus;
+  /** The run's address in Landflow, as text. */
+  runLink?: string;
+  outcome?: LandflowOutcome;
+  /** The room's address, as text. */
+  room?: string;
+  /** A flow's last node's output: JSON as text, redacted, at most 4,000 characters. */
+  output?: string;
+};
+/** A problem sent to triage from this cluster (D124): the chip on its row and drawer. */
+export type LandflowSent = { run: string; problem: string; title: string; severity: TriageSeverity; at: string; state: "triage" | "room"; room?: string };
+/** Every sentence a send or a run can show. */
+export const LANDFLOW_NOTES = {
+  sent: "Sent to triage.",
+  following: "Sent to triage. Following the run…",
+  held: "Landflow is holding it with other alerts.",
+  secretRefused: "Landflow refused the webhook secret.",
+  noWebhook: "No published flow listens at that webhook.",
+  opened: "War room opened.",
+  attached: "Attached to the room that is already open.",
+  recorded: "Recorded; no room opened.",
+  waiting: "Triage is waiting for on-call's answer.",
+  failed: "The run failed. Open it in Landflow.",
+  triageDone: "Triage finished without opening a room.",
+  noRuns: "This key can't read runs (executions:read). Open it in Landflow.",
+  gone: "Landflow no longer has this run.",
+  started: "Started in Landflow. Following the run…",
+  startedOnly: "Started in Landflow.",
+  running: "Running in Landflow…",
+  flowWaiting: "The run is waiting in Landflow.",
+  finished: "Finished.",
+  noFlow: "Landflow doesn't have that flow.",
+  cantRun: "This key can't run flows (run).",
+  cantList: "This key can't list workflows (workflows:read).",
+  noTriage: "Set up the triage webhook on Connections → Landflow first.",
+  notReady: "Connect Landflow first.",
+  noSheet: "That sheet is gone. Open it again.",
+  stillGoing: "Still going. Check again in a moment.",
+} as const;
+
 // Google Cloud (docs/gcp.md, wave 6 part 4): browse every resource of the projects you choose, read-only, with
 // gcloud's own sign-in. Landlens stores no Google credential; the token stays in main. Names are held to Google's
 // shapes before they go into a path or a query.
@@ -779,6 +888,18 @@ export const channels = {
    */
   "family:repin": z.object({ sibling: Sibling, hash: z.string().regex(/^[0-9a-f]{64}$/) }),
   "family:disconnect": z.object({ sibling: Sibling }),
+  // Landflow on a resource (docs/family.md, D126). Only choices and ids cross: main builds the alert from the problem in
+  // the scope's current report and the flow's input from the object, and sends only what the sheet showed. Strict: a
+  // request that carries anything else (a title, a description, an address) is refused.
+  "landflow:alert": z.object({ handle: Handle, namespace: NamespaceName.optional(), problem: ProblemId, severity: TriageSeverity, logs: z.boolean(), sheet: LandflowSheetId.optional() }).strict(),
+  "landflow:triage": z.object({ sheet: LandflowSheetId }).strict(),
+  "landflow:flows": z.object({}).strict(),
+  "landflow:input": z.object({ handle: Handle, ref: ResourceRef.strict(), namespace: NamespaceName.optional(), problem: ProblemId.optional(), yaml: z.boolean(), sheet: LandflowSheetId.optional() }).strict(),
+  "landflow:run": z.object({ sheet: LandflowSheetId, flow: LandflowFlowId }).strict(),
+  "landflow:follow": z.object({ run: LandflowRunId }).strict(),
+  "landflow:sent": z.object({ handle: Handle }).strict(),
+  /** The run in Landflow, or the room it opened: main's own record of it, after the native dialog that shows its host. */
+  "landflow:open": z.object({ run: LandflowRunId, what: z.enum(["run", "room"]) }).strict(),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
   "agent:autonomy": AutonomyRequest,
@@ -885,6 +1006,14 @@ export type Responses = {
   "family:test": McpTest;
   "family:repin": FamilyInfo;
   "family:disconnect": FamilyInfo;
+  "landflow:alert": AlertPreview;
+  "landflow:triage": LandflowRun;
+  "landflow:flows": { flows: LandflowFlow[] };
+  "landflow:input": FlowPreview;
+  "landflow:run": LandflowRun;
+  "landflow:follow": LandflowRun;
+  "landflow:sent": { entries: LandflowSent[] };
+  "landflow:open": { opened: boolean };
   "agent:autonomy": AutonomyState;
   "gcp:status": GcpStatus;
   "gcp:projects": { projects: GcpProject[]; cut: boolean };

@@ -17,7 +17,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { FAMILY_HTTP_HOST, FAMILY_NOTES, familyUrlAllowed, type FamilyInfo, type FamilyList, type McpServerInfo, type McpTest, type McpToolInfo, type Sibling } from "@landlens/contracts";
 import {
-  clicklandWho, ConnError, FamilyError, familyPinOk, FamilyStore, landfallConnector, landfallTarget, landflowWho, McpOAuth, mcpRefresh, mcpRevoke, mcpSignIn, originOf, siblingHealth,
+  clicklandWho, ConnError, FamilyError, familyPinOk, FamilyStore, landfallConnector, landfallTarget, landflowCan, landflowWho, type LandflowCan, McpOAuth, mcpRefresh, mcpRevoke, mcpSignIn, originOf, siblingHealth,
   SIBLINGS, type Crypto, type FamilyPin, type McpOAuthTokens, type McpOAuthUsed, type McpSignIn, type OAuthClientRecord,
 } from "@landlens/connections";
 import { familyIsRead, familyReadTools, listingDiff, listingHash, rawError, testRemote, toolDigest, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
@@ -169,6 +169,23 @@ export class FamilyService {
    */
   clicklandReadKey(): { origin: string; key: string } | undefined {
     return this.clicklandKey();
+  }
+
+  /**
+   * Main only (part 4, D120–D125): Landflow's origin and key, what the key's scopes cover, and the triage webhook with
+   * its secret, while Landflow is ready at an address this build takes. None of it leaves main.
+   */
+  landflowUse(): { origin: string; key: string; can: LandflowCan; triage?: { path: string; header: string; secret: string } } | undefined {
+    const info = this.baseInfo("landflow");
+    const sec = this.landflowSec();
+    if (info.state !== "ready" || !sec || sec.url !== info.url) return undefined;
+    const t = info.triage;
+    return { origin: sec.url, key: sec.key, can: info.can ?? landflowCan([]), ...(t && sec.triageSecret ? { triage: { path: t.path, header: t.header, secret: sec.triageSecret } } : {}) };
+  }
+
+  /** A line for main's log with every secret this service holds cut out exactly. */
+  log(line: string) {
+    this.say(line);
   }
 
   /** The console's origin, for Open in Clickland (D118), while this build takes it. */

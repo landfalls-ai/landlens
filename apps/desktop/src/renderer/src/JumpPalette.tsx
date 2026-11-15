@@ -6,7 +6,7 @@ import type { GcpResource, KubeContext, KubeObject, Problem, SearchEntry } from 
 import { resourceLabel, serviceIcon, shortType } from "./GcpPage";
 import {
   ArrowRightLeft, Box, ChevronRight, CornerDownLeft, FilePlus2, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
-  CircleX, ExternalLink, Search, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, type LucideIcon,
+  CircleX, ExternalLink, Search, Siren, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, Workflow, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
@@ -35,6 +35,9 @@ type Row = { key: string; group: Group; label: string; hint?: string; icon: Luci
 const PER_GROUP = 6;
 
 const keyOf = (t: Pick<Target, "group" | "resource" | "name"> & { namespace?: string }) => `${t.group}/${t.resource}/${t.namespace ?? ""}/${t.name}`;
+/** A problem's subject (the owner, as the doctor names it), as an object of the palette. */
+const subjectTarget = (p: Problem): Target | undefined =>
+  p.resource ? { group: p.group, version: p.version, resource: p.resource, kind: p.kind, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) } : undefined;
 const label = (t: Target) => `${t.namespace ? `${t.namespace}/` : ""}${t.name}`;
 
 type Recent = { k: "object"; t: Target } | { k: "kind"; key: string };
@@ -99,6 +102,10 @@ export function JumpPalette(props: {
   onSwitch: (context: string) => void;
   /** Open in Clickland (D118), for a pod or a workload, while a console address is set: a Tab action. */
   onOpenClickland?: (t: Target) => void;
+  /** Send to triage… (wave 7 D122), while Landflow's triage webhook is set up: a problem's Tab action. */
+  onTriage?: (p: Problem) => void;
+  /** Run a Landflow flow… (D125), while the key can list and run flows: a Tab action of a problem and of an object. */
+  onFlow?: (t: Target, problem?: Problem) => void;
   commands: Commands;
   /** The Google Cloud rows the page last read (one project), found by name; no new read. */
   gcp?: { project: string; items: GcpResource[]; onOpen: (project: string, r: GcpResource) => void };
@@ -166,6 +173,11 @@ export function JumpPalette(props: {
       ? [{ key: `ck:${keyOf(t)}`, group: "Actions", label: "Open in Clickland", hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: ExternalLink, run: () => done(() => open(t)) }]
       : [];
   };
+  /** Run a Landflow flow… on an object, or on a problem's subject (D125). */
+  const flowRow = (t: Target, problem?: Problem): Row[] => {
+    const flow = props.onFlow;
+    return flow ? [{ key: `lf:${keyOf(t)}`, group: "Actions", label: "Run a Landflow flow…", hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: Workflow, run: () => done(() => flow(t, problem)) }] : [];
+  };
   const objectRow = (t: Target, group: Group = "Objects"): Row => ({
     key: `o:${keyOf(t)}`, group, label: t.name, hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: kindIcon(t.resource), mono: true,
     run: () => openObject(t),
@@ -222,11 +234,13 @@ export function JumpPalette(props: {
         { key: "pa:open", group: "Actions", label: "Open", hint: "Problem", icon: Stethoscope, run: () => done(() => props.onProblem(p)) },
         { key: "pa:ask", group: "Actions", label: "Ask Claude", hint: p.name, icon: Sparkles, run: () => done(() => props.onAskProblem(p)) },
         { key: "pa:subject", group: "Actions", label: `Open ${p.kind}`, hint: p.name, icon: SquareArrowOutUpRight, run: () => done(() => props.onOpenSubject(p)) },
+        ...(props.onTriage ? [{ key: "pa:triage", group: "Actions" as Group, label: "Send to triage…", hint: p.name, icon: Siren, run: () => done(() => props.onTriage!(p)) }] : []),
+        ...(subjectTarget(p) ? flowRow(subjectTarget(p)!, p) : []),
       ];
       return acts.filter((r) => !text || r.label.toLowerCase().includes(text));
     }
     if (onlyProblems) return matchProblems(props.problems, text, text ? 50 : PER_GROUP).map(problemRow);
-    if (focus) return [...verbsFor(focus.t).map((v) => actionRow(focus.t, v)), ...clicklandRow(focus.t)].filter((r) => !text || r.label.toLowerCase().includes(text));
+    if (focus) return [...verbsFor(focus.t).map((v) => actionRow(focus.t, v)), ...clicklandRow(focus.t), ...flowRow(focus.t)].filter((r) => !text || r.label.toLowerCase().includes(text));
     if (switching) return rank(props.contexts ?? [], (c) => c.name).map(clusterRow);
     if (cmd) return rank(commands, (r) => r.label);
     if (verb) {

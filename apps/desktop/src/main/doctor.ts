@@ -132,6 +132,16 @@ export class DoctorService {
   }
 
   /**
+   * A problem in the scope's current report, as main holds it (wave 7 D126): what a send to triage or a flow is built
+   * from. The window names it by id only; one that isn't in the report is refused.
+   */
+  problem(handle: string, namespace: string | undefined, id: string): Problem {
+    const p = this.scopes.get(handle)?.get(namespace ?? "")?.health?.problems.find((x) => x.id === id);
+    if (!p) throw new KubeError(404, "That problem isn't in the current report.");
+    return p;
+  }
+
+  /**
    * Whether the scope reports of this cluster name the object (D117): a problem's subject, or one of its pods. Clickland's
    * history may be asked about such an object even when it is gone from the cluster.
    */

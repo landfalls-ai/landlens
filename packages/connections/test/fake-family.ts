@@ -361,7 +361,14 @@ function matchTerm(signal: "logs" | "traces", r: ClLogRow | ClSpanRow, t: Search
   return r.resource[t.field] === t.value || r.attributes[t.field] === t.value;
 }
 
-export type FakeExecution = { workflowId: string; polls: number; script: { status: string; output?: unknown }[] };
+/**
+ * A run as Landflow's GET /api/executions/:id answers it (apps/web/src/lib/shared/types.ts ExecutionRecord, without
+ * resumeState): each poll gives the next state of its script, the last one repeating.
+ */
+export type FakeExecution = { workflowId: string; polls: number; script: { status: string; runData?: Record<string, unknown[]>; order?: string[]; last?: string }[] };
+
+/** One node's run as Landflow records it (packages/engine/src/types.ts NodeRun). */
+export const nodeRun = (items: unknown[]) => ({ startedAt: new Date().toISOString(), durationMs: 3, status: "success", source: "main", inputs: [], outputs: [items.map((json) => ({ json }))] });
 
 export class FakeLandflow extends FakeBase {
   readonly keys = new Map<string, { scopes: string[] }>([
@@ -370,33 +377,70 @@ export class FakeLandflow extends FakeBase {
     [LF_KEY_ADMIN, { scopes: ["admin"] }],
   ]);
   readonly user = { id: "u_fake", name: "Fable Person", email: "fable@example.com", role: "member" };
-  /** The triage flow's webhook: path, header and secret. */
+  /** The triage flow's webhook: path, header and secret (its Webhook secret credential, a Header Auth). */
   webhook = { path: "alerts", header: "x-webhook-secret", secret: TRIAGE_SECRET };
+  /** The triage flow's Respond setting: "immediately" (the template's) or the debounce that holds alerts. */
+  respond: "immediately" | "debounced" = "immediately";
+  /** What Landfall's Open From Alert answers in a triage run (its TriggerResult), and when the run waits instead. */
+  triage: { outcome: string; workspaceUrl?: string; incidentId?: string } | "waiting" | "error" = { outcome: "opened", incidentId: "inc_fake_1", workspaceUrl: "http://127.0.0.1:9/o/fake/i/1" };
+  /** What a flow's last node outputs. */
+  flowOutput: unknown = { checked: true, note: "pods look fine" };
+  /** Every alert the webhook took: its headers and body. */
+  readonly alerts: { headers: Record<string, string>; body: unknown }[] = [];
   readonly workflows = [
-    { id: "wf_landlens_check", name: "Check a workload", description: "A two-node flow: Manual trigger → Set.", tags: ["landlens"] },
-    { id: "wf_other", name: "Nightly digest", description: "Not for Landlens.", tags: ["digest"] },
+    { id: "wf_landlens_check", name: "Check a workload", description: "A two-node flow: Manual trigger → Set.", tags: ["landlens"], active: false, nodeCount: 2, nodeTypes: ["core.manualTrigger", "core.set"], updatedAt: "", createdAt: "", ownership: "owned" },
+    { id: "wf_other", name: "Nightly digest", description: "Not for Landlens.", tags: ["digest"], active: true, nodeCount: 4, nodeTypes: [], updatedAt: "", createdAt: "", ownership: "owned" },
   ];
   readonly executions = new Map<string, FakeExecution>();
+  /** Each run's input, as Landflow's execute route took it. */
+  readonly inputs = new Map<string, unknown>();
   private readonly idem = new Map<string, string>();
   readonly brain: unknown[] = [];
   /** Tools listed beside its own (a Landflow whose listing Landlens must refuse). */
   extraTools: Tool[] = [];
 
   protected state() {
-    return { requests: this.requests.map((r) => ({ method: r.method, path: r.path })), executions: [...this.executions.keys()], brain: this.brain.length };
+    return { requests: this.requests.map((r) => ({ method: r.method, path: r.path })), executions: [...this.executions.keys()], brain: this.brain.length, alerts: this.alerts.length };
   }
 
-  private execution(workflowId: string): string {
-    const id = `ex_${randomBytes(6).toString("hex")}`;
-    this.executions.set(id, {
-      workflowId,
-      polls: 0,
-      script: [
-        { status: "running" },
-        { status: "success", output: { nodes: { landfall: { json: { outcome: "opened", incidentId: "inc_fake_1", workspaceUrl: "http://127.0.0.1:9/o/fake/i/1" } } } } },
-      ],
-    });
+  /** The triage template's run (plugins/triage/flows/alert-triage-to-landfall.json), as far as its nodes' outputs go. */
+  private triageScript(alert: unknown): FakeExecution["script"] {
+    const a = (alert ?? {}) as Record<string, unknown>;
+    const normalized = { alert: { source: "generic", title: a.title, severity: a.severity, service: a.service, environment: a.environment, status: "firing", dedupKey: "generic:fake" } };
+    const decided = { ...normalized, outcome: "open", enforceOutcome: "open", reasons: ["shadow mode"] };
+    const order = ["hook", "notDirect", "normalize", "resolved", "rules", "verdict", "join", "decide", "record", "route"];
+    const runData: Record<string, unknown[]> = {
+      hook: [nodeRun([{ headers: {}, params: {}, query: {}, body: a }])], notDirect: [nodeRun([{ body: a }])], normalize: [nodeRun([normalized])], resolved: [nodeRun([normalized])],
+      rules: [nodeRun([normalized])], verdict: [nodeRun([{ text: "{\"verdict\":\"incident\"}" }])], join: [nodeRun([decided])], decide: [nodeRun([decided])], record: [nodeRun([{ id: 1 }])], route: [nodeRun([decided])],
+    };
+    if (this.triage === "waiting") return [{ status: "running" }, { status: "waiting", runData: { ...runData, ask: [nodeRun([{ ok: true }])] }, order: [...order, "ask"], last: "ask" }];
+    if (this.triage === "error") return [{ status: "running" }, { status: "error", runData, order, last: "route" }];
+    const result = { ...this.triage, tenantId: "t_fake", entity: { kind: "service", id: String(a.service ?? "") }, proposedSeverity: a.severity, opened: this.triage.outcome === "opened" };
+    return [
+      { status: "running", runData, order, last: "route" },
+      { status: "success", runData: { ...runData, open: [nodeRun([result])], saveRoom: [nodeRun([{ id: 1, landfall: this.triage.outcome }])] }, order: [...order, "open", "saveRoom"], last: "saveRoom" },
+    ];
+  }
+
+  private execution(workflowId: string, script: FakeExecution["script"]): string {
+    const id = `ex${randomBytes(8).toString("base64url").replace(/[^A-Za-z0-9]/g, "x")}`;
+    this.executions.set(id, { workflowId, polls: 0, script });
     return id;
+  }
+
+  /** GET /api/executions/:id as Landflow answers it: `{ execution: ExecutionRecord }`, resumeState left out. */
+  private executionAnswer(id: string, e: FakeExecution) {
+    const step = e.script[Math.min(e.polls++, e.script.length - 1)]!;
+    const wf = e.workflowId === "wf_triage" ? "Alert triage → Landfall war room" : (this.workflows.find((w) => w.id === e.workflowId)?.name ?? e.workflowId);
+    return {
+      execution: {
+        executionId: id, workflowId: e.workflowId, workflowName: wf, mode: e.workflowId === "wf_triage" ? "webhook" : "manual", status: step.status,
+        startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), durationMs: 10,
+        runData: step.runData ?? {}, executionOrder: step.order ?? [], ...(step.last ? { lastNodeId: step.last } : {}),
+        // The workflow as it ran rides along; its parameters mention outcome only as expressions.
+        workflow: { id: e.workflowId, name: wf, nodes: [{ id: "route", name: "Route", type: "core.switch", parameters: { rules: { values: [{ conditions: { condition: [{ left: "{{ $json.outcome }}", operator: "equals", right: "open" }] } }] } } }] },
+      },
+    };
   }
 
   protected async handle(req: IncomingMessage, res: ServerResponse, url: URL, body: string) {
@@ -411,37 +455,56 @@ export class FakeLandflow extends FakeBase {
       return this.json(res, 200, { user: { ...this.user, sso: false, hasPassword: true }, via: "api-key", apiKey: { id: "key_fake", scopes: known.scopes } });
     }
     if (p.startsWith("/api/webhook/")) {
-      if (req.method !== "POST") return this.json(res, 405, {});
-      if (p.slice("/api/webhook/".length) !== this.webhook.path) return this.json(res, 404, { error: "No published workflow listens here" });
-      if (req.headers[this.webhook.header] !== this.webhook.secret) return this.json(res, 401, { error: "Unauthorized" });
+      // Landflow's webhook route: the path and method pick a published flow (404), then its Header Auth (401), then
+      // the Idempotency-Key (a repeat answers 200 with the first run's state), then the trigger's Respond setting.
+      const path = p.slice("/api/webhook/".length);
+      if (req.method !== "POST" || path !== this.webhook.path) return this.json(res, 404, { error: `No published workflow listens on ${req.method} /api/webhook/${path}` });
+      if (req.headers[this.webhook.header.toLowerCase()] !== this.webhook.secret) return this.json(res, 401, { error: "Unauthorized" }, { "WWW-Authenticate": "Header" });
       const idem = typeof req.headers["idempotency-key"] === "string" ? req.headers["idempotency-key"] : undefined;
-      const id = (idem && this.idem.get(idem)) || this.execution("wf_triage");
+      const earlier = idem ? this.idem.get(idem) : undefined;
+      if (earlier) return this.json(res, 200, { status: "running", workflowId: "wf_triage", executionId: earlier }, { "x-landflow-execution": earlier, "idempotent-replayed": "true" });
+      let alert: unknown;
+      try {
+        alert = JSON.parse(body);
+      } catch {
+        alert = body;
+      }
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers[k] = v;
+      this.alerts.push({ headers, body: alert });
+      if (this.respond === "debounced") return this.json(res, 202, { status: "debounced", workflowId: "wf_triage", message: "Held for 60s with other events", count: 1, runsAt: new Date(Date.now() + 60_000).toISOString() });
+      const id = this.execution("wf_triage", this.triageScript(alert));
       if (idem) this.idem.set(idem, id);
-      return this.json(res, 202, { executionId: id });
+      return this.json(res, 202, { status: "started", workflowId: "wf_triage", executionId: id });
     }
     if (p === "/api/workflows") {
       if (!known) return refuse();
-      if (!can("workflows:read")) return this.json(res, 403, { error: "This key lacks workflows:read" });
-      return this.json(res, 200, { workflows: this.workflows });
+      if (!can("workflows:read")) return this.json(res, 403, { error: "This API key doesn't have the workflows:read scope" });
+      return this.json(res, 200, { workflows: this.workflows, stats: { workflows: this.workflows.length } });
     }
     const exec = /^\/api\/workflows\/([^/]+)\/execute$/.exec(p);
     if (exec) {
       if (!known) return refuse();
-      if (!can("run")) return this.json(res, 403, { error: "This key lacks run" });
-      if (!this.workflows.some((w) => w.id === exec[1])) return this.json(res, 404, { error: "No such workflow" });
+      if (!can("run")) return this.json(res, 403, { error: "This API key doesn't have the run scope" });
+      if (!this.workflows.some((w) => w.id === exec[1])) return this.json(res, 404, { error: "Workflow not found" });
       const b = body ? JSON.parse(body) : {};
-      const id = (b.idempotencyKey && this.idem.get(b.idempotencyKey)) || this.execution(exec[1]!);
+      const earlier = b.idempotencyKey ? this.idem.get(b.idempotencyKey) : undefined;
+      if (earlier) return this.json(res, 200, { executionId: earlier, workflowId: exec[1], status: "running", duplicate: true });
+      const id = this.execution(exec[1]!, [
+        { status: "running" },
+        { status: "success", runData: { manual: [nodeRun([b.input ?? {}])], set: [nodeRun([this.flowOutput])] }, order: ["manual", "set"], last: "set" },
+      ]);
+      this.inputs.set(id, b.input);
       if (b.idempotencyKey) this.idem.set(b.idempotencyKey, id);
-      return this.json(res, 202, { executionId: id });
+      return this.json(res, 202, { executionId: id, workflowId: exec[1], status: "running" });
     }
     const ex = /^\/api\/executions\/([^/]+)$/.exec(p);
     if (ex) {
       if (!known) return refuse();
-      if (!can("executions:read")) return this.json(res, 403, { error: "This key lacks executions:read" });
+      if (!can("executions:read")) return this.json(res, 403, { error: "This API key doesn't have the executions:read scope" });
       const e = this.executions.get(ex[1]!);
-      if (!e) return this.json(res, 404, { error: "No such execution" });
-      const step = e.script[Math.min(e.polls++, e.script.length - 1)]!;
-      return this.json(res, 200, { id: ex[1], workflowId: e.workflowId, status: step.status, ...(step.output ? { data: step.output } : {}) });
+      if (!e) return this.json(res, 404, { error: "Execution not found" });
+      return this.json(res, 200, this.executionAnswer(ex[1]!, e));
     }
     if (p === "/api/brain/work") {
       if (!known) return refuse();

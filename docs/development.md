@@ -53,6 +53,13 @@ development bootstrap key, which a development Clickland takes for reads), and e
 `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/clickland.e2e.test.ts`
 (screenshots `w7p3-*` with `LANDLENS_SHOTS`).
 
+Landflow on a resource (wave 7 part 4): `landflow.e2e` runs on OrbStack against the doctor scenario (it runs
+`up.mjs`) and the fake Landflow and Landfall only: `pnpm -s build`, then in `apps/desktop`
+`LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/landflow.e2e.test.ts` (screenshots `w7p4-*`
+with `LANDLENS_SHOTS`). Its unit tests are `packages/kube/test/triage-alert.test.ts`,
+`packages/connections/test/landflow.test.ts` and `apps/desktop/test/landflow-main.test.ts`. A send to a real triage
+flow writes, so it is not written as a live check; that waits for the person (D137, `LANDLENS_LIVE_WRITES=1`).
+
 The doctor ([doctor.md](doctor.md)): `node deploy/scenarios/doctor/up.mjs` starts one broken workload per problem
 class in `landlens-dev` (and `--down` removes them); `LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/kube
 test:integration` starts them itself and waits up to 4 minutes for each problem, since pending and not-ready count

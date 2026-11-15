@@ -18,6 +18,8 @@ import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
 import { gcpMode, GcpService } from "./gcp";
 import { familyOverrides, FamilyService } from "./family";
+import { LandflowActions } from "./landflow";
+import { FamilySentStore } from "@landlens/connections";
 import { loginPath, which } from "@landlens/acp-host";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
@@ -203,7 +205,13 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family);
+  // Landflow on a resource (wave 7 part 4): sends to triage and flow runs, built in main, sent on the person's click.
+  const landflow = new LandflowActions({
+    family, doctor,
+    clusters: { context: (handle) => clusters.get(handle).info.context, typeOf: (handle, ref) => clusters.typeOf(handle, ref), getObject: (handle, ref) => clusters.getObject(handle, ref) },
+    sent: new FamilySentStore(join(app.getPath("userData"), "family-sent.json")),
+  });
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();

@@ -14,12 +14,13 @@ import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
 import { flowOwners, type ConnectionsService } from "./connections";
 import type { FamilyService } from "./family";
+import type { LandflowActions } from "./landflow";
 import type { GcpService } from "./gcp";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -219,6 +220,16 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "family:test": ({ sibling }) => family.test(sibling),
     "family:repin": async ({ sibling, hash }) => family.repin(sibling, hash),
     "family:disconnect": ({ sibling }) => family.disconnect(sibling),
+    // Landflow on a resource (docs/family.md#landflow-on-a-resource): main builds what is sent and keeps it under a
+    // sheet owned by this window; the window sends only choices and main's ids. Links open after main's own dialog.
+    "landflow:alert": (req, event) => landflow.prepareAlert(req, event.sender),
+    "landflow:triage": (req, event) => landflow.sendAlert(req, event.sender),
+    "landflow:flows": () => landflow.flows(),
+    "landflow:input": (req, event) => landflow.prepareInput(req, event.sender),
+    "landflow:run": (req, event) => landflow.run(req, event.sender),
+    "landflow:follow": (req) => landflow.follow(req),
+    "landflow:sent": async (req) => landflow.sentFor(req),
+    "landflow:open": (req, event) => landflow.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
     "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),

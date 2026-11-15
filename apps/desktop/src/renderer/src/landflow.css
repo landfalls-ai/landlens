@@ -1,0 +1,36 @@
+/* Landflow on a resource (wave 7 part 4, D122–D125): the triage and flow sheets, and the chips a send leaves. */
+.dialog.lf-sheet { width: min(560px, calc(100vw - 48px)); max-height: calc(100vh - 16vh - 24px); display: flex; flex-direction: column; }
+.lf-sheet .dialog-body { overflow: auto; min-height: 0; }
+.lf-mark { display: inline-grid; place-items: center; color: var(--accent); }
+.lf-title { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.lf-title strong { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-field { display: grid; gap: 6px; }
+.lf-label { font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-3); }
+.lf-sev { margin-left: 0; justify-self: start; }
+.lf-sev button { font-family: var(--mono); }
+.lf-sev-line { margin: 0; }
+.lf-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: var(--t-12); }
+.lf-facts dt { color: var(--ink-3); }
+.lf-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.lf-well { margin: 0; max-height: 220px; overflow: auto; padding: 9px 11px; border-radius: var(--r-3); background: var(--bg-0); box-shadow: inset 0 0 0 1px var(--line); font: 12px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; word-break: break-word; }
+.lf-well:focus-visible { box-shadow: var(--focus-in); outline: none; }
+.lf-line { margin: 0; color: var(--ink-2); }
+.lf-room { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-error { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--bad-text); font-size: var(--t-12); }
+.lf-result { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r-3); background: var(--bg-0); box-shadow: inset 0 0 0 1px var(--line); }
+.lf-result .ic { margin-top: 1px; }
+.lf-result.tone-bad { background: var(--bad-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 30%, transparent); }
+.lf-result.tone-warn { background: var(--warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 30%, transparent); }
+.lf-result.tone-ok { background: var(--ok-soft); }
+.lf-result strong { font-weight: 600; font-size: 13px; color: var(--ink); }
+.lf-result .link-btn { justify-self: start; margin-top: 4px; font-size: var(--t-12); }
+.lf-flows { display: grid; gap: 4px; }
+.lf-flow { display: grid; gap: 2px; text-align: left; padding: 8px 10px; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line); background: var(--bg-1, var(--bg-2)); }
+.lf-flow:hover { background: var(--bg-3); }
+.lf-flow.on { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
+.lf-flow-name { font-weight: 500; font-size: 13px; color: var(--ink); }
+/* The chip a send leaves on a problem's row and drawer (D124): In triage, or War room (it opens the room). */
+.lf-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px; font-size: 11.5px; font-weight: 500; white-space: nowrap; flex: none; }
+.lf-chip.triage { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.lf-chip.room { background: var(--bad-soft); color: var(--bad-text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 30%, transparent); cursor: pointer; }
+button.lf-chip.room:hover { background: color-mix(in srgb, var(--bad) 22%, transparent); }
