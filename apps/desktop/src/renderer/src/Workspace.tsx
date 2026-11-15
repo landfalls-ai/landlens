@@ -27,6 +27,8 @@ import { StatusBar } from "./StatusBar";
 import { Bench } from "./Bench";
 import { useBench } from "./benchState";
 import { useForwards } from "./Forwards";
+import { DockGrip } from "./DockGrip";
+import { DOCK_KEY, dockMax, dockWidth, readDockWidth } from "./dockWidth";
 import { logSourceOf } from "./LogsView";
 import { direct, shellable, targetOf } from "./ShellMenu";
 import { copyText } from "./present";
@@ -88,6 +90,13 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [claude, setClaude] = useState<string>();
   const [width, setWidth] = useState({ app: window.innerWidth, main: window.innerWidth - 232, height: window.innerHeight });
   const bench = useBench();
+  // The dock's width you chose (wave 6), kept across launches; undefined is the default for the window.
+  const [dockChosen, setDockChosen] = useState<number | undefined>(() => readDockWidth(localStorage.getItem(DOCK_KEY)));
+  const chooseDock = (w: number | undefined) => {
+    setDockChosen(w);
+    if (w === undefined) localStorage.removeItem(DOCK_KEY);
+    else localStorage.setItem(DOCK_KEY, String(w));
+  };
   const forwardsRunning = useForwards(cluster.context).filter((f) => f.state === "running" || f.state === "reconnecting" || f.state === "starting").length;
   const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number }>();
   const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number }>();
@@ -266,6 +275,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const autoRail = dock && (drawer || narrow);
   const rail = userRail ?? autoRail;
   useEffect(() => setUserRail(undefined), [dock, drawer, narrow]);
+  const dockW = dockWidth(dockChosen, width.app, drawer, narrow);
+  const dockLimit = dockMax(width.app, drawer, narrow);
 
   const focusBench = () => setTimeout(() => {
     const pane = document.querySelector<HTMLElement>(".bench-pane:not([hidden])");
@@ -332,7 +343,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   return (
     <div ref={app}
       className={"app" + (rail ? " sidebar-rail" : "") + (narrow ? " narrow" : "") + (dock ? " with-dock" : "") + (drawer ? " with-drawer" : "") + (bench.open ? " with-bench" : "") + (bench.open && bench.max ? " bench-max" : "") + (width.height < 760 ? " short" : "")}
-      style={bench.height ? ({ "--bench-h": `${Math.min(bench.height, Math.max(160, width.height - 48 - 4 * 32 - 26))}px` } as React.CSSProperties) : undefined}>
+      style={{
+        "--dock-w": `${dockW}px`,
+        ...(bench.height ? { "--bench-h": `${Math.min(bench.height, Math.max(160, width.height - 48 - 4 * 32 - 26))}px` } : {}),
+      } as React.CSSProperties}>
       <Sidebar
         cluster={cluster}
         contexts={contexts}
@@ -445,7 +459,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             loading={watch.loading}
             selected={selected?.metadata.uid}
             width={width.main}
-            {...(narrow && dock && drawer ? { covered: 372 } : {})}
+            {...(narrow && dock && drawer ? { covered: dockW + 12 } : {})}
             oneNamespace={!!scoped}
             empty={{
               title: `No ${list.label.toLowerCase()}${scoped ? ` in ${scoped}` : ""}${filter.trim() ? ` matching “${filter.trim()}”` : status !== "all" ? ` ${status === "bad" ? "failing" : "pending"}` : ""}`,
@@ -533,6 +547,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onActivity={setClaude}
           onOpenObject={go}
           onOpenSettings={() => pick("agent")}
+          grip={<DockGrip width={dockW} max={dockLimit} onWidth={chooseDock} />}
         />
       ) : null}
       {settings ? (

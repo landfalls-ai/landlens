@@ -83,6 +83,12 @@ floating drawer ends at the panel's top. `Workspace.tsx` sets classes on it from
 | dock | sidebar, dock 392 | rail 52, dock 360 |
 | drawer + dock | rail, drawer 372, dock 392 | rail, dock 360, drawer 372 floating over the table |
 
+The dock's widths above are defaults. Its left edge is a grip (`DockGrip.tsx`, `dockWidth.ts`): drag it, or focus it
+and use ← → (16px a step), Home for the narrowest (320) and End for the widest; a double click goes back to the
+default. The widest leaves the rail and 600px of table, and beside a drawer in a wide window the drawer's 372 too (at
+most 960). The width you chose is kept in `localStorage` (`landlens.dock.width`) and held to that room as the window
+or the panes change; the floating drawer at 1024–1279 sits beside whatever width the dock has.
+
 ⌘B folds the sidebar to the rail by hand. The main pane is a container (`container-name: main`), so the toolbar and
 table shrink by the pane's width, not the window's: under 860px the key hints go and the filter says "Filter"; under
 760 the status words; under 640 "Ask Claude" becomes its icon (and always while a drawer is open, which has its own

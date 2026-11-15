@@ -167,6 +167,40 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await shot(page, "04-pod-yaml");
   }, 60_000);
 
+  it("resizes Claude's panel by dragging or with the keys, and remembers the width (wave 6)", async () => {
+    await page.setViewportSize({ width: 1440, height: 880 });
+    // No drawer: beside one the dock has less room (dockMax).
+    await page.keyboard.press("Escape");
+    await page.locator(".drawer").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Ask Claude", description: /⌘J/ }).click();
+    const dock = page.getByRole("complementary", { name: "Claude Code" });
+    const grip = page.getByRole("separator", { name: "Resize Claude's panel" });
+    await grip.waitFor();
+    await page.waitForTimeout(400); // the slide-in
+    const w = async () => Math.round((await dock.boundingBox())!.width);
+    expect(await w()).toBe(392);
+    const g = (await grip.boundingBox())!;
+    await page.mouse.move(g.x + g.width / 2, g.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(g.x + g.width / 2 - 200, g.y + 200, { steps: 8 });
+    await page.mouse.up();
+    expect(await w()).toBe(592);
+    expect(await page.evaluate(() => (globalThis as any).localStorage.getItem("landlens.dock.width"))).toBe("592");
+    await shot(page, "w6-01-dock-wide");
+    await grip.focus();
+    await page.keyboard.press("ArrowRight");
+    expect(await w()).toBe(576);
+    await page.keyboard.press("End"); // the rail and 600px of table stay
+    expect(await w()).toBe(1440 - 52 - 600);
+    await page.keyboard.press("Home");
+    expect(await w()).toBe(320);
+    await grip.dblclick();
+    expect(await w()).toBe(392);
+    expect(await page.evaluate(() => (globalThis as any).localStorage.getItem("landlens.dock.width"))).toBeNull();
+    await page.keyboard.press("Meta+j");
+    await dock.waitFor({ state: "detached" });
+  }, 60_000);
+
   it("shows deployments across namespaces", async () => {
     await page.getByRole("button", { name: "Deployments", exact: true }).click();
     await page.getByRole("combobox", { name: "Namespace" }).selectOption("");

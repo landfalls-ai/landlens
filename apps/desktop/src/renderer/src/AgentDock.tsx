@@ -39,6 +39,8 @@ export function AgentDock(props: {
   onOpenObject: (t: ObjectTarget) => void;
   /** "/settings": open the Agent page. */
   onOpenSettings?: () => void;
+  /** The left edge's resize grip (wave 6). */
+  grip?: React.ReactNode;
 }) {
   const [info, setInfo] = useState<AgentSessionInfo>();
   const [failed, setFailed] = useState<string>();
@@ -438,6 +440,7 @@ export function AgentDock(props: {
 
   return (
     <aside className="dock" aria-label="Claude Code">
+      {props.grip}
       <div className="sr-only" role="alert">{alert}</div>
       <div className="sr-only" role="status">{status}</div>
       <header className="dock-head">
