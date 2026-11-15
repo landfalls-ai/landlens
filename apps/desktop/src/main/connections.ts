@@ -14,7 +14,7 @@ import {
   ConnError, ConnectionStore, endpoints, githubWhoAmI, GITHUB_CLIENT_ID, GITHUB_DEVICE_PAGE, LinearAuth, linearRefresh, linearRevoke, linearSignIn,
   linearViewer, LOOPBACK_ORIGIN, pollDeviceFlow, PROVIDER_NAME, PROVIDERS, startDeviceFlow, StoreError, type Clock, type Crypto, type Endpoints, type LinearUsed, type Provider,
 } from "@landlens/connections";
-import { listingHash, rawError, readTools, testRemote, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
+import { listingHash, rawError, readonlyIsSmaller, readTools, testRemote, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
 export { readTools };
@@ -75,6 +75,8 @@ type Listing = {
   pin?: string;
   /** Each half, for the gateway to check its own listing of the upstream against. */
   halves?: { full: string; readonly: string };
+  /** The read-only endpoint listed fewer tools than the full one, all of them the full one's (H1). */
+  smaller: boolean;
 };
 
 /** A connection's server on the gateway: a RemoteSpec with its provider rules. */
@@ -348,7 +350,16 @@ export class ConnectionsService {
   private async accept(p: Provider) {
     delete this.listings[p];
     const l = await this.listing(p, true).catch(() => undefined);
-    if (l?.ok && l.pin && !this.store.pin(p)) this.store.setPin(p, l.pin, { read: l.reads.size, write: (l.full?.length ?? 0) - l.reads.size });
+    if (!l?.ok || !l.pin) return;
+    const kept = this.store.pin(p);
+    // The same account connected again with its accepted listing kept (L5): a listing that changed asks for review.
+    if (kept) {
+      if (kept !== l.pin) this.drifted(p);
+      return;
+    }
+    // A read-only endpoint that isn't a smaller server isn't accepted on sight: the person looks first (H1).
+    if (!l.smaller) return;
+    this.store.setPin(p, l.pin, { read: l.reads.size, write: (l.full?.length ?? 0) - l.reads.size });
   }
 
   set(p: Provider, prefs: { mode?: ConnMode; readsAuto?: boolean; give?: boolean }): ConnInfo {
@@ -420,7 +431,8 @@ export class ConnectionsService {
     const headers = { Authorization: `Bearer ${token}`, ...(p === "github" ? GITHUB_HEADERS : {}) };
     const ep = this.ep_(p);
     // Every request for a connection's server goes only to the provider's token origins, never through a redirect.
-    return { full: { name: p, url: ep.mcp, headers, origins: ep.tokenOrigins }, readonly: { name: p, url: ep.mcpReadonly, headers, origins: ep.tokenOrigins } };
+    // No MCP App views for a connection (M3): the client doesn't offer them, in Test and in sessions alike.
+    return { full: { name: p, url: ep.mcp, headers, origins: ep.tokenOrigins, noViews: true }, readonly: { name: p, url: ep.mcpReadonly, headers, origins: ep.tokenOrigins, noViews: true } };
   }
 
   /**
@@ -436,13 +448,15 @@ export class ConnectionsService {
     const steps = [...full.steps.map((s) => ({ ...s, name: `full: ${s.name}` })), ...ro.steps.map((s) => ({ ...s, name: `read-only: ${s.name}` }))];
     const roTools: Tool[] = ro.ok && ro.tools ? ro.tools : [];
     if (!full.ok || !full.tools) {
-      const l: Listing = { at: Date.now(), ok: false, steps, readonly: roTools, reads: new Set() };
+      const l: Listing = { at: Date.now(), ok: false, steps, readonly: roTools, reads: new Set(), smaller: false };
       this.listings[p] = l;
       return l;
     }
     const reads = readTools(full.tools, roTools);
+    const smaller = readonlyIsSmaller(full.tools, roTools);
+    if (!smaller) steps.push({ name: "read-only endpoint", ok: false, detail: CONN_NOTES.readonlyUnproven });
     const halves = { full: listingHash(full.tools), readonly: listingHash(roTools) };
-    const l: Listing = { at: Date.now(), ok: true, steps, full: full.tools, readonly: roTools, reads, pin: `${halves.full}.${halves.readonly}`, halves };
+    const l: Listing = { at: Date.now(), ok: true, steps, full: full.tools, readonly: roTools, reads, pin: `${halves.full}.${halves.readonly}`, halves, smaller };
     this.listings[p] = l;
     this.store.setListing(p, full.tools.map((t) => toolInfo(t, { readTools: reads })), { read: reads.size, write: full.tools.length - reads.size });
     return l;
@@ -487,6 +501,12 @@ export class ConnectionsService {
       const same = !!l?.pin && l.pin === accepted;
       if (accepted && l?.ok && l.pin !== accepted) this.drifted(p);
       const read = info.mode === "read";
+      // Read only serves the read-only endpoint, so it must be one: a smaller server than the full one (H1).
+      if (read && !(l?.ok && l.smaller)) {
+        this.say(`[connections] ${p}: its read-only endpoint isn't a smaller server; not served at Read only`);
+        if (l?.ok && this.transient[p]?.note !== CONN_NOTES.readonlyUnproven) this.changed(p, { note: CONN_NOTES.readonlyUnproven });
+        continue;
+      }
       const base = read ? specs.readonly : specs.full;
       const auth = await this.sessionAuth(p, info.mode);
       const headers = { ...(base.headers ?? {}) };
@@ -496,6 +516,8 @@ export class ConnectionsService {
         headers,
         ...(auth ? { authProvider: auth } : {}),
         ...(same && l?.halves ? { pin: read ? l.halves.readonly : l.halves.full } : {}),
+        // At Ask for writes the reads go to the read-only endpoint (M1), whose half of the listing is pinned too.
+        ...(!read ? { readUrl: specs.readonly.url, ...(same && l?.halves ? { readPin: l.halves.readonly } : {}) } : {}),
         provider: { id: p, readTools: l?.reads ?? new Set(), mode: info.mode, readsAuto: info.readsAuto },
       });
     }

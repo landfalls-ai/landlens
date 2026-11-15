@@ -40,6 +40,8 @@ export type FakeOptions = {
   graphqlKeysOnly?: boolean;
   /** The MCP endpoints answer 503 (a listing that fails). */
   mcpDown?: boolean;
+  /** Tools listed this many to a page (tools/list's nextCursor). */
+  pageSize?: number;
 };
 
 export class FakeProvider {
@@ -53,6 +55,8 @@ export class FakeProvider {
   revoked: string[] = [];
   /** The token the device flow hands out. */
   readonly deviceToken = `gho_${"D".repeat(36)}`;
+  /** Listings served in place of the fixture's (a read-only endpoint that serves the full set, a changed tool). */
+  readonly serve: { full?: Tool[]; readonly?: Tool[] } = {};
   private server!: HttpServer;
   origin = "";
 
@@ -123,9 +127,15 @@ export class FakeProvider {
           return json(401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${this.origin}/.well-known/oauth-protected-resource/mcp"` });
         }
         const l = listing(this.vendor);
-        const tools = url.pathname === "/mcp/readonly" ? l.readonly : l.full;
+        const ro = url.pathname === "/mcp/readonly";
+        const tools = (ro ? this.serve.readonly : this.serve.full) ?? (ro ? l.readonly : l.full);
         const mcp = new Server({ name: `fake-${this.vendor}`, version: "1.0.0" }, { capabilities: { tools: {} } });
-        mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+        const size = this.opts.pageSize;
+        mcp.setRequestHandler(ListToolsRequestSchema, async (r) => {
+          if (!size) return { tools };
+          const at = Number(r.params?.cursor ?? 0);
+          return { tools: tools.slice(at, at + size), ...(at + size < tools.length ? { nextCursor: String(at + size) } : {}) };
+        });
         mcp.setRequestHandler(CallToolRequestSchema, async (r) => ({ content: [{ type: "text", text: `fake ${r.params.name}` }] }));
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
         res.on("close", () => void transport.close());

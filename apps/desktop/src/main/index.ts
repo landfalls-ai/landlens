@@ -79,7 +79,11 @@ async function start() {
     overrides: connectionOverrides(process.env, app.isPackaged),
     // Only GitHub's device page or an address on Linear's own origin reach this (connections.ts checks).
     openExternal: (url) => shell.openExternal(url),
-    push: (info) => send("conn:update", info),
+    // Open sessions follow a connection's change at once (M2).
+    push: (info) => {
+      send("conn:update", info);
+      mcp?.connectionChanged(info);
+    },
     // A server you added under github or linear keeps that name, and the connection stays off.
     takenNames: () => mcpStore.list().map((s) => s.name),
     log: (l) => console.log(l),

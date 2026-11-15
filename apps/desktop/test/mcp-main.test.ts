@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { AppViews, viewCsp, VIEW_HEADERS } from "../src/main/app-views";
 import { ClicklandSettingsStore, type Crypto } from "../src/main/clickland-settings";
 import { CSP_PROD } from "../src/main/csp";
-import type { RemoteSpec } from "@landlens/mcp-gateway";
+import type { GatewaySession, RemoteSpec } from "@landlens/mcp-gateway";
 import { McpService } from "../src/main/mcp";
 import { DRIFT_NOTE, McpServerStore } from "../src/main/mcp-store";
 
@@ -260,6 +260,41 @@ describe("McpService", () => {
       await s.close();
       (svc.gateway as unknown as { opts: { onDrift: (s: RemoteSpec) => void } }).opts.onDrift(conn);
       expect(drifted).toEqual(["github"]);
+    } finally {
+      await svc.stop();
+    }
+  });
+
+  it("M2 (review of part 2): a connection's change reaches open sessions at once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
+    const conn: RemoteSpec = { name: "github", url: "http://127.0.0.1:1/mcp/", provider: { id: "github", readTools: new Set(["list_issues"]), mode: "ask", readsAuto: true } };
+    const svc = new McpService({
+      store: st,
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      connections: { remotes: async () => [conn], servers: () => [], drifted: () => {} },
+    });
+    await svc.start();
+    try {
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const open = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      open.bind("acp-m2");
+      const session = () => [...(svc.gateway as unknown as { sessions: Map<string, GatewaySession> }).sessions.values()].find((x) => x.acpSession === "acp-m2")!;
+      svc.gateway.permit("acp-m2", { toolCallId: "t1", toolName: "mcp__github__issue_write", always: true });
+      const info = { provider: "github" as const, state: "ready" as const, mode: "ask" as const, readsAuto: true, give: true };
+      svc.connectionChanged(info);
+      expect(session().takePermit("mcp__github__issue_write", "t2")).toBe(true); // nothing changed: the yes stands
+      svc.connectionChanged({ ...info, readsAuto: false });
+      expect(session().takePermit("mcp__github__issue_write", "t3")).toBe(false);
+      expect(session().upstreams.has("github")).toBe(true);
+      svc.connectionChanged({ ...info, mode: "read" });
+      expect(session().upstreams.has("github")).toBe(false);
+      await open.close();
     } finally {
       await svc.stop();
     }

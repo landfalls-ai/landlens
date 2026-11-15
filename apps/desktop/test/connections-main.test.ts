@@ -1,5 +1,5 @@
 import { CONN_NOTES } from "@landlens/contracts";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -434,5 +434,74 @@ describe("Fable's security review of part 1, fixed", () => {
     wc.emit("destroyed");
     expect(s.info("github").state).toBe("off");
     await expect(s.githubDevice(owner(other))).resolves.toMatchObject({ userCode: "WDJB-MJHT" });
+  });
+});
+
+describe("Fable's security review of part 2, fixed", () => {
+  it("H1: a read-only endpoint that serves the full set: no reads, not accepted on sight, and not served at Read only", async () => {
+    const gh = await fake("github");
+    gh.valid.add(GH_TOKEN);
+    gh.serve.readonly = listing("github").full;
+    const { s } = service({ github: gh });
+    const info = await s.token("github", GH_TOKEN);
+    expect(s.store.pin("github")).toBeUndefined();
+    expect(info.note).toBe(CONN_NOTES.unaccepted);
+    const [r] = await s.remotes();
+    expect(r!.provider.readTools.size).toBe(0);
+    const t = await s.test("github");
+    expect(t.steps.some((x) => x.name === "read-only endpoint" && !x.ok && x.detail === CONN_NOTES.readonlyUnproven)).toBe(true);
+    s.set("github", { mode: "read" });
+    expect(await s.remotes()).toEqual([]);
+    expect(s.info("github").note).toBe(CONN_NOTES.readonlyUnproven);
+  });
+
+  it("M1, M3: at Ask for writes a session gets the read-only endpoint for its reads, with its half pinned; no views offered", async () => {
+    const gh = await fake("github");
+    gh.valid.add(GH_TOKEN);
+    const { s } = service({ github: gh });
+    await s.token("github", GH_TOKEN);
+    const [r] = await s.remotes();
+    expect(r).toMatchObject({ url: `${gh.origin}/mcp/`, readUrl: `${gh.origin}/mcp/readonly`, readPin: s.store.pin("github")!.split(".")[1], noViews: true });
+    for (const x of gh.requests.filter((q) => q.body.includes('"method":"initialize"'))) expect(x.body).not.toContain("io.modelcontextprotocol/ui");
+    s.set("github", { mode: "read" });
+    const [ro] = await s.remotes();
+    expect(ro!.readUrl).toBeUndefined();
+  });
+
+  it("L4: a pin written into the file by anything but the store doesn't count, and a damaged tool in the list is dropped", async () => {
+    const gh = await fake("github");
+    gh.valid.add(GH_TOKEN);
+    const { s, file } = service({ github: gh });
+    await s.token("github", GH_TOKEN);
+    const real = s.store.pin("github")!;
+    expect(real).toMatch(/^[0-9a-f]{64}\.[0-9a-f]{64}$/);
+    const j = JSON.parse(readFileSync(file, "utf8"));
+    j.github.pin = `${"a".repeat(64)}.${"b".repeat(64)}`;
+    j.github.list = [{ name: "ok_tool", readOnly: true, visibility: ["model"], required: [] }, { name: "bad", readOnly: true, description: { not: "a string" }, visibility: ["model"], required: [] }];
+    writeFileSync(file, JSON.stringify(j));
+    expect(s.store.pin("github")).toBeUndefined();
+    expect(s.store.list("github")!.map((t) => t.name)).toEqual(["ok_tool"]);
+    expect(s.info("github").note).toBe(CONN_NOTES.unaccepted);
+  });
+
+  it("L5: connecting again as the same account keeps the accepted listing, so a changed one asks for review", async () => {
+    const gh = await fake("github");
+    gh.valid.add(GH_TOKEN);
+    const { s } = service({ github: gh });
+    await s.token("github", GH_TOKEN);
+    const accepted = s.store.pin("github")!;
+    await s.disconnect("github");
+    expect(s.store.pin("github")).toBeUndefined();
+    // The listing changes while disconnected; Connect again as octo-person.
+    gh.serve.full = listing("github").full.map((t) => (t.name === "issue_write" ? { ...t, description: "now also closes the repository" } : t));
+    const info = await s.token("github", GH_TOKEN);
+    expect(s.store.pin("github")).toBe(accepted);
+    expect(info.note).toBe(CONN_NOTES.drift);
+    const [r] = await s.remotes();
+    expect(r!.pin).toBeUndefined();
+    // Looked at and accepted: the new listing is the pin.
+    await s.test("github");
+    s.repin("github");
+    expect(s.store.pin("github")).not.toBe(accepted);
   });
 });

@@ -29,17 +29,36 @@ export interface Upstream {
   close(): Promise<void>;
 }
 
+/**
+ * Every page of a server's tools (at most 20 pages, 500 tools). One function for sessions and for Test, so a vendor
+ * that pages its listing hashes the same in both (L1).
+ */
+export async function listAllTools(c: Client): Promise<Tool[]> {
+  const all: Tool[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < 20; page++) {
+    const r = await c.listTools(cursor ? { cursor } : {}, { timeout: LIST_TIMEOUT });
+    all.push(...r.tools);
+    if (!r.nextCursor) break;
+    cursor = r.nextCursor;
+  }
+  return all.slice(0, 500);
+}
+
+/** A client for a server: one that may offer MCP App views is told Landlens shows them; a connection's isn't (M3). */
+const newClient = (views: boolean) => new Client(CLIENT_INFO, { capabilities: (views ? CAPABILITIES : {}) as never });
+
 abstract class ClientUpstream implements Upstream {
   private client: Promise<Client> | undefined;
   private listed: Promise<Tool[]> | undefined;
-  constructor(readonly name: string) {}
+  constructor(readonly name: string, private readonly views = true) {}
 
   /** Connect a fresh client to this server. */
   abstract connect(client: Client): Promise<void>;
 
   private get conn(): Promise<Client> {
     this.client ??= (async () => {
-      const c = new Client(CLIENT_INFO, { capabilities: CAPABILITIES as never });
+      const c = newClient(this.views);
       await this.connect(c);
       return c;
     })();
@@ -49,18 +68,7 @@ abstract class ClientUpstream implements Upstream {
   }
 
   tools(): Promise<Tool[]> {
-    this.listed ??= (async () => {
-      const c = await this.conn;
-      const all: Tool[] = [];
-      let cursor: string | undefined;
-      for (let page = 0; page < 20; page++) {
-        const r = await c.listTools(cursor ? { cursor } : {}, { timeout: LIST_TIMEOUT });
-        all.push(...r.tools);
-        if (!r.nextCursor) break;
-        cursor = r.nextCursor;
-      }
-      return all.slice(0, 500);
-    })();
+    this.listed ??= (async () => listAllTools(await this.conn))();
     this.listed.catch(() => { this.listed = undefined; });
     return this.listed;
   }
@@ -113,6 +121,15 @@ export type RemoteSpec = {
   provider?: ProviderRules;
   /** When set, the only origins any request for this server may go to (a connection's token origins). */
   origins?: string[];
+  /** A connection's server: Landlens doesn't offer it MCP App views (M3). Implied by `provider`. */
+  noViews?: boolean;
+  /**
+   * A connection at Ask for writes: its read-only endpoint. The reads of the session go there, so a tool the full
+   * server serves under a read's name can't write unasked (M1).
+   */
+  readUrl?: string;
+  /** The read-only endpoint's half of the accepted listing; its reads run without asking only while it holds. */
+  readPin?: string;
 };
 
 /** fetch, refusing redirects (a redirect would carry the header elsewhere). */
@@ -137,7 +154,7 @@ function pinnedTo(origins: string[]): typeof fetch {
 /** A remote MCP server over streamable HTTP. */
 export class RemoteUpstream extends ClientUpstream {
   constructor(private readonly spec: RemoteSpec) {
-    super(spec.name);
+    super(spec.name, !(spec.noViews || spec.provider));
   }
   async connect(client: Client) {
     const transport = new StreamableHTTPClientTransport(new URL(this.spec.url), {
@@ -156,7 +173,7 @@ export async function testRemote(spec: RemoteSpec): Promise<{ ok: boolean; steps
   const up = new RemoteUpstream(spec);
   let server: string | undefined;
   try {
-    const client = new Client(CLIENT_INFO, { capabilities: CAPABILITIES as never });
+    const client = newClient(!(spec.noViews || spec.provider));
     const started = Date.now();
     try {
       await up.connect(client);
@@ -170,10 +187,10 @@ export async function testRemote(spec: RemoteSpec): Promise<{ ok: boolean; steps
       return { ok: false, steps };
     }
     try {
-      const r = await client.listTools({}, { timeout: LIST_TIMEOUT });
-      const ro = r.tools.filter((t) => t.annotations?.readOnlyHint === true).length;
-      steps.push({ name: "tools/list", ok: true, detail: `${r.tools.length} tools, ${ro} read-only` });
-      return { ok: true, steps, tools: r.tools, ...(server ? { server } : {}) };
+      const tools = await listAllTools(client);
+      const ro = tools.filter((t) => t.annotations?.readOnlyHint === true).length;
+      steps.push({ name: "tools/list", ok: true, detail: `${tools.length} tools, ${ro} read-only` });
+      return { ok: true, steps, tools, ...(server ? { server } : {}) };
     } catch (err) {
       steps.push({ name: "tools/list", ok: false, detail: describeError(err) });
       return { ok: false, steps };

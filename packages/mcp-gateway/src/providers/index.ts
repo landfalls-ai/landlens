@@ -34,23 +34,67 @@ function canonical(v: unknown): string {
 }
 
 /**
- * D78: the tools of `full` that the vendor's read-only endpoint lists too, with an equal input schema. A tool's own
- * readOnlyHint plays no part; a tool whose schema differs between the two listings is a write; with no read-only
- * listing (it didn't answer) nothing is a read, so every tool asks.
+ * Words that name a write. A tool whose name has one never counts as a read, whatever the read-only listing says: a
+ * floor under D78, in case a vendor's read-only endpoint isn't what its docs say (H1).
  */
-export function readTools(full: Pick<Tool, "name" | "inputSchema">[], readonly: Pick<Tool, "name" | "inputSchema">[]): Set<string> {
-  const ro = new Map(readonly.map((t) => [t.name, canonical(t.inputSchema)]));
-  return new Set(full.filter((t) => ro.get(t.name) === canonical(t.inputSchema)).map((t) => t.name));
+const WRITE_WORDS = new Set([
+  "create", "update", "delete", "write", "merge", "close", "comment", "add", "remove", "assign", "push", "edit", "set", "send",
+  "post", "put", "patch", "trigger", "run", "rerun", "cancel", "dispatch", "fork", "submit", "approve", "transfer", "archive",
+  "upload", "dismiss", "revoke", "invite", "publish", "rename", "move", "star", "unstar", "lock", "unlock", "reopen", "mark",
+  "resolve", "enable", "disable", "sync", "save", "upsert", "insert", "import", "reply", "react",
+]);
+
+/** The words of a tool's name: snake_case, kebab-case, dotted and camelCase all split. */
+const words = (name: string) => name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+export const namesAWrite = (name: string) => words(name).some((w) => WRITE_WORDS.has(w));
+
+/**
+ * Whether the read-only listing is a different, smaller server: every tool it lists is in the full listing, and the
+ * full listing has more (H1). An endpoint that doesn't exist and answers with the full server, or one that lists a
+ * tool the full one doesn't, isn't.
+ */
+export function readonlyIsSmaller(full: Pick<Tool, "name">[], readonly: Pick<Tool, "name">[]): boolean {
+  if (!readonly.length) return false;
+  const names = new Set(full.map((t) => t.name));
+  const ro = new Set(readonly.map((t) => t.name));
+  return [...ro].every((n) => names.has(n)) && ro.size < names.size;
 }
 
 /**
- * A provider tool as the model is offered it: no output schema, because the gateway hands the model text only (a
- * client that sees an output schema expects structured content beside the text).
+ * D78: the tools of `full` that the vendor's read-only endpoint lists too, with an equal input schema. A tool's own
+ * readOnlyHint plays no part; a tool whose schema differs between the two listings is a write; a tool whose name says
+ * it writes is a write; with no read-only listing (it didn't answer), or one that isn't a strict subset of the full
+ * one, nothing is a read, so every tool asks.
+ */
+export function readTools(full: Pick<Tool, "name" | "inputSchema">[], readonly: Pick<Tool, "name" | "inputSchema">[]): Set<string> {
+  if (!readonlyIsSmaller(full, readonly)) return new Set();
+  const ro = new Map(readonly.map((t) => [t.name, canonical(t.inputSchema)]));
+  return new Set(full.filter((t) => ro.get(t.name) === canonical(t.inputSchema) && !namesAWrite(t.name)).map((t) => t.name));
+}
+
+/** The most of a provider tool's description and title the model is offered (L2). */
+export const PROVIDER_DESCRIPTION_MAX = 2_000;
+export const PROVIDER_TITLE_MAX = 200;
+
+/**
+ * A provider tool as the model is offered it (and as the gateway treats it): no output schema, because the gateway
+ * hands the model text only; no MCP Apps metadata, because a connection's tools get no views (M3); and its title and
+ * description capped (L2).
  */
 export function providerTool(t: Tool): Tool {
-  if (!t.outputSchema) return t;
-  const { outputSchema: _drop, ...rest } = t;
-  return rest as Tool;
+  const { outputSchema: _drop, _meta, title, description, annotations, ...rest } = t;
+  const meta = _meta ? Object.fromEntries(Object.entries(_meta).filter(([k]) => k !== "ui" && k !== "ui/resourceUri")) : undefined;
+  const cap = (v: unknown, n: number) => (typeof v === "string" ? (v.length > n ? `${v.slice(0, n)}…` : v) : undefined);
+  const capped = cap(title, PROVIDER_TITLE_MAX);
+  const desc = cap(description, PROVIDER_DESCRIPTION_MAX);
+  const atitle = cap(annotations?.title, PROVIDER_TITLE_MAX);
+  return {
+    ...rest,
+    ...(capped !== undefined ? { title: capped } : {}),
+    ...(desc !== undefined ? { description: desc } : {}),
+    ...(annotations ? { annotations: { ...annotations, ...(atitle !== undefined ? { title: atitle } : {}) } } : {}),
+    ...(meta && Object.keys(meta).length ? { _meta: meta } : {}),
+  } as Tool;
 }
 
 /**

@@ -56,7 +56,18 @@ export function listingHash(tools: Pick<Tool, "name" | "title" | "description" |
  * A server in a session: its listing now, the listing you allowed its read-only tools for, if you did, and for a
  * connection's server, its rules.
  */
-export type ListedServer = { name: string; tools: Tool[]; pin?: string; provider?: ProviderRules };
+export type ListedServer = {
+  name: string; tools: Tool[]; pin?: string; provider?: ProviderRules;
+  /** A connection's read-only endpoint at Ask for writes: its listing now (undefined: it didn't answer), and its pin. */
+  readListing?: Tool[]; readPin?: string;
+};
+
+/** Whether a server's listing (and, for a connection with a read-only endpoint, that one's too) is the pinned one. */
+function holds(s: ListedServer): boolean {
+  if (!s.pin || listingHash(s.tools) !== s.pin) return false;
+  if (s.readPin !== undefined && (!s.readListing || listingHash(s.readListing) !== s.readPin)) return false;
+  return true;
+}
 
 /** Whether a tool only reads: by the vendor's read-only listing for a connection's server, else by its own word. */
 export const readsOnly = (t: Pick<Tool, "name" | "annotations">, provider?: ProviderRules) => (provider ? provider.readTools.has(t.name) : isReadOnly(t));
@@ -70,7 +81,7 @@ export const readsOnly = (t: Pick<Tool, "name" | "annotations">, provider?: Prov
 export function preAllowed(servers: ListedServer[]): string[] {
   const allow = [`mcp__${BUILTIN_MCP_SERVER}`];
   for (const s of servers) {
-    if (s.name === BUILTIN_MCP_SERVER || !s.pin || listingHash(s.tools) !== s.pin) continue;
+    if (s.name === BUILTIN_MCP_SERVER || !holds(s)) continue;
     if (s.provider && !s.provider.readsAuto) continue;
     for (const t of s.tools) if (readsOnly(t, s.provider) && modelMayCall(t) && RULE_TOOL.test(t.name)) allow.push(`mcp__${s.name}__${t.name}`);
   }
@@ -79,7 +90,10 @@ export function preAllowed(servers: ListedServer[]): string[] {
 
 /** The servers whose listing no longer matches the one you pinned. */
 export function drifted(servers: ListedServer[]): string[] {
-  return servers.filter((s) => s.name !== BUILTIN_MCP_SERVER && s.pin && listingHash(s.tools) !== s.pin).map((s) => s.name);
+  // A read-only endpoint that didn't answer isn't a change (its reads just ask); one that answered differently is.
+  return servers
+    .filter((s) => s.name !== BUILTIN_MCP_SERVER && s.pin && (listingHash(s.tools) !== s.pin || (s.readPin !== undefined && s.readListing && listingHash(s.readListing) !== s.readPin)))
+    .map((s) => s.name);
 }
 
 /** A tool as the MCP page shows it; for a connection's server, readOnly is the vendor's read-only listing's answer. */

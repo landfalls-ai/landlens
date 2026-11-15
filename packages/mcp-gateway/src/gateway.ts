@@ -61,6 +61,8 @@ export class GatewaySession {
   acpSession: string | undefined;
   closed = false;
   readonly upstreams = new Map<string, Upstream>();
+  /** A connection's read-only endpoint, where its reads go at Ask for writes (M1). */
+  readonly readUpstreams = new Map<string, Upstream>();
   /** Permission rules Claude Code gets: what runs without asking. */
   allow: string[] = [];
   /** Your yes in the dock to one tool call (its ACP toolCallId → `mcp__<server>__<tool>`, if known). */
@@ -70,7 +72,10 @@ export class GatewaySession {
 
   constructor(readonly gateway: McpGateway, readonly token: string, readonly init: SessionInit) {
     this.upstreams.set(BUILTIN_MCP_SERVER, new BuiltinUpstream(BUILTIN_MCP_SERVER, init.cluster));
-    for (const r of init.remotes) this.upstreams.set(r.name, new RemoteUpstream(r));
+    for (const r of init.remotes) {
+      this.upstreams.set(r.name, new RemoteUpstream(r));
+      if (r.provider && r.readUrl && r.readUrl !== r.url) this.readUpstreams.set(r.name, new RemoteUpstream({ ...r, url: r.readUrl }));
+    }
     if (init.origin === "you") this.acpSession = "console";
   }
 
@@ -121,6 +126,29 @@ export class GatewaySession {
     return false;
   }
 
+  /** A server's rules and every yes for its tools leave the session: they run only after a new yes. */
+  private forgetRules(server: string) {
+    const prefix = `mcp__${server}__`;
+    this.allow = this.allow.filter((a) => !a.startsWith(prefix));
+    for (const a of [...this.always]) if (a.startsWith(prefix)) this.always.delete(a);
+    for (const [id, named] of [...this.once]) if (named === undefined || named.startsWith(prefix)) this.once.delete(id);
+  }
+
+  /**
+   * A connection changed under an open session (M2). `drop`: it was disconnected, taken from sessions or set to
+   * Read only, so its server leaves the session (a call to it is refused). `reads`: its reads stop running without
+   * asking. Either way every standing yes for its tools goes.
+   */
+  restrict(server: string, what: "drop" | "reads") {
+    this.forgetRules(server);
+    if (what !== "drop") return;
+    for (const m of [this.upstreams, this.readUpstreams]) {
+      const u = m.get(server);
+      m.delete(server);
+      void u?.close().catch(() => {});
+    }
+  }
+
   /** Call a tool as an app's view or as you; the agent's calls come in over HTTP. */
   call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you", onCall?: (id: string) => void): Promise<CallToolResult> {
     return this.gateway.run(this, server, tool, args, origin, onCall ? { onCall } : {});
@@ -130,7 +158,7 @@ export class GatewaySession {
     if (this.closed) return;
     this.closed = true;
     this.gateway.drop(this);
-    await Promise.all([...this.upstreams.values()].map((u) => u.close()));
+    await Promise.all([...this.upstreams.values(), ...this.readUpstreams.values()].map((u) => u.close()));
   }
 }
 
@@ -199,6 +227,17 @@ export class McpGateway {
       }
     }));
     const answered = listed.filter((l): l is ListedServer => !!l);
+    // A connection's read-only endpoint is pinned too: its reads run without asking only while both halves hold.
+    for (const l of answered) {
+      const ro = session.readUpstreams.get(l.name);
+      const spec = init.remotes.find((r) => r.name === l.name);
+      if (!ro || !spec) continue;
+      l.readPin = spec.readPin;
+      l.readListing = await this.listTools(ro, false).catch((err) => {
+        this.opts.log?.(`[mcp] ${init.label}: ${l.name}'s read-only endpoint didn't list its tools: ${rawError(err)}`);
+        return undefined;
+      });
+    }
     session.allow = preAllowed(answered);
     for (const name of drifted(answered)) {
       this.opts.log?.(`[mcp] ${init.label}: ${name}'s tools changed since you allowed its read-only tools; they ask again`);
@@ -246,10 +285,23 @@ export class McpGateway {
     s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, p.always);
   }
 
-  async listTools(u: Upstream): Promise<Tool[]> {
+  async listTools(u: Upstream, keep = true): Promise<Tool[]> {
     const tools = await u.tools();
-    for (const t of tools) this.toolsOf.set(`${u.name}\0${t.name}`, t);
+    if (keep) for (const t of tools) this.toolsOf.set(`${u.name}\0${t.name}`, t);
     return tools;
+  }
+
+  /**
+   * A connection changed (M2): in every open session that has it, its server leaves (`drop`) or its reads stop
+   * running without asking (`reads`).
+   */
+  restrictProvider(provider: string, decide: (spec: RemoteSpec) => "drop" | "reads" | undefined) {
+    for (const s of this.sessions.values()) {
+      const spec = s.init.remotes.find((r) => r.provider?.id === provider);
+      if (!spec || !s.upstreams.has(spec.name)) continue;
+      const what = decide(spec);
+      if (what) s.restrict(spec.name, what);
+    }
   }
 
   /** A tool as last listed (for the MCP page and app views). */
@@ -282,8 +334,10 @@ export class McpGateway {
       return { content: [{ type: "text", text: `Landlens: ${server} didn't answer: ${describeError(err)}` }], isError: true };
     }
     if (!t) return refuse(`${server} has no tool named ${tool}.`);
-    // A connection's server: reads are what its vendor's read-only listing says, not what a tool says of itself.
+    // A connection's server: reads are what its vendor's read-only listing says, not what a tool says of itself. Its
+    // tools get no views (M3): their MCP Apps metadata is set aside, and views can't call them.
     const provider = s.init.remotes.find((r) => r.name === server)?.provider;
+    if (provider) t = providerTool(t);
     const readOnly = readsOnly(t, provider);
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
@@ -293,7 +347,7 @@ export class McpGateway {
       }
       this.pairing.call({ id, session: s.id, server, tool, args, ...(toolUseId ? { toolUseId } : {}) });
     } else if (origin === "app") {
-      if (!appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
+      if (provider || !appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
       if (!readOnly) {
         const yes = this.opts.approve ? await this.opts.approve({ label: s.label, server, tool, args, origin }).catch(() => false) : false;
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
@@ -303,8 +357,15 @@ export class McpGateway {
     }
 
     const app = toolUi(t).resourceUri;
+    // A connection's read goes to its read-only endpoint when the session has one (M1): the full server can't be
+    // asked under a read's name. The read-only endpoint must list the tool.
+    const ro = provider && readOnly ? s.readUpstreams.get(server) : undefined;
+    if (ro) {
+      const listed = await this.listTools(ro, false).catch(() => [] as Tool[]);
+      if (!listed.some((x) => x.name === tool)) return refuse(`${server}'s read-only endpoint has no tool named ${tool}.`);
+    }
     try {
-      const result = await up.call(tool, args, server === BUILTIN_MCP_SERVER ? { [CALL_META]: id } : undefined);
+      const result = await (ro ?? up).call(tool, args, server === BUILTIN_MCP_SERVER ? { [CALL_META]: id } : undefined);
       const status = result.isError ? "error" : "ok";
       if (app && !result.isError) {
         const url = s.init.remotes.find((r) => r.name === server)?.url;
@@ -401,8 +462,8 @@ export class McpGateway {
     mcp.setRequestHandler(ListToolsRequestSchema, async () => {
       try {
         const provider = session.init.remotes.find((r) => r.name === name)?.provider;
-        const tools = (await this.listTools(up)).filter(modelMayCall);
-        return { tools: provider ? tools.map(providerTool) : tools };
+        const tools = await this.listTools(up);
+        return { tools: provider ? tools.map(providerTool) : tools.filter(modelMayCall) };
       } catch (err) {
         this.opts.log?.(`[mcp] ${session.label}: ${name} didn't list its tools: ${rawError(err)}`);
         return { tools: [] };

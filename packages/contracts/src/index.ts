@@ -267,6 +267,7 @@ export const CONN_NOTES = {
   linearReadScope: "Linear was connected for reading only. Connect again to let Claude ask for writes.",
   drift: "The tools changed since you accepted them. Look at them, then accept.",
   unaccepted: "Look at its tools, then accept them, so its reads can run without asking.",
+  readonlyUnproven: "Its read-only endpoint didn't list fewer tools than the full one, so no tool counts as a read and Read only isn't served.",
   githubNameTaken: "Rename your server named github first.",
   linearNameTaken: "Rename your server named linear first.",
 } as const;

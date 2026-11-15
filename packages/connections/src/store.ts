@@ -5,7 +5,7 @@
 //
 // A file that doesn't parse, or an entry that isn't what this store writes, is moved aside (connections.json.damaged-…)
 // and never written over, so one bad byte can't lose the other provider's sign-in or its accepted listing.
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { CONN_NOTES, ConnMode, type ConnAccount, type ConnInfo, type ConnMethod, type McpToolInfo } from "@landlens/contracts";
 import { z } from "zod";
@@ -34,6 +34,15 @@ type Entry = {
   scopes?: string[];
   /** listingHash(full) + "." + listingHash(readonly), accepted by the person (D80). */
   pin?: string;
+  /**
+   * HMAC-SHA256 of the provider and the pin under `seal`'s key (L4): a pin written into the file by anything but this
+   * store doesn't count, so editing the file can't silence a drift.
+   */
+  pinMac?: string;
+  /** base64 of safeStorage's ciphertext of a random key for pinMac and keptMac. */
+  seal?: string;
+  /** The last accepted listing and who it was accepted for, kept across Disconnect (L5). */
+  kept?: { login: string; pin: string; mac: string };
   tools?: { read: number; write: number };
   /** The last listing's tools as the pages show them (names, descriptions, read or write), in clear. */
   list?: McpToolInfo[];
@@ -58,14 +67,39 @@ const ENTRY = z.object({
   account: z.object({ login: line, name: line.optional(), org: line.optional() }).optional(),
   scopes: z.array(line).optional(),
   pin: z.string().regex(/^[0-9a-f]{64}\.[0-9a-f]{64}$/).optional(),
+  pinMac: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  seal: z.string().max(4096).optional(),
+  kept: z.object({ login: line, pin: z.string().regex(/^[0-9a-f]{64}\.[0-9a-f]{64}$/), mac: z.string().regex(/^[0-9a-f]{64}$/) }).optional(),
   tools: z.object({ read: z.number().int().min(0), write: z.number().int().min(0) }).optional(),
-  list: z.array(z.object({ name: z.string(), readOnly: z.boolean() }).passthrough()).optional(),
+  // Items are checked one by one when read (TOOL below): one odd item is dropped, not the whole file.
+  list: z.array(z.unknown()).max(500).optional(),
   access: z.string().max(65_536).optional(),
   refresh: z.string().max(65_536).optional(),
   client: z.string().max(65_536).optional(),
   expiresAt: z.number().optional(),
   expired: z.boolean().optional(),
 }).strict();
+
+/** A stored tool as the pages show it (L4): every field checked, so a damaged list can't break a page. */
+const TOOL = z.object({
+  name: z.string().min(1).max(200),
+  title: z.string().max(200).optional(),
+  description: z.string().max(600).optional(),
+  readOnly: z.boolean(),
+  app: z.string().max(400).optional(),
+  visibility: z.array(z.enum(["model", "app"])).max(2),
+  required: z.array(z.string().max(200)).max(200),
+  routine: z.boolean().optional(),
+}).strip();
+
+/** A tool kept for the pages: its fields checked and cut, or undefined. */
+export function cleanTool(t: unknown): McpToolInfo | undefined {
+  const o = (t && typeof t === "object" ? { ...(t as Record<string, unknown>) } : {}) as Record<string, unknown>;
+  if (typeof o.title === "string") o.title = o.title.slice(0, 200);
+  if (typeof o.description === "string") o.description = o.description.slice(0, 600);
+  const r = TOOL.safeParse(o);
+  return r.success ? (r.data as McpToolInfo) : undefined;
+}
 
 const DEFAULTS: Pick<Entry, "mode" | "readsAuto" | "give"> = { mode: "ask", readsAuto: true, give: true };
 
@@ -200,7 +234,10 @@ export class ConnectionStore {
     const refresh = c.refresh ? this.enc(c.refresh) : undefined;
     const client = c.client ? this.enc(JSON.stringify(c.client)) : undefined;
     this.update(p, (e) => {
-      for (const k of ["account", "scopes", "pin", "tools", "list", "refresh", "client", "expiresAt", "expired"] as const) delete e[k];
+      // The accepted listing outlives a new sign-in as the same account (L5): it is kept, so a listing that changed
+      // in between shows as changed rather than being accepted unseen. Another account starts unaccepted.
+      const before = e.pin && e.account && this.pinHolds(p, e) ? { login: e.account.login, pin: e.pin } : this.keptOf(p, e);
+      for (const k of ["account", "scopes", "pin", "pinMac", "kept", "tools", "list", "refresh", "client", "expiresAt", "expired"] as const) delete e[k];
       e.method = c.method;
       e.access = access;
       if (refresh) e.refresh = refresh;
@@ -209,7 +246,42 @@ export class ConnectionStore {
       const account = c.account ? cleanAccount(c.account) : undefined;
       if (account) e.account = account;
       if (c.scopes) e.scopes = cleanScopes(c.scopes.join(" "));
+      if (before && account && before.login === account.login) this.sealPin(p, e, before.pin);
     });
+  }
+
+  /** The key the pin's MAC is made with, made once per provider and kept encrypted. */
+  private key(e: Entry, make: boolean): Buffer | undefined {
+    const k = this.dec(e.seal);
+    if (k && /^[0-9a-f]{64}$/.test(k)) return Buffer.from(k, "hex");
+    if (!make) return undefined;
+    const fresh = randomBytes(32);
+    e.seal = this.enc(fresh.toString("hex"));
+    return fresh;
+  }
+
+  private mac(p: Provider, key: Buffer, what: string): string {
+    return createHmac("sha256", key).update(`${p}\0${what}`).digest("hex");
+  }
+
+  private sealPin(p: Provider, e: Entry, pin: string) {
+    const key = this.key(e, true)!;
+    e.pin = pin;
+    e.pinMac = this.mac(p, key, `pin\0${pin}`);
+  }
+
+  private pinHolds(p: Provider, e: Entry): boolean {
+    const key = e.pin && e.pinMac ? this.key(e, false) : undefined;
+    if (!key || !e.pin || !e.pinMac) return false;
+    const want = Buffer.from(this.mac(p, key, `pin\0${e.pin}`), "hex");
+    return timingSafeEqual(want, Buffer.from(e.pinMac, "hex"));
+  }
+
+  private keptOf(p: Provider, e: Entry): { login: string; pin: string } | undefined {
+    const key = e.kept ? this.key(e, false) : undefined;
+    if (!key || !e.kept) return undefined;
+    const want = Buffer.from(this.mac(p, key, `kept\0${e.kept.login}\0${e.kept.pin}`), "hex");
+    return timingSafeEqual(want, Buffer.from(e.kept.mac, "hex")) ? { login: e.kept.login, pin: e.kept.pin } : undefined;
   }
 
   /** Main only: the provider's tokens and client, decrypted. Undefined if none is stored or it doesn't decrypt. */
@@ -263,7 +335,7 @@ export class ConnectionStore {
   setListing(p: Provider, list: McpToolInfo[], tools: { read: number; write: number }) {
     this.update(p, (e) => {
       if (!e.access) return;
-      e.list = list.slice(0, 500);
+      e.list = list.slice(0, 500).flatMap((t) => cleanTool(t) ?? []);
       e.tools = tools;
     });
   }
@@ -271,27 +343,40 @@ export class ConnectionStore {
   /** The last listing's tools, if any. */
   list(p: Provider): McpToolInfo[] | undefined {
     const e = this.read()[p];
-    return e?.access ? e.list : undefined;
+    return e?.access && e.list ? e.list.flatMap((t) => cleanTool(t) ?? []) : undefined;
   }
 
   /** The listing the person accepted, and its counts. */
   setPin(p: Provider, pin: string, tools: { read: number; write: number }) {
     this.update(p, (e) => {
       if (!e.access) return;
-      e.pin = pin;
+      this.sealPin(p, e, pin);
       e.tools = tools;
     });
   }
 
+  /** The accepted listing, if this store wrote it (its MAC holds); a pin edited into the file counts as none (L4). */
   pin(p: Provider): string | undefined {
-    return this.read()[p]?.pin;
+    const e = this.read()[p];
+    return e && this.pinHolds(p, e) ? e.pin : undefined;
   }
 
-  /** Forget the sign-in: tokens, client, account, scopes and pin. The level and switches stay. */
+  /**
+   * Forget the sign-in: tokens, client, account, scopes and pin. The level and switches stay, and so does the accepted
+   * listing with the account it was accepted for, sealed (L5): connecting again as that account keeps it.
+   */
   remove(p: Provider) {
     const all = this.read();
-    if (!all[p]) return;
-    all[p] = { mode: all[p]!.mode ?? DEFAULTS.mode, readsAuto: all[p]!.readsAuto ?? DEFAULTS.readsAuto, give: all[p]!.give ?? DEFAULTS.give };
+    const e = all[p];
+    if (!e) return;
+    const keep = e.pin && e.account && this.pinHolds(p, e) ? { login: e.account.login, pin: e.pin } : this.keptOf(p, e);
+    const next: Entry = { mode: e.mode ?? DEFAULTS.mode, readsAuto: e.readsAuto ?? DEFAULTS.readsAuto, give: e.give ?? DEFAULTS.give };
+    const key = keep ? this.key(e, false) : undefined;
+    if (keep && key && e.seal) {
+      next.seal = e.seal;
+      next.kept = { ...keep, mac: this.mac(p, key, `kept\0${keep.login}\0${keep.pin}`) };
+    }
+    all[p] = next;
     this.write(all);
   }
 }

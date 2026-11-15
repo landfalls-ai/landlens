@@ -1,6 +1,6 @@
 // MCP in main (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers you added, the call
 // log the MCP page and the dock read, Preview (you running a read-only tool from the MCP page), and MCP App views.
-import { BUILTIN_MCP_SERVER, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, CONN_NOTES, type ConnInfo, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
 import { BuiltinUpstream, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
@@ -76,7 +76,9 @@ export class McpService {
         const remotes = await this.remotesFor(context);
         const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes });
         const providers = remotes.flatMap((r) => (r.provider ? [PROVIDER_LABEL[r.provider.id]] : []));
-        return { servers: s.servers(), allow: s.allow, ...(providers.length ? { providers } : {}), bind: (id) => s.bind(id), close: () => s.close() };
+        // The standing rules say a connection's reads run without asking only when this session lets them (L3).
+        const readsFree = remotes.flatMap((r) => (r.provider && s.allow.some((a) => a.startsWith(`mcp__${r.name}__`)) ? [PROVIDER_LABEL[r.provider.id]] : []));
+        return { servers: s.servers(), allow: s.allow, ...(providers.length ? { providers, readsFree } : {}), bind: (id) => s.bind(id), close: () => s.close() };
       },
     };
   }
@@ -92,6 +94,22 @@ export class McpService {
       return [];
     }) ?? [];
     return [...mine, ...conns.filter((c) => !mine.some((m) => m.name === c.name))];
+  }
+
+  /**
+   * A connection changed (ConnectionsService's push), and open sessions follow at once (M2): one disconnected, taken
+   * from sessions, expired or set to Read only leaves every session that has it at Ask for writes; one whose reads
+   * stopped running without asking (the switch, or its tools changed) has its reads ask again. Every standing yes for
+   * its tools goes with it. Preview sessions are closed, to be opened again as the connection is now.
+   */
+  connectionChanged(info: ConnInfo) {
+    const served = info.state === "ready" && info.give;
+    const readsFree = info.readsAuto && info.note !== CONN_NOTES.drift;
+    this.gateway.restrictProvider(info.provider, (spec) => {
+      if (!served || (spec.provider?.mode === "ask" && info.mode === "read")) return "drop";
+      return readsFree ? undefined : "reads";
+    });
+    for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
   }
 
   /** The front door's audit trail, for the requests behind each landlens-kube call. */
