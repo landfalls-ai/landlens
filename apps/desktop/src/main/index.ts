@@ -94,6 +94,7 @@ async function start() {
   // (LANDLENS_GCP_ENDPOINT, with LANDLENS_GCLOUD for a fake gcloud) or the person set LANDLENS_GCP_REAL=1.
   const gcp = new GcpService({
     file: join(app.getPath("userData"), "gcp.json"),
+    gkeDir: join(app.getPath("userData"), "gke"),
     mode: gcpMode(process.env, app.isPackaged),
     findGcloud: async () => which("gcloud", await loginPath()),
     loginPath: () => loginPath(),
@@ -103,6 +104,8 @@ async function start() {
   mcp = new McpService({
     store: mcpStore,
     connections,
+    // landlens-gcp (D93): read-only Google Cloud tools for sessions, when you turned "Claude can read" on.
+    gcp: { reader: () => gcp.agentReader((context) => clusters.list().some((c) => c.context === context)) },
     clickland: settings,
     frontDoor,
     clusters,

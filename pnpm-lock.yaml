@@ -28,6 +28,9 @@ importers:
       '@landlens/gcp':
         specifier: workspace:*
         version: link:../../packages/gcp
+      '@landlens/gcp-mcp':
+        specifier: workspace:*
+        version: link:../../packages/gcp-mcp
       '@landlens/kube':
         specifier: workspace:*
         version: link:../../packages/kube
@@ -209,6 +212,37 @@ importers:
       '@landlens/kube':
         specifier: workspace:*
         version: link:../kube
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.12
+        version: 4.1.12(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
+
+  packages/gcp-mcp:
+    dependencies:
+      '@landlens/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@landlens/gcp':
+        specifier: workspace:*
+        version: link:../gcp
+      '@landlens/kube':
+        specifier: workspace:*
+        version: link:../kube
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.2
+        version: 1.32.2(zod@4.6.7)
       zod:
         specifier: 4.6.7
         version: 4.6.7

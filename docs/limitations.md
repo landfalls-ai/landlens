@@ -84,8 +84,16 @@ person's check reads them), and Ask Claude sends one problem at a time.
   you turn a connection autonomous for one session.
 - **Google Cloud is browse only, and only by project** ([gcp.md](gcp.md)): at most 20 chosen projects and 5,000
   resources each (the rest cut), no folders or organisations, no IAM policies or costs, no writes, one Google account
-  (gcloud's current one), and Landlens never runs `gcloud auth login` for you. GKE clusters in the catalog, Claude's
-  Google Cloud tools and Ask Claude from a resource are part 5. Nothing was tried against the real Google APIs.
+  (gcloud's current one), and Landlens never runs `gcloud auth login` for you. Nothing was tried against the real
+  Google APIs or a real GKE cluster.
+- **GKE clusters connect with gcloud's user token only** ([gcp.md](gcp.md#gke-clusters-in-the-catalog)): a cluster
+  that doesn't take Google sign-in for users, or whose private endpoint this machine can't reach, won't connect; the
+  catalog lists only clusters with an address, and a context your kubeconfig already names is yours, not Landlens's.
+  The list is read when the catalog is (Welcome, the switcher's menu), cached 60 s.
+- **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
+  no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
+  positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
+  clusters and sessions. The dock shows Claude's Markdown tables as plain lines.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
   asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones

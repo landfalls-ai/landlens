@@ -172,7 +172,7 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
 .cluster-menu { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; background: var(--bg-2); border-radius: 10px; box-shadow: var(--shadow-2); padding: 4px; display: grid; gap: 1px; animation: pop var(--dur-2) var(--ease); min-width: 216px; }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px); } }
 .cluster-menu .menu-label { font-size: 11.5px; color: var(--ink-3); font-weight: 500; padding: 6px 8px 4px; }
-.cluster-option { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--r-2); }
+.cluster-option { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--r-2); min-width: 0; }
 .cluster-option:hover, .cluster-option:focus-visible { background: var(--hover); box-shadow: none; }
 .cluster-option .cl-tile { width: 20px; height: 20px; border-radius: 5px; font-size: 9px; }
 .cluster-option span.name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

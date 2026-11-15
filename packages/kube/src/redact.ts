@@ -17,6 +17,10 @@ const PATTERNS: [RegExp, string][] = [
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, "<redacted github token>"],
   [/\blin_(?:api|oauth|refresh)_[A-Za-z0-9]{20,}/g, "<redacted linear key>"],
   [/\bya29\.[A-Za-z0-9._-]{20,}/g, "<redacted google token>"],
+  // Google's other shapes (review of wave 6 part 4, M2): API keys, OAuth refresh tokens, OAuth client secrets.
+  [/\bAIza[0-9A-Za-z_-]{35}/g, "<redacted google api key>"],
+  [/\b1\/\/[0-9A-Za-z_-]{40,}/g, "<redacted google refresh token>"],
+  [/\bGOCSPX-[0-9A-Za-z_-]{10,}/g, "<redacted google client secret>"],
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, "<redacted slack token>"],
   [/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g, "<redacted api key>"],
   [/\bglpat-[A-Za-z0-9_-]{20,}/g, "<redacted gitlab token>"],

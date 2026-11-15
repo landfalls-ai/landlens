@@ -2,12 +2,13 @@
 // sign-in. Three columns in the main pane (projects 240, types 260, resources), the drawer for one resource (Summary
 // and its own JSON), the chooser for projects, the card on the Connections page, and the page on its own from Welcome.
 // The page knows names and fields only: the token stays in main.
-import type { GcpProject, GcpResource, GcpStatus, GcpTypeCount, KubeObject } from "@landlens/contracts";
+import type { GcpProject, GcpResource, GcpStatus, GcpTypeCount, KubeContext, KubeObject } from "@landlens/contracts";
 import type { Tone } from "@landlens/kube/status";
 import {
   Archive, ArrowLeft, Boxes, Braces, Cloud, CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, Cpu, Database, ExternalLink, FolderTree, Globe, KeyRound,
-  Lock, MessagesSquare, Network, Package, RefreshCw, Rocket, Search, Server, Shapes, Table2, Users, X, type LucideIcon,
+  Lock, MessagesSquare, Network, Package, RefreshCw, Rocket, Search, Server, Shapes, Sparkles, SquareArrowOutUpRight, Table2, Users, X, type LucideIcon,
 } from "lucide-react";
+import type { AskContext } from "./quotes";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, useNow, type ApiError } from "./api";
 import { CodeEditor } from "./CodeEditor";
@@ -40,6 +41,17 @@ const serviceLabel = (s: string) => SERVICES[s]?.label ?? s;
 export const serviceIcon = (assetType: string): LucideIcon => SERVICES[serviceOf(assetType)]?.icon ?? Server;
 /** compute.googleapis.com/Instance → Instance. */
 export const shortType = (assetType: string) => assetType.split("/")[1] ?? assetType;
+/** What Ask Claude asks about a resource (D94). */
+export const GCP_QUESTION = "What is this Google Cloud resource for, and does anything about it look wrong? Say what you checked.";
+/** A GKE cluster's context, from its Cloud Asset name: //container.googleapis.com/projects/P/locations/L/clusters/N. */
+export function gkeContextOf(r: Pick<GcpResource, "name" | "assetType">): string | undefined {
+  if (r.assetType !== "container.googleapis.com/Cluster") return undefined;
+  const m = /^\/\/container\.googleapis\.com\/projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/(?:locations|zones)\/([a-z0-9-]{1,40})\/clusters\/([a-z][-a-z0-9]{0,39})$/.exec(r.name);
+  return m ? `gke_${m[1]}_${m[2]}_${m[3]}` : undefined;
+}
+/** The resource as the dock's context: the brief main built, quoted as data (quotes.ts). */
+export const gcpContext = (r: GcpResource, brief: string): AskContext => ({ kind: "gcp", label: `Google Cloud: ${resourceLabel(r)}`, text: brief });
+
 /** The resource's own name: its display name, else the last part of its full name. */
 export const resourceLabel = (r: GcpResource) => r.displayName || r.name.split("/").at(-1) || r.name;
 
@@ -481,11 +493,19 @@ export function GcpPage(props: {
 }
 
 /** One resource: Summary (the search fields, labels, parent) and JSON (its own, read when the drawer opens). */
-export function GcpDrawer(props: { pick: GcpPick; onClose: () => void }) {
+export function GcpDrawer(props: {
+  pick: GcpPick;
+  onClose: () => void;
+  /** Ask Claude (D94): with a cluster connected; without one the button says to connect one. */
+  onAsk?: (c: AskContext, question: string) => void;
+  /** Open a GKE cluster in Landlens (D91), when the catalog lists its context. */
+  onOpenCluster?: (context: string) => void;
+  gkeContexts?: ReadonlySet<string>;
+}) {
   const { project, resource: r } = props.pick;
   const now = useNow();
   const [tab, setTab] = useState<"summary" | "json">("summary");
-  const [d, setD] = useState<{ resource: GcpResource; json?: string; cut: boolean } | { error: string }>();
+  const [d, setD] = useState<{ resource: GcpResource; json?: string; cut: boolean; brief?: string } | { error: string }>();
   useEffect(() => {
     let live = true;
     setD(undefined);
@@ -493,6 +513,9 @@ export function GcpDrawer(props: { pick: GcpPick; onClose: () => void }) {
     return () => void (live = false);
   }, [project, r.name]);
   const cur = d && !("error" in d) ? d.resource : r;
+  const brief = d && !("error" in d) ? d.brief : undefined;
+  const ctx = gkeContextOf(cur);
+  const cluster = ctx && props.gkeContexts?.has(ctx) ? ctx : undefined;
   const tone = gcpTone(cur.state);
   const svc = serviceOf(cur.assetType);
   const created = Date.parse(cur.createTime ?? "");
@@ -506,7 +529,13 @@ export function GcpDrawer(props: { pick: GcpPick; onClose: () => void }) {
           <span className={`kind-tile sm${tone === "bad" || tone === "warn" ? ` ${tone}` : ""}`}><Ic icon={serviceIcon(cur.assetType)} size={15} /></span>
           <div className="eyebrow">Google Cloud<span className="sep"> / </span>{project}</div>
           <span className="grow" />
-          <button className="secondary sm" onClick={() => void copyText(cur.name)} title={cur.name}><Ic icon={Copy} size={13} />Copy name</button>
+          {cluster && props.onOpenCluster ? <button className="secondary sm" onClick={() => props.onOpenCluster!(cluster)} title={`Connect ${cluster}`}><Ic icon={SquareArrowOutUpRight} size={13} />Open in Landlens</button> : null}
+          <button className="icon-btn" onClick={() => void copyText(cur.name)} aria-label="Copy name" title={`Copy ${cur.name}`}><Ic icon={Copy} size={14} /></button>
+          {props.onAsk ? (
+            <button className="primary sm" disabled={!brief} onClick={() => brief && props.onAsk!(gcpContext(cur, brief), GCP_QUESTION)} title={brief ? "Ask Claude about this resource" : "Reading it…"}><Ic icon={Sparkles} size={13} />Ask Claude</button>
+          ) : (
+            <button className="secondary sm" disabled title="Connect a cluster to ask Claude"><Ic icon={Sparkles} size={13} />Connect a cluster to ask Claude</button>
+          )}
           <button className="icon-btn" onClick={props.onClose} aria-label="Close details" title="Close (Esc)"><Ic icon={X} size={15} /></button>
         </div>
         <h2 className="drawer-title">{resourceLabel(cur)}</h2>
@@ -574,9 +603,17 @@ export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => 
   const st = CARD_STATE[s.state];
   const [choosing, setChoosing] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
   const check = () => {
     setChecking(true);
     api.invoke("gcp:status", { fresh: true }).then(props.onStatus, () => undefined).finally(() => setChecking(false));
+  };
+  // Turning it on asks in a dialog from main (L6 of part 4's review): this page can't say yes for you.
+  const agentRead = () => {
+    setBusy(true);
+    setError(undefined);
+    api.invoke("gcp:agent-read", { on: !s.agentRead }).then(props.onStatus, (e: ApiError) => setError(e.message)).finally(() => setBusy(false));
   };
   return (
     <section className="panel conn-card gcp-card" aria-label="Google Cloud connection">
@@ -599,6 +636,18 @@ export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => 
               </div>
               <span className="dim small">Read-only: every resource of these projects, through Cloud Asset, as you. At most 20.</span>
             </div>
+            <div className="conn-row">
+              <label className="switch">
+                <input type="checkbox" role="switch" checked={s.agentRead} disabled={busy || (!s.agentRead && !s.projects.length)} onChange={agentRead} aria-label="Claude can read these projects" />
+                <span>Claude can read these projects</span>
+              </label>
+              <span className="dim small">
+                {s.agentRead
+                  ? "Claude's sessions have read-only Google Cloud tools for these projects, run in Landlens with your sign-in; what they read is scrubbed of secret values. Claude gets no Google token."
+                  : "Off: Claude's sessions have no Google Cloud tools. Turning it on asks you first."}
+              </span>
+              {error ? <span className="tone-bad small" role="alert">{error}</span> : null}
+            </div>
           </>
         ) : (
           <GcpNotice status={s} checking={checking} onCheck={check} onChoose={() => setChoosing(true)} />
@@ -610,7 +659,8 @@ export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => 
 }
 
 /** Google Cloud from Welcome, with no cluster connected: the page, its drawer, and the way back. */
-export function GcpStandalone(props: { onBack: () => void }) {
+export function GcpStandalone(props: { onBack: () => void; contexts?: KubeContext[]; onConnect?: (context: string) => void }) {
+  const gke = useMemo(() => new Set((props.contexts ?? []).filter((c) => c.source === "gke").map((c) => c.name)), [props.contexts]);
   const [nav, setNav] = useState<GcpNav>({});
   const [pick, setPick] = useState<GcpPick>();
   const [width, setWidth] = useState(window.innerWidth);
@@ -632,7 +682,7 @@ export function GcpStandalone(props: { onBack: () => void }) {
           </header>
           <GcpPage nav={nav} onNav={setNav} {...(pick ? { selected: pick.resource.name } : {})} onSelect={setPick} width={width} />
         </main>
-        {pick ? <GcpDrawer key={pick.resource.name} pick={pick} onClose={() => setPick(undefined)} /> : null}
+        {pick ? <GcpDrawer key={pick.resource.name} pick={pick} onClose={() => setPick(undefined)} gkeContexts={gke} {...(props.onConnect ? { onOpenCluster: props.onConnect } : {})} /> : null}
       </div>
     </div>
   );

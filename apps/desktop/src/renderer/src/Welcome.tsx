@@ -1,7 +1,7 @@
 // The first screen: your kubeconfig's contexts as one centred list. ↑/↓ move, Enter or the number connects.
 import type { KubeContext } from "@landlens/contracts";
 import { ArrowRight, Cable, CircleX, Cloud, FileText, ShieldCheck } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Ic } from "./icons";
 import { Mark } from "./Mark";
 import { clusterTile } from "./present";
@@ -9,6 +9,8 @@ import { clusterTile } from "./present";
 export function Welcome(props: {
   contexts?: KubeContext[];
   catalogError?: string;
+  /** Projects whose GKE clusters couldn't be listed, each with its sentence. */
+  gkeErrors?: { project: string; message: string }[];
   connecting?: string;
   error?: { context: string; message: string };
   onConnect: (c: string) => void;
@@ -17,8 +19,12 @@ export function Welcome(props: {
   /** Open Google Cloud, which needs no cluster either. */
   onGcp?: () => void;
 }) {
-  // The current context first: it has the focus, so Enter connects to it.
-  const list = props.contexts && [...props.contexts].sort((a, b) => Number(b.current) - Number(a.current));
+  // The current context first: it has the focus, so Enter connects to it. GKE clusters after yours (D91).
+  const list = props.contexts && [
+    ...props.contexts.filter((c) => c.source !== "gke").sort((a, b) => Number(b.current) - Number(a.current)),
+    ...props.contexts.filter((c) => c.source === "gke"),
+  ];
+  const own = list?.filter((c) => c.source !== "gke").length ?? 0;
   const cards = useRef<(HTMLButtonElement | null)[]>([]);
   const [focused, setFocused] = useState(false);
 
@@ -72,41 +78,48 @@ export function Welcome(props: {
         ) : (
           <div className="cards">
             {list.map((c, i) => {
-              const t = clusterTile(c.name);
+              const gke = c.source === "gke";
+              const short = gke ? (c.name.split("_").at(-1) ?? c.name) : c.name;
+              const t = clusterTile(short);
               const busy = props.connecting === c.name;
               const failed = props.error?.context === c.name;
               return (
+                <Fragment key={c.name}>
+                {gke && i === own ? <div className="cards-label" role="heading" aria-level={2}><Ic icon={Cloud} size={13} />Google Cloud<span className="dim">GKE clusters of the projects you chose</span></div> : null}
                 <button
-                  key={c.name}
                   ref={(el) => void (cards.current[i] = el)}
+                  title={gke ? c.name : undefined}
                   className={"card" + (props.connecting && !busy ? " dimmed" : "") + (failed ? " failed" : "")}
                   onClick={() => props.onConnect(c.name)}
                   disabled={!!props.connecting}
                   aria-busy={busy}
                 >
-                  <span className={`cl-tile lg ${t.g}`} aria-hidden="true">{t.initials}</span>
+                  <span className={`cl-tile lg ${t.g}${gke ? " gke" : ""}`} aria-hidden="true">{gke ? <Ic icon={Cloud} size={16} /> : t.initials}</span>
                   <span className="card-text">
-                    <span className="card-name">{c.name}{c.current ? <span className="pill">current</span> : null}</span>
+                    <span className="card-name">{short}{c.current ? <span className="pill">current</span> : null}{gke ? <span className="pill">GKE</span> : null}</span>
                     {busy ? <span className="card-server">Connecting…</span>
                       : failed ? <span className="card-error">{props.error!.message}</span>
+                      : gke ? <span className="mono card-server">{c.project} · {c.location}</span>
                       : <span className="mono card-server">{c.server}</span>}
                   </span>
                   {failed ? <span className="retry">Try again</span> : list.length > 1 && i < 9 ? <kbd aria-hidden="true">{i + 1}</kbd> : null}
                   {busy ? <span className="spinner" aria-hidden="true" /> : <Ic icon={failed ? CircleX : ArrowRight} size={15} className={failed ? "tone-bad" : "go"} />}
                 </button>
+                </Fragment>
               );
             })}
           </div>
         )}
         {list?.length ? (
           <div className="welcome-foot">
-            <span><Ic icon={FileText} size={13} />{list.length} context{list.length === 1 ? "" : "s"} in your kubeconfig</span>
+            <span><Ic icon={FileText} size={13} />{own} context{own === 1 ? "" : "s"} in your kubeconfig{list.length > own ? ` · ${list.length - own} GKE` : ""}</span>
             <span className="grow" />
             <span aria-hidden="true"><kbd>↑</kbd><kbd>↓</kbd> move</span>
             <span aria-hidden="true"><kbd>↵</kbd> connect</span>
           </div>
         ) : null}
         {props.catalogError && list?.length ? <p className="small tone-bad">{props.catalogError}</p> : null}
+        {props.gkeErrors?.length ? <p className="small dim">{props.gkeErrors.map((e) => `Google Cloud${e.project ? ` (${e.project})` : ""}: ${e.message}`).join(" ")}</p> : null}
         {props.onGcp || props.onConnections ? (
           <div className="welcome-links">
             {props.onGcp ? <button className="link-btn welcome-link" onClick={props.onGcp}><Ic icon={Cloud} size={13} />Google Cloud<span className="dim">every resource of your projects, read-only</span></button> : null}

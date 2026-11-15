@@ -48,6 +48,21 @@ describe("the session fence", () => {
     });
     expect(o.settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__clickland__list_services"]);
   });
+
+  it("allows landlens-gcp whole only by its exact rule, when the gateway gives it (wave 6, D93)", () => {
+    const base = { home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234, path: "/usr/bin" };
+    expect(sessionOptions({ ...base, mcpAllow: ["mcp__landlens-gcp"] }).settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);
+    const loose = sessionOptions({ ...base, mcpAllow: ["mcp__landlens-gcpx", "mcp__landlens-gcp__gcp_projects", "mcp__landlens-g*", "mcp__landlens"] });
+    expect(loose.settings.permissions.allow).toEqual(["mcp__landlens-kube"]);
+    expect(sessionOptions(base).settings.permissions.allow).toEqual(["mcp__landlens-kube"]);
+  });
+
+  it("keeps Landlens's data folder (the GKE kubeconfig is in it) out of the agent's reach: the home folder is denied", () => {
+    const o = sessionOptions({ home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 1, path: "/usr/bin" });
+    expect(o.sandbox.filesystem.denyRead).toContain("/Users/me");
+    expect(o.sandbox.filesystem.allowRead.some((p) => p.includes("Application Support"))).toBe(false);
+    expect(o.sandbox.filesystem.denyRead).toContain("/Users/me/.config/gcloud");
+  });
 });
 
 describe("the Claude Code process's environment", () => {

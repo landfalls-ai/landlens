@@ -221,7 +221,7 @@ describe.runIf(run)("Google Cloud against the fake", { timeout: 90_000 }, () => 
   it("keeps no Google credential: the token went only to the fake, and no file or answer holds it", async () => {
     expect(fake.requests.length).toBeGreaterThan(10);
     expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
-    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8"))).toEqual({ projects: ["demo-shop", "orbit-analytics", "archive-vault", "payments-core", "ml-sandbox-42"], agentRead: false });
+    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8"))).toEqual({ projects: ["demo-shop", "orbit-analytics", "archive-vault", "payments-core", "ml-sandbox-42"], agentRead: false, confirmed: [] });
     expect(statSync(join(userData, "gcp.json")).mode & 0o777).toBe(0o600);
     expect(allText(userData)).not.toContain(GCP_TOKEN);
     const answers = await page.evaluate(async () => {

@@ -141,10 +141,11 @@ function smallProject(P: string): Asset[] {
   ];
 }
 
+// The addresses are documentation ranges (RFC 5737): nothing real answers there, and no test connects to them.
 const CLUSTERS: Record<string, unknown[]> = {
   "demo-shop": [
-    { name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "34.68.201.17", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } },
-    { name: "shop-staging", location: "europe-west1-b", status: "RUNNING", currentMasterVersion: "1.32.9-gke.1051000", endpoint: "35.195.44.90", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } },
+    { name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "203.0.113.17", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } },
+    { name: "shop-staging", location: "europe-west1-b", status: "RUNNING", currentMasterVersion: "1.32.9-gke.1051000", endpoint: "198.51.100.90", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } },
     { name: "batch-jobs", location: "us-east1", status: "RECONCILING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "", controlPlaneEndpointsConfig: { dnsEndpointConfig: { endpoint: "gke-0a1b2c3d4e-batch.us-east1.gke.goog" } } },
   ],
 };
@@ -157,6 +158,8 @@ export class FakeGcp {
   slowMs = 0;
   /** Answer every request with a 307 to this address. */
   redirect?: string;
+  /** GKE clusters per project, in place of the built-in ones (the GKE e2e points one at OrbStack). */
+  readonly clusters = new Map<string, unknown[]>();
   /** Projects to a page in projects:search (paging). */
   projectsPageSize = 500;
   private readonly data = new Map<string, Asset[]>([
@@ -229,7 +232,7 @@ export class FakeGcp {
     if (gke) {
       const f = this.fail.get(gke[1]!);
       if (f && (!f.api || f.api === "container")) return this.failure(res, { api: "container", ...f });
-      return this.send(res, 200, { clusters: CLUSTERS[gke[1]!] ?? [] });
+      return this.send(res, 200, { clusters: this.clusters.get(gke[1]!) ?? CLUSTERS[gke[1]!] ?? [] });
     }
     this.send(res, 404, { error: { code: 404, status: "NOT_FOUND", message: "Not found" } });
   }

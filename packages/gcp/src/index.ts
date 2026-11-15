@@ -3,3 +3,4 @@ export * from "./auth.js";
 export * from "./client.js";
 export * from "./errors.js";
 export * from "./gke.js";
+export * from "./scrub.js";

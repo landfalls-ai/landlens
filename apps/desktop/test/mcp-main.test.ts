@@ -11,6 +11,7 @@ import { CSP_PROD } from "../src/main/csp";
 import { listingHash, readTools, testRemote, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import { FakeProvider, listing } from "../../../packages/connections/test/fake-provider";
 import { McpService } from "../src/main/mcp";
+import type { GcpReader } from "@landlens/gcp-mcp";
 import { DRIFT_NOTE, McpServerStore } from "../src/main/mcp-store";
 
 const SECRET = "Bearer k_live_abcdefghijklmnopqrstuvwxyz";
@@ -261,6 +262,50 @@ describe("McpService", () => {
       await s.close();
       (svc.gateway as unknown as { opts: { onDrift: (s: RemoteSpec) => void } }).opts.onDrift(conn);
       expect(drifted).toEqual(["github"]);
+    } finally {
+      await svc.stop();
+    }
+  });
+
+  it("gives sessions landlens-gcp, allowed whole, only while Claude may read Google Cloud; off leaves them at once (D93)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    let on = false;
+    const reader: GcpReader = {
+      projects: async () => [{ id: "demo-shop", name: "Demo Shop" }], types: async () => ({ types: [], total: 0, cut: false }),
+      resources: async () => ({ items: [], total: 0, cut: false }), resource: async () => { throw new Error("none"); },
+      clusters: async () => ({ clusters: [], errors: [] }), connected: () => false,
+    };
+    const svc = new McpService({
+      store: new McpServerStore(join(dir, "mcp-servers.json"), fake()),
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      gcp: { reader: async () => (on ? { reader, projects: ["demo-shop"] } : undefined) },
+    });
+    await svc.start();
+    try {
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const off = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(off.servers.map((x) => x.name)).toEqual(["landlens-kube"]);
+      expect(off.gcp).toBeUndefined();
+      await off.close();
+      expect((await svc.servers("orbstack")).servers.map((x) => x.name)).toEqual(["landlens-kube"]);
+      on = true;
+      const s = await svc.forSessions().open({ label: "agent 2 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(s.servers.map((x) => x.name)).toEqual(["landlens-kube", "landlens-gcp"]);
+      expect(s.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);
+      expect(s.gcp).toEqual(["demo-shop"]);
+      const page = (await svc.servers("orbstack")).servers.find((x) => x.name === "landlens-gcp")!;
+      expect(page).toMatchObject({ builtin: true, connection: "gcp", status: "ready" });
+      expect(page.tools!.every((t) => t.readOnly)).toBe(true);
+      const list = () => fetch(s.servers[1]!.url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: s.servers[1]!.headers[0]!.value }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect((await list()).status).toBe(200);
+      svc.gcpOff();
+      expect((await list()).status).toBe(404);
+      await s.close();
     } finally {
       await svc.stop();
     }

@@ -60,7 +60,7 @@ export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => voi
   // The tool lists come with the MCP page's servers: the connections' last listings, read from main's store.
   const loadTools = () => api.invoke("mcp:servers", props.context ? { context: props.context } : {}).then((s) => {
     const by: Partial<Record<ConnProvider, McpToolInfo[]>> = {};
-    for (const srv of s.servers as McpServerInfo[]) if (srv.connection && srv.tools) by[srv.connection] = srv.tools;
+    for (const srv of s.servers as McpServerInfo[]) if (srv.connection && srv.connection !== "gcp" && srv.tools) by[srv.connection] = srv.tools;
     setTools(by);
   }, () => {});
   const ghState = list?.github.state;

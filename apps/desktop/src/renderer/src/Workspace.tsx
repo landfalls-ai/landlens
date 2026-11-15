@@ -42,7 +42,7 @@ import { leaveEdit } from "./editGuard";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
-export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInfo; contexts?: KubeContext[]; onSwitch: (context: string) => void }) {
+export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster: ClusterInfo; contexts?: KubeContext[]; onSwitch: (context: string) => void; onCatalog?: () => void }) {
   const now = useNow();
   const [nav, setNav] = useState<NavItem[]>([]);
   const [navError, setNavError] = useState<string>();
@@ -287,6 +287,17 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     setPrompt({ id: Date.now(), text: PROBLEM_QUESTION });
   };
 
+  /**
+   * Ask Claude about a Google Cloud resource (D94): main's brief as quoted data, one resource at a time, and the
+   * question sent at once (or left in the box when a turn is running).
+   */
+  const askGcp = (ctx: AskContext, question: string) => {
+    setAskContext((cs) => [...cs.filter((c) => c.kind !== "gcp"), ctx]);
+    setDock(true);
+    setPrompt({ id: Date.now(), text: question });
+  };
+  const gkeContexts = useMemo(() => new Set((contexts ?? []).filter((c) => c.source === "gke").map((c) => c.name)), [contexts]);
+
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
   // the dock alone does, and the drawer floats over the table.
   const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && problemSel) || !!(gcpPage && gcpPick);
@@ -370,6 +381,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       <Sidebar
         cluster={cluster}
         contexts={contexts}
+        {...(onCatalog ? { onMenu: onCatalog } : {})}
         nodes={h?.nodes?.total}
         sections={sections}
         current={current}
@@ -563,7 +575,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       ) : null}
       {gcpPage && gcpPick ? (
         <Boundary what="this resource" resetKey={gcpPick.resource.name}>
-          <GcpDrawer key={gcpPick.resource.name} pick={gcpPick} onClose={() => setGcpPick(undefined)} />
+          <GcpDrawer key={gcpPick.resource.name} pick={gcpPick} onClose={() => setGcpPick(undefined)} onAsk={askGcp} gkeContexts={gkeContexts} onOpenCluster={switchTo} />
         </Boundary>
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}

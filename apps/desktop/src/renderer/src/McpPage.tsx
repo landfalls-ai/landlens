@@ -4,7 +4,7 @@
 // filters; a row opens the call in the drawer.
 import { BUILTIN_MCP_SERVER, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import {
-  Ban, Cable, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X, Zap,
+  Ban, Cable, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Cloud, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X, Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { age } from "@landlens/kube/status";
@@ -153,7 +153,9 @@ function ServerPanel(props: {
   onOpenConnections?: () => void;
 }) {
   const srv = props.server;
-  const conn = srv.connection;
+  // GitHub or Linear; landlens-gcp is built in and comes from Connections too, with the Cloud mark.
+  const conn = srv.connection === "gcp" ? undefined : srv.connection;
+  const gcp = srv.connection === "gcp";
   const st = STATUS[srv.status];
   const [test, setTest] = useState<McpTest | "running">();
   const [busy, setBusy] = useState(false);
@@ -178,14 +180,17 @@ function ServerPanel(props: {
   return (
     <section className="panel mcp-server" aria-label={`MCP server ${srv.name}`}>
       <header className="panel-head">
-        <span className={"kind-tile sm" + (conn ? " conn-tile" : "")}>{conn ? <ProviderMark provider={conn} size={15} /> : <Ic icon={srv.builtin ? Server : Plug} size={15} />}</span>
+        <span className={"kind-tile sm" + (conn || gcp ? " conn-tile" : "")}>{conn ? <ProviderMark provider={conn} size={15} /> : <Ic icon={gcp ? Cloud : srv.builtin ? Server : Plug} size={15} />}</span>
         <h3 className="mono">{srv.name}</h3>
         {srv.builtin ? <span className="badge muted">Built in</span> : null}
-        {conn ? <span className="chip from-conn"><Ic icon={Cable} size={11} />From Connections</span> : null}
+        {conn || gcp ? <span className="chip from-conn"><Ic icon={Cable} size={11} />From Connections</span> : null}
         <span className={`badge ${st.tone}`}><Ic icon={st.icon} size={13} />{st.word}</span>
         <span className="grow" />
         {srv.builtin ? (
-          <span className="dim small">On for every cluster</span>
+          <>
+            <span className="dim small">{gcp ? "Read-only, your chosen projects" : "On for every cluster"}</span>
+            {gcp && props.onOpenConnections ? <button className="secondary" onClick={props.onOpenConnections}>Manage in Connections</button> : null}
+          </>
         ) : conn ? (
           <>
             <span className="dim small">{srv.enabled ? "On for every cluster" : "Off for sessions"}</span>

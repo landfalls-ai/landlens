@@ -31,6 +31,25 @@ describe("startSidecar", () => {
     }
   });
 
+  it("sets the variables it is given over Landlens's environment, minus Landlens's secrets (a GKE cluster's PATH)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-sidecar-"));
+    const kubeconfig = join(dir, "config");
+    writeFileSync(kubeconfig, [
+      "apiVersion: v1", "kind: Config", "current-context: t",
+      "clusters: [{name: t, cluster: {server: 'https://127.0.0.1:1'}}]",
+      "users: [{name: t, user: {token: dummy}}]",
+      "contexts: [{name: t, context: {cluster: t, user: t}}]",
+    ].join("\n"));
+    const sc = await startSidecar({ binary: SIDECAR, context: "t", kubeconfig, env: { LANDLENS_GKE_MARK: "login-path-here", LANDLENS_TOKEN: "f".repeat(64) } });
+    try {
+      const ps = execFileSync("ps", ["eww", "-o", "command=", "-p", String(sc.pid)], { encoding: "utf8" });
+      expect(ps).toContain("LANDLENS_GKE_MARK=login-path-here");
+      expect(ps).not.toContain("f".repeat(64));
+    } finally {
+      await sc.stop();
+    }
+  });
+
   it("keeps Landlens's own secrets out of child environments", () => {
     expect(withoutLandlensSecrets({ PATH: "/bin", LANDLENS_TOKEN: "t", LANDLENS_SIDECAR_SECRET: "s" })).toEqual({ PATH: "/bin" });
   });

@@ -10,6 +10,7 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult, ReadResourceResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ProviderRules } from "./providers/index.js";
 
@@ -93,14 +94,19 @@ abstract class ClientUpstream implements Upstream {
   }
 }
 
-/** landlens-kube for one session, in memory. */
+/**
+ * A built-in server for one session, in memory: landlens-kube (bound to the session's cluster), or landlens-gcp (the
+ * person's chosen Google Cloud projects, wave 6). Given an AgentCluster, it is landlens-kube.
+ */
 export class BuiltinUpstream extends ClientUpstream {
-  constructor(name: string, private readonly cluster: AgentCluster) {
+  private readonly make: () => McpServer;
+  constructor(name: string, source: AgentCluster | (() => McpServer)) {
     super(name);
+    this.make = typeof source === "function" ? source : () => kubeMcpServer(source);
   }
   async connect(client: Client) {
     const [a, b] = InMemoryTransport.createLinkedPair();
-    await kubeMcpServer(this.cluster).connect(a);
+    await this.make().connect(a);
     await client.connect(b);
   }
 }

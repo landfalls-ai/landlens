@@ -12,13 +12,18 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
 
 `packages/mcp-gateway/` (`McpGateway`), started with the app (`apps/desktop/src/main/mcp.ts`).
 
-- **One endpoint per session.** Loopback HTTP on `127.0.0.1:<port>`: `/mcp` is `landlens-kube`, `/mcp/<name>` a
-  remote server. A session's `session/new` lists every server on the gateway, each with the session's bearer token
+- **One endpoint per session.** Loopback HTTP on `127.0.0.1:<port>`: `/mcp` is `landlens-kube`,
+  `/mcp/landlens-gcp` the Google Cloud tools when you turned them on, `/mcp/<name>` a remote server. A session's `session/new` lists every server on the gateway, each with the session's bearer token
   and nothing else; Claude Code never gets a remote server's address or header. No browser (an `Origin` header is
   refused), no other host name, a 1 MB request limit, stateless (a fresh MCP server per POST).
 - **landlens-kube** runs in memory per session, bound to the session's cluster (its own front-door token, its
   namespaces, Landlens's metrics source). It is still allowed whole (`mcp__landlens-kube`): every tool reads through
   the front door, which refuses writes.
+- **landlens-gcp** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)) is the second built-in server: five
+  read-only Google Cloud tools for the projects you chose, run in main with your gcloud sign-in. A session gets it only
+  while **Claude can read these projects** is on (Connections), and it is allowed whole (`mcp__landlens-gcp`); turning
+  the switch off takes it out of running sessions at once. The gateway's built-ins are a map by name, and no remote
+  server may take a built-in's name or any name starting `landlens`.
 - **Remote servers** are reached over streamable HTTP only (never stdio: nothing the gateway proxies runs on this
   machine), with the header you stored added in main, redirects refused. A session gets the servers turned on for its
   cluster when it starts; their tools are listed then.
@@ -61,8 +66,9 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
 
 Sidebar, under Overview (`McpPage.tsx`). The tool bar is the usual one; the page has two tabs.
 
-**Servers.** `landlens-kube` first (built in, on for every cluster), then GitHub and Linear when connected (a **From
-Connections** chip, "On for every cluster" or "Off for sessions", **Manage in Connections** in place of Test, Edit and
+**Servers.** `landlens-kube` first (built in, on for every cluster), then `landlens-gcp` while Claude may read your
+Google Cloud projects (built in, **From Connections**, **Manage in Connections**), then GitHub and Linear when
+connected (a **From Connections** chip, "On for every cluster" or "Off for sessions", **Manage in Connections** in place of Test, Edit and
 Remove, and their tools marked by the read-only listing), then the servers you added, each a panel: name,
 status (Ready, Not tested, Failed), address, whether a header is stored, how many tools and how many read-only; a
 switch to turn it on for this cluster; **Run read-only tools without asking** (above); Test; Edit; Remove. Each tool is

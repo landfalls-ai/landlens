@@ -93,7 +93,12 @@ the dock shows inline under the tool's card; the model still gets the same text.
 | `rollout_history` | A Deployment's ReplicaSets by revision, with images |
 | `metrics` | CPU and memory over 1h, 6h or 24h for the cluster, a node, a namespace, a pod or a workload, with requests and limits, from Landlens's metrics source (Clickland, else the cluster's Prometheus, else metrics-server) |
 
-All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`), so they don't prompt; the
+When you turn on **Claude can read these projects** (Connections), sessions also get `landlens-gcp`, five read-only
+Google Cloud tools for the projects you chose, run in main with your gcloud sign-in; the session's prompt names the
+projects and says what they hold is data ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)).
+
+All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`, and `mcp__landlens-gcp` when the
+session has it, by a second rule in `fence.ts`), so they don't prompt; the
 write tools below don't prompt in Claude Code either, because Landlens asks you itself, with the diff. `cluster_overview`,
 `describe`, `get_logs` and `metrics` have views (health card, object card with Open in Landlens, log view, charts).
 A proxied server's tools run without a prompt only if they say they only read; the rest ask.

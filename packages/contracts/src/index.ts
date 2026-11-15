@@ -31,6 +31,16 @@ export const KubeContext = z.object({
   server: z.string(),
   namespace: z.string().optional(),
   current: z.boolean(),
+  /**
+   * Where the context comes from: your kubeconfig, or a GKE cluster of a Google Cloud project you chose (wave 6, D91),
+   * which Landlens lists from its own kubeconfig in its data folder and never writes to yours.
+   */
+  source: z.enum(["kubeconfig", "gke"]),
+  /** A GKE context's project and location. */
+  project: z.string().optional(),
+  location: z.string().optional(),
+  /** A GKE context you already said yes to connecting (asked once per cluster, D91). */
+  confirmed: z.boolean().optional(),
 });
 export type KubeContext = z.infer<typeof KubeContext>;
 
@@ -292,7 +302,7 @@ export type GcpStatus = {
   account?: string;
   /** The projects you chose to browse (ids only). */
   projects: string[];
-  /** "Claude can read these projects" (part 5): stored, off by default, used by nothing yet. */
+  /** "Claude can read these projects" (D93): the landlens-gcp tools in agent sessions. Off by default. */
   agentRead: boolean;
 };
 export type GcpProject = { id: string; name: string; number: string };
@@ -310,6 +320,10 @@ export type GcpResource = {
 };
 export type GcpTypeCount = { assetType: string; count: number };
 export type GkeCluster = { project: string; location: string; name: string; status: string; version: string; endpoint: string; context: string };
+/** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
+export const GCP_MCP_SERVER = "landlens-gcp";
+/** What a GKE context needs said once before the first connect (D91). */
+export const CLOUD_CONFIRM = "This is a cloud cluster. Claude will read it, and can change it only through changes you approve.";
 /** The most resources Landlens reads in one project (10 pages of 500), and the most one gcp:resources answer holds. */
 export const GCP_MAX_RESOURCES = 5000;
 export const GCP_PAGE = 500;
@@ -443,7 +457,8 @@ export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
-  "cluster:connect": z.object({ context: z.string().min(1).max(253) }),
+  // `cloud`: you said yes to "This is a cloud cluster…" for a GKE context (D91); asked once per cluster.
+  "cluster:connect": z.object({ context: z.string().min(1).max(253), cloud: z.boolean().optional() }),
   "cluster:disconnect": z.object({ handle: Handle }),
   "cluster:discovery": z.object({ handle: Handle }),
   "cluster:access": z.object({ handle: Handle, checks: z.array(AccessCheck).max(200) }),
@@ -553,7 +568,10 @@ export const channels = {
   // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; no channel takes an address or returns a token.
   "gcp:status": z.object({ fresh: z.boolean().optional() }),
   "gcp:projects": z.object({ fresh: z.boolean().optional() }),
-  "gcp:choose": z.object({ projects: z.array(GcpProjectId).max(20), agentRead: z.boolean().optional() }),
+  // Ids you can see (checked in main against the project search); "Claude can read" is its own channel (L6 of part 4's review).
+  "gcp:choose": z.object({ projects: z.array(GcpProjectId).max(20) }),
+  // "Claude can read these projects" (D93): turning it on asks you in a native dialog in main.
+  "gcp:agent-read": z.object({ on: z.boolean() }),
   "gcp:types": z.object({ project: GcpProjectId, fresh: z.boolean().optional() }),
   "gcp:resources": z.object({ project: GcpProjectId, assetType: GcpAssetType.optional(), query: GcpQuery.optional(), offset: z.number().int().min(0).max(GCP_MAX_RESOURCES).optional() }),
   "gcp:resource": z.object({ project: GcpProjectId, name: GcpResourceName }),
@@ -562,7 +580,8 @@ export const channels = {
 export type Channel = keyof typeof channels;
 
 export type Responses = {
-  "catalog:list": { contexts: KubeContext[]; error?: string };
+  /** `gke`: the GKE clusters' projects that couldn't be listed, each with its sentence (D88). */
+  "catalog:list": { contexts: KubeContext[]; error?: string; gke?: { errors: { project: string; message: string }[] } };
   "cluster:connect": ClusterInfo;
   "cluster:disconnect": { ok: true };
   "cluster:discovery": { types: ResourceType[] };
@@ -643,12 +662,14 @@ export type Responses = {
   "gcp:status": GcpStatus;
   "gcp:projects": { projects: GcpProject[]; cut: boolean };
   "gcp:choose": GcpStatus;
+  "gcp:agent-read": GcpStatus;
   /** A project's asset types with their counts, from the cached read; `error` is one fixed sentence (D88). */
   "gcp:types": { types: GcpTypeCount[]; total: number; cut: boolean; error?: string };
   /** At most 500 from `offset` into the cached list; `total` is the whole list's length. */
   "gcp:resources": { items: GcpResource[]; total: number; cut: boolean; error?: string };
   /** `json`: the resource's own JSON (versionedResources[0].resource), cut at 256 KB. */
-  "gcp:resource": { resource: GcpResource; json?: string; cut: boolean };
+  /** `brief`: what Ask Claude quotes (D94): the fields and the scrubbed JSON, at most 8,000 characters, built in main. */
+  "gcp:resource": { resource: GcpResource; json?: string; cut: boolean; brief?: string };
   "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
 };
 
@@ -673,8 +694,8 @@ export type McpServerInfo = {
   id: string;
   name: string;
   builtin: boolean;
-  /** Served from Connections (wave 6): managed on the Connections page, not edited or removed here. */
-  connection?: ConnProvider;
+  /** Served from Connections (wave 6): managed on the Connections page, not edited or removed here ("gcp": landlens-gcp). */
+  connection?: ConnProvider | "gcp";
   url: string;
   /** The header Landlens adds, and whether a value is stored. The value itself never leaves main. */
   header?: { name: string; stored: boolean };

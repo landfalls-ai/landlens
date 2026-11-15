@@ -9,10 +9,11 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { BUILTIN_MCP_SERVER, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
 import type { AuditEntry } from "@landlens/kube";
 import { APP_HTML, CALL_META, type AgentCluster } from "@landlens/kube-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { appMayCall, drifted, modelMayCall, preAllowed, readsOnly, toolUi, type ListedServer } from "./approval.js";
@@ -32,6 +33,16 @@ const hash = (t: string) => createHash("sha256").update(t).digest();
 
 export type Origin = McpCall["origin"];
 
+/**
+ * Landlens's own servers, in memory: landlens-kube at /mcp (every session) and landlens-gcp at /mcp/landlens-gcp (only
+ * when the person lets Claude read their Google Cloud projects). Allowed whole, like landlens-kube: their tools only
+ * read, and run in main under Landlens's own limits. No remote server may take one of these names.
+ */
+export const BUILTIN_SERVERS: ReadonlySet<string> = new Set([BUILTIN_MCP_SERVER, GCP_MCP_SERVER]);
+export const isBuiltin = (name: string) => BUILTIN_SERVERS.has(name);
+/** A built-in other than landlens-kube, for one session. */
+export type BuiltinSpec = { name: typeof GCP_MCP_SERVER; server: () => McpServer };
+
 /** What a view's resource declares: its CSP domains, border preference and permissions (MCP Apps `_meta.ui`). */
 export type AppResource = {
   html: string;
@@ -48,6 +59,8 @@ export type SessionInit = {
   cluster: AgentCluster;
   /** The remote servers turned on for this cluster, with their headers. */
   remotes: RemoteSpec[];
+  /** Built-ins beside landlens-kube (landlens-gcp), when the person turned them on. */
+  builtins?: BuiltinSpec[];
 };
 
 /** Asked before an app's view (or you) runs a tool that doesn't say it only reads. */
@@ -83,6 +96,7 @@ export class GatewaySession {
 
   constructor(readonly gateway: McpGateway, readonly token: string, readonly init: SessionInit) {
     this.upstreams.set(BUILTIN_MCP_SERVER, new BuiltinUpstream(BUILTIN_MCP_SERVER, init.cluster));
+    for (const b of init.builtins ?? []) if (b.name === GCP_MCP_SERVER) this.upstreams.set(b.name, new BuiltinUpstream(b.name, b.server));
     for (const r of init.remotes) {
       this.upstreams.set(r.name, new RemoteUpstream(r));
       if (r.provider && r.readUrl && r.readUrl !== r.url) this.readUpstreams.set(r.name, new RemoteUpstream({ ...r, url: r.readUrl }));
@@ -167,6 +181,18 @@ export class GatewaySession {
     }
   }
 
+  /**
+   * A built-in other than landlens-kube leaves the session (the person turned "Claude can read these projects" off, or
+   * gcloud signed out): its rule goes, and a call to it is refused.
+   */
+  dropBuiltin(name: string) {
+    if (name === BUILTIN_MCP_SERVER || !this.upstreams.has(name)) return;
+    this.allow = this.allow.filter((a) => a !== `mcp__${name}`);
+    const u = this.upstreams.get(name);
+    this.upstreams.delete(name);
+    void u?.close().catch(() => {});
+  }
+
   /** Call a tool as an app's view or as you; the agent's calls come in over HTTP. */
   call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you", onCall?: (id: string) => void): Promise<CallToolResult> {
     return this.gateway.run(this, server, tool, args, origin, onCall ? { onCall } : {});
@@ -236,7 +262,7 @@ export class McpGateway {
    * the session keeps this listing for its life. One that doesn't answer is still served, with every tool asking.
    */
   async open(init: SessionInit): Promise<GatewaySession> {
-    for (const r of init.remotes) if (r.name === BUILTIN_MCP_SERVER || !/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(r.name)) throw new Error(`Landlens: bad MCP server name ${r.name}`);
+    for (const r of init.remotes) if (isBuiltin(r.name) || r.name.startsWith("landlens") || !/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(r.name)) throw new Error(`Landlens: bad MCP server name ${r.name}`);
     const token = randomBytes(32).toString("hex");
     const session = new GatewaySession(this, token, init);
     this.sessions.set(hash(token).toString("hex"), session);
@@ -261,7 +287,8 @@ export class McpGateway {
         return undefined;
       });
     }
-    session.allow = preAllowed(answered);
+    // Landlens's own servers are allowed whole: landlens-kube always, landlens-gcp when the session has it.
+    session.allow = [...preAllowed(answered), ...[...session.upstreams.keys()].filter((n) => isBuiltin(n) && n !== BUILTIN_MCP_SERVER).map((n) => `mcp__${n}`)];
     const changed = drifted(answered);
     for (const name of changed) {
       this.opts.log?.(`[mcp] ${init.label}: ${name}'s tools changed since you allowed its read-only tools; they ask again`);
@@ -325,7 +352,7 @@ export class McpGateway {
   async autonomyCheck(acpSession: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider; write?: boolean }> {
     const m = /^mcp__([a-z][a-z0-9-]{0,30}[a-z0-9])__([A-Za-z0-9_.-]{1,128})$/.exec(toolName);
     const s = this.agentSession(acpSession);
-    if (!m || !s || m[1] === BUILTIN_MCP_SERVER) return { ok: false };
+    if (!m || !s || isBuiltin(m[1]!)) return { ok: false };
     const spec = s.init.remotes.find((r) => r.name === m[1]);
     const up = spec?.provider ? s.upstreams.get(spec.name) : undefined;
     if (!spec?.provider || !up) return { ok: false };
@@ -341,6 +368,11 @@ export class McpGateway {
     if (!r) return { ok: true, provider, write: true };
     if (r.rules) a.refused();
     return { ok: false, provider, write: true, why: r.why };
+  }
+
+  /** A built-in (landlens-gcp) leaves every open session, at once. */
+  dropBuiltin(name: string) {
+    for (const s of this.sessions.values()) s.dropBuiltin(name);
   }
 
   /** Called by GatewaySession.close(). */
@@ -446,7 +478,7 @@ export class McpGateway {
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
       const rule = `mcp__${server}__${tool}`;
-      if (server !== BUILTIN_MCP_SERVER) {
+      if (!isBuiltin(server)) {
         if (s.allow.includes(rule)) this.log.gate(id, "read");
         else {
           const kind = s.takePermitKind(rule, toolUseId);
@@ -472,10 +504,10 @@ export class McpGateway {
         const yes = this.opts.approve ? await this.opts.approve({ label: s.label, server, tool, args, origin }).catch(() => false) : false;
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
       }
-      if (server !== BUILTIN_MCP_SERVER) this.log.gate(id, readOnly ? "read" : "asked");
+      if (!isBuiltin(server)) this.log.gate(id, readOnly ? "read" : "asked");
     } else if (!readOnly) {
       return refuse(`${tool} doesn't say it only reads, so Landlens won't run it from the MCP page.`);
-    } else if (server !== BUILTIN_MCP_SERVER) this.log.gate(id, "preview");
+    } else if (!isBuiltin(server)) this.log.gate(id, "preview");
 
     const app = toolUi(t).resourceUri;
     // A connection's read goes to its read-only endpoint when the session has one (M1): the full server can't be
@@ -566,6 +598,7 @@ export class McpGateway {
     if (!m) return deny(res, 404, "not found");
     const session = this.sessionFor(req.headers.authorization);
     if (!session || session.init.origin !== "agent") return deny(res, 401, "missing or unknown Landlens session token");
+    // landlens-kube is at /mcp only; landlens-gcp, when the session has it, at /mcp/landlens-gcp.
     const name = m[1] ?? BUILTIN_MCP_SERVER;
     if (m[1] === BUILTIN_MCP_SERVER) return deny(res, 404, "not found");
     const up = session.upstreams.get(name);

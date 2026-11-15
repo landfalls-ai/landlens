@@ -1,9 +1,10 @@
 // MCP in main (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers you added, the call
 // log the MCP page and the dock read, Preview (you running a read-only tool from the MCP page), and MCP App views.
-import { BUILTIN_MCP_SERVER, CONN_NOTES, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, CONN_NOTES, GCP_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
-import { BuiltinUpstream, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { BuiltinUpstream, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { gcpMcpServer, type GcpReader } from "@landlens/gcp-mcp";
 import type { SessionMcp } from "@landlens/acp-host";
 import { AppViews, viewCsp } from "./app-views";
 import type { ClicklandSettingsStore } from "./clickland-settings";
@@ -48,6 +49,8 @@ export class McpService {
     ask: Ask;
     /** GitHub and Linear, served to every session after the servers you added (docs/connections.md). */
     connections?: ConnectionServers;
+    /** Google Cloud for landlens-gcp (GcpService.agentReader): undefined while Claude may not read it. */
+    gcp?: { reader(): Promise<{ reader: GcpReader; projects: string[] } | undefined> };
     log?: (l: string) => void;
   }) {
     this.gateway = new McpGateway({
@@ -79,13 +82,33 @@ export class McpService {
     return {
       open: async ({ label, context, cluster }) => {
         const remotes = await this.remotesFor(context);
-        const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes });
+        const gcp = await this.gcpBuiltin();
+        const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes, ...(gcp ? { builtins: [gcp.spec] } : {}) });
         const providers = remotes.flatMap((r) => (r.provider ? [PROVIDER_LABEL[r.provider.id]] : []));
         // The standing rules say a connection's reads run without asking only when this session lets them (L3).
         const readsFree = remotes.flatMap((r) => (r.provider && s.allow.some((a) => a.startsWith(`mcp__${r.name}__`)) ? [PROVIDER_LABEL[r.provider.id]] : []));
-        return { servers: s.servers(), allow: s.allow, ...(providers.length ? { providers, readsFree } : {}), bind: (id) => s.bind(id), close: () => s.close() };
+        return {
+          servers: s.servers(), allow: s.allow, ...(providers.length ? { providers, readsFree } : {}), ...(gcp ? { gcp: gcp.projects } : {}),
+          bind: (id) => s.bind(id), close: () => s.close(),
+        };
       },
     };
+  }
+
+  /** landlens-gcp for a session (D93), when you let Claude read your Google Cloud projects and gcloud is ready. */
+  private async gcpBuiltin(): Promise<{ spec: BuiltinSpec; projects: string[] } | undefined> {
+    const g = await this.deps.gcp?.reader().catch((err) => {
+      this.deps.log?.(`[mcp] landlens-gcp: ${rawError(err)}`);
+      return undefined;
+    });
+    // One server per session: its 30-calls-a-minute limit is the session's.
+    return g ? { spec: { name: GCP_MCP_SERVER, server: () => gcpMcpServer(g.reader) }, projects: g.projects } : undefined;
+  }
+
+  /** You turned "Claude can read these projects" off: landlens-gcp leaves every open session at once. */
+  gcpOff() {
+    this.gateway.dropBuiltin(GCP_MCP_SERVER);
+    for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
   }
 
   /**
@@ -163,14 +186,27 @@ export class McpService {
       tools: (await this.builtinTools) ?? [], status: "ready",
     };
     const remotes = this.deps.store.list(context);
+    const gcp = await this.gcpInfo();
     const c = this.deps.clickland.view();
     const url = clicklandMcpUrl(c.url);
     return {
       gateway: this.gateway.url,
-      servers: [builtin, ...(this.deps.connections?.servers() ?? []), ...remotes],
+      servers: [builtin, ...(this.deps.connections?.servers() ?? []), ...(gcp ? [gcp] : []), ...remotes],
       canStore: this.deps.store.canStore,
       // Only a Clickland you connected is probed: Landlens doesn't knock on addresses you haven't given it a key for.
       presets: [{ id: "clickland", name: "Clickland", url, reachable: c.hasKey ? await reachable(url) : false, hasKey: c.hasKey, added: remotes.some((s) => s.url === url) }],
+    };
+  }
+
+  /** landlens-gcp as the MCP page lists it, while it is on: built in, managed on the Connections page. */
+  private gcpTools: Promise<McpServerInfo["tools"]> | undefined;
+  private async gcpInfo(): Promise<McpServerInfo | undefined> {
+    const g = await this.deps.gcp?.reader().catch(() => undefined);
+    if (!g) return undefined;
+    this.gcpTools ??= new BuiltinUpstream(GCP_MCP_SERVER, () => gcpMcpServer(g.reader)).tools().then((t) => t.map((x) => toolInfo(x)));
+    return {
+      id: GCP_MCP_SERVER, name: GCP_MCP_SERVER, builtin: true, connection: "gcp", url: `${this.gateway.url}/${GCP_MCP_SERVER}`, enabled: true, autoRun: true, appOrigins: [],
+      tools: (await this.gcpTools.catch(() => undefined)) ?? [], status: "ready",
     };
   }
 
@@ -275,7 +311,8 @@ export class McpService {
           types: async () => types, metrics: (r, read) => this.deps.metrics(handle, r, read),
           ...(this.deps.certs ? { certs: async (ns: string[] | undefined) => this.deps.certs!(handle, ns) } : {}),
         });
-        const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: await this.remotesFor(info.context) });
+        const gcp = await this.gcpBuiltin();
+        const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: await this.remotesFor(info.context), ...(gcp ? { builtins: [gcp.spec] } : {}) });
         return { session, revoke: () => this.deps.frontDoor.revokeToken(token) };
       })();
       this.consoles.set(handle, c);

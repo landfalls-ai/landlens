@@ -35,8 +35,10 @@ Three rules hold in every wave:
 │  ACP host ──spawn stdio──► claude-agent-acp ──► Claude Code (yours)   │
 │   │  handles: request_permission, session updates, cancel, resume     │
 │   │  per session: own cwd, one-context KUBECONFIG, kubectl write deny │
-│   │  session/new mcpServers:                                           │
-│   │    • landlens-kube (http on loopback, per-session token)           │
+│   │  session/new mcpServers (all on the MCP gateway, loopback):        │
+│   │    • landlens-kube (per-session token)                             │
+│   │    • github • linear (Connections; tokens stay in main)            │
+│   │    • landlens-gcp (read-only Google Cloud, when you turn it on)    │
 │   │    • clickland (http, read-only) • landfall (http) — optional      │
 │   └─► approval broker: every write waits for the person (dry-run diff) │
 └────────────────────────────────────────────────────────────────────────┘
@@ -133,8 +135,9 @@ Each wave ends with the app running against the OrbStack cluster, tests green an
 | 3 | **Agent writes**: write tools behind the approval broker, YAML diff review, server-side dry run, apply; session history and resume; slash commands; other ACP agents | The agent proposes a fix as a diff, the person approves, the deployment recovers; a rejected change never reaches the API server, and `kubectl delete` from the agent's Bash is refused, even in bypass mode (tests prove both) |
 | 4 | **Workbench**: all built-in kinds and CRDs (printer columns), logs (followed stream, not Lens's 10 s poll; previous; search), pod shell and local terminal (node-pty), port-forward, YAML editor (a merge patch after a dry run; server-side apply was the plan), metrics (metrics-server, Prometheus if found), Helm releases (read), command palette | Feature parity with the OpenLens views listed in `research/lens-features.md` marked "take" |
 | 5 | **Cluster doctor**: a problems view (crashloops, pending, OOM, failing probes, warning events, expiring certs) with "Ask the agent" on each | Each broken scenario in `deploy/scenarios/` shows up and gets a sensible suggestion |
-| 6 | **Land family**: Clickland MCP + telemetry, Landfall war room + MCP, Landflow flows on a resource, brain offload; Landbright OIDC for clusters later | Each link checked live on this machine |
-| 7 | **Packaging**: an unsigned local `.dmg`, auto-update off, crash reports to Clickland | Installs and runs from `/Applications` on this Mac |
+| 6 | **Connections**: Landlens signs in to GitHub and Linear and gives their tools to agent sessions through the gateway (reads run, writes ask, an autonomous mode per session); Google Cloud (every resource of your projects, read-only; GKE clusters in the catalog; read tools for the agent); a resizable dock | Against local fakes: a session lists an issue without asking, a write asks, an autonomous write in scope runs and one out of scope asks; a fake project's resources are browsed and a fake GKE cluster opens. The person checks GitHub, Linear and their own Google project once |
+| 7 | **Land family** (was 6): Clickland MCP + telemetry, Landfall war room + MCP, Landflow flows on a resource, brain offload; Landbright OIDC for clusters later | Each link checked live on this machine |
+| 8 | **Packaging** (was 7): an unsigned local `.dmg`, auto-update off, crash reports to Clickland | Installs and runs from `/Applications` on this Mac |
 
 ## Not taking
 

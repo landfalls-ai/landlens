@@ -21,6 +21,7 @@
     "@landlens/connections": "workspace:*",
     "@landlens/contracts": "workspace:*",
     "@landlens/gcp": "workspace:*",
+    "@landlens/gcp-mcp": "workspace:*",
     "@landlens/kube": "workspace:*",
     "@landlens/kube-mcp": "workspace:*",
     "@landlens/mcp-gateway": "workspace:*",

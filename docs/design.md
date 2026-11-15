@@ -106,7 +106,16 @@ Linux keep the native frame. The window's background follows the theme so it doe
 
 - **Welcome** (`Welcome.tsx`): a centred column with the mark, "Pick a cluster", the contexts as rows (two-letter
   tile hashed over six gradients, `current` pill, server in mono), the current context first and focused; ↑/↓, Enter
-  and number keys. Connecting dims the others; an error rings the row and offers "Try again".
+  and number keys. Connecting dims the others; an error rings the row and offers "Try again". GKE clusters of the
+  chosen Google Cloud projects follow your own contexts under a `.cards-label` heading (**Google Cloud** with the
+  `Cloud` icon and "GKE clusters of the projects you chose" in `--ink-3`): the row's tile is the blue `.cl-tile.gke`
+  with the `Cloud` icon, the short name with a **GKE** pill, and "project · location" in mono where the server would
+  be; the footer counts "N contexts in your kubeconfig · M GKE"; a project that couldn't be listed is one small dim
+  line under the cards. The first connect to a GKE cluster opens an `alertdialog` (`.dialog`, 420px): a `kind-tile`
+  with `Cloud` and "Connect <short name>?", the cloud sentence, then the project and location in a small dim line;
+  **Cancel** (focused) and **Connect** (primary). The sidebar's switcher menu groups **Clusters in your kubeconfig** and
+  **Google Cloud** (the GKE tile, short name, " · project" dim); a connected GKE cluster shows its short name and the
+  GKE tile in the switcher, its full context in the tooltip.
 - **Overview** (`Overview.tsx`, the landing page): a verdict sentence ("2 problems need attention", "Nothing is
   broken; n things to watch", "All clear") with "Ask Claude what's wrong"; tiles for nodes, pods (a segmented bar),
   deployments and restarts, which open those lists; the worst five problems (a row opens it on the Problems page; See
@@ -200,12 +209,17 @@ all N) and Recent warnings; Nodes. It reads
   tone pill, created), a 280px filter, a query chip, the count right-aligned. Under 1,100px of main the projects
   become a select atop the types; under 720px the types become a select (optgroups by service) in the resources
   header, and the table takes the pane. A project's error sits in the Types column as a bad-tinted box with the
-  sentence. The drawer is the usual `.drawer`: a service tile, "Google Cloud / <project>", **Copy name**, the name, a
-  type chip, location and state; tabs **Summary** (the drawer's key/value grid; labels as `key= value` chips) and
+  sentence. The drawer is the usual `.drawer`: a service tile, "Google Cloud / <project>" (ellipsised first), then
+  **Open in Landlens** (secondary, on a GKE cluster the catalog lists), **Copy name** (an icon button), **Ask Claude**
+  (primary, `Sparkles`; disabled while the brief is read; without a cluster a disabled "Connect a cluster to ask
+  Claude") and close; the name, a type chip, location and state; tabs **Summary** (the drawer's key/value grid; labels as `key= value` chips) and
   **JSON** (the YAML editor's well, read-only, filling the body). States are one `.notice` each with its next step.
   The chooser is a `.dialog` with a filter and a checklist (checkbox, name, id in mono). On Connections, a **Google
   Cloud** card after the providers: the state, account, chosen projects as mono chips, **Choose projects…** and
-  **Open Google Cloud**.
+  **Open Google Cloud**, then a `.conn-row` with the switch **Claude can read these projects** and a dim sentence that
+  says what on and off mean (on asks in a native dialog first; an error is a `tone-bad` line). On the MCP page,
+  `landlens-gcp` follows `landlens-kube` while it is on: the `Cloud` tile, **Built in**, **From Connections**, and
+  **Manage in Connections** in place of Test, Edit and Remove.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
   the call drawer. A view from a server you added (not `landlens-kube`) sits in `.app-third`: a `--line-2` ring, 8px
   inset, and "View from <server>" above, drawn by the page outside the frame, so it never reads as Landlens's own.
@@ -273,7 +287,10 @@ Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's
 complementary "Resources" and Welcome); regions "Projects", "Types", "Resources" and "Google Cloud connection";
 dialog "Choose projects" with its checkboxes named by project id and "Save"; searchbox "Filter resources"; buttons
-"Read again", "Clear the query", "Copy name"; complementary "Google Cloud resource <name>"; the JSON well
+"Read again", "Clear the query", "Copy name", "Open in Landlens"; complementary "Google Cloud resource <name>"; the
+GKE heading "Google Cloud" on Welcome and cards named "<short name> GKE …"; alertdialog "Connect <short name>?"; menu
+"Clusters" with groups "Clusters in your kubeconfig" and "Google Cloud"; button "<context>, switch cluster"; switch
+"Claude can read these projects"; region "MCP server landlens-gcp"; the JSON well
 `.gcp-json .cm-content` (label "Resource JSON"); selects "Project" and "Type" when narrow. Graphs: regions "Usage" and "Nodes", status "Metrics
 unavailable", button "Connect Clickland", dialog "Connect Clickland" with fields "Clickland address" and "Clickland
 API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes `.metrics-src`, `.mtab`,

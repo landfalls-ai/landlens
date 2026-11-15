@@ -3,19 +3,22 @@
 // one and keeps it in memory for 5 minutes; the token goes only to Google's three API origins (or, in an unpackaged
 // build, the loopback fake) and never to the renderer, a file, a log line or the agent.
 //
-// What is kept: userData/gcp.json (0600) holds the project ids you chose and the "Claude can read" switch (part 5).
+// What is kept: userData/gcp.json (0600) holds the project ids you chose, the "Claude can read" switch and the GKE
+// clusters you said yes to connecting. userData/gke/kubeconfig (0700/0600) is Landlens's own kubeconfig for the GKE
+// clusters of those projects (part 5, D91): no token in it, and ~/.kube/config is never written.
 // What is cached, in memory: the projects you can see (5 minutes); each project's resources (60 seconds, per query).
 // One read per project at a time, two projects at once.
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
-  GCP_PAGE, GcpProjectId, type GcpProject, type GcpResource, type GcpStatus, type GkeCluster, type Responses,
+  GCP_PAGE, GcpProjectId, type GcpProject, type GcpResource, type GcpStatus, type GkeCluster, type KubeContext, type Responses,
 } from "@landlens/contracts";
 import {
-  countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, listClusters, LOOPBACK, rawGcpError, searchProjects, searchResources,
-  type Runner,
+  countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeKubeconfig, listClusters, LOOPBACK, rawGcpError,
+  resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
 } from "@landlens/gcp";
+import type { GcpReader } from "@landlens/gcp-mcp";
 
 /**
  * Where Google Cloud is on (spec D86). A packaged app always talks to Google, with the gcloud on your PATH. An
@@ -40,7 +43,9 @@ const READS_AT_ONCE = 2;
 /** Cached queries (beyond each project's full list). */
 const MAX_QUERIES = 10;
 
-type Kept = { projects: string[]; agentRead: boolean };
+type Kept = { projects: string[]; agentRead: boolean; confirmed: string[] };
+/** GKE clusters listed, kept as long as a project's resources. */
+export const CLUSTERS_TTL = 60_000;
 type Listed = { at: number; items: GcpResource[]; cut: boolean };
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
@@ -55,9 +60,14 @@ export class GcpService {
   private readonly reading = new Map<string, Promise<Listed>>();
   private running = 0;
   private readonly waiting: (() => void)[] = [];
+  private clustersCache?: { at: number; read: Promise<{ clusters: GkeClusterFull[]; errors: { project: string; message: string }[] }> };
+  /** The GKE contexts in Landlens's kubeconfig now, by name. */
+  private gke = new Map<string, GkeClusterFull>();
 
   constructor(private readonly o: {
     file: string;
+    /** Where Landlens's GKE kubeconfig goes (userData/gke): made 0700, the file 0600. */
+    gkeDir?: string;
     mode: GcpMode;
     /** gcloud on the login PATH (acp-host's which + loginPath), unless the mode names one. */
     findGcloud: () => Promise<string | undefined>;
@@ -80,9 +90,10 @@ export class GcpService {
     try {
       const raw = JSON.parse(readFileSync(this.o.file, "utf8")) as Partial<Kept>;
       const projects = Array.isArray(raw.projects) ? raw.projects.filter((p): p is string => typeof p === "string" && GcpProjectId.safeParse(p).success).slice(0, 20) : [];
-      return { projects: [...new Set(projects)], agentRead: raw.agentRead === true };
+      const confirmed = Array.isArray(raw.confirmed) ? raw.confirmed.filter((c): c is string => typeof c === "string" && GKE_CONTEXT.test(c)).slice(0, 500) : [];
+      return { projects: [...new Set(projects)], agentRead: raw.agentRead === true, confirmed: [...new Set(confirmed)] };
     } catch {
-      return { projects: [], agentRead: false };
+      return { projects: [], agentRead: false, confirmed: [] };
     }
   }
 
@@ -120,6 +131,7 @@ export class GcpService {
   private forget() {
     this.auth?.drop();
     this.projectsCache = undefined;
+    this.clustersCache = undefined;
     this.lists.clear();
   }
 
@@ -170,11 +182,43 @@ export class GcpService {
     return read;
   }
 
-  async choose(projects: string[], agentRead?: boolean): Promise<GcpStatus> {
+  /**
+   * The projects to browse. A project you add must be one your account can see (the project search, cached 5 minutes),
+   * so a renderer can't name any other (L6 of part 4's review); one already chosen may stay or go.
+   */
+  async choose(projects: string[]): Promise<GcpStatus> {
     const ids = [...new Set(projects)];
     if (ids.length > 20 || ids.some((p) => !GcpProjectId.safeParse(p).success)) throw fail(400, "At most 20 project ids.");
+    const added = ids.filter((p) => !this.kept.projects.includes(p));
+    if (added.length) {
+      const seen = new Set((await this.projects()).projects.map((p) => p.id));
+      const unknown = added.filter((p) => !seen.has(p));
+      if (unknown.length) throw fail(404, `Your account can't see ${unknown.join(", ")}.`);
+    }
     for (const key of [...this.lists.keys()]) if (!ids.includes(key.split("\n")[0]!)) this.lists.delete(key);
-    this.kept = { projects: ids, agentRead: agentRead ?? this.kept.agentRead };
+    if (ids.join() !== this.kept.projects.join()) this.clustersCache = undefined;
+    this.kept = { ...this.kept, projects: ids };
+    this.save();
+    return this.status();
+  }
+
+  /**
+   * "Claude can read these projects" (D93). Turning it on is a grant to the agent, so main asks in a native dialog
+   * (`confirm`); the renderer can't answer for you. Turning it off takes no question.
+   */
+  async setAgentRead(on: boolean, confirm: (q: { message: string; detail: string; yes: string }) => Promise<boolean>): Promise<GcpStatus> {
+    if (on && !this.kept.agentRead) {
+      const s = await this.status();
+      if (s.state !== "ready") throw fail(409, "Sign in to gcloud first.");
+      if (!s.projects.length) throw fail(409, "Choose the projects first.");
+      const yes = await confirm({
+        message: "Let Claude read these Google Cloud projects?",
+        detail: `Claude's sessions get read-only Google Cloud tools for ${s.projects.join(", ")}, run in Landlens as ${s.account}. Claude gets no Google token; what it reads is scrubbed of secret values. Claude can't change anything in Google Cloud.`,
+        yes: "Let Claude read them",
+      });
+      if (!yes) return this.status();
+    }
+    this.kept = { ...this.kept, agentRead: on };
     this.save();
     return this.status();
   }
@@ -249,7 +293,13 @@ export class GcpService {
     }
   }
 
+  /** One resource with its JSON, and the brief Ask Claude quotes (D94): fields and scrubbed JSON, ≤ 8,000 characters. */
   async resource(project: string, name: string): Promise<Responses["gcp:resource"]> {
+    const r = await this.resourceRaw(project, name);
+    return { ...r, brief: resourceBrief(project, r.resource, r.json) };
+  }
+
+  private async resourceRaw(project: string, name: string): Promise<{ resource: GcpResource; json?: string; cut: boolean }> {
     this.chosen(project);
     const client = await this.client();
     let r: Awaited<ReturnType<typeof getResource>>;
@@ -262,17 +312,107 @@ export class GcpService {
     return r;
   }
 
+  /** The GKE clusters of the chosen projects, for the page (no CA). */
   async clusters(): Promise<Responses["gcp:clusters"]> {
-    const client = await this.client();
-    const clusters: GkeCluster[] = [];
-    const errors: { project: string; message: string }[] = [];
-    for (const project of this.kept.projects) {
-      try {
-        clusters.push(...(await this.slot(() => listClusters(client, project))));
-      } catch (e) {
-        errors.push({ project, message: this.failed(`clusters ${project}`, e).message });
+    const r = await this.clustersFull();
+    return { clusters: r.clusters.map(({ ca: _ca, ...c }): GkeCluster => c), errors: r.errors };
+  }
+
+  /** The chosen projects' GKE clusters with their CAs, cached a minute; a project that fails says why, the rest load. */
+  private clustersFull(fresh = false): Promise<{ clusters: GkeClusterFull[]; errors: { project: string; message: string }[] }> {
+    const c = this.clustersCache;
+    if (c && !fresh && this.now() - c.at < CLUSTERS_TTL) return c.read;
+    // Only the development fake may point a cluster at this machine (it points one at OrbStack).
+    const allowLocal = this.o.mode.on && !!this.o.mode.endpoint;
+    const read = this.client().then(async (client) => {
+      const clusters: GkeClusterFull[] = [];
+      const errors: { project: string; message: string }[] = [];
+      for (const project of [...this.kept.projects]) {
+        try {
+          clusters.push(...(await this.slot(() => listClusters(client, project, { allowLocal }))));
+        } catch (e) {
+          errors.push({ project, message: this.failed(`clusters ${project}`, e).message });
+        }
       }
+      return { clusters, errors };
+    });
+    this.clustersCache = { at: this.now(), read };
+    read.catch(() => this.clustersCache?.read === read && (this.clustersCache = undefined));
+    return read;
+  }
+
+  // ---- GKE clusters in the catalog (D91) ---------------------------------------------------------------------------
+
+  /**
+   * The GKE clusters of the chosen projects as catalog contexts, with Landlens's kubeconfig for them written again. When
+   * Google Cloud isn't ready, or no project is chosen, there are none (and the kubeconfig is left as it was: it holds
+   * no token, and a context is only connected while it is listed here).
+   */
+  async gkeContexts(): Promise<{ contexts: KubeContext[]; errors: { project: string; message: string }[] }> {
+    const s = await this.status();
+    if (s.state !== "ready" || !s.account || !this.kept.projects.length || !this.o.gkeDir || !this.gcloud?.path) {
+      this.gke = new Map();
+      return { contexts: [], errors: [] };
     }
-    return { clusters, errors };
+    const r = await this.clustersFull();
+    const open = r.clusters.filter((c) => c.endpoint && GKE_CONTEXT.test(c.context));
+    writeGkeKubeconfig(this.o.gkeDir, gkeKubeconfig(open, this.gcloud.path, s.account));
+    this.gke = new Map(open.map((c) => [c.context, c]));
+    return {
+      contexts: open.map((c) => ({
+        name: c.context, cluster: c.context, user: c.context, server: `https://${c.endpoint}`, current: false,
+        source: "gke" as const, project: c.project, location: c.location, confirmed: this.kept.confirmed.includes(c.context),
+      })),
+      errors: r.errors,
+    };
+  }
+
+  /**
+   * How to connect a GKE context: Landlens's kubeconfig and the login PATH (gcloud needs its Python). Undefined for a
+   * context the last listing didn't have. `cloud`: you said yes to the cloud-cluster question now, which is kept; a
+   * context you never said yes to is refused with that question (409).
+   */
+  async gkeConnect(context: string, cloud: boolean): Promise<{ kubeconfig: string; env: Record<string, string> } | undefined> {
+    if (!GKE_CONTEXT.test(context) || !this.o.gkeDir) return undefined;
+    if (!this.gke.has(context)) await this.gkeContexts();
+    if (!this.gke.has(context)) return undefined;
+    if (!this.kept.confirmed.includes(context)) {
+      if (!cloud) throw fail(409, "This is a cloud cluster: say yes to connecting it first.");
+      this.kept = { ...this.kept, confirmed: [...this.kept.confirmed, context].slice(-500) };
+      this.save();
+    }
+    return { kubeconfig: join(this.o.gkeDir, "kubeconfig"), env: { PATH: await this.o.loginPath() } };
+  }
+
+  // ---- landlens-gcp, the agent's read-only tools (D93) ---------------------------------------------------------------
+
+  /**
+   * What landlens-gcp reads with, for one session, when you turned "Claude can read these projects" on and gcloud is
+   * signed in; otherwise undefined and the session has no Google Cloud tools. Every read goes through this service:
+   * the chosen projects only, its caches and limits.
+   */
+  async agentReader(connected: (context: string) => boolean): Promise<{ reader: GcpReader; projects: string[] } | undefined> {
+    if (!this.kept.agentRead) return undefined;
+    const s = await this.status();
+    if (s.state !== "ready" || !s.projects.length) return undefined;
+    const reader: GcpReader = {
+      projects: async () => {
+        const names = await this.projects().then((r) => new Map(r.projects.map((p) => [p.id, p.name])), () => new Map<string, string>());
+        // Read again at each call: you may have changed the choice or turned reading off since the session began.
+        if (!this.kept.agentRead) return [];
+        return this.kept.projects.map((id) => ({ id, ...(names.get(id) ? { name: names.get(id)! } : {}) }));
+      },
+      types: (p) => this.agentOnly(() => this.types(p)),
+      resources: (r) => this.agentOnly(() => this.resources(r)),
+      resource: (p, n) => this.agentOnly(() => this.resourceRaw(p, n)),
+      clusters: () => this.agentOnly(() => this.clusters()),
+      connected,
+    };
+    return { reader, projects: s.projects };
+  }
+
+  private agentOnly<T>(f: () => Promise<T>): Promise<T> {
+    if (!this.kept.agentRead) return Promise.reject(fail(403, "The person turned off Claude's reading of Google Cloud."));
+    return f();
   }
 }

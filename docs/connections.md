@@ -8,8 +8,9 @@ Wave 6 is built in parts (the spec's section 8). **Part 1, built 15 November 202
 (`packages/connections`, `apps/desktop/src/main/connections.ts`, the `conn:*` channels). **Part 2, built the same
 day:** the Connections page and the tools in sessions, through the gateway. **Part 3, built the same day:** the
 autonomous mode, below. **Part 4, built the same day:** browsing Google Cloud, in its own page,
-[gcp.md](gcp.md), with a **Google Cloud** card on the Connections page after GitHub and Linear. Not yet built: GKE
-clusters in the catalog and Claude's Google Cloud tools (part 5).
+[gcp.md](gcp.md), with a **Google Cloud** card on the Connections page after GitHub and Linear. **Part 5, built the
+same day:** GKE clusters in the catalog, Claude's read-only Google Cloud tools (the card's **Claude can read these
+projects**) and Ask Claude on a resource, also in [gcp.md](gcp.md).
 The security rules are in [security.md](security.md#connections-and-google-cloud).
 
 ## The Connections page

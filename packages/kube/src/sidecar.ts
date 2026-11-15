@@ -8,6 +8,11 @@ export type SidecarOptions = {
   context: string;
   /** KUBECONFIG-style list; empty means the default rules (KUBECONFIG or ~/.kube/config). */
   kubeconfig?: string;
+  /**
+   * Variables set over Landlens's own environment (minus its secrets) for this sidecar and the exec plugins client-go
+   * runs from it: a GKE cluster's gets the login PATH, so gcloud finds its Python (D91).
+   */
+  env?: Record<string, string>;
   startTimeoutMs?: number;
   log?: (line: string) => void;
 };
@@ -34,7 +39,7 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
     // stdin stays open as a pipe: its first line is the secret (never the environment, which any same-user process
     // can read with `ps eww`), and when Landlens dies it closes and the sidecar exits.
     stdio: ["pipe", "pipe", "pipe"],
-    env: withoutLandlensSecrets(process.env),
+    env: { ...withoutLandlensSecrets(process.env), ...withoutLandlensSecrets(opts.env ?? {}) },
   });
   child.stdin?.on("error", () => {}); // EPIPE if it exits early; `exited` reports that
   child.stdin?.write(secret + "\n");

@@ -8,7 +8,7 @@
 // reads run without asking when you leave "Reads run without asking" on, while its listing is the one you accepted,
 // and readOnlyHint plays no part.
 import { createHash } from "node:crypto";
-import { BUILTIN_MCP_SERVER, type McpToolInfo } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, type McpToolInfo } from "@landlens/contracts";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ProviderRules } from "./providers/index.js";
 
@@ -81,7 +81,7 @@ export const readsOnly = (t: Pick<Tool, "name" | "annotations">, provider?: Prov
 export function preAllowed(servers: ListedServer[]): string[] {
   const allow = [`mcp__${BUILTIN_MCP_SERVER}`];
   for (const s of servers) {
-    if (s.name === BUILTIN_MCP_SERVER || !holds(s)) continue;
+    if (s.name === BUILTIN_MCP_SERVER || s.name === GCP_MCP_SERVER || !holds(s)) continue;
     if (s.provider && !s.provider.readsAuto) continue;
     for (const t of s.tools) if (readsOnly(t, s.provider) && modelMayCall(t) && RULE_TOOL.test(t.name)) allow.push(`mcp__${s.name}__${t.name}`);
   }
@@ -92,7 +92,7 @@ export function preAllowed(servers: ListedServer[]): string[] {
 export function drifted(servers: ListedServer[]): string[] {
   // A read-only endpoint that didn't answer isn't a change (its reads just ask); one that answered differently is.
   return servers
-    .filter((s) => s.name !== BUILTIN_MCP_SERVER && s.pin && (listingHash(s.tools) !== s.pin || (s.readPin !== undefined && s.readListing && listingHash(s.readListing) !== s.readPin)))
+    .filter((s) => s.name !== BUILTIN_MCP_SERVER && s.name !== GCP_MCP_SERVER && s.pin && (listingHash(s.tools) !== s.pin || (s.readPin !== undefined && s.readListing && listingHash(s.readListing) !== s.readPin)))
     .map((s) => s.name);
 }
 

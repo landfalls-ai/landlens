@@ -76,7 +76,7 @@
 
 /* The drawer: the full name breaks anywhere; the JSON well fills the body. */
 .gcp-full-name { word-break: break-all; font-size: var(--t-12); }
-.gcp-drawer .drawer-top .secondary.sm { display: inline-flex; align-items: center; gap: 5px; margin-right: 2px; }
+.gcp-drawer .drawer-top .secondary.sm, .gcp-drawer .drawer-top .primary.sm { display: inline-flex; align-items: center; gap: 5px; margin-right: 2px; flex: none; white-space: nowrap; }
 .gcp-drawer .drawer-meta .chip { height: 22px; }
 .gcp-drawer .tabs button .ic { opacity: .8; }
 .gcp-readonly { display: flex; align-items: center; gap: 6px; margin-top: 20px; }
@@ -96,3 +96,9 @@
 /* Welcome: Google Cloud and Connections, both without a cluster. */
 .welcome-links { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 14px; }
 .welcome-links .welcome-link { margin-top: 0; }
+
+/* GKE clusters on Welcome (part 5, D91): after your kubeconfig's contexts, under a Google Cloud heading. */
+.cards-label { display: flex; align-items: center; gap: 6px; margin: 10px 0 -2px; color: var(--ink-2); font-size: var(--t-12); font-weight: 600; }
+.cards-label .dim { font-weight: 400; color: var(--ink-3); }
+.cl-tile.gke { --g1: #6FA8F5; --g2: #2F6FD0; }
+.cluster-option .dim.small { font-weight: 400; }

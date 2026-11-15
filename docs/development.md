@@ -84,8 +84,12 @@ build has Google Cloud off unless it reads one of:
 | `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the fake); otherwise it is looked up on the login PATH |
 | `LANDLENS_GCP_REAL=1` | an unpackaged build may reach the real Google Cloud with your gcloud; only the person sets it |
 
-A packaged app reads none of them. The e2e: `pnpm -s build`, then in `apps/desktop`
-`LANDLENS_INTEGRATION=orbstack npx vitest run test/gcp.e2e.test.ts` (screenshots `g4-*` with `LANDLENS_SHOTS`).
+A packaged app reads none of them. `pnpm test` also runs `@landlens/gcp-mcp`'s tests (`landlens-gcp` against the
+fake). The e2e: `pnpm -s build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run
+test/gcp.e2e.test.ts test/gke.e2e.test.ts` (screenshots `g4-*` and `g5-*` with `LANDLENS_SHOTS`). `gke.e2e` makes a
+throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (read-only, deleted after) and points the fake's
+GKE cluster at OrbStack's API server; it never writes `~/.kube/config`. With `orbstack,claude` it also asks a live
+session one question about the fake Google Cloud, on your own Claude Code subscription.
 
 ## Where things start
 

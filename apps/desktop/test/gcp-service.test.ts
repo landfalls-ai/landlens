@@ -19,11 +19,13 @@ beforeEach(() => {
 });
 
 function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number } = {}) {
-  const file = join(mkdtempSync(join(tmpdir(), "landlens-gcp-")), "gcp.json");
+  const data = mkdtempSync(join(tmpdir(), "landlens-gcp-"));
+  const file = join(data, "gcp.json");
   const logs: string[] = [];
   const dir = o.dir ?? sdkDir();
   const svc = new GcpService({
     file,
+    gkeDir: join(data, "gke"),
     mode: o.mode ?? { on: true, endpoint: fake.origin, gcloud: FAKE_GCLOUD },
     findGcloud: async () => ("gcloud" in o ? o.gcloud : undefined),
     loginPath: async () => process.env.PATH ?? "",
@@ -32,7 +34,7 @@ function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined;
     ...(o.fetch ? { fetch: o.fetch } : {}),
     ...(o.now ? { now: o.now } : {}),
   });
-  return { svc, file, logs, dir };
+  return { svc, file, logs, dir, data };
 }
 
 describe("when Google Cloud is on (D86)", () => {
@@ -75,9 +77,9 @@ describe("projects and what is kept", () => {
     expect(fake.hits("projects:search")).toHaveLength(1);
     await svc.projects(true);
     expect(fake.hits("projects:search")).toHaveLength(2);
-    const st = await svc.choose(["demo-shop", "orbit-analytics", "demo-shop"], false);
+    const st = await svc.choose(["demo-shop", "orbit-analytics", "demo-shop"]);
     expect(st.projects).toEqual(["demo-shop", "orbit-analytics"]);
-    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ projects: ["demo-shop", "orbit-analytics"], agentRead: false });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ projects: ["demo-shop", "orbit-analytics"], agentRead: false, confirmed: [] });
     expect(statSync(file).mode & 0o777).toBe(0o600);
     await expect(svc.choose(["Not_A_Project"])).rejects.toThrow(/project ids/);
     expect(readFileSync(file, "utf8")).not.toContain("ya29");
@@ -87,6 +89,7 @@ describe("projects and what is kept", () => {
   it("reads only projects you chose: another is refused before any request", async () => {
     const { svc } = service();
     await svc.choose(["demo-shop"]);
+    fake.requests.length = 0;
     await expect(svc.types("payments-core")).rejects.toThrow("Choose payments-core on the Google Cloud page first.");
     await expect(svc.resources({ project: "payments-core" })).rejects.toThrow(/Choose payments-core/);
     await expect(svc.resource("payments-core", "//storage.googleapis.com/payments-core-datasets")).rejects.toThrow(/Choose payments-core/);
@@ -184,5 +187,104 @@ describe("types and resources", () => {
     const env = readFileSync(join(dir, "env"), "utf8");
     expect(env).not.toContain("GH_TOKEN");
     expect(env).toContain("CLOUDSDK_CONFIG=");
+  });
+});
+
+describe("choosing projects and Claude's reading (review of part 4, L6)", () => {
+  it("adds only a project your account can see; one already chosen may stay", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    await expect(svc.choose(["demo-shop", "not-mine-at-all"])).rejects.toThrow("Your account can't see not-mine-at-all.");
+    expect((await svc.status()).projects).toEqual(["demo-shop"]);
+  });
+
+  it("turns Claude's reading on only after main's own question, and off without one", async () => {
+    const { svc, file } = service();
+    await expect(svc.setAgentRead(true, async () => true)).rejects.toThrow("Choose the projects first.");
+    await svc.choose(["demo-shop"]);
+    const asked: string[] = [];
+    expect((await svc.setAgentRead(true, async (q) => (asked.push(q.detail), false))).agentRead).toBe(false);
+    expect(asked[0]).toContain("demo-shop");
+    expect((await svc.setAgentRead(true, async () => true)).agentRead).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8")).agentRead).toBe(true);
+    expect((await svc.setAgentRead(false, async () => { throw new Error("not asked"); })).agentRead).toBe(false);
+  });
+});
+
+describe("GKE clusters in the catalog (D91)", () => {
+  it("writes Landlens's own kubeconfig (0700/0600, no token) and lists the clusters as gke contexts", async () => {
+    const { svc, data } = service();
+    expect((await svc.gkeContexts()).contexts).toEqual([]); // no project chosen: none, and nothing asked
+    await svc.choose(["demo-shop"]);
+    const r = await svc.gkeContexts();
+    expect(r.contexts.map((c) => [c.name, c.source, c.project, c.location, c.confirmed])).toEqual([
+      ["gke_demo-shop_us-central1_shop-prod", "gke", "demo-shop", "us-central1", false],
+      ["gke_demo-shop_europe-west1-b_shop-staging", "gke", "demo-shop", "europe-west1-b", false],
+      ["gke_demo-shop_us-east1_batch-jobs", "gke", "demo-shop", "us-east1", false],
+    ]);
+    const kc = join(data, "gke", "kubeconfig");
+    expect(statSync(join(data, "gke")).mode & 0o777).toBe(0o700);
+    expect(statSync(kc).mode & 0o777).toBe(0o600);
+    const text = readFileSync(kc, "utf8");
+    expect(text).not.toContain(GCP_TOKEN);
+    expect(text).toContain(FAKE_GCLOUD);
+    // One listing a minute: the catalog asks again from the cache.
+    await svc.gkeContexts();
+    expect(fake.hits("/clusters")).toHaveLength(1);
+  });
+
+  it("connects a GKE context only once you said yes, kept; never one it didn't list", async () => {
+    const { svc, file, data } = service();
+    await svc.choose(["demo-shop"]);
+    await svc.gkeContexts();
+    const ctx = "gke_demo-shop_us-central1_shop-prod";
+    await expect(svc.gkeConnect(ctx, false)).rejects.toThrow(/cloud cluster/);
+    const ok = await svc.gkeConnect(ctx, true);
+    expect(ok).toEqual({ kubeconfig: join(data, "gke", "kubeconfig"), env: { PATH: process.env.PATH ?? "" } });
+    expect(JSON.parse(readFileSync(file, "utf8")).confirmed).toEqual([ctx]);
+    expect(await svc.gkeConnect(ctx, false)).toBeDefined();
+    expect((await svc.gkeContexts()).contexts[0]!.confirmed).toBe(true);
+    expect(await svc.gkeConnect("gke_demo-shop_us-central1_not-listed", true)).toBeUndefined();
+    expect(await svc.gkeConnect("orbstack", true)).toBeUndefined();
+  });
+
+  it("refuses a cluster pointed at this machine unless Google Cloud is the development fake", async () => {
+    fake.clusters.set("demo-shop", [{ name: "local", location: "us-central1", endpoint: "127.0.0.1:26443", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } }]);
+    try {
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      expect((await svc.gkeContexts()).contexts.map((c) => c.server)).toEqual(["https://127.0.0.1:26443"]);
+    } finally {
+      fake.clusters.delete("demo-shop");
+    }
+  });
+});
+
+describe("the agent's reader and Ask Claude's brief (D93, D94)", () => {
+  it("gives no reader until Claude's reading is on, then reads only chosen projects, and stops when it is turned off", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    expect(await svc.agentReader(() => false)).toBeUndefined();
+    await svc.setAgentRead(true, async () => true);
+    const g = (await svc.agentReader(() => false))!;
+    expect(g.projects).toEqual(["demo-shop"]);
+    expect((await g.reader.projects()).map((p) => p.id)).toEqual(["demo-shop"]);
+    expect((await g.reader.resources({ project: "demo-shop", assetType: "sqladmin.googleapis.com/Instance" })).items).toHaveLength(4);
+    await expect(g.reader.types("payments-core")).rejects.toThrow(/Choose payments-core/);
+    await svc.setAgentRead(false, async () => true);
+    expect(await g.reader.projects()).toEqual([]);
+    await expect(g.reader.types("demo-shop")).rejects.toThrow(/turned off/);
+  });
+
+  it("builds the brief in main: fields and scrubbed JSON, at most 8,000 characters", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const r = await svc.resource("demo-shop", "//compute.googleapis.com/projects/demo-shop/zones/us-central1-a/instances/web-frontend-1");
+    expect(r.brief).toContain("Name: //compute.googleapis.com/projects/demo-shop/zones/us-central1-a/instances/web-frontend-1");
+    expect(r.brief).toContain("machineType");
+    expect(r.brief).not.toContain("s3cr3t-Example-Only");
+    expect(r.brief!.length).toBeLessThanOrEqual(8000);
+    // The drawer's own JSON is the person's to see, as before.
+    expect(r.json).toContain("s3cr3t-Example-Only");
   });
 });

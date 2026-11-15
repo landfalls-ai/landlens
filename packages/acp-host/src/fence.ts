@@ -11,13 +11,19 @@
 //    loopback port for an external proxy; naming the front door as both the HTTP and the SOCKS proxy is how kubectl
 //    reaches it, and why anything else that tries the network reaches only the front door, which refuses it.)
 // 4. Its file tools can't read outside the session folder at all (blockReadsOutsideWorkingDirectories).
-// 5. Permission rules refuse the obvious ways to write with kubectl or Helm and let Landlens's read-only cluster tools,
-//    and proxied tools that say they only read, run without a prompt; any other MCP tool asks. The kubectl rules
+// 5. Permission rules refuse the obvious ways to write with kubectl or Helm and let Landlens's read-only cluster tools
+//    (and its read-only Google Cloud tools, when the person turned them on), and proxied tools that say they only read,
+//    run without a prompt; any other MCP tool asks. The kubectl rules
 //    match command prefixes only, so they are a courtesy, not the control.
 // The front door then refuses writes, Secrets and exec for that token, and scrubs what it returns, whatever gets through.
 
 /** The MCP server name Landlens registers its cluster tools under (kube-mcp's MCP_SERVER_NAME). */
 const MCP_SERVER = "landlens-kube";
+/**
+ * Landlens's read-only Google Cloud tools (wave 6, D93), allowed whole when the gateway gives the session them: this
+ * exact rule, a second constant, not a looser pattern (MCP_RULE still refuses every other `landlens` name).
+ */
+export const GCP_RULE = "mcp__landlens-gcp";
 
 /** Folders and files holding credentials the agent must never read, relative to your home folder. */
 export const CREDENTIAL_PATHS = [
@@ -113,7 +119,7 @@ export function sessionOptions(i: FenceInput) {
       permissions: {
         // Landlens's own cluster tools are read-only and go through the front door: no prompt for each one. A proxied
         // tool runs without one only if its server says it only reads; the rest ask, and the dock shows the ask.
-        allow: [`mcp__${MCP_SERVER}`, ...(i.mcpAllow ?? []).filter((r) => MCP_RULE.test(r))],
+        allow: [`mcp__${MCP_SERVER}`, ...((i.mcpAllow ?? []).includes(GCP_RULE) ? [GCP_RULE] : []), ...(i.mcpAllow ?? []).filter((r) => MCP_RULE.test(r))],
         deny: [
           ...CREDENTIAL_PATHS.flatMap((p) => [`Read(~/${p})`, `Read(~/${p}/**)`, `Edit(~/${p}/**)`]),
           ...kubeconfigs.map((k) => `Read(/${k})`),

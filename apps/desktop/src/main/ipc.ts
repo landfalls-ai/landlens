@@ -1,8 +1,8 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, getRelease, KubeError, listContexts, listReleases, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
-import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { checkAccess, getRelease, KubeError, listContexts, listReleases, mergeCatalog, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { DoctorService } from "./doctor";
@@ -26,16 +26,24 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
 
   const handlers: Handlers = {
     "catalog:list": async () => {
+      let own: ReturnType<typeof listContexts> = [];
+      let error: string | undefined;
       try {
-        return { contexts: listContexts() };
+        own = listContexts();
       } catch (err) {
-        return { contexts: [], error: `Could not read your kubeconfig: ${(err as Error).message}` };
+        error = `Could not read your kubeconfig: ${(err as Error).message}`;
       }
+      // The GKE clusters of the Google Cloud projects you chose (D91), after yours; a name yours has is left out.
+      const gke = await gcp.gkeContexts().catch((err: Error) => ({ contexts: [], errors: [{ project: "", message: err.message }] }));
+      return { contexts: mergeCatalog(own, gke.contexts), ...(error ? { error } : {}), ...(gke.errors.length ? { gke: { errors: gke.errors } } : {}) };
     },
-    "cluster:connect": async ({ context }) => {
-      // Only contexts from the user's kubeconfig; the name goes to the sidecar as an argument.
-      if (!listContexts().some((c) => c.name === context)) throw ipcError(404, `no context named ${context} in your kubeconfig`);
-      const info = await clusters.connect(context);
+    "cluster:connect": async ({ context, cloud }) => {
+      // Only contexts from the user's kubeconfig, or a GKE cluster Landlens listed (its own kubeconfig, D91); the name
+      // goes to the sidecar as an argument. Yours wins when both have the name.
+      const own = listContexts().some((c) => c.name === context);
+      const gke = own ? undefined : await gcp.gkeConnect(context, !!cloud);
+      if (!own && !gke) throw ipcError(404, `no context named ${context} in your kubeconfig`);
+      const info = await clusters.connect(context, gke ?? {});
       // Kept forwards for this context start again (D37), without opening anything.
       forwards.restore(info);
       return info;
@@ -155,7 +163,18 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
     "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),
-    "gcp:choose": ({ projects, agentRead }) => gcp.choose(projects, agentRead),
+    "gcp:choose": ({ projects }) => gcp.choose(projects),
+    // A grant to the agent: main asks in a native dialog before turning it on; off leaves open sessions at once.
+    "gcp:agent-read": async ({ on }, event) => {
+      const s = await gcp.setAgentRead(on, async ({ message, detail, yes }) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
+        const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+        return r.response === 0;
+      });
+      if (!s.agentRead) mcp.gcpOff();
+      return s;
+    },
     "gcp:types": ({ project, fresh }) => gcp.types(project, !!fresh),
     "gcp:resources": (r) => gcp.resources(r),
     "gcp:resource": ({ project, name }) => gcp.resource(project, name),
