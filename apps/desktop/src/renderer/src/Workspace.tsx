@@ -435,7 +435,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             version={metricsVersion}
           />
         ) : connPage ? (
-          <ConnectionsPage context={cluster.context} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} onOpenGcp={() => pick("gcp")} />
+          <ConnectionsPage context={cluster.context} handle={cluster.handle} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} onOpenGcp={() => pick("gcp")} />
         ) : gcpPage ? (
           <Boundary what="Google Cloud" resetKey="gcp">
             <GcpPage nav={gcpNav} onNav={setGcpNav} {...(gcpPick ? { selected: gcpPick.resource.name } : {})} onSelect={setGcpPick} onRows={setGcpRows} width={width.main} />

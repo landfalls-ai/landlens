@@ -334,6 +334,23 @@ Left open by part 1: a pasted classic GitHub token reaches every repository you 
 page's advice); Linear's `api.linear.app` gets the OAuth token once, to ask who you are (it is one of Linear's
 origins); the fixtures are hand-made until the person records the real listings.
 
+## The land family
+
+Wave 7 ([family.md](family.md)): Landlens signs in to Clickland, Landflow and Landfall itself. Part 1 (the
+connections, the store and the Land family cards) is built; the rows below are the spec's D138 rows 1–3. Rows for the
+family's tools in sessions, triage, the brain and telemetry come with parts 2, 4 and 5. In part 1 no family secret
+reaches a Claude session at all, because nothing gives a session family tools yet.
+
+| Rule | How it's checked |
+|---|---|
+| A sibling's secret (Landflow's API key and triage webhook secret, Landfall's access and refresh tokens and registered client; Clickland's key stays in `clickland.json` as before) is stored only encrypted with `safeStorage`, in `userData/family.json` (mode 0600, temp file and rename). If `safeStorage` can't encrypt, nothing is stored. No channel returns a secret: `FamilyInfo` has no field for one, and the webhook shows only `hasSecret`. Main's log lines have every held or stored secret cut out, and `redact.ts` scrubs `lf_…` and `ck_…` shaped keys from what the agent reads | `family-store.test.ts` (the file's bytes and mode, no secret in `FamilyInfo`, cantStore); `family-main.test.ts` (the list, the pushes and the file carry no key; the raw error reaches the log with the key cut out; cantStore before any request); `redact.test.ts`; `family.e2e` (`family:list` and a `grep -rlF` of the whole profile folder find none of the key, the webhook secret or the tokens; the page's text has no secret) |
+| A secret goes only to the origin it was saved for. Connecting Landflow at another address needs the key pasted again, and moving it drops the webhook secret. Clickland's who-am-I is kept per origin. Every request refuses redirects and has a time limit. Addresses are origins only: https, or plain http only to `127.0.0.1`, `localhost` and `[::1]`. An unpackaged build also takes the exact names in `LANDLENS_FAMILY_HTTP_HOSTS`, and a packaged one takes none. Main checks the rule itself; the page's check is only for help text. Landfall's sign-in stops if its metadata names an endpoint on another origin, opens in the browser only a URL on Landfall's origin, and asks for `mcp:read` only, never `mcp:ack` | `family.test.ts` (the address rule, the listed hosts exactly, a redirect refused, the key only to its origin in the Authorization header, health with no key); `family-store.test.ts` (origin binding); `family-main.test.ts` (the variable ignored when packaged; plain http to a name refused before any request unless listed; no key without its origin; a moved Clickland address never shows the old account); `mcp-oauth.test.ts` (the origin pin before registering, `mcp:read` only); `family.e2e` (a non-local name refused with no request made; the one URL opened is the fake's authorize page, for `mcp:read`) |
+| Main is no relay. Every sibling answer is checked (zod, or a few fields cut to one line of at most 100 characters, scopes as words) or becomes a fixed sentence (`FAMILY_NOTES`, `familyHttpNote`), never the answer's text. Landflow's who-am-I must say `via: "api-key"`, and Landfall's metadata must name itself as the issuer. The page can't make main send a stored secret to an address it wasn't saved for; an address the page names gets only the key the page itself pasted (Landflow), no key (health, Landfall's metadata), or Landfall's sign-in, and what it answers reaches the page only as those checked fields or a sentence. A sign-in belongs to the window that started it. Landlens never calls Landfall's trigger, timeline or artifact routes | `family.test.ts` (each sentence, a session or an MCP token isn't a personal key, a person's Clickland session isn't a key, bad metadata); `family-store.test.ts` (one line, 100 characters); `family-main.test.ts` (only the starting window cancels; a Landfall without its connector is refused before a listener opens); the fake Landfall records any trigger, timeline or artifact request in `forbidden`, which `mcp-oauth.test.ts`, `family-main.test.ts` and `family.e2e` expect empty |
+
+Left open by part 1: the live links, with a real key and a real Landfall sign-in, are not checked yet
+([family.md](family.md#tests)). A Landflow key that can change workflows is kept, with a note, because Landlens can't
+narrow a key the person made; in part 1 Landlens uses it only for who-am-I.
+
 ## What this doesn't stop
 
 Landlens runs as you. Another process running as your user can read your kubeconfig directly, and could read

@@ -93,6 +93,24 @@ throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (read-only, del
 GKE cluster at OrbStack's API server; it never writes `~/.kube/config`. With `orbstack,claude` it also asks a live
 session one question about the fake Google Cloud, on your own Claude Code subscription.
 
+Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
+`packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
+every request (`/_fake/state`). The fake Landfall records any trigger, timeline or artifact request in `forbidden`.
+`apps/desktop/test/family-main.test.ts` runs `FamilyService` against the same fakes. No test reaches a sibling. An
+unpackaged build reads:
+
+| Variable | What |
+|---|---|
+| `LANDLENS_FAMILY_HTTP_HOSTS` | comma-separated host names (each `^[a-z0-9.-]{1,253}$`, at most 20) a sibling's address may reach over plain http, such as `landflow-host.landflow-dev.svc.cluster.local` for the local Landflow. Without it, plain http goes only to `127.0.0.1`, `localhost` and `[::1]` |
+
+A packaged app reads none: forward the service in Landlens and use `http://127.0.0.1:<port>`. The e2e: `pnpm -s
+build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism
+test/family.e2e.test.ts` (screenshots `w7-*` with `LANDLENS_SHOTS`). It starts the three fakes, plays the browser
+for Landfall's sign-in with a stub of `shell.openExternal` that fetches only loopback addresses, and uses its own
+profile. The live checks of the spec's D137 (`orbstack,clickland`, `orbstack,landflow,claude`, `landfall,claude`,
+and the writing ones behind `LANDLENS_LIVE_WRITES=1`) are not written yet. They come with the parts that use each
+link, and the ones that write are run only by the person.
+
 ## Where things start
 
 See [architecture.md](architecture.md), "Code map". New IPC: add the channel and its schema to

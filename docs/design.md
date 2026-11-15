@@ -200,6 +200,18 @@ all N) and Recent warnings; Nodes. It reads
   also has a muted **Routine** badge with a `Zap`; the badges sit right-aligned) and **Check tools**.
   A note that needs you is amber with its icon and **Review tools**; a card whose tools changed gets an amber ring.
   On the MCP page a connection's panel carries its mark, a **From Connections** chip and **Manage in Connections**.
+- **Land family** (wave 7, `FamilyCards.tsx`, `.fam*` in `connections.css`): a section under Google Cloud with its
+  heading and one line of intro, then a `.panel` card each for Clickland, Landflow and Landfall. Each card has the
+  sibling's own mark from `icons.tsx` (`SiblingMark`: Clickland's histogram tile, Landflow's nodes and flow,
+  Landfall's beacon, filled in ink in a `.kind-tile`), the name, and a state `.badge` (Ready ok, Off muted, Signing
+  in… with a spinner, Sign-in ran out warn, Failed bad). Then come the address in mono (only when connected), who
+  you are (`Signed in as …`, the role and how, muted, then the scopes as mono `.chip`s) and a note (a fixed sentence,
+  amber, or red when the card is Off or Failed). The uses are `.fam-row`s on hairlines: a label column, a sentence,
+  and a dot with its state word at the right on the same line ("In use", "Can record", "Can list and run", "Secret
+  stored", "Through Landflow"; muted "Not in use", "No scope", "Not set up"). Under 640px of the main pane the sentence drops under
+  the label. The forms are the wave 6 wells: a mono `.field` for the address, a password field for the key, its
+  shape checked as you type, the help in `small`. The triage webhook's form sits inside the Landflow card (path,
+  header name, secret; Remove, Cancel, Save). **Check** lists its steps as `.test-steps`.
 - **Google Cloud** (`GcpPage.tsx`, `gcp.css`; the sidebar's **Cloud** section after Pinned, `Cloud`; also under
   Welcome's list, standing alone with a **Clusters** button back): three columns in the main pane. **Projects**
   (240px, `--bg-0`): two-line items (name, then the id in mono), a filter, **Choose projects…** in the foot. **Types**
@@ -305,6 +317,12 @@ name", "Header value"; a `switch`; complementary "MCP call" with list "Front-doo
 instead", "Open github.com/login/device", "Read only", "Ask for writes", "Review tools", "Accept these tools",
 "Manage in Connections"; label "Device code"; fields "GitHub token" and "Linear API key"; switches "<Name>: reads run
 without asking" and "Give <Name> to Claude sessions"; lists "<Name> tools"; regions "MCP server github".
+Land family: region "Land family" with heading "Land family"; regions "Clickland connection", "Landflow connection",
+"Landfall connection"; lists "What <Name> is used for" (the `.fam-row`s, each `.fam-label` and `.fam-state`) and
+"<Name> check"; buttons "Connect…", "Settings…", "Connect", "Sign in", "Sign in again", "Sign out", "Set up", "Edit",
+"Check", "Disconnect"; fields "Landflow address", "Landflow API key", "Landfall address"; form "Triage webhook"
+with fields "Webhook path", "Webhook header name", "Webhook secret". Connect Clickland opened from here has no
+"Cluster name in Clickland" field.
 Autonomous: buttons "GitHub · asks", "GitHub · autonomous <n>/20", "Turn on", "Stop GitHub autonomous"; dialog
 "GitHub autonomous" with fields "Repositories", "Default branch" (Linear: "Team key"); status "Autonomous" (the
 strip); region "Claude asks"; classes `.auto-chip`, `section.change`, `.change-done.rejected`. Badges and key hints inside buttons are `aria-hidden`,

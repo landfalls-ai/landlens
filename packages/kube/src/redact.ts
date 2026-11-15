@@ -16,6 +16,10 @@ const PATTERNS: [RegExp, string][] = [
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "<redacted github token>"],
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, "<redacted github token>"],
   [/\blin_(?:api|oauth|refresh)_[A-Za-z0-9]{20,}/g, "<redacted linear key>"],
+  // The Land family's keys (wave 7): Landflow's `lf_…` (and its `lf_mcp_`, `lf_dbg_` tokens, Landfall's `lf_key_…`),
+  // Clickland's `ck_…`.
+  [/\blf_[A-Za-z0-9_-]{20,}/g, "<redacted land family key>"],
+  [/\bck_[A-Za-z0-9_-]{16,}/g, "<redacted clickland key>"],
   [/\bya29\.[A-Za-z0-9._-]{20,}/g, "<redacted google token>"],
   // Google's other shapes (review of wave 6 part 4, M2): API keys, OAuth refresh tokens, OAuth client secrets.
   [/\bAIza[0-9A-Za-z_-]{35}/g, "<redacted google api key>"],

@@ -9,6 +9,7 @@ import { api, type ApiError } from "./api";
 import { Ic } from "./icons";
 import { copyText } from "./present";
 import { GcpCard } from "./GcpPage";
+import { FamilySection } from "./FamilyCards";
 
 type Listed = ConnList & { gcp: GcpStatus };
 
@@ -54,7 +55,7 @@ function useConnections(): [Listed | undefined, (i: ConnInfo) => void, (s: GcpSt
   return [list, put, putGcp, error];
 }
 
-export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => void; onOpenGcp?: () => void }) {
+export function ConnectionsPage(props: { context?: string; handle?: string; onOpenMcp?: () => void; onOpenGcp?: () => void }) {
   const [list, put, putGcp, error] = useConnections();
   const [tools, setTools] = useState<Partial<Record<ConnProvider, McpToolInfo[]>>>({});
   // The tool lists come with the MCP page's servers: the connections' last listings, read from main's store.
@@ -89,6 +90,7 @@ export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => voi
         <>
           {(["github", "linear"] as const).map((p) => <ConnCard key={p} info={list[p]} canStore={list.canStore} tools={tools[p]} onInfo={put} onTools={loadTools} />)}
           <GcpCard status={list.gcp} onStatus={putGcp} {...(props.onOpenGcp ? { onOpen: props.onOpenGcp } : {})} />
+          <FamilySection {...(props.context ? { context: props.context } : {})} {...(props.handle ? { handle: props.handle } : {})} />
         </>
       ) : (
         <>

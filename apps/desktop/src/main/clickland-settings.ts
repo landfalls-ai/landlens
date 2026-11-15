@@ -21,7 +21,8 @@ export type Crypto = {
   decryptString(encrypted: Buffer): string;
 };
 
-type Stored = { url?: string; key?: string; clusters?: Record<string, string> };
+/** `console`: the console's origin, for Open in Clickland (wave 7, D118); in clear, no secret. */
+type Stored = { url?: string; key?: string; clusters?: Record<string, string>; console?: string };
 
 export class ClicklandSettingsStore {
   constructor(private readonly path: string, private readonly crypto: Crypto) {}
@@ -92,6 +93,20 @@ export class ClicklandSettingsStore {
   keyOrigin(): string | undefined {
     const s = this.read();
     return s.key ? origin(s.url ?? DEFAULT_CLICKLAND_URL) : undefined;
+  }
+
+  /** The console's origin, if one is set (wave 7, D118). */
+  consoleUrl(): string | undefined {
+    const c = this.read().console;
+    return typeof c === "string" && origin(c) ? origin(c) : undefined;
+  }
+
+  /** Set or clear the console's origin (checked by the caller: FamilyUrl). */
+  setConsole(url: string | null) {
+    const s = this.read();
+    if (url === null) delete s.console;
+    else s.console = origin(url);
+    this.write(s);
   }
 
   /** Forget the key (the address and cluster names stay). */

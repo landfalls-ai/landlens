@@ -16,6 +16,7 @@ import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
 import { gcpMode, GcpService } from "./gcp";
+import { familyOverrides, FamilyService } from "./family";
 import { loginPath, which } from "@landlens/acp-host";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
@@ -90,6 +91,18 @@ async function start() {
     takenNames: () => mcpStore.list().map((s) => s.name),
     log: (l) => console.log(l),
   });
+  // The Land family (docs/family.md): Landflow's key and Landfall's sign-in in family.json; Clickland's key stays in
+  // clickland.json. LANDLENS_FAMILY_HTTP_HOSTS is for an unpackaged build only.
+  const family = new FamilyService({
+    file: join(app.getPath("userData"), "family.json"),
+    crypto: safeStorage,
+    clickland: settings,
+    overrides: familyOverrides(process.env, app.isPackaged),
+    // Only an address on the Landfall origin being signed in to reaches this (family.ts checks).
+    openExternal: (url) => shell.openExternal(url),
+    push: (info) => send("family:update", info),
+    log: (l) => console.log(l),
+  });
   // Google Cloud (docs/gcp.md): gcloud's sign-in, read-only. An unpackaged build is off unless it has a loopback fake
   // (LANDLENS_GCP_ENDPOINT, with LANDLENS_GCLOUD for a fake gcloud) or the person set LANDLENS_GCP_REAL=1.
   const gcp = new GcpService({
@@ -160,12 +173,13 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections, gcp);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections, gcp, family);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();
     metrics.stopAll();
     connections.stop();
+    family.stop();
     await agent.stop();
     await service.stop();
     await hub.stopAll();

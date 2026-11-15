@@ -77,6 +77,11 @@ describe("redactText", () => {
     ["maps key AIzaSyA" + "b".repeat(32), "<redacted google api key>"],
     ["refresh 1//0g" + "c".repeat(60), "<redacted google refresh token>"],
     ["oauth GOCSPX-" + "d".repeat(28), "<redacted google client secret>"],
+    // The Land family's keys (wave 7): Landflow's, its MCP token, Landfall's API key, Clickland's.
+    ["landflow lf_" + "F".repeat(43), "<redacted land family key>"],
+    ["mcp lf_mcp_" + "m".repeat(40), "<redacted land family key>"],
+    ["landfall lf_key_" + "k".repeat(32), "<redacted land family key>"],
+    ["clickland ck_" + "R".repeat(32), "<redacted clickland key>"],
     ["password=correcthorse", "password=<redacted>"],
     ['"client_secret": "abcdef123456"', '"client_secret": "<redacted>"'],
     ["-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----", "<redacted private key>"],
@@ -93,6 +98,11 @@ describe("redactText", () => {
 
   it("leaves ordinary log lines alone", () => {
     const line = "2026-11-14T10:00:00Z ERROR connection refused to db:5432 (attempt 3)";
+    expect(redactText(line)).toBe(line);
+  });
+
+  it("leaves words that merely contain ck_ or lf_ alone", () => {
+    const line = "lock_manager_acquired_for_shard_12345 and self_test_passed_in_the_first_run";
     expect(redactText(line)).toBe(line);
   });
 });

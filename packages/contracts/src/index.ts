@@ -145,20 +145,35 @@ export const MetricsRequest = z
   .refine((r) => !["namespace", "deployment", "statefulset", "daemonset", "pod"].includes(r.scope) || !!r.namespace, "this scope needs a namespace");
 export type MetricsRequest = z.infer<typeof MetricsRequest>;
 
+// A Land family sibling's address (docs/family.md, wave 7 D102): one rule for Clickland, Landflow and Landfall. An
+// origin only: scheme://host[:port], a trailing "/" at most; no user info, path, query or fragment (the contracts build
+// has no URL global). https anywhere; plain http only to this machine, so a key never crosses a network in the clear.
+// An unpackaged build may also take plain http to the exact hosts in LANDLENS_FAMILY_HTTP_HOSTS: main decides that
+// (main/family.ts), so the family channels take FamilyOrigin, the shape, and main applies familyUrlAllowed.
+const FAMILY_ORIGIN = /^(https?):\/\/([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:]{2,39}\])(:\d{1,5})?\/?$/;
+/** This machine's names: plain http may go to these. */
+export const LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"] as const;
+/** A host name LANDLENS_FAMILY_HTTP_HOSTS may list. */
+export const FAMILY_HTTP_HOST = /^[a-z0-9.-]{1,253}$/;
+/** https, or http to this machine or to one of `httpHosts` (exact, lowercase). False for anything that isn't an origin. */
+export function familyUrlAllowed(u: string, httpHosts: readonly string[] = []): boolean {
+  const m = FAMILY_ORIGIN.exec(u);
+  if (!m) return false;
+  const port = m[3] ? Number(m[3].slice(1)) : undefined;
+  if (port !== undefined && (port < 1 || port > 65535)) return false;
+  const host = m[2]!.toLowerCase();
+  return m[1] === "https" || (LOCAL_HOSTS as readonly string[]).includes(host) || httpHosts.includes(host);
+}
+/** An origin's shape, for the channels; main applies familyUrlAllowed with its overrides. */
+export const FamilyOrigin = z.string().max(300).regex(FAMILY_ORIGIN, "an address like https://landflow.example or http://127.0.0.1:3000, with no path");
+/** A sibling's address as this build takes it with no overrides. */
+export const FamilyUrl = FamilyOrigin.refine((u) => familyUrlAllowed(u), "https, or http to this machine (127.0.0.1, localhost)");
+
 /**
  * Clickland's address and key. The key travels renderer → main only (when the person types it); main keeps it
- * encrypted with safeStorage and never sends it back. Plain http only to this machine, so a key never crosses a network
- * in the clear.
+ * encrypted with safeStorage and never sends it back. Since wave 7 the address follows the family's rule (FamilyUrl).
  */
-export const ClicklandUrl = z
-  .string()
-  .max(500)
-  .refine((u) => {
-    // scheme://host[:port][/path]: no user info, query or fragment (the contracts build has no URL global).
-    const m = /^(https?):\/\/([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.exec(u);
-    if (!m) return false;
-    return m[1] === "https" || ["127.0.0.1", "localhost", "[::1]"].includes(m[2]!.toLowerCase());
-  }, "https, or http to this machine (127.0.0.1, localhost)");
+export const ClicklandUrl = FamilyUrl;
 export const ClicklandKey = z.string().max(200).regex(/^ck_[A-Za-z0-9_-]{16,128}$/, "not a Clickland API key (ck_…)");
 /** The cluster's name in Clickland's data (`k8s.cluster.name`); a label value. */
 export const ClicklandClusterName = z.string().max(253).regex(/^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/, "not a cluster name");
@@ -282,6 +297,82 @@ export const CONN_NOTES = {
   linearNameTaken: "Rename your server named linear first.",
 } as const;
 export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
+
+// The Land family (docs/family.md, wave 7): Landlens's own sign-in to the Clickland, Landflow and Landfall the person
+// runs, held in main. A key or token comes in on family:connect (Landflow's pasted key), family:signin (Landfall's
+// browser sign-in) or family:set (the triage webhook's secret); no channel sends one back.
+export const Sibling = z.enum(["clickland", "landflow", "landfall"]);
+export type Sibling = z.infer<typeof Sibling>;
+/**
+ * A Landflow personal API key (`lf_` and 32 random bytes, base64url). Not an instance MCP token (`lf_mcp_`, which acts
+ * for nobody), a debug token (`lf_dbg_`) or a Landfall key (`lf_key_`).
+ */
+export const LANDFLOW_KEY_SHAPE = /^lf_(?!mcp_|key_|dbg_)[A-Za-z0-9_-]{20,128}$/;
+export const LandflowKey = z.string().max(200).regex(LANDFLOW_KEY_SHAPE, "not a Landflow API key (lf_…)");
+/** The triage flow's webhook path under /api/webhook/ (D121): no dots, so no dot segments. */
+export const TriagePath = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9/_-]{0,119}$/, "letters, digits, /, _ and -");
+/** The header the webhook's secret goes in: never one HTTP or Landlens owns. */
+export const TriageHeader = z
+  .string()
+  .regex(/^[A-Za-z0-9-]{1,64}$/, "not a header name")
+  .refine((h) => !/^(host|cookie|authorization|proxy-authorization|connection|content-(length|type|encoding)|transfer-encoding|idempotency-key|x-landlens-.*)$/i.test(h), "Landlens sets this header itself, or it can't carry the secret");
+/** The webhook's secret: one line of printable characters, no space at either end. */
+export const TriageSecret = z.string().max(400).regex(/^[\x21-\x7e](?:[\x20-\x7e]{0,398}[\x21-\x7e])?$/, "one line of printable characters");
+export type FamilyAccount = { name?: string; email?: string; org?: string; role?: string };
+/** What the renderer may know about a sibling: never a key, token or secret. */
+export type FamilyInfo = {
+  sibling: Sibling;
+  state: "off" | "connecting" | "ready" | "expired" | "failed";
+  /** The origin, as stored. */
+  url: string;
+  method?: "key" | "oauth";
+  /** Who the key or sign-in is; each field one line, at most 100 characters. */
+  account?: FamilyAccount;
+  /** As the sibling reported them. */
+  scopes?: string[];
+  /** "Give to Claude sessions" (D108): off when first connected. Served from wave 7 part 2. */
+  toSessions: boolean;
+  /** Reads run without asking (D110): on when first connected. Used from wave 7 part 2. */
+  readsAuto: boolean;
+  tools?: { read: number; write: number };
+  drift?: boolean;
+  /** One of FAMILY_NOTES. */
+  note?: string;
+  /** Landflow: what the key's scopes cover. */
+  can?: { brain: boolean; run: boolean; runs: boolean; flows: boolean };
+  /** Landflow: the triage flow's webhook (D121). */
+  triage?: { path: string; header: string; hasSecret: boolean };
+  /** Clickland: the console's origin, for Open in Clickland (D118). */
+  console?: string;
+};
+export type FamilyList = { canStore: boolean; clickland: FamilyInfo; landflow: FamilyInfo; landfall: FamilyInfo };
+/** Every sentence a sibling's note or error can be; the raw error goes to main's log only. */
+export const FAMILY_NOTES = {
+  cantStore: "This machine can't encrypt the token, so Landlens won't store it.",
+  httpOnlyHere: "Use https, or plain http only to this machine (127.0.0.1, localhost).",
+  keyElsewhere: "Paste the key again: a stored key never follows a new address.",
+  unreachable: "Nothing is listening at that address.",
+  clicklandRefused: "Clickland refused the key.",
+  clicklandAnswer: "Clickland's answer wasn't what Landlens expected.",
+  clicklandSlow: "Clickland didn't answer in time.",
+  clicklandWrites: "This key can also write. A key with only read is enough.",
+  landflowRefused: "Landflow refused the key.",
+  landflowAnswer: "Landflow's answer wasn't what Landlens expected.",
+  landflowSlow: "Landflow didn't answer in time.",
+  landflowNotKey: "Landflow didn't take that as a personal API key.",
+  landflowWrites: "This key can also change workflows. Landlens doesn't need that.",
+  connectLandflow: "Connect Landflow first.",
+  landfallOff: "This Landfall doesn't offer its MCP connector (MCP_GATEWAY_ENABLED is off).",
+  landfallAnswer: "Landfall's answer wasn't what Landlens expected.",
+  landfallSlow: "Landfall didn't answer in time.",
+  landfallElsewhere: "Landfall's sign-in named another server, so Landlens stopped.",
+  landfallDenied: "The sign-in was turned down at Landfall.",
+  landfallTimeout: "The sign-in wasn't finished within 5 minutes. Sign in again.",
+  landfallExpired: "Landfall's sign-in ran out. Sign in again.",
+  landfallUnreachable: "Couldn't reach Landfall.",
+} as const;
+/** "<Sibling> answered HTTP <n>.": the one note with a number in it. */
+export const familyHttpNote = (name: "Clickland" | "Landflow" | "Landfall", status: number) => `${name} answered HTTP ${Math.trunc(status)}.`;
 
 // Google Cloud (docs/gcp.md, wave 6 part 4): browse every resource of the projects you choose, read-only, with
 // gcloud's own sign-in. Landlens stores no Google credential; the token stays in main. Names are held to Google's
@@ -576,6 +667,24 @@ export const channels = {
   "conn:test": z.object({ provider: ConnProvider }),
   "conn:repin": z.object({ provider: ConnProvider }),
   "conn:disconnect": z.object({ provider: ConnProvider }),
+  // The Land family (docs/family.md). A Landflow key comes in on family:connect, the triage webhook's secret on
+  // family:set; no channel sends one back. Addresses are FamilyOrigin here; main holds them to familyUrlAllowed with
+  // its overrides (LANDLENS_FAMILY_HTTP_HOSTS, unpackaged only). A Landfall sign-in is a flow, ended by conn:cancel.
+  "family:list": z.object({ context: z.string().min(1).max(253).optional() }),
+  "family:connect": z.object({ sibling: z.literal("landflow"), url: FamilyOrigin, key: LandflowKey.optional() }),
+  "family:signin": z.object({ sibling: z.literal("landfall"), url: FamilyOrigin }),
+  "family:set": z
+    .object({
+      sibling: Sibling,
+      toSessions: z.boolean().optional(),
+      readsAuto: z.boolean().optional(),
+      console: FamilyUrl.nullable().optional(),
+      triage: z.object({ path: TriagePath, header: TriageHeader, secret: TriageSecret.optional() }).nullable().optional(),
+    })
+    .refine((r) => r.console === undefined || r.sibling === "clickland", "only Clickland has a console address")
+    .refine((r) => r.triage === undefined || r.sibling === "landflow", "only Landflow has a triage webhook"),
+  "family:test": z.object({ sibling: Sibling }),
+  "family:disconnect": z.object({ sibling: Sibling }),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
   "agent:autonomy": AutonomyRequest,
@@ -672,6 +781,12 @@ export type Responses = {
   "conn:test": McpTest;
   "conn:repin": ConnInfo;
   "conn:disconnect": ConnInfo;
+  "family:list": FamilyList;
+  "family:connect": FamilyInfo;
+  "family:signin": { flow: string };
+  "family:set": FamilyInfo;
+  "family:test": McpTest;
+  "family:disconnect": FamilyInfo;
   "agent:autonomy": AutonomyState;
   "gcp:status": GcpStatus;
   "gcp:projects": { projects: GcpProject[]; cut: boolean };
@@ -1059,6 +1174,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
+  "family:update",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

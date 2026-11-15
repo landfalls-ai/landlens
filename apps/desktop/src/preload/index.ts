@@ -15,12 +15,14 @@ const CHANNELS: readonly Channel[] = [
   "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
   "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",
+  "family:list", "family:connect", "family:signin", "family:set", "family:test", "family:disconnect",
   "agent:autonomy",
   "gcp:status", "gcp:projects", "gcp:choose", "gcp:agent-read", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
+  "family:update",
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */

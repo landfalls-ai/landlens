@@ -65,7 +65,7 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
-- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 7).
+- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 8).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
   both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
@@ -177,4 +177,14 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten
   pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
 - **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
-  Clickland (wave 6).
+  Clickland (wave 7 part 5).
+- **The Land family is connections only so far** (wave 7 part 1, [family.md](family.md)). Landlens signs in to
+  Clickland, Landflow and Landfall, but nothing uses those sign-ins beyond who-am-I and **Check** yet: no family
+  tools in Claude sessions (part 2, so the cards have no **Tools for Claude** or **Reads run without asking** rows,
+  though the switches are stored), no Clickland logs, traces or console links (part 3; the console address can be
+  set only over IPC), no triage or flows from a resource (part 4; the webhook is stored, not sent), and no
+  telemetry or brain (part 5). No live link was checked with a real key: making a key writes to a sibling, so that
+  waits for the person. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in was checked
+  only against the fake. A Landflow key that can change workflows is kept, with a note. Landbright sign-in for
+  Landlens itself is not planned until a sibling accepts Landbright tokens (D104). The Land family cards were checked
+  at 1024×700. Below the page's 640px container width they have a rule, but no test is narrow enough to reach it.

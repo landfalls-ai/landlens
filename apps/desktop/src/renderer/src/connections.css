@@ -65,3 +65,31 @@ button.secondary.sm { height: 24px; padding: 0 8px; font-size: var(--t-12); }
 .welcome-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; font-size: var(--t-12); }
 .welcome-link .dim { font-weight: 400; color: var(--ink-3); }
 .tool-badges { display: inline-flex; gap: 6px; flex: none; }
+
+/* The Land family (docs/family.md, wave 7): a section under Google Cloud, one card per sibling. Each card's uses are
+   rows: the use, a sentence, and its state at the right; under 640 px the state goes under the sentence. */
+.ov.conn > .fam { width: 100%; max-width: 820px; display: grid; gap: 12px; }
+.fam-head { display: grid; gap: 4px; padding: 10px 2px 0; }
+.fam-head h2 { margin: 0; font-size: var(--t-13); font-weight: 600; color: var(--ink); }
+.fam-head p { margin: 0; max-width: 68ch; }
+.fam-addr { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.fam-addr .mono { overflow-wrap: anywhere; color: var(--ink-2); }
+.fam-rows { list-style: none; margin: 0; padding: 0; display: grid; }
+.fam-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) auto; align-items: center; gap: 4px 14px; padding: 9px 0; border-top: 1px solid var(--line); }
+.fam-label { font-size: var(--t-12); color: var(--ink-2); }
+.fam-say { min-width: 0; overflow-wrap: anywhere; }
+.fam-state { display: inline-flex; align-items: center; gap: 6px; justify-self: end; white-space: nowrap; }
+.fam-state .small { color: var(--ink-2); }
+.fam-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.fam-dot.ok { background: var(--ok); }
+.fam-dot.warn { background: var(--warn); }
+.fam-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--line); }
+.fam-check { display: grid; gap: 6px; justify-items: start; }
+.fam-form .field .dim.mono { flex: none; padding-left: 2px; }
+.fam-form-say { margin: 0; }
+.fam-form .conn-token-acts .link-btn { margin-right: auto; }
+@container main (max-width: 640px) {
+  .fam-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .fam-row .fam-say { grid-column: 1 / -1; grid-row: 2; }
+}
+.fam small .mono, .fam .fam-say .mono, .fam .conn-note .mono { font-size: .95em; }
