@@ -1,14 +1,19 @@
 // One sidebar: the cluster switcher, the jump row, and the resource nav. Folds to a 52px rail of icons when the
 // drawer and the dock both want room (or on ⌘B).
 import type { ClusterInfo, KubeContext } from "@landlens/contracts";
-import { Check, ChevronDown, ChevronsUpDown, PanelLeft, Search } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronsUpDown, PanelLeft, Search, Shapes, Star } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Badge } from "./health";
 import { Ic, kindIcon, MOD } from "./icons";
-import { SECTIONS, type NavItem } from "./kinds";
+import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
 export type Current = NavItem | "overview" | "mcp" | "agent";
+
+/** A kind's key for pins: `group/resource`. */
+export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
+/** Past this many custom kinds the section gets a filter (D38). */
+const FILTER_PAST = 12;
 
 export function Sidebar(props: {
   cluster: ClusterInfo;
@@ -23,10 +28,17 @@ export function Sidebar(props: {
   onToggle: () => void;
   onSwitch: (context: string) => void;
   onJump: () => void;
+  /** Kinds pinned under Agent (D39), by navKey. */
+  pins: string[];
+  onPin: (key: string) => void;
 }) {
   const { cluster, rail } = props;
   const [menu, setMenu] = useState(false);
   const [closed, setClosed] = useState<Set<string>>(() => new Set(props.sections.map(([s]) => s).filter((s) => !SECTIONS.includes(s))));
+  const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set());
+  const [customFilter, setCustomFilter] = useState("");
+  const [flyout, setFlyout] = useState<number>();
+  const flyWrap = useRef<HTMLDivElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const seen = useRef(new Set<string>());
   const tile = clusterTile(cluster.context);
@@ -58,20 +70,115 @@ export function Sidebar(props: {
     };
   }, [menu]);
 
-  const item = (key: string, label: string, resource: string, on: boolean, badge: Badge | undefined, pick: () => void) => (
-    <button
-      key={key}
-      className={"nav-item" + (on ? " on" : "")}
-      aria-label={label}
-      aria-current={on ? "page" : undefined}
-      title={rail ? label + (badge ? ` · ${badge.n} ${badge.tone === "bad" ? "failing" : "to watch"}` : "") : undefined}
-      onClick={pick}
-    >
-      <Ic icon={kindIcon(resource)} size={15} />
-      <span className="nav-label">{label}</span>
-      {badge ? (
-        <span className={`nav-badge ${badge.tone}`} aria-hidden="true" title={`${badge.n} ${badge.tone === "bad" ? (badge.n === 1 ? "problem" : "problems") : badge.n === 1 ? "thing to watch" : "things to watch"}`}>{badge.n}</span>
+  useEffect(() => {
+    if (flyout === undefined) return;
+    const away = (e: MouseEvent) => flyWrap.current && !flyWrap.current.contains(e.target as Node) && setFlyout(undefined);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), setFlyout(undefined));
+    window.addEventListener("mousedown", away);
+    window.addEventListener("keydown", esc, true);
+    return () => {
+      window.removeEventListener("mousedown", away);
+      window.removeEventListener("keydown", esc, true);
+    };
+  }, [flyout]);
+  useEffect(() => setFlyout(undefined), [rail]);
+
+  const pinned = useMemo(() => {
+    const all = props.sections.flatMap(([, items]) => items);
+    return props.pins.map((k) => all.find((n) => navKey(n) === k)).filter((n): n is NavItem => !!n);
+  }, [props.sections, props.pins]);
+  const isPinned = (n: NavItem) => props.pins.includes(navKey(n));
+
+  const item = (key: string, label: string, resource: string, on: boolean, badge: Badge | undefined, pick: () => void, pin?: NavItem) => (
+    <div key={key} className="nav-row">
+      <button
+        className={"nav-item" + (on ? " on" : "")}
+        aria-label={label}
+        aria-current={on ? "page" : undefined}
+        title={rail ? label + (badge ? ` · ${badge.n} ${badge.tone === "bad" ? "failing" : "to watch"}` : "") : undefined}
+        onClick={pick}
+      >
+        <Ic icon={pin?.type.custom ? Shapes : kindIcon(resource)} size={15} />
+        <span className="nav-label">{label}</span>
+        {badge ? (
+          <span className={`nav-badge ${badge.tone}`} aria-hidden="true" title={`${badge.n} ${badge.tone === "bad" ? (badge.n === 1 ? "problem" : "problems") : badge.n === 1 ? "thing to watch" : "things to watch"}`}>{badge.n}</span>
+        ) : null}
+      </button>
+      {pin && !rail ? (
+        <button
+          className={"nav-pin" + (isPinned(pin) ? " on" : "")}
+          aria-label={isPinned(pin) ? `Unpin ${label}` : `Pin ${label}`}
+          aria-pressed={isPinned(pin)}
+          title={isPinned(pin) ? "Unpin" : "Pin under Agent"}
+          onClick={() => props.onPin(navKey(pin))}
+        >
+          <Ic icon={Star} size={12} />
+        </button>
       ) : null}
+    </div>
+  );
+  const kindItem = (n: NavItem) => item(navKey(n), n.label, n.type.resource, props.current === n, props.badges.byResource[n.type.resource], () => props.onPick(n), n);
+
+  /** Custom resources (D38): Definitions, then each API group folding, with a filter past 12 kinds; one icon in the rail. */
+  const custom = (items: NavItem[]) => {
+    const defs = items.filter((n) => !n.group);
+    const kinds = items.filter((n) => n.group);
+    const f = customFilter.trim().toLowerCase();
+    const groups = new Map<string, NavItem[]>();
+    for (const n of kinds) {
+      if (f && !n.label.toLowerCase().includes(f) && !n.group!.toLowerCase().includes(f) && !n.type.resource.includes(f)) continue;
+      groups.set(n.group!, [...(groups.get(n.group!) ?? []), n]);
+    }
+    const list = (inFlyout: boolean) => (
+      <>
+        {kinds.length > FILTER_PAST && !inFlyout ? (
+          <input className="nav-filter" type="search" placeholder={`Filter ${kinds.length} kinds`} aria-label="Filter custom resources" value={customFilter} onChange={(e) => setCustomFilter(e.target.value)} />
+        ) : null}
+        {defs.map((n) => inFlyout ? flyItem(n) : kindItem(n))}
+        {[...groups].sort(([a], [b]) => a.localeCompare(b)).map(([g, ns]) => {
+          const open = inFlyout || !!f || !closedGroups.has(g);
+          return (
+            <div key={g} role="group" aria-label={g} style={{ display: "contents" }}>
+              {inFlyout ? <div className="menu-label mono">{g}</div> : (
+                <button className={"nav-group" + (open ? "" : " closed")} aria-expanded={open} onClick={() => setClosedGroups((c) => {
+                  const next = new Set(c);
+                  if (next.has(g)) next.delete(g);
+                  else next.add(g);
+                  return next;
+                })}>
+                  <Ic icon={ChevronDown} size={11} />
+                  <span className="mono">{g}</span>
+                  <span className="count">{ns.length}</span>
+                </button>
+              )}
+              {open ? ns.sort((a, b) => a.label.localeCompare(b.label)).map((n) => inFlyout ? flyItem(n) : kindItem(n)) : null}
+            </div>
+          );
+        })}
+        {f && !groups.size ? <p className="small dim nav-none">No kinds match “{customFilter.trim()}”.</p> : null}
+      </>
+    );
+    if (rail) {
+      const on = items.some((n) => props.current === n);
+      return (
+        <div className="nav-fly-wrap" ref={flyWrap}>
+          <button className={"nav-item" + (on ? " on" : "")} aria-label={CUSTOM} aria-haspopup="menu" aria-expanded={flyout !== undefined} title={CUSTOM}
+            onClick={(e) => {
+              const top = e.currentTarget.getBoundingClientRect().top;
+              setFlyout((v) => (v === undefined ? top : undefined));
+            }}>
+            <Ic icon={Shapes} size={15} />
+          </button>
+          {flyout !== undefined ? <div className="nav-flyout" role="menu" aria-label={CUSTOM} style={{ top: Math.max(8, Math.min(flyout, window.innerHeight - 428)) }}><div className="menu-label">{CUSTOM}</div>{list(true)}</div> : null}
+        </div>
+      );
+    }
+    return list(false);
+  };
+  const flyItem = (n: NavItem) => (
+    <button key={navKey(n)} role="menuitem" className={"cluster-option" + (props.current === n ? " on" : "")} onClick={() => (setFlyout(undefined), props.onPick(n))}>
+      <Ic icon={n.group ? Shapes : kindIcon(n.type.resource)} size={14} />
+      <span className="name">{n.label}</span>
     </button>
   );
 
@@ -119,8 +226,15 @@ export function Sidebar(props: {
         {item("overview", "Overview", "overview", props.current === "overview", props.badges.overview, () => props.onPick("overview"))}
         {item("mcp", "MCP", "mcp", props.current === "mcp", undefined, () => props.onPick("mcp"))}
         {item("agent", "Agent", "agent", props.current === "agent", undefined, () => props.onPick("agent"))}
+        {pinned.length ? (
+          <div role="group" aria-label="Pinned" style={{ display: "contents" }}>
+            <div className="nav-sec static"><span>Pinned</span></div>
+            {pinned.map((n) => item(`pin:${navKey(n)}`, n.label, n.type.resource, props.current === n, props.badges.byResource[n.type.resource], () => props.onPick(n), n))}
+          </div>
+        ) : null}
         {props.navError ? <p className="small tone-bad">{props.navError}</p> : null}
         {props.sections.map(([section, items]) => {
+          if (section === CUSTOM && rail) return <div key={section} role="group" aria-label={section} style={{ display: "contents" }}>{custom(items)}</div>;
           const open = rail || !closed.has(section);
           return (
             <div key={section} role="group" aria-label={section} style={{ display: "contents" }}>
@@ -135,10 +249,10 @@ export function Sidebar(props: {
                   return next;
                 })}
               >
-                <span>{section === "core" ? "Core (other)" : section}</span>
+                <span>{section === "core" ? "Core (other)" : section}{section === CUSTOM ? <span className="count">{items.filter((n) => n.group).length}</span> : null}</span>
                 <Ic icon={ChevronDown} size={12} />
               </button>
-              {open ? items.map((n) => item(`${n.type.group}/${n.type.resource}`, n.label, n.type.resource, props.current === n, props.badges.byResource[n.type.resource], () => props.onPick(n))) : null}
+              {open ? (section === CUSTOM ? custom(items) : items.map(kindItem)) : null}
             </div>
           );
         })}

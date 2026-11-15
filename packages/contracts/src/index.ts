@@ -50,6 +50,8 @@ export const ResourceType = z.object({
   namespaced: z.boolean(),
   verbs: z.array(z.string()),
   shortNames: z.array(z.string()).optional(),
+  /** Defined by a CustomResourceDefinition (from the CRD list's names; by group when that list can't be read). */
+  custom: z.boolean().optional(),
 });
 export type ResourceType = z.infer<typeof ResourceType>;
 

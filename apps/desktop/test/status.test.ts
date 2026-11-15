@@ -73,4 +73,18 @@ describe("buildNav", () => {
     ]);
     expect(nav.at(-1)!.columns.map((c) => c.id)).toEqual(["name", "namespace", "age"]);
   });
+  it("puts custom kinds under Custom resources by group, with Definitions first (D38)", () => {
+    const nav = buildNav([
+      t("apiextensions.k8s.io", "customresourcedefinitions", "CustomResourceDefinition", false),
+      { ...t("k3s.cattle.io", "addons", "Addon"), custom: true },
+      { ...t("cert-manager.io", "certificates", "Certificate"), custom: true },
+      t("example.com", "widgets", "Widget"),
+    ]);
+    expect(nav.map((n) => [n.section, n.label, n.group])).toEqual([
+      ["Custom resources", "Definitions", undefined],
+      ["Custom resources", "Addon", "k3s.cattle.io"],
+      ["Custom resources", "Certificate", "cert-manager.io"],
+      ["example.com", "Widget", undefined],
+    ]);
+  });
 });

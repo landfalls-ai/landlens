@@ -12,7 +12,8 @@ import { Ic, RESOURCE_OF_KIND } from "./icons";
 import { JumpPalette } from "./JumpPalette";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
-import { buildNav, SECTIONS, type NavItem } from "./kinds";
+import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
+import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
 import { splitByShape } from "./present";
 import { ResourceTable, rowTone } from "./ResourceTable";
@@ -90,8 +91,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const scoped = list?.type.namespaced && namespace ? namespace : undefined;
   const watch = useWatch(list ? { handle: cluster.handle, group: list.type.group, version: list.type.version, resource: list.type.resource, ...(scoped ? { namespace: scoped } : {}) } : undefined);
   const pods = list?.type.resource === "pods" && list.type.group === "";
+  // A custom kind's columns come from its definition's printer columns (D40).
+  const crd = useCrd(cluster.handle, list);
+  const { columns, printer } = useColumns(list, crd, watch.items);
+  const [pins, togglePin] = usePins(cluster.context);
 
-  const tones = useMemo(() => new Map(list ? watch.items.map((o) => [o.metadata.uid, rowTone(list.columns, o, now)]) : []), [watch.items, list, now]);
+  const tones = useMemo(() => new Map(list ? watch.items.map((o) => [o.metadata.uid, rowTone(columns, o, now)]) : []), [watch.items, list, columns, now]);
   const shown = useMemo(() => {
     const f = filter.trim().toLowerCase();
     return watch.items.filter((o) =>
@@ -116,7 +121,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const sections = useMemo(() => {
     const by = new Map<string, NavItem[]>();
     for (const n of nav) by.set(n.section, [...(by.get(n.section) ?? []), n]);
-    const order = [...SECTIONS, ...[...by.keys()].filter((s) => !SECTIONS.includes(s)).sort()];
+    // Known sections, then API groups that aren't custom, then Custom resources last (D38).
+    const order = [...SECTIONS, ...[...by.keys()].filter((s) => !SECTIONS.includes(s) && s !== CUSTOM).sort(), CUSTOM];
     return order.filter((s) => by.has(s)).map((s) => [s, by.get(s)!] as const);
   }, [nav]);
 
@@ -245,6 +251,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
         onToggle={() => setUserRail(!rail)}
         onSwitch={switchTo}
         onJump={() => setJump(true)}
+        pins={pins}
+        onPin={togglePin}
       />
       <main className="main" ref={main}>
         <Toolbar
@@ -302,7 +310,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
         ) : (
           <ResourceTable
             resource={list.type.resource}
-            columns={list.columns}
+            columns={columns}
             items={shown}
             now={now}
             loading={watch.loading}
@@ -349,6 +357,11 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           metricsVersion={metricsVersion}
           onSettings={() => setSettings(true)}
           onShell={(t) => (bench.openShell(t), focusBench())}
+          printer={printer}
+          onOpenKind={(group, resource) => {
+            const n = nav.find((x) => x.type.group === group && x.type.resource === resource);
+            if (n) pick(n);
+          }}
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
           {...(show ? { show } : {})}
         />

@@ -197,6 +197,37 @@ Code: `Forwards.tsx` (port lines, the popover, the Forwards tab), `apps/desktop/
 (`ForwardService`: choosing and following the pod, tokens, saving and restoring), `packages/kube/src/forward.ts`
 (the WebSocket bridge, listening on 127.0.0.1, choosing a Service's pod and port).
 
+## Custom resources
+
+Kinds a CustomResourceDefinition defines (D38–D41), from discovery: Landlens reads the CRD list (metadata only)
+and marks the kinds it names as custom; if your role can't list CRDs, a kind is custom when its group isn't one
+Kubernetes serves.
+
+- **One section** (D38), last in the sidebar and closed at first: **Custom resources** with a count, holding
+  **Definitions** (the CRD list, moved from Cluster: Name, Group, Kind, Scope, Age), then each API group as a
+  folding sub-heading in mono with its count (`k3s.cattle.io 2`), holding its kinds. Past 12 kinds a filter field
+  ("Filter 40 kinds") narrows them by kind, group or resource. In the rail the section is one Shapes icon with a
+  flyout listing the same.
+- **Pinned** (D39): a star on a kind's row (on hover) pins it to a Pinned section under Agent; the star there
+  unpins it. Pins are per cluster context, in the window's storage, at most 20.
+- **Printer columns** (D40): a custom kind's list uses its CRD's columns for the served version (priority 0),
+  between Name/Namespace and Age, without the CRD's own Age: dates as ages (the date in the tooltip), numbers
+  right-aligned in mono, booleans as a check or a dash and the word, text cut to 300 characters, a column's
+  description in its header's tooltip. When an object has a `Ready` or `Available` condition, a Status column
+  shows it the pod way (a quiet dot when True, a red badge with the reason when False, muted when Unknown), unless
+  the CRD has a Status or Ready column already. The paths are kubectl's JSONPath, read by a small reader that
+  never evaluates anything: `.a.b`, `['a.b']`, `a\.b`, `[0]`, `[-1]`, `[*]` and `[?(@.type=="Ready")]` (`==`,
+  `!=` against a string, number or boolean); anything else (`..`, ranges, functions) reads as nothing, at most 50
+  values.
+- **Drawers** (D41): a custom resource's Overview has its printer columns as facts, then the conditions and labels
+  every drawer has; Events; YAML (editable, as for any kind). A definition's Overview: group, kind, scope, short
+  names, the versions with served, storage and deprecated badges, the served version's columns with their paths,
+  and **Open certificates** (its kind's list).
+
+Code: `apps/desktop/src/renderer/src/printer.ts` (the JSONPath reader, columns, the condition cell), `custom.ts`
+(the CRD read, the columns, pins), `Sidebar.tsx` (the section, the flyout, pins), `kinds.ts` (`CUSTOM`),
+`packages/kube/src/discovery.ts` (`markCustom`).
+
 ## Tests
 
 - `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
@@ -240,5 +271,5 @@ LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e
 
 ## Still to come in wave 4
 
-Part 4, CRD printer columns, Helm releases (read), the full ⌘K palette and Prometheus (D38–D45). See
-[limitations.md](limitations.md) for what parts 1 to 3 leave out.
+Part 4's rest: Helm releases (read), the full ⌘K palette and Prometheus (D42–D45). See
+[limitations.md](limitations.md) for what parts 1 to 4 leave out.

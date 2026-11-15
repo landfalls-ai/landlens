@@ -4,7 +4,17 @@ import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podStatus, podReady, podRestarts, nodeStatus, nodeRoles, type Tone } from "@landlens/kube/status";
 
 export type Cell = { text: string; tone?: Tone; title?: string; sort?: number | string };
-export type Column = { id: string; label: string; cell: (o: KubeObject, now: number) => Cell; width?: string };
+export type Column = {
+  id: string; label: string; cell: (o: KubeObject, now: number) => Cell; width?: string;
+  /** Right-aligned mono (numbers). */
+  num?: boolean;
+  /** How a printer column's cell is drawn: an age, or a boolean as an icon and word. */
+  kind?: "age" | "bool";
+  description?: string;
+};
+
+/** The sidebar's last section (D38): Definitions, then each custom API group. */
+export const CUSTOM = "Custom resources";
 
 type Spec = { group: string; resource: string; label: string; section: string; columns?: Column[] };
 
@@ -116,12 +126,16 @@ export const SPECS: Spec[] = [
       return { text: age(t, now), sort: -t };
     }, width: "80px" },
   ] },
-  { section: "Cluster", group: "apiextensions.k8s.io", resource: "customresourcedefinitions", label: "Custom resource definitions" },
+  { section: CUSTOM, group: "apiextensions.k8s.io", resource: "customresourcedefinitions", label: "Definitions", columns: [
+    name, text("group", "Group", (o) => o.spec?.group), text("kind", "Kind", (o) => o.spec?.names?.kind),
+    text("scope", "Scope", (o) => o.spec?.scope, "110px"), ageCol,
+  ] },
 ];
 
 export const SECTIONS = ["Workloads", "Network", "Config", "Storage", "Access", "Cluster"];
 
-export type NavItem = { type: ResourceType; label: string; section: string; columns: Column[] };
+/** `group`: a custom kind's API group, its sub-heading under Custom resources (D38). */
+export type NavItem = { type: ResourceType; label: string; section: string; columns: Column[]; group?: string };
 
 /** Build the sidebar from what the cluster actually serves: known kinds in their sections, the rest by API group. */
 export function buildNav(types: ResourceType[]): NavItem[] {
@@ -139,7 +153,8 @@ export function buildNav(types: ResourceType[]): NavItem[] {
     // Legacy duplicates of core kinds and noisy internals add nothing to the sidebar.
     if (t.group === "events.k8s.io" || t.group === "metrics.k8s.io" || t.resource === "componentstatuses" || t.resource === "bindings") continue;
     seen.add(k);
-    out.push({ type: t, label: t.kind, section: t.group || "core", columns: genericColumns(t) });
+    if (t.custom) out.push({ type: t, label: t.kind, section: CUSTOM, group: t.group, columns: genericColumns(t) });
+    else out.push({ type: t, label: t.kind, section: t.group || "core", columns: genericColumns(t) });
   }
   return out;
 }

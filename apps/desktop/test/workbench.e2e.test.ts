@@ -113,7 +113,7 @@ describe.runIf(run)("the workbench on OrbStack", () => {
 
   it("merges a deployment's pods in its logs, and opens them in the panel", async () => {
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Deployments" }).click();
+    await page.getByRole("button", { name: "Deployments", exact: true }).click();
     const row = page.locator(".tr", { hasText: "shop-web" }).first();
     await row.waitFor({ timeout: 30_000 });
     await row.click();

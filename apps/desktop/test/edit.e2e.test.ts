@@ -58,7 +58,7 @@ describe.runIf(run)("the YAML editor on OrbStack", () => {
       kubectl("wait", "--for=delete", "pod", "-l", "app=shop-web", "--field-selector=status.phase!=Running", "--timeout=60s");
       kubectl("rollout", "status", "deploy/shop-web", "--timeout=120s");
     }
-  });
+  }, 200_000);
 
   it("edits a deployment's replicas through a dry-run review, as you", async () => {
     await page.getByRole("button", { name: "Deployments", exact: true }).click();

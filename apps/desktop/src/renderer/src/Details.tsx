@@ -1,6 +1,6 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, X } from "lucide-react";
+import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
@@ -17,6 +17,8 @@ import { leaveEdit } from "./editGuard";
 import { YamlEdit } from "./YamlEdit";
 import { PortLine, useCanForward } from "./Forwards";
 import type { ClusterInfo } from "@landlens/contracts";
+import { CRD, printerFacts } from "./custom";
+import { printerColumns, type PrinterColumn } from "./printer";
 
 type Tab = "overview" | "events" | "yaml" | "metrics" | "logs";
 export type NavTarget = { kind: string; name: string; namespace?: string };
@@ -44,6 +46,10 @@ export function Details(props: {
   onLogsInPanel: (s: LogSource) => void;
   /** Asked from outside (a row's menu): show this tab, on this container. Changes `n` to ask again. */
   show?: { tab: "logs" | "shell" | "edit"; container?: string; n: number };
+  /** A custom resource's printer columns, shown as facts (D41). */
+  printer?: PrinterColumn[];
+  /** A definition's "Open <kind>": the kind's list. */
+  onOpenKind?: (group: string, resource: string) => void;
 }) {
   const { object: o, type, now } = props;
   const logs = logSourceOf(type.kind, o);
@@ -165,7 +171,8 @@ export function Details(props: {
           <LogsView key={`${o.metadata.uid}`} handle={props.handle} source={{ ...logs, ...(logContainer ? { container: logContainer } : {}) }} place="drawer" onAsk={props.onAsk} onOpenInPanel={props.onLogsInPanel} />
         ) : null}
         {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
-          onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec} />}
+          onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec}
+          {...(props.printer?.length ? { printer: props.printer } : {})} {...(props.onOpenKind ? { onOpenKind: props.onOpenKind } : {})} />}
         {tab === "events" && <Events events={events} now={now} />}
         {tab === "yaml" ? (
           <div className="yaml-tab">
@@ -198,10 +205,13 @@ function readyOf(o: KubeObject): string | undefined {
   return undefined;
 }
 
-function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster }: {
+function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster, printer, onOpenKind }: {
   o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void;
   onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined; cluster: ClusterInfo;
+  printer?: PrinterColumn[]; onOpenKind?: (group: string, resource: string) => void;
 }) {
+  const definition = type.group === CRD.group && type.resource === CRD.resource;
+  const facts = printer ? printerFacts(o, printer, now) : [];
   const pod = type.resource === "pods" && type.group === "";
   const service = type.resource === "services" && type.group === "";
   const canForward = useCanForward(cluster.handle, pod || service ? o.metadata.namespace : undefined);
@@ -235,9 +245,17 @@ function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster 
             <dt>Pod IP</dt><dd className="mono">{o.status?.podIP ?? "—"}</dd>
           </>
         ) : null}
+        {definition ? <DefinitionFacts crd={o} /> : null}
+        {facts.map((f) => (
+          <span key={f.label} style={{ display: "contents" }}>
+            <dt title={f.title}>{f.label}</dt>
+            <dd className={f.num ? "num" : undefined} title={f.title}>{f.text}</dd>
+          </span>
+        ))}
         <dt>Created</dt>
         <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
+      {definition ? <Definition crd={o} {...(onOpenKind ? { onOpenKind } : {})} /> : null}
       {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} cluster={cluster} canForward={canForward} /> : null}
       {service ? <ServicePorts svc={o} cluster={cluster} canForward={canForward} /> : null}
       {conditions.length ? (
@@ -409,6 +427,63 @@ function Labels({ title, map }: { title: string; map?: Record<string, string> })
       <h3>{title}</h3>
       <div className="chips">{entries.map(([k, v]) => <span key={k} className="chip mono" title={`${k}=${v}`}><i>{k}</i>{v}</span>)}</div>
     </section>
+  );
+}
+
+/** A CustomResourceDefinition's facts (D41), in the drawer's facts list. */
+function DefinitionFacts({ crd }: { crd: KubeObject }) {
+  const names = crd.spec?.names ?? {};
+  return (
+    <>
+      <dt>Group</dt><dd className="mono">{crd.spec?.group ?? "—"}</dd>
+      <dt>Kind</dt><dd>{names.kind ?? "—"}</dd>
+      <dt>Scope</dt><dd>{crd.spec?.scope ?? "—"}</dd>
+      {names.shortNames?.length ? <><dt>Short names</dt><dd className="mono">{names.shortNames.join(", ")}</dd></> : null}
+    </>
+  );
+}
+
+/** A CustomResourceDefinition (D41): its versions, the served version's columns, and its list. */
+function Definition({ crd, onOpenKind }: { crd: KubeObject; onOpenKind?: (group: string, resource: string) => void }) {
+  const names = crd.spec?.names ?? {};
+  const versions = (crd.spec?.versions ?? []) as { name: string; served?: boolean; storage?: boolean; deprecated?: boolean }[];
+  const served = versions.find((v) => v.storage && v.served) ?? versions.find((v) => v.served);
+  const cols = served ? printerColumns(crd, served.name) : [];
+  const plural: string = names.plural ?? "";
+  return (
+    <>
+      <section>
+        <h3>Versions</h3>
+        <div className="crd-versions">
+          {versions.map((v) => (
+            <div key={v.name} className="crd-version">
+              <span className="mono">{v.name}</span>
+              {v.served ? <span className="badge ok">served</span> : <span className="badge muted">not served</span>}
+              {v.storage ? <span className="badge muted">storage</span> : null}
+              {v.deprecated ? <span className="badge warn">deprecated</span> : null}
+            </div>
+          ))}
+        </div>
+      </section>
+      {cols.length ? (
+        <section>
+          <h3>Columns <span className="dim small">({served!.name})</span></h3>
+          <div className="crd-cols">
+            {cols.map((c) => (
+              <span key={c.name} style={{ display: "contents" }}>
+                <span title={c.description}>{c.name}</span>
+                <span className="mono" title={c.jsonPath}>{c.jsonPath}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {onOpenKind && served && plural ? (
+        <button className="secondary crd-open" onClick={() => onOpenKind(crd.spec.group, plural)}>
+          Open {plural}<Ic icon={ArrowRight} size={13} />
+        </button>
+      ) : null}
+    </>
   );
 }
 

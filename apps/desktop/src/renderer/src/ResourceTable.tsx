@@ -1,6 +1,6 @@
 import type { KubeObject } from "@landlens/contracts";
 import type { Tone } from "@landlens/kube/status";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Minus } from "lucide-react";
 import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Ic, kindIcon, TONE_ICON } from "./icons";
 import type { Cell, Column } from "./kinds";
@@ -127,8 +127,9 @@ export function ResourceTable(props: {
             return (
               <button
                 key={c.id}
-                className={"th" + (NUMERIC.has(c.id) ? " num" : "") + (on ? " sorted" : "")}
+                className={"th" + (NUMERIC.has(c.id) || c.num || c.kind === "age" ? " num" : "") + (on ? " sorted" : "")}
                 role="columnheader"
+                title={c.description}
                 aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
                 onClick={() => setSort((s) => ({ id, dir: s.id === id ? (s.dir === 1 ? -1 : 1) : 1 }))}
               >
@@ -237,7 +238,14 @@ function Td({ col, cell, o, rowTone, split }: { col: Column; cell: Cell; o: Kube
     case "last":
       return <span role="gridcell" className="td age" title={title}>{cell.text}</span>;
     default:
-      return <span role="gridcell" className={"td plain" + (NUMERIC.has(col.id) ? " num" : "") + (cell.tone ? ` tone-${cell.tone}` : "")} title={title}>{cell.text}</span>;
+      // A custom resource's printer columns (D40): an age, a boolean as an icon and a word, a number in mono.
+      if (col.kind === "age") return <span role="gridcell" className="td age" title={title}>{cell.text}</span>;
+      if (col.kind === "bool") {
+        if (!cell.text) return <span role="gridcell" className="td" />;
+        const on = cell.text === "true";
+        return <span role="gridcell" className={`td bool tone-${on ? "ok" : "muted"}`} title={title}><Ic icon={on ? Check : Minus} size={13} />{cell.text}</span>;
+      }
+      return <span role="gridcell" className={"td plain" + (NUMERIC.has(col.id) || col.num ? " num" : "") + (cell.tone ? ` tone-${cell.tone}` : "")} title={title}>{cell.text}</span>;
   }
 }
 
