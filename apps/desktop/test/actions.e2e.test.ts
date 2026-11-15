@@ -1,7 +1,7 @@
 // Your actions (wave 8 part 1) in the built app against OrbStack: scale hands-web from its row's menu, restart it from
 // the drawer's ⋯, run hands-report from ⌘K, a conflict when it changed between review and Apply, Enter on a fresh
-// card sending nothing, ⌫ on a row opening a delete review, a Secret's delete review with no value, and Recent
-// actions. Needs deploy/scenarios/hands (node deploy/scenarios/hands/up.mjs) in landlens-dev; puts hands-web back to 2
+// card sending nothing, Enter held from the menu sending nothing (security review of part 1, L4), ⌫ on a row opening
+// a delete review, a Secret's delete review with no value, and Recent actions. Needs deploy/scenarios/hands (node deploy/scenarios/hands/up.mjs) in landlens-dev; puts hands-web back to 2
 // replicas and deletes the Job it made. Screenshots go to $LANDLENS_SHOTS (w8p1-*, dark and light).
 // LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/actions.e2e.test.ts
 import { execFileSync } from "node:child_process";
@@ -50,13 +50,16 @@ describe.runIf(run)("your actions on OrbStack", () => {
       args: [resolve(__dirname, "..")],
       env: { ...process.env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: mkdtempSync(join(tmpdir(), "landlens-e2e-")) },
     });
-    // Main's own dialog is answered here, never by the window: Cancel, and each question kept.
+    // Main's own dialog is answered here, never by the window: Cancel, and each question kept. The question main asks
+    // once a window has changed more than three objects in a minute (M2) is answered yes, so the tests below can go
+    // on applying, and an apply that shouldn't happen (L4) still would.
     await app.evaluate(({ dialog }) => {
       const g = globalThis as unknown as { asked: string[] };
       g.asked = [];
       (dialog as unknown as { showMessageBox: (...a: unknown[]) => Promise<unknown> }).showMessageBox = async (...a: unknown[]) => {
-        g.asked.push((a.at(-1) as { message: string }).message);
-        return { response: 1, checkboxChecked: false };
+        const q = a.at(-1) as { message: string; detail: string };
+        g.asked.push(q.message);
+        return { response: /in the last minute/.test(q.detail) ? 0 : 1, checkboxChecked: false };
       };
     });
     page = await app.firstWindow();
@@ -111,6 +114,8 @@ describe.runIf(run)("your actions on OrbStack", () => {
     expect(await sheet().innerText()).toContain("deployment landlens-dev/hands-web applied");
     await shot(page, "04-done", true);
     expect(replicas()).toBe("3");
+    // The new pod's status moves the Deployment's version: wait for it, so the next review isn't a conflict by timing.
+    kubectl("rollout", "status", "deploy/hands-web", "--timeout=120s");
     await sheet().getByRole("button", { name: "Done" }).click();
 
     // Back to 2 the same way.
@@ -169,6 +174,32 @@ describe.runIf(run)("your actions on OrbStack", () => {
     expect(kubectl("get", "deploy/hands-web", "-o", "jsonpath={.spec.template.metadata.annotations.kubectl\\.kubernetes\\.io/restartedAt}")).toMatch(/^\d{4}-/);
     await page.locator(".drawer").getByRole("button", { name: "Close details" }).click();
   }, 90_000);
+
+  it("Enter held down from the menu's Restart sends nothing: a repeated key never presses Apply (L4)", async () => {
+    const row = await list("Deployments", "hands-web");
+    const before = kubectl("get", "deploy/hands-web", "-o", "jsonpath={.metadata.generation}");
+    await row.click({ button: "right" });
+    const menu = page.getByRole("menu", { name: /Deployment hands-web/ });
+    await menu.getByRole("menuitem", { name: "Restart" }).focus();
+    // The first press chooses Restart; the key repeats until the card is up, then with Apply focused (as the sheet
+    // focuses it) for two seconds more, past the card's half second. Never a keyup in between.
+    await page.keyboard.down("Enter");
+    for (let i = 0; i < 200 && !(await card().isVisible()); i++) {
+      await page.waitForTimeout(50);
+      await page.keyboard.down("Enter");
+    }
+    await card().getByRole("button", { name: /^Apply/ }).focus();
+    for (let i = 0; i < 40; i++) {
+      await page.waitForTimeout(50);
+      await page.keyboard.down("Enter");
+    }
+    await page.keyboard.up("Enter");
+    await page.waitForTimeout(800);
+    expect(await card().isVisible()).toBe(true);
+    expect(kubectl("get", "deploy/hands-web", "-o", "jsonpath={.metadata.generation}")).toBe(before);
+    await card().getByRole("button", { name: /^Cancel/ }).click();
+    await card().waitFor({ state: "detached" });
+  }, 60_000);
 
   it("runs hands-report from ⌘K: a Job owned by the CronJob, then removed", async () => {
     await page.keyboard.press("Meta+K");

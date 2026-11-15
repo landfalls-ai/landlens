@@ -270,3 +270,16 @@ describe("the diff", () => {
     expect(diffLines("a\nb", "")).toMatchObject({ added: 0, removed: 2 });
   });
 });
+
+describe("security review of wave 8 part 1, L1: the agent's broker keeps no unscrubbed objects", () => {
+  it("prepareOp returns the objects before and after only when asked (the person's actions)", async () => {
+    const k = fakeCluster();
+    const { b } = broker(k.send, () => "never");
+    const agent = await (b as any).prepare(scale(3));
+    expect("current" in agent || "after" in agent).toBe(false);
+    const { prepareOp } = await import("../src/changes.js");
+    const mine = await prepareOp(k.send, scale(3), { fieldManager: "landlens", hideSecrets: true, keepObjects: true });
+    expect((mine.current as any).spec.replicas).toBe(1);
+    expect((mine.after as any).spec.replicas).toBe(3);
+  });
+});

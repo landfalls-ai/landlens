@@ -320,25 +320,42 @@ cluster deletes; Background propagation, pinned to the object's uid and resource
   colour. Arrow keys, Home/End, type-ahead, Esc. Each action asks `cluster:access` first (cached a minute): one your
   role can't use is disabled and says so ("Your role can't patch deployments in landlens-dev"). ⌘K has the verbs
   `scale`, `restart`, `trigger` and `delete` (delete is never an object's first row). ⌫ (or Delete) on a focused row
-  opens the delete review; no other key writes. A Secret has Delete only, and no Ask Claude.
+  opens the delete review, only when the row itself has focus and the key isn't held (`rowKeys.ts`); no other key
+  writes. A Secret has Delete only, and no Ask Claude.
 - **The sheet** (`ActionSheet.tsx`). Scale has a form (a number with − and +; arrows step one, Shift+arrows ten);
   the others open on the review. "Checking with the cluster…" while main reads and dry-runs as you; then the card:
   "Your action", main's title ("Scale deployment landlens-dev/hands-web to 3 replicas"), risk tags, main's facts,
-  the diff and the cluster's warnings. Apply sends the review's id and digest; the result is one line per object
-  (applied, already gone, changed after your review, failed), with **Review again** on a conflict. Nothing is
-  optimistic: the table changes when the watch does.
+  the diff and the cluster's warnings. Apply sends the review's id and digest (the SHA-256 of the card main answered
+  and the requests it keeps); a key held down never presses it. The result is one line per object (applied, already
+  gone, changed after your review, a Job of that name already there, failed; a request that got no answer in 30 s is
+  "may have been applied"), with **Review again** on a conflict. Nothing is optimistic: the table changes when the
+  watch does.
 - **Facts** (`actionFacts` in `packages/kube/src/actions.ts`): at most 8 of Landlens's own sentences, the loudest
-  first. An autoscaler that will set the count back; a PodDisruptionBudget a scale goes under; one pod with no
-  surge; a rollout already in progress; what recreates a deleted object (or that nothing will); finalizers; a
-  claim's volume and its reclaim policy; a Namespace's contents; Helm's release record; a CronJob that is suspended
-  or Forbid with a run going. A read that fails says "Landlens couldn't check …" and never blocks the review.
-- **Main's own dialog.** A delete of more than one object, or of a Namespace, CRD, Node, PersistentVolume or
-  APIService, asks again in a native dialog ("Delete 12 ConfigMaps in landlens-dev on orbstack?", Cancel the
-  default) after the card's button. Cancel keeps the review.
+  first; past 8 the last says how many more and of which tones ("And 23 more: 23 serious."), in the loudest one. An
+  autoscaler (autoscaling/v2, or v1 where v2 isn't served) that will set the count back; a Deployment that will set
+  its ReplicaSet's count back; a PodDisruptionBudget a scale goes under; one pod with no surge; a rollout already in
+  progress; what a deleted object's owner does (a ReplicaSet makes a new pod; a Job only if it hasn't finished; a
+  CronJob doesn't make its Job again), or that nothing will recreate it; finalizers; every claim's volume and its
+  reclaim policy; a Namespace's contents; Helm's release record; a CronJob that is suspended or Forbid with a run
+  going; a list cut at 500. A read that fails says "Landlens couldn't check …" and never blocks the review. Facts
+  are read when you review: by Apply they can be up to 15 minutes old.
+- **Main's own dialog** (a native dialog after the card's button, Cancel the default). It asks for: a delete of
+  more than one object; a delete of any cluster-scoped kind (a Namespace, CRD, Node, PersistentVolume, APIService,
+  ClusterRole, ClusterRoleBinding, StorageClass, a cluster-scoped custom resource); a delete with a serious fact (a
+  claim whose volume goes with it, a Namespace), of a claim whose volume Landlens couldn't read, or of a workload
+  with 10 pods or more; a restart of more than 3 workloads; and any apply after a window has had more than 3 objects
+  changed in the last minute ("This window has sent 3 changes in the last minute…"), so a bulk split into singles
+  still asks. The dialog names what and where: "Delete 12 ConfigMaps in 2 namespaces on orbstack?", the count by
+  namespace, every flagged object (cluster-scoped, in a system namespace like `kube-system`, or outside the
+  namespace most are in) by `namespace/name` first, then the rest, ten and "and N more in landlens-dev". The first
+  Cancel keeps the review; the second drops it.
 - **Recent actions** (`RecentActions.tsx`, `main/action-log.ts`): one row per apply (and per Cancel in main's
-  dialog), kept in `userData/actions.json` (0600, the newest 500), shown newest first from the status bar's History
-  item (with the count since start) or ⌘K's "Recent actions". A row is its action, kind, names and a closed detail
-  ("2 → 3 replicas"); no diff, no message and no value.
+  dialog), kept in `userData/actions.json` (0600, the newest 500, a file over 4 MB moved aside), shown newest first
+  from the status bar's History item (with the count since start) or ⌘K's "Recent actions", for the connected
+  cluster only (its context and its API server). A row is written as *Sent* before the first request and settled
+  when they answer; if the log can't take it, nothing is sent. A row is its action, kind (with its group and
+  resource, so a click opens that kind), names and a closed detail ("2 → 3 replicas"); no diff, no message and no
+  value. It is a convenience record on this computer, not evidence: the front door's audit is.
 - **Ask Claude first** puts the review in the dock as quoted data with a fixed question ([agent.md](agent.md#ask-claude-first)).
 
 Code: `packages/kube/src/actions.ts` (builders, the kind table in `action-kinds.ts`, facts), `changes.ts`
@@ -373,7 +390,8 @@ Wave 8 part 2 (D149–D154). A Node's menu (and the drawer's ⋯, and ⌘K's `co
   reported). **Ask Claude** sends the plan as names, classes and counts only, quoted as data, with "Which blockers
   matter, and what is a safe order?".
 - **The run.** After main's own dialog ("Drain node-2 on orbstack? 9 pods will be evicted, 1 is blocked by a
-  disruption budget and will be retried, 3 DaemonSet pods stay."), main answers with a run at once and works on its
+  disruption budget and will be retried, 3 DaemonSet pods stay.", then the pods it evicts counted by namespace, each
+  one in a system namespace by name), main writes its Recent actions row and answers with a run at once and works on its
   own token (`you · <context> · drain <node>`): the cordon it kept (a 409 there stops the run before any eviction:
   "The node changed since the preview"), then the evictions of exactly the pods the preview listed, by uid, four at a
   time. A 429 is tried again every 5 s until the run's 10 minutes are up, then the pod is *blocked*; a 404 or a 409
@@ -414,9 +432,11 @@ renderer's `DrainPlanView.tsx` (the drain sheet) and `ActionSheet.tsx` (cordon's
   every fact, no copied text), `edits.test.ts` (`reviewOps`, apply each, the digest, a Secret's delete), on OrbStack
   `actions.integration.test.ts` (scale, restart, suspend and trigger hands-* for real and put back; the triggered Job
   equal to `kubectl create job --from`'s; a delete pinned to an old version is a 409; a Secret's review has no value);
-  `apps/desktop` `actions-main.test.ts` (as you, owner, digest, main's dialog, discovery, limits), `action-log.test.ts`,
-  `palette.test.ts`, `quotes.test.ts`, and `actions.e2e.test.ts` (menu, drawer ⋯, ⌘K, conflict, Enter on a fresh card,
-  ⌫, a Secret's review, Recent actions).
+  `apps/desktop` `actions-main.test.ts` (as you, owner, digest, main's dialog, discovery, limits; then one block per
+  finding of the part's security review: the dialog's list, the window's budget, the row before the request, facts
+  past the cut, what asks alone, the named rules), `action-log.test.ts`, `row-keys.test.ts`, `palette.test.ts`,
+  `quotes.test.ts`, and `actions.e2e.test.ts` (menu, drawer ⋯, ⌘K, conflict, Enter on a fresh card, Enter held from
+  the menu, ⌫, a Secret's review, Recent actions).
 - `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
   `workbench.test.ts` (exit statuses, exec and log paths) and, on OrbStack,
   `workbench.integration.test.ts` (a followed log in order; a shell through the front door with the size it was

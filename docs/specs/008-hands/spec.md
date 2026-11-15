@@ -106,7 +106,8 @@ export const Action = z.discriminatedUnion("kind", [
 Targets in one action are of one kind (main refuses a mix), named by `ResourceRef`, and each type is resolved from
 the cluster's discovery in main (as `reviewEdit` does), never taken from the window.
 
-**D142. Facts: what the diff doesn't say.** Beside the diff a card carries up to 8 facts, each a fixed sentence built
+**D142. Facts: what the diff doesn't say.** Beside the diff a card carries up to 8 facts (amended, M4: past 8, the
+last says how many more and of which tones, in the loudest; every bound PVC's volume is read), each a fixed sentence built
 in main with names only (`ActionFact = { tone: "info" | "warn" | "bad"; code: FactCode; text: string }`; names are
 checked as Kubernetes names, numbers as numbers; nothing from a message, label value or annotation is copied in).
 Reads are made as the person in the action's own request series; a read that fails gives the fact
@@ -144,8 +145,26 @@ Reads are made as the person in the action's own request series; a read that fai
   `Delete 12`, `Cancel`, Cancel the default). Cancel answers 409 "Cancelled." and keeps the review. This is the first
   native confirmation of a change (`limitations.md` "The approval card is the renderer's"); other danger keeps the
   card's second click. A page that was taken over still can't press it.
-- **Limits.** 50 targets an action; 8 reviews being prepared per window at once (more is 429); a review's dry runs
-  share a 60 s limit; `current` objects are dropped from memory once the review is built, except what the facts used.
+
+  *Amended after the security review of part 1 (M1, M2, M5, L3).* What asks is decided in main from what main
+  resolved and read, never from the window: a delete of more than one object; a delete of **any cluster-scoped
+  kind** (`!namespaced` from discovery: the five above, and ClusterRole, ClusterRoleBinding, StorageClass, webhook
+  configurations, cluster-scoped custom resources); a delete with a `bad` fact (a PVC whose volume's reclaim policy
+  is Delete, a Namespace), of a PVC whose volume Landlens couldn't read, or of a workload with 10 pods or more
+  (`asksInMain`); a restart of more than 3 workloads; a drain; and **any apply once its window has had more than 3
+  objects changed in the last 60 s** (`CARD_BUDGET`, counted per window in main), so a bulk sent as singles still
+  reaches the dialog. The five stay the kinds never deleted in bulk. The dialog's detail lists the reasons in main's
+  sentences, the count by namespace, every flagged object by `namespace/name` first (cluster-scoped; in a system
+  namespace, `kube-*` or `*-system`; outside the namespace most targets are in), then the rest, the first ten and
+  "and N more in <namespace>"; main sorts, so the window's order changes nothing, and nothing flagged is ever behind
+  "more". The first Cancel keeps the review; the second drops it (410). A second apply while the dialog is up is 429.
+- **Limits.** 50 targets an action, each named once; 8 reviews being prepared per window at once (more is 429); a
+  review's reads and dry runs share a 60 s limit; each request of an apply (and of a drain's run) waits at most 30 s,
+  and one that didn't answer is reported as "may have been applied"; `current` objects are dropped from memory once
+  the review is built, except what the facts used (and the agent's broker never holds them: `prepareOp` returns them
+  only with `keepObjects`).
+- **The digest** (amended, L2): the SHA-256 of the card main answers (diff, risks, title, facts, plan, `native`)
+  with the kept requests. Apply names it; it ties Apply to that review, and can't prove what the window drew.
 
 **D144. IPC** (contracts, `ipc.ts`, the preload list; zod on every request; ids `EditId`):
 
@@ -155,7 +174,7 @@ Reads are made as the person in the action's own request series; a read that fai
 | `action:apply` | `{ handle; id: EditId }` → `{ results: ActionResult[] }`, or for a drain `{ run: EditId }` (D152) |
 | `action:discard` | `{ id }` → `{ ok: true }` |
 | `action:stop` | `{ run: EditId }` → `{ ok: true }` (part 2) |
-| `action:log` | `{ context: string (a context of the catalog, as `agent:history` takes it); limit?: 1–200 }` → `{ entries: ActionLogEntry[] }` |
+| `action:log` | `{ handle; limit?: 1–200 }` → `{ entries: ActionLogEntry[] }`: the connected cluster's rows, matched on its context and its API server's hash (amended, L7) |
 | push `action:progress` | `DrainProgress` (part 2), only to the window that started the run |
 
 ```ts
@@ -187,7 +206,7 @@ closes when nothing is applying):
    icon and sentence), then **Done**. A conflict offers **Review again**.
 
 Apply keeps `ReviewCard`'s rules: a press of Apply itself, not Enter anywhere; a key press in the first 500 ms is
-ignored; danger needs the second click with Back focused; a `native` review's button reads `Delete 12…` and the
+ignored, and so is a repeated key (a key held from the menu item that opened the card; amended, L4); danger needs the second click with Back focused; a `native` review's button reads `Delete 12…` and the
 dialog is main's. While a dry run is running the sheet shows the skeleton and "Checking with the cluster…"; nothing
 is optimistic: the table changes when the watch says so.
 
@@ -225,8 +244,12 @@ export type ActionLogEntry = {
 ```
 
 Entries are made only by constructors in that file from checked names, numbers and closed words: no diff, no message
-from the cluster, no value. A row is written when an apply ends (or a reveal is served), whatever the outcome; a
-review that is never applied writes nothing (its dry runs are in the front door's audit as today). Shown as **Recent
+from the cluster, no value. *Amended after the security review of part 1 (M3, L6, L8):* a row is written with outcome
+`sent` before an apply's first request (if the log can't take it, nothing is sent) and settled when the requests
+answer, whatever the outcome; the schema takes every kind a CRD may name (a DNS-1035 label once lowercased; a kind
+that isn't one is kept as `Object`), any count the cluster had, and any context (cut to 253, control characters made
+`?`); rows keep the kind's `group` and `resource` so a row opens its own kind; a file over 4 MB is moved aside
+unread; the log is a convenience record, not evidence. A review that is never applied writes nothing (its dry runs are in the front door's audit as today). Shown as **Recent
 actions**: a ⌘K command and a status-bar item (`History` icon and the count since start) opening a 420px popover list,
 newest first, each row the action's icon, sentence, age and outcome; a row's object opens on click when it still
 exists. The agent's applied changes are not copied here (they stay in the session's history); joining both into one

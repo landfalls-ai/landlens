@@ -135,7 +135,10 @@ describe("your actions' channels (wave 8, D144)", () => {
     expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64) }).success).toBe(true);
     expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA" }).success).toBe(false);
     expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64), confirmed: true }).success).toBe(false);
-    expect(channels["action:log"].safeParse({ context: "orbstack", limit: 500 }).success).toBe(false);
+    expect(channels["action:log"].safeParse({ handle: "handle-0001", limit: 500 }).success).toBe(false);
+    // L7: the log is read for a connected cluster (its context and server), not a context name alone.
+    expect(channels["action:log"].safeParse({ handle: "handle-0001", limit: 50 }).success).toBe(true);
+    expect(channels["action:log"].safeParse({ context: "orbstack" }).success).toBe(false);
   });
   it("name a node by its own rule for cordon and drain, with drain's two choices and nothing else (part 2)", () => {
     expect(review.safeParse({ handle: "handle-0001", action: { kind: "cordon", node: "orbstack", on: true } }).success).toBe(true);

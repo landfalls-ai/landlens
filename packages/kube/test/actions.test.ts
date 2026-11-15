@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { actionFacts, actionFits, buildOps, cordonBody, restartBody, scaleBody, selects, triggerJob, triggerName, type ActionTarget } from "../src/actions.js";
+import { actionFacts, actionFits, asksInMain, buildOps, capFacts, cordonBody, factList, restartBody, scaleBody, selects, triggerJob, triggerName, type ActionTarget } from "../src/actions.js";
 
 const T = {
   deployments: { group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespaced: true, verbs: ["get", "patch", "delete"] },
@@ -199,5 +199,77 @@ describe("cordon (wave 8 part 2, D149)", () => {
       "Landlens couldn't check for other nodes here (HTTP 403).", "Landlens couldn't check for the pods on it here (HTTP 403).",
     ]);
     expect(actionFacts({ kind: "cordon", on: false, objects: one })).toEqual([{ tone: "info", code: "uncordon", text: "New pods can be scheduled on it again." }]);
+  });
+});
+
+describe("security review of part 1", () => {
+  const T2 = {
+    pvcs: { group: "", version: "v1", resource: "persistentvolumeclaims", kind: "PersistentVolumeClaim", namespaced: true, verbs: ["delete"] },
+    crbs: { group: "rbac.authorization.k8s.io", version: "v1", resource: "clusterrolebindings", kind: "ClusterRoleBinding", namespaced: false, verbs: ["delete"] },
+    widgets: { group: "example.com", version: "v1", resource: "widgets", kind: "Widget", namespaced: false, verbs: ["delete"] },
+    replicasets: { group: "apps", version: "v1", resource: "replicasets", kind: "ReplicaSet", namespaced: true, verbs: ["patch"] },
+  };
+  const pvc = (i: number) => ({ group: "", resource: "persistentvolumeclaims", kind: "PersistentVolumeClaim", obj: { metadata: { name: `data-${i}` }, spec: { volumeName: `pv-${i}` } } });
+
+  it("M4: 30 claims on Delete volumes: seven facts and \"and 23 more\", serious, so all 30 are counted", () => {
+    const pvs = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`pv-${i}`, { spec: { persistentVolumeReclaimPolicy: "Delete" } }]));
+    const facts = actionFacts({ kind: "delete", objects: Array.from({ length: 30 }, (_, i) => pvc(i)), pvs });
+    expect(facts).toHaveLength(8);
+    expect(facts.slice(0, 7).every((f) => f.code === "pv-delete")).toBe(true);
+    expect(facts[7]).toEqual({ tone: "bad", code: "more", text: "And 23 more: 23 serious." });
+  });
+
+  it("M4: a claim whose volume wasn't read says so; twenty of them are twenty facts, counted past the cut", () => {
+    const pvs = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`pv-${i}`, { spec: { persistentVolumeReclaimPolicy: "Retain" } }]));
+    const all = factList({ kind: "delete", objects: Array.from({ length: 30 }, (_, i) => pvc(i)), pvs });
+    expect(all.filter((f) => f.code === "couldnt-check")).toHaveLength(20);
+    expect(all.find((f) => f.code === "couldnt-check")!.text).toBe("data-10: Landlens didn't read its volume's reclaim policy.");
+    expect(capFacts(all).at(-1)).toEqual({ tone: "info", code: "more", text: "And 23 more: 23 notes." });
+  });
+
+  it("M4: past the cut the loudest tone stays, with the counts by tone", () => {
+    const f = (tone: "bad" | "warn" | "info", n: number) => Array.from({ length: n }, () => ({ tone, code: "x", text: "x" }));
+    expect(capFacts([...f("bad", 7), ...f("warn", 2), ...f("info", 3)]).at(-1)).toEqual({ tone: "warn", code: "more", text: "And 5 more: 2 warnings, 3 notes." });
+    expect(capFacts(f("info", 8))).toHaveLength(8);
+  });
+
+  it("M5: a ClusterRoleBinding, a cluster-scoped custom resource and a claim whose volume goes with it ask in main; a ConfigMap doesn't", () => {
+    expect(asksInMain("delete", [{ type: T2.crbs, name: "admin" }], [])).toEqual(["ClusterRoleBinding is cluster-scoped: it isn't in any namespace."]);
+    expect(asksInMain("delete", [{ type: T2.widgets, name: "w" }], [])).toHaveLength(1);
+    const pvFacts = actionFacts({ kind: "delete", objects: [pvc(1)], pvs: { "pv-1": { spec: { persistentVolumeReclaimPolicy: "Delete" } } } });
+    expect(asksInMain("delete", [at(T2.pvcs, "data-1")], pvFacts)).toEqual(["Its volume's reclaim policy is Delete: the data goes with it."]);
+    const unread = actionFacts({ kind: "delete", objects: [pvc(1)], pvs: { "pv-1": { status: 403 } } });
+    expect(asksInMain("delete", [at(T2.pvcs, "data-1")], unread)).toEqual(["Landlens couldn't check every claim's volume: its data may go with it."]);
+    expect(asksInMain("delete", [at(T.configmaps, "c")], [])).toEqual([]);
+    expect(asksInMain("delete", [at(T.deployments, "big")], [], [{ group: "apps", resource: "deployments", obj: { status: { replicas: 10 } } }])).toEqual(["Deletes 10 pods."]);
+    expect(asksInMain("delete", [at(T.deployments, "small")], [], [{ group: "apps", resource: "deployments", obj: { status: { replicas: 9 } } }])).toEqual([]);
+    expect(asksInMain("scale", [at(T.deployments, "x")], [{ tone: "bad", code: "x", text: "x" }])).toEqual([]);
+  });
+
+  it("L9: a cut CronJob name loses a trailing - or . so the Job's name is a label", () => {
+    const n = triggerName(`${"a".repeat(49)}-bcd`, "a1b2c");
+    expect(n).toBe(`${"a".repeat(49)}-manual-a1b2c`);
+    expect(triggerName(`${"a".repeat(48)}.-x`, "a1b2c")).toBe(`${"a".repeat(48)}-manual-a1b2c`);
+    expect(n.length).toBeLessThanOrEqual(63);
+  });
+
+  it("L10: owners say what they do: a CronJob doesn't remake its Job; a Deployment sets a ReplicaSet's scale back; a cut list is said", () => {
+    const job = { group: "batch", resource: "jobs", kind: "Job", obj: { metadata: { name: "r-1", ownerReferences: [{ kind: "CronJob", name: "report", controller: true }] } } };
+    expect(actionFacts({ kind: "delete", objects: [job] })).toEqual([{ tone: "info", code: "owner-schedule", text: "CronJob report doesn't make this Job again; its next Job comes on its schedule." }]);
+    const podOfJob = { group: "", resource: "pods", kind: "Pod", obj: { metadata: { name: "p", ownerReferences: [{ kind: "Job", name: "r-1", controller: true }] } } };
+    expect(actionFacts({ kind: "delete", objects: [podOfJob] })[0]!.text).toBe("Job r-1 makes a new pod only if it hasn't finished.");
+    const rs = { group: "apps", resource: "replicasets", kind: "ReplicaSet", obj: { metadata: { name: "web-1", ownerReferences: [{ kind: "Deployment", name: "web", controller: true }] }, spec: {} } };
+    expect(actionFacts({ kind: "scale", objects: [rs], replicas: 3, hpas: [], pdbs: [] })).toEqual([{ tone: "warn", code: "owner-sets-back", text: "Deployment web manages its replicas; it will set this back." }]);
+    expect(actionFacts({ kind: "delete", objects: [{ ...rs, obj: { metadata: rs.obj.metadata } }] })[0]!.text).toBe("Deployment web will make a new one.");
+    const dep = { group: "apps", resource: "deployments", kind: "Deployment", obj: { metadata: { name: "web" }, spec: {} } };
+    expect(actionFacts({ kind: "scale", objects: [dep], replicas: 3, hpas: [], pdbs: [], cut: ["autoscalers"] })).toEqual([{ tone: "info", code: "list-cut", text: "Landlens read the first 500 autoscalers here; there are more it didn't check." }]);
+    // A CRD's kind is a kind (M3's rule), in an owner too.
+    const owned = { group: "", resource: "pods", kind: "Pod", obj: { metadata: { name: "p", ownerReferences: [{ kind: "fooBar", name: "f", controller: true }] } } };
+    expect(actionFacts({ kind: "delete", objects: [owned] })[0]!.text).toBe("fooBar f owns it; whether it makes a new one is up to it.");
+  });
+
+  it("L12: the same object twice is refused", () => {
+    expect(() => buildOps({ kind: "delete", targets: [at(T.configmaps, "a"), at(T.configmaps, "a")] })).toThrow(/named twice/);
+    expect(buildOps({ kind: "delete", targets: [at(T.configmaps, "a"), at(T.configmaps, "a", "other")] })).toHaveLength(2);
   });
 });

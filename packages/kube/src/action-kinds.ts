@@ -12,11 +12,17 @@ export const ACTION_KINDS: Record<Exclude<ActionKind, "delete">, readonly string
   cordon: ["nodes"],
   drain: ["nodes"],
 };
-/** Kinds never deleted in bulk, and asked about in main's own dialog even alone (D141, D143). */
+/** Kinds never deleted in bulk, one at a time behind main's own dialog (D141, D143). */
 export const WIDE_DELETES: ReadonlySet<string> = new Set([
   "namespaces", "customresourcedefinitions.apiextensions.k8s.io", "nodes", "persistentvolumes", "apiservices.apiregistration.k8s.io",
 ]);
 export const keyOf = (t: { group: string; resource: string }) => (t.group ? `${t.resource}.${t.group}` : t.resource);
+/**
+ * A delete main asks about in its own dialog whatever its count (D143, widened by the security review of part 1, M5):
+ * the five above and every other cluster-scoped kind (ClusterRole, ClusterRoleBinding, StorageClass, webhook
+ * configurations, cluster-scoped custom resources). PVCs whose volume goes with them are decided from the facts.
+ */
+export const wideDelete = (t: { group: string; resource: string; namespaced: boolean }) => !t.namespaced || WIDE_DELETES.has(keyOf(t));
 
 /** Whether an action takes this kind (delete: whatever discovery says can be deleted). */
 export function actionFits(kind: ActionKind, t: { group: string; resource: string; verbs?: string[] }): boolean {

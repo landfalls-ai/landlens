@@ -12,7 +12,18 @@ export type AskContext = {
   ref?: ResourceRef; label: string; text?: string; source?: string; kind?: "logs" | "terminal" | "edit" | "helm" | "problem" | "gcp" | "landflow" | "action";
   /** Log lines from Clickland's history (wave 7 part 3): the head says so, and main holds the session's autonomy. */
   from?: "clickland";
+  /**
+   * The namespaces the quoted text is from ("" for cluster-scoped): an action's diff. A session limited to some
+   * namespaces isn't sent text from outside them (security review of wave 8 part 1, L11).
+   */
+  namespaces?: string[];
 };
+
+/** Whether a quoted context may go to a session limited to `limit` namespaces (none: no limit). */
+export function inSession(c: AskContext, limit: string[] | undefined): boolean {
+  if (!limit?.length || !c.namespaces) return true;
+  return c.namespaces.every((ns) => !!ns && limit.includes(ns));
+}
 
 /**
  * The question, with the lines the person chose quoted under it (redacted as get_logs is; the prompt's 20,000 cap

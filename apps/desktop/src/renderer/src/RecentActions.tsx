@@ -2,7 +2,7 @@
 // action's icon, a sentence built from the row's checked fields, its age and its outcome. A row's object opens on
 // click when it still exists. The status bar shows the count since Landlens started.
 import type { ActionLogEntry } from "@landlens/contracts";
-import { Ban, CircleCheck, CircleSlash, CircleX, History, LogOut, Pause, Play, RotateCcw, Scale, TriangleAlert, Trash2, X } from "lucide-react";
+import { Ban, CircleCheck, CircleDashed, CircleSlash, CircleX, History, LogOut, Pause, Play, RotateCcw, Scale, TriangleAlert, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Ic, type LucideIcon } from "./icons";
@@ -11,6 +11,8 @@ import { duration } from "./present";
 const STARTED = Date.now();
 const ICON: Partial<Record<ActionLogEntry["action"], LucideIcon>> = { scale: Scale, restart: RotateCcw, delete: Trash2, trigger: Play, suspend: Pause, resume: Play, cordon: CircleSlash, uncordon: CircleCheck, drain: LogOut };
 const OUTCOME: Record<ActionLogEntry["outcome"], { word: string; tone: string; icon: LucideIcon }> = {
+  // Written before the requests went (M3); one that stays so had no answer recorded (Landlens stopped first).
+  sent: { word: "Sent", tone: "dim", icon: CircleDashed },
   applied: { word: "Done", tone: "ok", icon: CircleCheck },
   partial: { word: "Partly", tone: "warn", icon: TriangleAlert },
   failed: { word: "Failed", tone: "bad", icon: CircleX },
@@ -26,12 +28,12 @@ export function sentence(e: ActionLogEntry): string {
   return `${verb} ${what}${e.detail ? ` · ${e.detail}` : ""}`;
 }
 
-/** The log for this cluster, read again whenever `version` moves. */
-export function useActionLog(context: string, version: number) {
+/** The log for this cluster (its context and API server, L7), read again whenever `version` moves. */
+export function useActionLog(handle: string, version: number) {
   const [entries, setEntries] = useState<ActionLogEntry[]>([]);
   const read = useCallback(() => {
-    void api.invoke("action:log", { context, limit: 200 }).then((r) => setEntries(r.entries), () => {});
-  }, [context]);
+    void api.invoke("action:log", { handle, limit: 200 }).then((r) => setEntries(r.entries), () => {});
+  }, [handle]);
   useEffect(read, [read, version]);
   return { entries, since: entries.filter((e) => Date.parse(e.at) >= STARTED).length };
 }
@@ -61,7 +63,8 @@ export function RecentActions({ entries, onOpen, onClose }: { entries: ActionLog
         <ul className="recent-list">
           {entries.map((e) => {
             const o = OUTCOME[e.outcome];
-            const one = e.names.length === 1 && e.action !== "delete";
+            // A row opens its own kind (group and resource, L8); an older row without them doesn't open.
+            const one = e.names.length === 1 && e.action !== "delete" && e.resource !== undefined;
             return (
               <li key={e.id}>
                 <button className="recent-row" disabled={!one} onClick={() => (onOpen(e), onClose())} title={one ? "Open it" : undefined}>

@@ -90,10 +90,13 @@ export type Prepared = {
   contentType?: string;
   body?: string;
   shown: ChangeOperation;
-  /** The object as read before the dry run (null: it didn't exist). With hideSecrets, a Secret's values are lengths. */
-  current: unknown;
-  /** What the dry run answered (null for a delete). With hideSecrets, a Secret's values are lengths. */
-  after: unknown;
+  /**
+   * The object as read before the dry run (null: it didn't exist), and what the dry run answered (null for a delete).
+   * With hideSecrets, a Secret's values are lengths. Only with keepObjects (the person's actions, for their facts and
+   * the scrubbed diff): the agent's broker doesn't hold unscrubbed objects through an ask (security review, L1).
+   */
+  current?: unknown;
+  after?: unknown;
 };
 
 export class ChangeError extends Error {}
@@ -290,7 +293,7 @@ async function revisionTemplate(send: Send, d: any, undo: number | "previous"): 
  * person's path): a core Secret's objects before and after go through withoutSecretValues before anything is kept or
  * diffed, so a Secret's card shows its keys and sizes, never a value.
  */
-export async function prepareOp(send: Send, op: ChangeOp, o: { fieldManager: string; hideSecrets?: boolean }): Promise<Prepared> {
+export async function prepareOp(send: Send, op: ChangeOp, o: { fieldManager: string; hideSecrets?: boolean; keepObjects?: boolean }): Promise<Prepared> {
   const objectPath = apiPath(op.type, op.namespace, op.name);
   const got = await send({ method: "GET", path: objectPath });
   let current: any = null;
@@ -377,8 +380,7 @@ export async function prepareOp(send: Send, op: ChangeOp, o: { fieldManager: str
       warnings: r.warnings.slice(0, 20),
       risk: risks(op, current, after),
     },
-    current,
-    after,
+    ...(o.keepObjects ? { current, after } : {}),
   };
 }
 

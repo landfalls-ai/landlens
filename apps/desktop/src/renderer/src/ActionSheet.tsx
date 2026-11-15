@@ -19,7 +19,8 @@ type Stage =
   | { s: "checking" }
   | { s: "review"; review: ActionReview }
   | { s: "applying"; review: ActionReview }
-  | { s: "problems"; messages: string[]; conflict?: boolean }
+  /** `head`: Landlens's own line when nothing reached the cluster (a Cancel, the log, a dialog already up), L13. */
+  | { s: "problems"; messages: string[]; conflict?: boolean; head?: string }
   | { s: "done"; results: ActionResult[] };
 
 const refOf = (d: ActionDraft, o: KubeObject) => ({
@@ -130,8 +131,11 @@ function ChangeSheet(props: SheetProps) {
       props.onApplied();
     } catch (e) {
       const err = e as ApiError;
-      // Cancel in main's dialog keeps the review: back to the card.
+      // Cancel in main's dialog keeps the review once: back to the card. A second Cancel drops it (L3).
       if (err.status === 409 && err.message === "Cancelled.") return (setStage({ s: "review", review: r }), props.onApplied());
+      if (err.status === 410) return (setStage({ s: "problems", messages: [err.message], conflict: true, head: "Cancelled. Nothing was sent." }), props.onApplied());
+      // Not a change in the cluster: main's dialog is already up, or the log couldn't take the row (L13, M3).
+      if (err.status === 429 || err.status === 500) return setStage({ s: "problems", messages: [err.message], head: "Nothing was sent." });
       setStage({ s: "problems", messages: [err.message], ...(err.status === 409 ? { conflict: true } : {}) });
     }
   };
@@ -144,7 +148,7 @@ function ChangeSheet(props: SheetProps) {
   const busy = stage.s === "applying" || stage.s === "checking";
   const close = () => !busy && props.onClose();
   const step = (n: number) => (touched.current = true, setReplicas((r: number) => Math.max(0, Math.min(1000, r + n))));
-  const ask = stage.s === "review" ? askFirst(verb, d.type, stage.review) : undefined;
+  const ask = stage.s === "review" ? askFirst(verb, d.type, stage.review, d.objects) : undefined;
 
   return (
     <div className="palette-back action-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
@@ -190,7 +194,7 @@ function ChangeSheet(props: SheetProps) {
               title={stage.review.title ?? sheetTitle(d)}
               review={stage.review}
               {...(stage.review.facts?.length ? { facts: stage.review.facts } : {})}
-              {...(stage.review.native ? { nativeLabel: `${d.kind === "delete" ? "Delete" : "Apply"}${d.objects.length > 1 ? ` ${d.objects.length}` : ""}…` } : {})}
+              {...(stage.review.native ? { nativeLabel: `${d.kind === "delete" ? "Delete" : d.kind === "restart" ? "Restart" : "Apply"}${d.objects.length > 1 ? ` ${d.objects.length}` : ""}…` } : {})}
               applying={stage.s === "applying"}
               {...(stage.review.previewOnly ? { previewOnly: PREVIEW_ONLY } : {})}
               applyRef={applyBtn}
@@ -204,7 +208,7 @@ function ChangeSheet(props: SheetProps) {
             />
           ) : stage.s === "problems" ? (
             <div className="action-problems" role="alert">
-              <div className="change-fact bad"><Ic icon={CircleX} size={13} />{stage.conflict ? "It changed since Landlens read it. Nothing was sent." : "The cluster refused this. Nothing was changed."}</div>
+              <div className="change-fact bad"><Ic icon={CircleX} size={13} />{stage.head ?? (stage.conflict ? "It changed since Landlens read it. Nothing was sent." : "The cluster refused this. Nothing was changed.")}</div>
               <ul>{stage.messages.slice(0, 20).map((m, i) => <li key={i} className="small">{m}</li>)}</ul>
             </div>
           ) : (
@@ -212,7 +216,7 @@ function ChangeSheet(props: SheetProps) {
               {stage.results.map((r, i) => (
                 <li key={i} className={`result-${r.outcome}`}>
                   <Ic icon={r.outcome === "applied" || r.outcome === "gone" ? CircleCheck : r.outcome === "conflict" ? TriangleAlert : CircleX} size={14} />
-                  <span><span className="mono">{r.target}</span> {r.outcome === "applied" ? (d.kind === "delete" ? "deleted" : d.kind === "trigger" ? "created" : d.kind === "cordon" ? (d.on === false ? "uncordoned" : "cordoned") : "applied") : r.outcome === "gone" ? "was already gone" : r.outcome === "conflict" ? "changed after your review: not sent" : `failed: ${r.message ?? "the cluster refused it"}`}</span>
+                  <span><span className="mono">{r.target}</span> {r.outcome === "applied" ? (d.kind === "delete" ? "deleted" : d.kind === "trigger" ? "created" : d.kind === "cordon" ? (d.on === false ? "uncordoned" : "cordoned") : "applied") : r.outcome === "gone" ? "was already gone" : r.outcome === "conflict" ? (d.kind === "trigger" ? `not created: ${r.message ?? "one of that name already exists"}` : "changed after your review: not sent") : `failed: ${r.message ?? "the cluster refused it"}`}</span>
                 </li>
               ))}
             </ul>

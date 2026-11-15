@@ -5,6 +5,7 @@ import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } fro
 import { Ic, kindIcon, TONE_ICON } from "./icons";
 import type { Cell, Column } from "./kinds";
 import { restartTone, splitName, statusTone } from "./present";
+import { rowKey } from "./rowKeys";
 
 const ROW = 32;
 const NUMERIC = new Set(["restarts", "age", "count", "last", "keys"]);
@@ -181,18 +182,16 @@ export function ResourceTable(props: {
                       props.onMenu(o, e.clientX, e.clientY);
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") return props.onSelect(o);
-                      if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+                      const k = rowKey({ key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, repeat: e.repeat, onRow: e.target === e.currentTarget });
+                      if (k === "select") return props.onSelect(o);
+                      if (k === "menu") {
                         e.preventDefault();
                         const r = e.currentTarget.getBoundingClientRect();
                         return props.onMenu?.(o, r.left + 24, r.bottom);
                       }
-                      if (e.metaKey || e.ctrlKey || e.altKey) return;
-                      if (e.key === "l" || e.key === "L") return props.onAction?.(o, "logs");
-                      if (e.key === "s" || e.key === "S") return props.onAction?.(o, "shell");
-                      if (e.key === "e" || e.key === "E") return props.onAction?.(o, "edit");
                       // ⌫ or Delete opens the delete sheet (D146): a review first, never a delete on a key.
-                      if (e.key === "Backspace" || e.key === "Delete") return (e.preventDefault(), props.onAction?.(o, "delete"));
+                      if (k === "delete") e.preventDefault();
+                      if (k) props.onAction?.(o, k);
                     }}
                   >
                     {columns.map((c) => <Td key={c.id} col={c} cell={c.cell(o, now)} o={o} rowTone={tone} split={split} />)}

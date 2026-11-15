@@ -4,7 +4,7 @@
 // danger asks twice with Back focused; a capped diff must be shown whole first.
 import type { ActionFact, ChangeRisk, EditOwner, EditReview } from "@landlens/contracts";
 import { Check, CircleX, Info, ShieldCheck, Sparkles, TriangleAlert, User } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Diff, ORDER, RISK } from "./ChangeCard";
 import { Ic } from "./icons";
 
@@ -44,11 +44,19 @@ export function ReviewCard(props: {
   // Apply is a press of the Apply button itself (Enter on it, or a click), not Enter anywhere in the card, and not in
   // the first half second, so a key meant for something else can't send it (security review, part 2, finding 2).
   const shownAt = useRef(Date.now());
+  // A key held down repeats: Enter held from the menu item that opened the card would press Apply once its half second
+  // is up (security review of part 1, L4). A keyboard press counts only when its keydown wasn't a repeat.
+  const repeating = useRef(false);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => void (repeating.current = e.repeat);
+    window.addEventListener("keydown", down, true);
+    return () => window.removeEventListener("keydown", down, true);
+  }, []);
   const capped = ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
   const apply = (e: React.MouseEvent) => {
     if (props.previewOnly) return;
     // A keyboard press (detail 0) in the first half second is a key meant for something else; a click is deliberate.
-    if (e.detail === 0 && Date.now() - shownAt.current < 500) return;
+    if (e.detail === 0 && (repeating.current || Date.now() - shownAt.current < 500)) return;
     // The whole change is on screen before it can be sent.
     if (capped) return setUncapped(new Set(ops.map((_, i) => i)));
     // A review main asks about in its own dialog (D143) has that as its second step, not the card's.

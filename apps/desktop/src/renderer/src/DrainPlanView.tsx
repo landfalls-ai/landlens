@@ -192,9 +192,16 @@ export function DrainSheet(props: SheetProps) {
   const busy = stage.s === "asking" || running;
   const close = () => !busy && props.onClose();
 
+  // A held key repeats into the button: a keyboard press counts only when its keydown wasn't a repeat (L4).
+  const repeating = useRef(false);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => void (repeating.current = e.repeat);
+    window.addEventListener("keydown", down, true);
+    return () => window.removeEventListener("keydown", down, true);
+  }, []);
   const apply = async (e: React.MouseEvent) => {
     // A press of the button itself; a key press in its first half second is a key meant for something else.
-    if (e.detail === 0 && Date.now() - shownAt.current < 500) return;
+    if (e.detail === 0 && (repeating.current || Date.now() - shownAt.current < 500)) return;
     if (stage.s !== "plan" || !canApply) return;
     const r = stage.review;
     setStage({ s: "asking", review: r });

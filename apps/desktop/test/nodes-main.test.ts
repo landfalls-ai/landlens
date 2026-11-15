@@ -20,7 +20,7 @@ vi.mock("@landlens/kube-mcp", () => ({
 }));
 import type { ActionReview, DrainProgress } from "@landlens/contracts";
 import { FakeApi } from "../../../packages/kube/test/fake-api";
-import { ActionService, fenced, nodeWrite, nodeWritesFrom, PREVIEW_ONLY } from "../src/main/actions";
+import { ActionService, cardDigest, fenced, nodeWrite, nodeWritesFrom, PREVIEW_ONLY } from "../src/main/actions";
 
 const types = [
   { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false, verbs: ["get", "list", "patch", "delete"] },
@@ -61,7 +61,14 @@ function setup(o: { writes?: (c: string) => boolean } = {}) {
   const door = { issueToken: issue, revokeToken: revoke, clusterUrl: () => "https://127.0.0.1:1/c/h", certificate: "" };
   const rows: any[] = [];
   const counted: any[] = [];
-  const log = { add: (e: any) => (rows.push(e), e), list: () => rows.slice().reverse() };
+  const log = {
+    add: (e: any) => (rows.push(e), e),
+    settle: (id: string, end: any) => {
+      const i = rows.findIndex((x) => x.id === id);
+      if (i >= 0) rows[i] = { ...rows[i], ...end };
+    },
+    list: () => rows.slice().reverse(),
+  };
   let t = 1_000_000;
   const svc = new ActionService({
     clusters: clusters as any, frontDoor: door as any, log: log as any, counted: (a) => counted.push(a),
@@ -195,7 +202,11 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     api.requests.length = 0;
     const asked: any[] = [];
     await expect(svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toMatchObject({ status: 409, message: "Cancelled." });
-    expect(asked).toEqual([{ message: "Drain node-1 on orbstack?", detail: "2 pods will be evicted, 2 are blocked by a disruption budget and will be retried, 1 DaemonSet pod stay.\nThe node stays cordoned until you uncordon it.", yes: "Drain" }]);
+    expect(asked).toEqual([{
+      message: "Drain node-1 on orbstack?",
+      detail: "2 pods will be evicted, 2 are blocked by a disruption budget and will be retried, 1 DaemonSet pod stay.\nThe node stays cordoned until you uncordon it.\n\n4 Pods: 4 in landlens-dev.\n\nlandlens-dev/bare\nlandlens-dev/cache\nlandlens-dev/web-a\nlandlens-dev/web-b",
+      yes: "Drain",
+    }]);
     expect(api.requests).toEqual([]);
     expect(rows.map((x) => x.outcome)).toEqual(["cancelled"]);
     // Kept: the same review can still be applied.
@@ -211,22 +222,25 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     sent.length = 0;
     // A pod that arrives after the review is not the review's to evict.
     api.pod("landlens-dev", "late", { owner: { kind: "ReplicaSet", name: "late-rs" } });
-    if (o.stopAt !== undefined) {
-      let evictions = 0;
-      const inner = api.send;
-      (api as any).send = async (q: any) => {
-        if (q.path.endsWith("/eviction") && ++evictions === o.stopAt) s.svc.stop(r.id!, a);
-        return inner(q);
-      };
-    }
+    let evictions = 0;
+    let rowsAtFirstWrite: string[] | undefined;
+    const inner = api.send.bind(api);
+    (api as any).send = async (q: any) => {
+      if (q.method !== "GET") rowsAtFirstWrite ??= s.rows.map((x) => x.outcome);
+      if (o.stopAt !== undefined && q.path.endsWith("/eviction") && ++evictions === o.stopAt) s.svc.stop(r.id!, a);
+      return inner(q);
+    };
     const out = await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true) as { run: string };
-    return { ...s, a, r, run: out.run };
+    return { ...s, a, r, run: out.run, get rowsAtFirstWrite() { return rowsAtFirstWrite; } };
   }
 
   it("runs in main: answers at once, cordons, evicts only the reviewed uids with its own token, pushes progress to its window, logs one row", async () => {
-    const { a, r, run, rows, revoke, issue, counted } = await started();
+    const { a, r, run, rows, revoke, issue, counted, rowsAtFirstWrite } = await started();
     expect(run).toBe(r.id);
-    await vi.waitFor(() => expect(rows).toHaveLength(1));
+    // The row was written, as sent, before the cordon went (security review of part 1, M3).
+    expect(rowsAtFirstWrite).toEqual(["sent"]);
+    await vi.waitFor(() => expect(rows[0]?.outcome).not.toBe("sent"));
+    expect(rows).toHaveLength(1);
     expect(issue).toHaveBeenCalledWith(expect.objectContaining({ label: "you · orbstack · drain node-1" }));
     const token = sent[0]!.token;
     expect(sent.every((s) => s.token === token)).toBe(true);
@@ -257,7 +271,8 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     const out = await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true) as { run: string };
     expect(() => s.svc.stop(out.run, b)).toThrow(/no such run/);
     s.svc.stop(out.run, a);
-    await vi.waitFor(() => expect(s.rows).toHaveLength(1));
+    await vi.waitFor(() => expect(s.rows[0]?.outcome).not.toBe("sent"));
+    expect(s.rows).toHaveLength(1);
     expect(s.rows[0]).toMatchObject({ action: "drain", outcome: "stopped" });
     expect(api.get("/api/v1/nodes/node-1").spec.unschedulable).toBe(true);
     expect(api.requests.some((q) => q.method === "PATCH" && q.body?.spec?.unschedulable === null)).toBe(false);
@@ -270,8 +285,31 @@ describe("cordon and drain, told it may (against the fake API only)", () => {
     const r = await s.svc.review(drain(), a);
     await s.svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async () => true);
     a.emit("render-process-gone");
-    await vi.waitFor(() => expect(s.rows).toHaveLength(1));
+    await vi.waitFor(() => expect(s.rows[0]?.outcome).not.toBe("sent"));
+    expect(s.rows).toHaveLength(1);
     expect(s.rows[0].outcome).toBe("stopped");
+  });
+
+  it("main's dialog names every pod it evicts in a system namespace, and counts them by namespace (M1)", async () => {
+    const { svc } = setup({ writes: ALLOW });
+    api.pod("kube-system", "coredns-1", { owner: { kind: "ReplicaSet", name: "coredns" } });
+    const a = window();
+    const r = await svc.review(drain(), a);
+    const asked: any[] = [];
+    await expect(svc.apply({ handle: H, id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toThrow(/Cancelled/);
+    expect(asked[0].detail).toContain("5 Pods: 1 in kube-system, 4 in landlens-dev.\n\nIn a system namespace:\nkube-system/coredns-1\n\nlandlens-dev/bare");
+  });
+
+  it("a drain's digest covers its plan and main's dialog, not only the requests it keeps (L2)", async () => {
+    const { svc } = setup({ writes: ALLOW });
+    const a = window();
+    const r = await svc.review(drain(), a);
+    const { digest, ...card } = r;
+    const kept = (svc as any).reviews.get(r.id).drain;
+    expect(digest).toBe(cardDigest(card, kept));
+    // Another plan with the same kept requests (one more pod that stays) is another digest.
+    const other = { ...card, plan: { ...card.plan!, counts: { ...card.plan!.counts, skipped: card.plan!.counts.skipped + 1 } } };
+    expect(cardDigest(other, kept)).not.toBe(digest);
   });
 
   it("one run per node; a digest that isn't the review's drops it; another window can't apply it", async () => {

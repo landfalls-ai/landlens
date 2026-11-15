@@ -17,7 +17,7 @@ import { slashOptions, slashQuery, SlashMenu, type AgentCommand, type SlashOptio
 
 export type { AskContext } from "./quotes";
 
-import { quoteHead, withQuotes, type AskContext } from "./quotes";
+import { inSession, quoteHead, withQuotes, type AskContext } from "./quotes";
 export { withQuotes };
 
 const SUGGESTIONS = ["What's wrong in this cluster right now?", "Which pods restarted in the last hour, and why?"];
@@ -294,7 +294,8 @@ export function AgentDock(props: {
   async function send(text: string) {
     const s = session.current;
     if (!s || !text.trim() || busy) return;
-    const context = props.context;
+    // Quoted text from outside a namespace-limited session's namespaces stays here (L11).
+    const context = props.context.filter((c) => inSession(c, info?.namespaces));
     setItems((xs) => [...xs, { type: "user", text, context }]);
     setDraft("");
     props.onContextChange([]);
@@ -612,7 +613,7 @@ export function AgentDock(props: {
           {props.context.length ? (
             <div className="chips">
               {props.context.map((c) => (
-                <span key={c.label} className="chip ctx-chip" {...(c.text ? { title: quoteHead(c) } : {})}>
+                <span key={c.label} className={`chip ctx-chip${inSession(c, info?.namespaces) ? "" : " dim"}`} {...(c.text ? { title: inSession(c, info?.namespaces) ? quoteHead(c) : "Outside this session's namespaces: not sent" } : {})}>
                   <Ic icon={contextIcon(c)} size={11} />
                   {c.label}
                   <button type="button" aria-label={`Remove ${c.label}`} onClick={() => props.onContextChange(props.context.filter((x) => x !== c))}><Ic icon={X} size={11} /></button>

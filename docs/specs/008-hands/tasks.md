@@ -13,13 +13,31 @@ and a Fable security review.
 - [x] `action-log.ts`, Recent actions, `landlens.actions` telemetry (D147)
 - [x] Ask Claude first (`actionAsks.ts`, the quote head) (D148)
 - [x] Tests (D169), the hands scenario, docs (D171)
-- [ ] Fable's security review of part 1
+- [x] Fable's security review of part 1 (no High, 6 Medium, 13 Low), every finding fixed with a test that fails
+  without its fix (checked by reverting each, 36 unit cases and the e2e of L4):
+  - M1: main's dialog lists `namespace/name`, sorted in main, the flagged first (cluster-scoped, system namespaces,
+    another namespace), with counts by namespace; nothing flagged behind "and N more". A drain's dialog counts the
+    evicted pods by namespace and names each in a system namespace.
+  - M2: a window's budget of 3 card-approved objects a minute; past it, main's dialog. A restart of more than 3 asks.
+  - M3: the log row is written as `sent` before the first request and settled after; a log that can't take it
+    refuses the apply; the schema takes any CRD kind, any count, any context. The drain's row too.
+  - M4: "And N more" with the loudest tone; every PVC's volume read; main decides from the uncut facts.
+  - M5: every cluster-scoped kind, a PVC on a Delete or unread volume, and 10 pods or more ask (`asksInMain`).
+  - M6: tests for the 429 while asking, a review gone during the dialog (three ways), the minute, the facts'
+    fallback, each wide kind, a cluster-scoped kind with a namespace.
+  - L1 `keepObjects`; L2 the digest covers the card (and a drain's plan); L3 two Cancels drop the review; L4 a
+    repeated key never presses Apply; L5 row keys only on the row, never on a repeat; L6 4 MB; L7 rows by context
+    and server (`action:log` takes the handle); L8 group and resource on a row; L9 the trimmed Job name and a 409 on a
+    create worded as a name taken; L10 owner sentences, a ReplicaSet's Deployment, autoscaling/v1, lists cut; L11 an
+    action's text held back from a namespace-limited session; L12 30 s per apply request, duplicates refused; L13
+    the 429 isn't shown as a conflict, and the docs say which errors carry the cluster's text.
 
 Departures from the spec, and why:
 
 - **`action:apply` carries the review's digest** (`{ handle, id, digest }`): main checks it against the review it
-  holds and drops the review on a mismatch, so what is applied is exactly what the card showed (the lesson of
-  `landflow.ts`'s prepare/apply).
+  holds and drops the review on a mismatch (the lesson of `landflow.ts`'s prepare/apply). Since the review, the
+  digest is over the card main answered and the kept requests: it names the review; it can't prove what the window
+  drew.
 - **A triggered Job's name cuts the CronJob's to 50, not 52**: 52 + `-manual-` (8) + 5 is 65, over the 63 a label
   value allows (a Job's name is also its `job-name` label).
 - **No `blockOwnerDeletion`** on the triggered Job's owner reference: `kubectl create job --from` sets

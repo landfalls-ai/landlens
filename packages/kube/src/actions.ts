@@ -10,14 +10,16 @@
 // also need permission on the CronJob's finalizers).
 import type { ActionFact, ActionKind } from "@landlens/contracts";
 import type { ChangeOp, ChangeTarget } from "./changes.js";
-import { ACTION_KINDS, actionFits, keyOf, WIDE_DELETES } from "./action-kinds.js";
+import { ACTION_KINDS, actionFits, keyOf, WIDE_DELETES, wideDelete } from "./action-kinds.js";
 
-export { ACTION_KINDS, actionFits, keyOf, WIDE_DELETES };
+export { ACTION_KINDS, actionFits, keyOf, WIDE_DELETES, wideDelete };
 
 export type ActionTarget = { type: ChangeTarget & { verbs?: string[] }; namespace?: string; name: string };
 
 export const MAX_TARGETS = 50;
 export const MAX_FACTS = 8;
+/** A workload whose delete takes at least this many pods asks in main's own dialog (security review of part 1, M5). */
+export const MANY_PODS = 10;
 
 export class ActionError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -32,11 +34,12 @@ export const restartBody = (now: Date) => ({ spec: { template: { metadata: { ann
 
 /**
  * A triggered Job's name: the CronJob's cut to 50, `-manual-`, and 5 of [a-z0-9] (main's random). A Job's name is
- * also a label value, so it must fit 63: 50 + 8 + 5.
+ * also a label value, so it must fit 63: 50 + 8 + 5. A cut that ends in `-` or `.` loses them, so the name stays a
+ * label (security review of part 1, L9).
  */
 export function triggerName(cronJob: string, suffix: string): string {
   if (!/^[a-z0-9]{5}$/.test(suffix)) throw new ActionError("not a suffix");
-  return `${cronJob.slice(0, 50)}-manual-${suffix}`;
+  return `${cronJob.slice(0, 50).replace(/[-.]+$/, "")}-manual-${suffix}`;
 }
 
 /** The Job a manual run of a CronJob creates, as kubectl makes it. The template is the person's read, unscrubbed. */
@@ -72,10 +75,12 @@ export type BuildInput =
  */
 export const cordonBody = (on: boolean) => ({ spec: { unschedulable: on ? true : null } });
 
-/** Checks an action's targets: one kind, one that the action takes, at most 50, never a wide kind in bulk. */
+/** Checks an action's targets: one kind, one that the action takes, at most 50, each once, never a wide kind in bulk. */
 export function checkTargets(kind: ActionKind, targets: ActionTarget[]) {
   if (!targets.length) throw new ActionError("An action needs an object.");
   if (targets.length > MAX_TARGETS) throw new ActionError(`At most ${MAX_TARGETS} at once.`);
+  // The same object twice would inflate the dialog's count and answer a spurious "gone" (security review, L12).
+  if (new Set(targets.map((t) => `${t.namespace ?? ""}/${t.name}`)).size !== targets.length) throw new ActionError("The same object is named twice.");
   const k = keyOf(targets[0]!.type);
   if (targets.some((t) => keyOf(t.type) !== k)) throw new ActionError("One kind at a time.");
   if (!actionFits(kind, targets[0]!.type)) throw new ActionError(`Landlens doesn't ${kind} ${targets[0]!.type.resource}.`);
@@ -117,7 +122,8 @@ const strip = (t: ChangeTarget & { verbs?: string[] }): ChangeTarget => ({ group
 // ---- Facts (D142) ------------------------------------------------------------------------------------------------
 
 const NAME = /^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$/;
-const KIND = /^[A-Z][A-Za-z0-9]{0,62}$/;
+/** A kind as a CRD may name it: a DNS-1035 label once lowercased (so `fooBar` and `my-Kind` are kinds too). */
+const KIND = /^[A-Za-z](?:[-A-Za-z0-9]{0,61}[A-Za-z0-9])?$/;
 /** A Kubernetes name, or undefined: never text that isn't one. */
 export const nameOf = (v: unknown): string | undefined => (typeof v === "string" && v.length <= 253 && NAME.test(v) ? v : undefined);
 const kindOf = (v: unknown): string | undefined => (typeof v === "string" && KIND.test(v) ? v : undefined);
@@ -137,8 +143,10 @@ export type FactInput = {
   /** scale: the namespace's HorizontalPodAutoscalers and PodDisruptionBudgets, or the status their list answered. */
   hpas?: any[] | Unread;
   pdbs?: any[] | Unread;
-  /** delete of a PVC: its bound PersistentVolume by name, or the status its read answered. */
+  /** delete of a PVC: its bound PersistentVolume by name, or the status its read answered. Every bound PVC's is read. */
   pvs?: Record<string, any | Unread>;
+  /** The lists that stopped at their limit with more to read (L10): said, never silent. */
+  cut?: ("autoscalers" | "disruption budgets")[];
   /** cordon: on (true) or off; the pods on the node now (a count), and every Node (for "the only one"). */
   on?: boolean;
   nodePods?: number | Unread;
@@ -196,6 +204,11 @@ function factsFor(i: FactInput, x: FactInput["objects"][number]): ActionFact[] {
   switch (i.kind) {
     case "scale": {
       const name = o.metadata?.name;
+      const owner = (o.metadata?.ownerReferences ?? []).find((r: any) => r?.controller === true);
+      if (owner && kindOf(owner.kind)) {
+        const n = nameOf(owner.name);
+        out.push({ tone: "warn", code: "owner-sets-back", text: `${kindOf(owner.kind)}${n ? ` ${n}` : ""} manages its replicas; it will set this back.` });
+      }
       if (unread(i.hpas)) out.push(couldnt("autoscalers", i.hpas.status));
       else for (const h of i.hpas ?? []) {
         const ref = h?.spec?.scaleTargetRef;
@@ -212,6 +225,7 @@ function factsFor(i: FactInput, x: FactInput["objects"][number]): ActionFact[] {
         if (!selects(p?.spec?.selector, o.spec?.template?.metadata?.labels)) continue;
         out.push({ tone: "warn", code: "pdb-min", text: `PodDisruptionBudget ${nameOf(p?.metadata?.name) ?? "here"} wants ${min} available.` });
       }
+      for (const what of i.cut ?? []) out.push({ tone: "info", code: "list-cut", text: `Landlens read the first 500 ${what} here; there are more it didn't check.` });
       break;
     }
     case "restart": {
@@ -231,11 +245,8 @@ function factsFor(i: FactInput, x: FactInput["objects"][number]): ActionFact[] {
     case "delete": {
       const owner = (o.metadata?.ownerReferences ?? []).find((r: any) => r?.controller === true);
       const pod = key === "pods";
-      if (owner) {
-        const k = kindOf(owner.kind);
-        const n = nameOf(owner.name);
-        out.push({ tone: "info", code: "recreated", text: `${k ?? "Its controller"}${n ? ` ${n}` : ""} will make ${pod ? "a new pod" : "a new one"}.` });
-      } else if (pod) out.push({ tone: "warn", code: "not-recreated", text: "Nothing will recreate it." });
+      if (owner) out.push(ownerFact(key, owner));
+      else if (pod) out.push({ tone: "warn", code: "not-recreated", text: "Nothing will recreate it." });
       const fin = Array.isArray(o.metadata?.finalizers) ? o.metadata.finalizers.length : 0;
       if (fin) out.push({ tone: "info", code: "finalizers", text: `It has ${plural(fin, "finalizer")}: deletion waits for them.` });
       if (WORKLOADS.has(key)) {
@@ -245,7 +256,8 @@ function factsFor(i: FactInput, x: FactInput["objects"][number]): ActionFact[] {
       if (key === "persistentvolumeclaims") {
         const pvName = nameOf(o.spec?.volumeName);
         const pv = pvName ? i.pvs?.[pvName] : undefined;
-        if (unread(pv)) out.push(couldnt("its volume's reclaim policy", pv.status));
+        if (pvName && pv === undefined) out.push({ tone: "info", code: "couldnt-check", text: "Landlens didn't read its volume's reclaim policy." });
+        else if (unread(pv)) out.push(couldnt("its volume's reclaim policy", pv.status));
         else if (pv?.spec?.persistentVolumeReclaimPolicy === "Delete") out.push({ tone: "bad", code: "pv-delete", text: "Its volume's reclaim policy is Delete: the data goes with it." });
         else if (pv?.spec?.persistentVolumeReclaimPolicy === "Retain") out.push({ tone: "info", code: "pv-retain", text: "Its volume's reclaim policy is Retain: the volume and its data stay." });
       }
@@ -290,8 +302,28 @@ function factsFor(i: FactInput, x: FactInput["objects"][number]): ActionFact[] {
   return out;
 }
 
-/** Up to 8 facts for an action; with several objects, each fact starts with its object's name. */
-export function actionFacts(i: FactInput): ActionFact[] {
+/** Controllers that make a new one of what they own when it is deleted, by what they own. */
+const REMAKES: Record<string, readonly string[]> = {
+  pods: ["ReplicaSet", "StatefulSet", "DaemonSet", "ReplicationController"],
+  "replicasets.apps": ["Deployment"],
+  "controllerrevisions.apps": ["StatefulSet", "DaemonSet"],
+};
+/** What a controller owner does after its object is deleted, in words that hold for that owner (L10). */
+function ownerFact(key: string, owner: any): ActionFact {
+  const k = kindOf(owner?.kind);
+  const n = nameOf(owner?.name);
+  const who = `${k ?? "Its controller"}${n ? ` ${n}` : ""}`;
+  if (k && REMAKES[key]?.includes(k)) return { tone: "info", code: "recreated", text: `${who} will make ${key === "pods" ? "a new pod" : "a new one"}.` };
+  if (key === "pods" && k === "Job") return { tone: "info", code: "recreated", text: `${who} makes a new pod only if it hasn't finished.` };
+  if (key === "jobs.batch" && k === "CronJob") return { tone: "info", code: "owner-schedule", text: `${who} doesn't make this Job again; its next Job comes on its schedule.` };
+  return { tone: "info", code: "owner", text: `${who} owns it; whether it makes a new one is up to it.` };
+}
+
+/**
+ * Every fact for an action, loudest first; with several objects, each fact starts with its object's name. Main
+ * decides from these (asksInMain) before they are cut for the card.
+ */
+export function factList(i: FactInput): ActionFact[] {
   const many = i.objects.length > 1;
   const out: ActionFact[] = [];
   for (const x of i.objects) {
@@ -307,6 +339,49 @@ export function actionFacts(i: FactInput): ActionFact[] {
     .filter((f) => (f.code === "couldnt-check" ? !seen.has(f.text) && !!seen.add(f.text) : true))
     .map((f, n) => ({ f, n }))
     .sort((a, b) => rank[a.f.tone] - rank[b.f.tone] || a.n - b.n)
-    .map((x) => x.f)
-    .slice(0, MAX_FACTS);
+    .map((x) => x.f);
+}
+
+/**
+ * At most 8 facts on a card (D142), never silence (security review of part 1, M4): past 8, the last says how many
+ * more there are and of which tones, and takes the loudest tone among them.
+ */
+export function capFacts(fs: ActionFact[], max = MAX_FACTS): ActionFact[] {
+  if (fs.length <= max) return fs;
+  const kept = fs.slice(0, max - 1);
+  const rest = fs.slice(max - 1);
+  const n = (t: ActionFact["tone"]) => rest.filter((f) => f.tone === t).length;
+  const parts = [n("bad") ? `${n("bad")} serious` : "", n("warn") ? plural(n("warn"), "warning") : "", n("info") ? plural(n("info"), "note") : ""].filter(Boolean);
+  const tone = n("bad") ? "bad" : n("warn") ? "warn" : "info";
+  return [...kept, { tone, code: "more", text: `And ${rest.length} more: ${parts.join(", ")}.` }];
+}
+
+/** Up to 8 facts for an action (D142), the last saying what was left out. */
+export const actionFacts = (i: FactInput): ActionFact[] => capFacts(factList(i));
+
+/**
+ * Why a delete asks in main's own dialog even for one object (D143; widened by the security review of part 1, M5), in
+ * main's sentences: a wide kind (every cluster-scoped kind), any serious fact (a PVC whose volume goes with it, a
+ * Namespace), a PVC whose volume Landlens couldn't check, or a workload with 10 pods or more. Empty: the card's own
+ * second click is enough (bulk asks anyway).
+ */
+export function asksInMain(kind: ActionKind, targets: ActionTarget[], facts: ActionFact[], objects: { group: string; resource: string; obj: any }[] = []): string[] {
+  if (kind !== "delete" || !targets.length) return [];
+  const t = targets[0]!.type;
+  const out: string[] = [];
+  if (!t.namespaced) out.push(`${kindOf(t.kind) ?? "This kind"} is cluster-scoped: it isn't in any namespace.`);
+  // A serious fact once per code; with several objects, how many of them it is about (their names are in the dialog).
+  const many = targets.length > 1;
+  const bad = new Map<string, { text: string; n: number }>();
+  for (const f of facts) {
+    if (f.tone !== "bad") continue;
+    const text = many && f.code !== "more" ? f.text.slice(f.text.indexOf(": ") + 2) : f.text;
+    const had = bad.get(f.code);
+    bad.set(f.code, { text: had?.text ?? text, n: (had?.n ?? 0) + 1 });
+  }
+  for (const { text, n } of bad.values()) out.push(many ? `${n} of them: ${text}` : text);
+  if (keyOf(t) === "persistentvolumeclaims" && facts.some((f) => f.code === "couldnt-check")) out.push("Landlens couldn't check every claim's volume: its data may go with it.");
+  const pods = objects.reduce((sum, x) => sum + (WORKLOADS.has(keyOf(x)) ? podsOf(keyOf(x), x.obj) ?? 0 : 0), 0);
+  if (pods >= MANY_PODS) out.push(`Deletes ${plural(pods, "pod")}.`);
+  return [...new Set(out)];
 }

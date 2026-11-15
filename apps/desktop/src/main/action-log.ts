@@ -2,23 +2,34 @@
 // or copied), in userData/actions.json, the newest 500. Rows are made only by `logEntry` from checked names, numbers
 // and closed words: no diff, no message from the cluster, no value. The file is mode 0600, written to a temp file and
 // renamed, read through a strict schema (a row with a field it doesn't know, or a name that isn't one, is dropped), and
-// moved aside if it can't be read at all (the pattern of family-sent.json).
+// moved aside if it can't be read at all (the pattern of family-sent.json). A row is written as `sent` before its
+// requests go and settled when they answer (security review of part 1, M3); the schema takes every kind, context and
+// count Kubernetes allows, so no applied action goes unlogged. The log is a convenience record kept on this computer,
+// not evidence: anything running as you can edit it (L6); the front door's audit is the record of what was sent.
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { ObjectName, type ActionLogEntry } from "@landlens/contracts";
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { GroupName, ObjectName, ResourceName, type ActionLogEntry } from "@landlens/contracts";
 import { z } from "zod";
 
 export const ACTION_LOG_MAX = 500;
+/** A file larger than this is treated as damaged and moved aside, unread (L6). */
+export const ACTION_LOG_BYTES = 4 * 1024 * 1024;
 const ACTIONS = ["scale", "restart", "delete", "trigger", "suspend", "resume", "cordon", "uncordon", "drain", "reveal", "copy"] as const;
-const OUTCOMES = ["applied", "partial", "failed", "conflict", "cancelled", "stopped"] as const;
-const KIND = /^[A-Z][A-Za-z0-9]{0,62}$/;
+const OUTCOMES = ["sent", "applied", "partial", "failed", "conflict", "cancelled", "stopped"] as const;
+/** A kind as a CRD may name it: a DNS-1035 label once lowercased (`fooBar`, `my-Kind`). */
+const KIND = /^[A-Za-z](?:[-A-Za-z0-9]{0,61}[A-Za-z0-9])?$/;
 const NAMESPACE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 /** A Secret key's name (part 4): Kubernetes's rule. */
 const KEY = /^[-._a-zA-Z0-9]{1,253}$/;
-/** The closed forms a detail may take: "2 → 3 replicas", "5 of 6", "9 evicted, 1 blocked". */
-const DETAIL = /^(?:\d{1,4} → \d{1,4} replicas?|\d{1,3} of \d{1,3}|\d{1,5} evicted, \d{1,5} blocked)$/;
-/** A context name as the catalog has it: one line of printable text. */
+/** The closed forms a detail may take: "2 → 3 replicas" (from any count the cluster had), "5 of 6", "9 evicted, 1 blocked". */
+const DETAIL = /^(?:\d{1,10} → \d{1,4} replicas?|\d{1,3} of \d{1,3}|\d{1,6} evicted, \d{1,6} blocked)$/;
+/** A context name as the row keeps it: one line of printable text, at most 253 characters (fitContext). */
 const CONTEXT = /^[^\u0000-\u001f\u007f]{1,253}$/;
+
+/** A context as the log keeps it (M3): control characters become "?" and the name is cut to 253, never dropped. */
+export const fitContext = (c: string) => (c.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 253) || "?");
+/** A kind that isn't one becomes "Object": the row is kept (M3). */
+const fitKind = (k: string) => (k.length <= 63 && KIND.test(k) ? k : "Object");
 
 const Entry = z.object({
   id: z.string().regex(/^ac[A-Za-z0-9_-]{16}$/),
@@ -27,7 +38,9 @@ const Entry = z.object({
   server: z.string().regex(/^[0-9a-f]{16}$/),
   who: z.literal("you"),
   action: z.enum(ACTIONS),
-  kind: z.string().regex(KIND),
+  kind: z.string().max(63).regex(KIND),
+  group: GroupName.optional(),
+  resource: ResourceName.optional(),
   namespace: z.string().max(63).regex(NAMESPACE).optional(),
   names: z.array(ObjectName).min(1).max(50),
   key: z.string().regex(KEY).optional(),
@@ -41,16 +54,18 @@ export const serverHash = (server: string) => createHash("sha256").update(server
 
 export type LogInput = Omit<ActionLogEntry, "id" | "at" | "server" | "who"> & { server: string; at?: number };
 
-/** The only way a row is made: every field checked, or nothing (throws). */
+/** The only way a row is made: every field checked, or nothing (throws). The context and kind are made to fit (M3). */
 export function logEntry(i: LogInput): ActionLogEntry {
   return Entry.parse({
     id: `ac${randomBytes(12).toString("base64url")}`,
     at: new Date(i.at ?? Date.now()).toISOString(),
-    context: i.context,
+    context: fitContext(i.context),
     server: serverHash(i.server),
     who: "you",
     action: i.action,
-    kind: i.kind,
+    kind: fitKind(i.kind),
+    ...(i.group !== undefined ? { group: i.group } : {}),
+    ...(i.resource !== undefined ? { resource: i.resource } : {}),
     ...(i.namespace !== undefined ? { namespace: i.namespace } : {}),
     names: i.names,
     ...(i.key !== undefined ? { key: i.key } : {}),
@@ -70,6 +85,8 @@ export class ActionLog {
   private read(): ActionLogEntry[] {
     if (!existsSync(this.path)) return [];
     try {
+      // A file too large to be the log is damaged: it is moved aside unread, so it can't stall launch (L6).
+      if (statSync(this.path).size > ACTION_LOG_BYTES) throw new Error("too large");
       const f = File.parse(JSON.parse(readFileSync(this.path, "utf8")));
       return f.entries.flatMap((e) => {
         const r = Entry.safeParse(e);
@@ -106,9 +123,21 @@ export class ActionLog {
     return checked;
   }
 
-  /** A context's rows, newest first. */
-  list(context: string, limit = 50): ActionLogEntry[] {
-    return this.entries.filter((e) => e.context === context).slice(-Math.max(1, Math.min(200, limit))).reverse();
+  /** A `sent` row's ending (M3): its outcome, and a closed detail; checked again, written. A row that's gone is left. */
+  settle(id: string, end: Pick<ActionLogEntry, "outcome"> & { detail?: string }): void {
+    const i = this.entries.findIndex((e) => e.id === id);
+    if (i < 0) return;
+    const { detail: _old, ...row } = this.entries[i]!;
+    const next = Entry.parse({ ...row, ...(end.detail !== undefined ? { detail: end.detail } : _old !== undefined ? { detail: _old } : {}), outcome: end.outcome }) as ActionLogEntry;
+    this.entries = this.entries.map((e, n) => (n === i ? next : e));
+    this.write();
+  }
+
+  /** A cluster's rows, newest first: its context and its API server both match (L7). */
+  list(context: string, server: string, limit = 50): ActionLogEntry[] {
+    const c = fitContext(context);
+    const s = serverHash(server);
+    return this.entries.filter((e) => e.context === c && e.server === s).slice(-Math.max(1, Math.min(200, limit))).reverse();
   }
 
   /** Whether the last write failed (the rows are still here for this launch). */

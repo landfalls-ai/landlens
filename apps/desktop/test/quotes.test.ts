@@ -90,3 +90,23 @@ describe("Ask Claude first on your action (wave 8, D148)", () => {
     expect(askFirst("delete", type, noAgent)).toBeUndefined();
   });
 });
+
+describe("security review of wave 8 part 1, L11: an action's diff stays out of a session limited to other namespaces", () => {
+  it("a session limited to some namespaces gets action text only from inside them; an unlimited one gets all", async () => {
+    const { inSession } = await import("../src/renderer/src/quotes");
+    const { askFirst } = await import("../src/renderer/src/actionAsks");
+    const type = { group: "", version: "v1", resource: "configmaps", kind: "ConfigMap", namespaced: true, verbs: ["delete"] } as any;
+    const obj = (namespace: string) => ({ apiVersion: "v1", kind: "ConfigMap", metadata: { name: "c", namespace, uid: namespace } }) as any;
+    const review = { id: "edAAAAAAAAAAAA", title: "Delete configmap shop/c", agent: "- data: …", operations: [] } as any;
+    const ctx = askFirst("delete", type, review, [obj("shop")])!.context;
+    expect(ctx.namespaces).toEqual(["shop"]);
+    expect(inSession(ctx, ["shop"])).toBe(true);
+    expect(inSession(ctx, ["landlens-dev"])).toBe(false);
+    expect(inSession(ctx, undefined)).toBe(true);
+    expect(inSession(askFirst("delete", type, review, [obj("shop"), obj("landlens-dev")])!.context, ["shop"])).toBe(false);
+    // Cluster-scoped text never goes to a limited session; other quotes (no namespaces) are as before.
+    const node = askFirst("cordon", { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false, verbs: [] } as any, { ...review, title: "Cordon node n" }, [{ metadata: { name: "n", uid: "n" } } as any])!.context;
+    expect(inSession(node, ["shop"])).toBe(false);
+    expect(inSession({ label: "logs", text: "x", kind: "logs" }, ["shop"])).toBe(true);
+  });
+});

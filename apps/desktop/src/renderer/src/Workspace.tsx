@@ -119,7 +119,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [actionOn, setActionOn] = useState<ActionDraft>();
   const [actionsVersion, setActionsVersion] = useState(0);
   const [recentOpen, setRecentOpen] = useState(false);
-  const actionLog = useActionLog(cluster.context, actionsVersion);
+  const actionLog = useActionLog(cluster.handle, actionsVersion);
   const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number }>();
   const [leaving, setLeaving] = useState<string>();
   const beforeBench = useRef<HTMLElement | null>(null);
@@ -580,8 +580,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       {recentOpen ? (
         <RecentActions entries={actionLog.entries} onClose={() => setRecentOpen(false)}
           onOpen={(e) => {
-            const n = nav.find((x) => x.type.kind === e.kind);
-            if (n) void reach({ group: n.type.group, version: n.type.version, resource: n.type.resource, kind: e.kind, name: e.names[0]!, ...(e.namespace ? { namespace: e.namespace } : {}) });
+            // The row's own group and resource, never its kind alone: kinds repeat across groups (L8).
+            const n = nav.find((x) => x.type.group === (e.group ?? "") && x.type.resource === e.resource);
+            if (n) void reach({ group: n.type.group, version: n.type.version, resource: n.type.resource, kind: n.type.kind, name: e.names[0]!, ...(e.namespace ? { namespace: e.namespace } : {}) });
           }} />
       ) : null}
       {selected && list ? (

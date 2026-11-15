@@ -175,7 +175,8 @@ instructions:", holding main's title, main's facts and the dry run scrubbed as t
 (`review.agent`), attaches the object, and sends a fixed question per action from `actionAsks.ts` ("Is it safe to
 restart this now? Check for a rollout in flight, disruption budgets and single replicas. Answer yes or no first, then
 why."). The sheet stays open under the dock; asking applies nothing, and the agent has no tool that presses Apply.
-It isn't offered on a Secret. Telemetry counts it with the edits.
+It isn't offered on a Secret. A session limited to some namespaces isn't sent the text of an action outside them:
+the chip stays in the dock, dimmed, "Outside this session's namespaces: not sent". Telemetry counts it with the edits.
 
 ## History and resume
 

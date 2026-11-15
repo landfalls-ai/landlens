@@ -11,9 +11,12 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   changes stay.
 - **The approval card is the renderer's.** A compromised renderer could approve a change it was shown; the renderer
   is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. Main's own native
-  dialog asks only before your widest actions (a delete of several objects, or of a Namespace, CRD, Node,
-  PersistentVolume or APIService, and a drain; wave 8); other danger (a cordon included), and the agent's changes,
-  keep the card's second click.
+  dialog asks only before your widest actions (a delete of several objects, of any cluster-scoped kind, of a claim
+  whose volume goes with it or a workload of 10 pods or more; a restart of more than 3; a drain; and any apply once a
+  window has had more than 3 objects changed in a minute; wave 8). Below that budget other danger (a cordon
+  included), and the agent's changes, keep the card's second click: a taken-over page can still make up to 3
+  card-approved changes a minute. The digest Apply names is main's own over the card it answered; it can't prove what
+  the window drew.
 - **Dry runs trust the API server.** An aggregated API server that ignored `dryRun` would apply at the dry run. The
   agent's commands in the "/" menu are Claude Code's own (with no settings loaded, its built-ins), sent as messages.
 - **Claude Code is the only agent.** Its sandbox fences only Claude Code; another ACP agent (Codex, Gemini CLI) would
@@ -72,7 +75,11 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **Your actions are one object at a time** (wave 8 part 1): the menu, the drawer and ⌘K act on the object in
   front of you. Bulk actions on a multi-select come in part 3; revealing a Secret's value in part 4. A Secret can be deleted (its review shows keys and sizes) but not otherwise acted on.
   Recent actions keeps no diff and no undo; Rollback, a Helm rollback and an action on several clusters are later
-  waves (10, 12).
+  waves (10, 12). A card's facts are read at review and can be up to 15 minutes old at Apply; lists stop at 500 (the
+  card says so). The action log is a convenience record on this computer, not evidence: anything running as you can
+  edit `actions.json` (a file over 4 MB is moved aside); a row left *Sent* means Landlens stopped before the answer.
+  If the log can't be written, actions are refused. "Ask Claude first" isn't offered differently to a session limited
+  to some namespaces: the text from outside them is held back in the dock, not sent.
 - **Cordon and drain are preview only in a development build** (wave 8 part 2, D153), on every cluster, OrbStack
   included: nothing is sent to a node unless `LANDLENS_NODE_WRITES` names the context. A packaged app has no such
   guard. **No real drain has run live**: the run is tested against an in-memory API (`fake-api.ts`) and OrbStack sees
@@ -173,7 +180,8 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Applied row and no flash of the row. Templates are fixed.
   An edit is one object; a leading-zero number like `0600` is refused rather than guessed (YAML 1.1 and 1.2 differ),
   so such values need `0o600` or quotes. A review lasts 15 minutes and a window keeps at most 20. The Apply guard
-  (no card-wide Enter, key presses ignored for half a second) is renderer behaviour, checked in e2e only by a click.
+  (no card-wide Enter, key presses ignored for half a second, never a repeated key) is renderer behaviour, checked in
+  e2e (a fresh card's Enter, and Enter held from the menu with Apply focused).
 - **Port-forward** ([workbench.md](workbench.md#port-forward)) is TCP only. A Service forward goes through one pod,
   not spread across them as the Service would. The pod is checked every 5 seconds, so a connection in the seconds
   after its pod goes can fail. A WebSocket can't half-close, so a client that half-closes waits for the pod's answer

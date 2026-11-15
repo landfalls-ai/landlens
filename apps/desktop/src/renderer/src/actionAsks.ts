@@ -70,12 +70,13 @@ export function accessFor(kind: ActionKind, t: ResourceType): { verb: string; gr
  * What "Ask Claude first" adds to the dock: main's title, main's facts and the scrubbed diff (`review.agent`), quoted
  * as data, and the question to send. Not offered when the review has no `agent` text (a Secret) or touches a Secret.
  */
-export function askFirst(verb: ActionVerb, type: ResourceType, review: ActionReview): { context: AskContext; question: string } | undefined {
+export function askFirst(verb: ActionVerb, type: ResourceType, review: ActionReview, objects: KubeObject[] = []): { context: AskContext; question: string } | undefined {
   if (isSecretType(type) || review.agent === undefined || !review.title) return undefined;
   const facts = (review.facts ?? []).map((f: ActionFact) => `- ${f.text}`).join("\n");
   const text = `${review.title}\n${facts ? `What Landlens checked:\n${facts}\n` : ""}The cluster's dry run (live → after), scrubbed as your reads are:\n${review.agent}`;
   return {
-    context: { label: `My action · ${verb}`, text, source: review.title, kind: "action" },
+    // Where the diff is from, so a session limited to some namespaces isn't sent it from others (L11).
+    context: { label: `My action · ${verb}`, text, source: review.title, kind: "action", namespaces: [...new Set(objects.map((o) => (type.namespaced ? o.metadata.namespace ?? "" : "")))] },
     question: ACTION_ASKS[verb].question,
   };
 }

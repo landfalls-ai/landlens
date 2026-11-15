@@ -318,7 +318,7 @@ export class EditBroker {
     type Tried = { ok: Prepared } | { op: ChangeOp; err: { status?: number; message?: string } };
     const tried = await inOrder(ops, 4, async (op): Promise<Tried> => {
       try {
-        return { ok: await prepareOp(send, op, { fieldManager: EDIT_FIELD_MANAGER, hideSecrets: true }) };
+        return { ok: await prepareOp(send, op, { fieldManager: EDIT_FIELD_MANAGER, hideSecrets: true, keepObjects: true }) };
       } catch (err) {
         return { op, err: err as { status?: number; message?: string } };
       }
@@ -369,11 +369,15 @@ export class EditBroker {
         let res: Awaited<ReturnType<Send>>;
         try {
           res = await send(q);
-        } catch {
-          each.push({ target: q.describe, outcome: "failed", message: "Landlens couldn't reach the cluster." });
+        } catch (e) {
+          // A request that timed out may have reached the cluster (L12): say so, not "couldn't reach".
+          const late = (e as { status?: number }).status === 504;
+          each.push({ target: q.describe, outcome: "failed", message: late ? "The cluster didn't answer in time; it may have been applied. Check it." : "Landlens couldn't reach the cluster." });
           continue;
         }
         if (res.status >= 200 && res.status < 300) each.push({ target: q.describe, outcome: "applied" });
+        // A create's 409 is a name taken, not a change since the review (L9).
+        else if (res.status === 409 && q.method === "POST") each.push({ target: q.describe, outcome: "conflict", message: "One of that name already exists; review again." });
         else if (res.status === 409) each.push({ target: q.describe, outcome: "conflict", message: "It changed after your review." });
         else if (res.status === 404 && q.method === "DELETE") each.push({ target: q.describe, outcome: "gone", message: "It was already gone." });
         else each.push({ target: q.describe, outcome: "failed", message: cut(toKubeError(res.status, res.text).message, 500) });

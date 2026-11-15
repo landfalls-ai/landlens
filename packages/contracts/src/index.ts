@@ -845,7 +845,11 @@ export const Action = z.discriminatedUnion("kind", [
 ]);
 export type Action = z.infer<typeof Action>;
 export type ActionKind = Action["kind"];
-/** A review's SHA-256 over the requests main keeps, as hex: Apply names it, so what is sent is what the card showed. */
+/**
+ * A review's SHA-256, as hex, over what main keeps and what main sent for the card: the requests, the diff, the risks,
+ * the title, the facts, the plan and whether main's dialog asks. Apply must name it. It ties Apply to the review main
+ * answered; it can't prove what the window drew.
+ */
 export const ActionDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
 /** What the diff doesn't say (D142): a fixed sentence of main's, with checked names only. */
 export type ActionFact = { tone: "info" | "warn" | "bad"; code: string; text: string };
@@ -924,11 +928,15 @@ export type ActionLogEntry = {
   who: "you";
   action: "scale" | "restart" | "delete" | "trigger" | "suspend" | "resume" | "cordon" | "uncordon" | "drain" | "reveal" | "copy";
   kind: string;
+  /** The kind's group and resource, so a row opens its own kind (security review of part 1, L8). */
+  group?: string;
+  resource?: string;
   namespace?: string;
   names: string[];
   key?: string;
   detail?: string;
-  outcome: "applied" | "partial" | "failed" | "conflict" | "cancelled" | "stopped";
+  /** `sent`: written before the requests went (M3) and not answered yet; a row left so by a crash stays `sent`. */
+  outcome: "sent" | "applied" | "partial" | "failed" | "conflict" | "cancelled" | "stopped";
 };
 
 /** Port-forward (wave 4, part 3). A local port is 1024 or above; a remote one any TCP port. */
@@ -1064,7 +1072,8 @@ export const channels = {
   "action:discard": z.object({ id: EditId }).strict(),
   /** Stop a drain's run (D152): no new eviction is sent; those in flight finish; the node stays cordoned. */
   "action:stop": z.object({ run: EditId }).strict(),
-  "action:log": z.object({ context: z.string().min(1).max(253), limit: z.number().int().min(1).max(200).optional() }).strict(),
+  /** The connected cluster's rows: its context and its API server's hash both match (security review, L7). */
+  "action:log": z.object({ handle: Handle, limit: z.number().int().min(1).max(200).optional() }).strict(),
   "forward:list": z.object({}),
   /** The local port to offer for a remote one (free now). */
   "forward:suggest": z.object({ port: RemotePort }),
