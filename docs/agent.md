@@ -71,7 +71,7 @@ the dock shows inline under the tool's card; the model still gets the same text.
 | `api_resources` | The kinds the cluster serves |
 | `top` | CPU and memory from metrics-server |
 | `rollout_history` | A Deployment's ReplicaSets by revision, with images |
-| `metrics` | CPU and memory over 1h, 6h or 24h for the cluster, a node, a namespace, a pod or a workload, with requests and limits, from Landlens's metrics source (Clickland, else metrics-server) |
+| `metrics` | CPU and memory over 1h, 6h or 24h for the cluster, a node, a namespace, a pod or a workload, with requests and limits, from Landlens's metrics source (Clickland, else the cluster's Prometheus, else metrics-server) |
 
 All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`), so they don't prompt; the
 write tools below don't prompt in Claude Code either, because Landlens asks you itself, with the diff. `cluster_overview`,

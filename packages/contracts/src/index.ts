@@ -566,11 +566,12 @@ export type MetricsReasonCode =
   | "clickland-unauthorized"
   | "clickland-failed"
   | "clickland-no-cluster" // answers, but has nothing for this cluster's name
+  | "prometheus-failed" // found in the cluster, but its answer couldn't be read
   | "no-metrics-server"
   | "live-only"; // metrics-server: samples only since Landlens opened, at most an hour
 export type MetricsReason = { code: MetricsReasonCode; message: string };
 export type MetricsSeries = {
-  source: "clickland" | "metrics-server" | "none";
+  source: "clickland" | "prometheus" | "metrics-server" | "none";
   /** Why a better source wasn't used, and anything the reader should know about this one. */
   reasons: MetricsReason[];
   /** Seconds between points. */
@@ -585,6 +586,8 @@ export type MetricsSeries = {
   namespaces?: { key: string; cpu: number; memory: number }[];
   /** The name the cluster has in Clickland's data. */
   cluster?: string;
+  /** Prometheus: the Service that answered, `namespace/name`. */
+  prometheus?: string;
 };
 export type ClicklandSettings = {
   url: string;

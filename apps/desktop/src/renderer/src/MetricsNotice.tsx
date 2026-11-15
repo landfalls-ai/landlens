@@ -1,7 +1,7 @@
 // What a chart says when it can't draw: which source is missing, why, and the action that fixes it. And, when it can,
 // a quiet line naming the source.
 import type { MetricsReason, MetricsSeries } from "@landlens/contracts";
-import { ChartLine, CircleX, Database, History, PlugZap } from "lucide-react";
+import { ChartLine, CircleX, Database, Flame, History, PlugZap } from "lucide-react";
 import { Ic } from "./icons";
 import { RANGES } from "./metrics";
 import type { MetricsRange } from "@landlens/contracts";
@@ -17,6 +17,7 @@ const TITLE: Partial<Record<MetricsReason["code"], string>> = {
 export function MetricsUnavailable({ data, onSettings }: { data: MetricsSeries; onSettings: () => void }) {
   const off = data.reasons.some((r) => r.code === "clickland-off");
   const clickland = data.reasons.find((r) => r.code.startsWith("clickland-") && r.code !== "clickland-off");
+  // The cluster's Prometheus answered nothing usable either; its reason is in the list.
   return (
     <div className="notice metrics-notice" role="status" aria-label="Metrics unavailable">
       <Ic icon={clickland ? CircleX : ChartLine} size={15} className={clickland ? "tone-bad" : "dim"} />
@@ -37,6 +38,8 @@ export function MetricsUnavailable({ data, onSettings }: { data: MetricsSeries; 
 export function MetricsSource({ data, onSettings }: { data: MetricsSeries; onSettings: () => void }) {
   if (data.source === "clickland")
     return <span className="metrics-src" title={`Clickland, k8s.cluster.name “${data.cluster}”, ${data.step}s steps`}><Ic icon={Database} size={12} />Clickland<span className="dim mono">{data.cluster}</span></span>;
+  if (data.source === "prometheus")
+    return <span className="metrics-src" title={`The cluster's Prometheus (${data.prometheus}), cAdvisor series, ${data.step}s steps`}><Ic icon={Flame} size={12} />Prometheus<span className="dim mono">{data.prometheus?.split("/")[1]}</span></span>;
   if (data.source !== "metrics-server") return null;
   const why = data.reasons.find((r) => r.code !== "live-only");
   return (

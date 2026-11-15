@@ -116,7 +116,11 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   cluster (before the review fixes) waits for you to start it again. The row menu's F (D6) and the palette's
   forward action aren't built.
 - **Graphs are CPU and memory only**, for the cluster, nodes, pods and Deployments, StatefulSets and DaemonSets: no
-  network, disk, GPU, or Prometheus. Namespaces are a Top namespaces list, not a chart of their own.
+  network, disk or GPU. Namespaces are a Top namespaces list, not a chart of their own.
+- **Prometheus** ([metrics.md](metrics.md#prometheus)) is found only where OpenLens looks (the Helm chart's and the
+  operator's labels, four well-known names), reached only through the API server's service proxy (no direct URL or
+  bearer token), and asked only for cAdvisor's CPU and working-set series, which a Prometheus without the kubelet's
+  cAdvisor job lacks; there is no setting to pick one. The OrbStack scenario's series are backfilled, not scraped.
 - **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is
   refused. Without it, metrics-server gives live samples from when a view first asks, at most an hour, and only while
   Landlens is open. OrbStack ships no metrics-server, so there it is Clickland or nothing.

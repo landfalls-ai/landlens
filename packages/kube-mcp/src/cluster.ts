@@ -16,7 +16,7 @@ export type AgentCluster = {
    * audit can say which MCP call asked for what.
    */
   withCall?(callId: string): AgentCluster;
-  /** CPU and memory over time from Landlens's metrics source (Clickland, else metrics-server), when main offers it. */
+  /** CPU and memory over time from Landlens's metrics source (Clickland, else the cluster's Prometheus, else metrics-server), when main offers it. */
   metrics?(req: { scope: MetricsScope; namespace?: string; name?: string; range: MetricsRange }): Promise<MetricsSeries>;
   /**
    * Propose a change: Landlens's approval broker dry-runs it, asks the person and applies it only on their yes. Only

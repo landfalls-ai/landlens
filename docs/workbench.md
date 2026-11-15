@@ -345,5 +345,5 @@ LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e
 
 ## Still to come in wave 4
 
-Part 4's rest: Prometheus, if a cluster has one. See
+Nothing: part 4 closed with Prometheus as a graphs source ([metrics.md](metrics.md#prometheus)). See
 [limitations.md](limitations.md) for what parts 1 to 4 leave out.

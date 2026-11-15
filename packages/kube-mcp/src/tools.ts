@@ -445,7 +445,7 @@ function metricsText(what: string, range: string, s: MetricsSeries): string {
     const refs = [finite(p.request) ? `request ${fmt(p.request)}` : "", finite(p.limit) ? `limit ${fmt(p.limit)}` : "", finite(p.allocatable) ? `allocatable ${fmt(p.allocatable)}` : ""].filter(Boolean);
     return `${name}${refs.length ? ` (${refs.join(", ")})` : ""}:\n${lines.length ? lines.join("\n") : "  no samples"}`;
   };
-  const source = s.source === "clickland" ? "Clickland" : "metrics-server, sampled live";
+  const source = s.source === "clickland" ? "Clickland" : s.source === "prometheus" ? "the cluster's Prometheus" : "metrics-server, sampled live";
   const notes = s.reasons.filter((r) => r.code === "live-only").map((r) => r.message);
   return [`CPU and memory for ${what} over ${range} (from ${source}, one point every ${s.step}s, one series per ${s.by}).`, panel("CPU (cores)", s.cpu, cores), panel("Memory (working set)", s.memory, bytes), ...notes].join("\n");
 }

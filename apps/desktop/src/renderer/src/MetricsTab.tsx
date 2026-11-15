@@ -30,7 +30,7 @@ export function MetricsTab(props: { handle: string; type: ResourceType; object: 
       <div className="mtab-empty" role="status">
         <strong>No usage samples for this {pod ? "pod" : props.type.kind.toLowerCase()} in the last {range} yet.</strong>
         <span>
-          {data.source === "clickland" ? "Clickland stores kubelet stats every 30s, for running containers only" : "metrics-server reports running containers only"}
+          {data.source === "clickland" ? "Clickland stores kubelet stats every 30s, for running containers only" : data.source === "prometheus" ? "Prometheus has cAdvisor series for running containers only" : "metrics-server reports running containers only"}
           {state && state !== "Running" ? `; its status is ${state}, so no container ran long enough to be sampled.` : "; a new pod shows up within a minute."}
         </span>
         {refs.length ? <span className="dim">{refs.join(" · ")}{pod ? " (from its spec)" : " per pod"}.</span> : null}

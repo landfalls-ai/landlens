@@ -4,3 +4,4 @@ export * from "./live-series.js";
 export * from "./quantity.js";
 export * from "./sampler.js";
 export * from "./service.js";
+export * from "./prometheus.js";

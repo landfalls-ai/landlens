@@ -38,12 +38,9 @@ export async function liveSeries(get: Get, samples: Sample[], r: ScopeRequest, s
   let pods: Set<string> | undefined;
   let template: any[] | undefined;
   if (r.scope !== "namespace") {
-    const w = await get(apiPath({ group: "apps", version: "v1", resource: WORKLOADS[r.scope] }, ns, r.name));
-    template = w?.spec?.template?.spec?.containers;
-    const labels: Record<string, string> = w?.spec?.selector?.matchLabels ?? {};
-    const selector = Object.entries(labels).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join(",");
-    const list = await get(`${apiPath({ group: "", version: "v1", resource: "pods" }, ns)}?labelSelector=${selector}`);
-    pods = new Set((list?.items ?? []).map((p: any) => p.metadata.name as string));
+    const w = await workload(get, r);
+    template = w.template;
+    pods = new Set(w.pods);
   }
   const pick = (s: Sample) => {
     const out = new Map<string, Usage>();
@@ -56,6 +53,20 @@ export async function liveSeries(get: Get, samples: Sample[], r: ScopeRequest, s
   };
   return { ...base, by: "pod", ...refs(template, shown, pick, false) };
 }
+
+/** A workload's pod template's containers and its pods' names, by its selector's labels. */
+async function workload(get: Get, r: ScopeRequest): Promise<{ template?: any[]; pods: string[] }> {
+  const w = await get(apiPath({ group: "apps", version: "v1", resource: WORKLOADS[r.scope as keyof typeof WORKLOADS] }, r.namespace, r.name));
+  const labels: Record<string, string> = w?.spec?.selector?.matchLabels ?? {};
+  const selector = Object.entries(labels).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join(",");
+  // No labels would select every pod in the namespace: a workload without matchLabels has none of its own here.
+  if (!selector) return { template: w?.spec?.template?.spec?.containers, pods: [] };
+  const list = await get(`${apiPath({ group: "", version: "v1", resource: "pods" }, r.namespace)}?labelSelector=${selector}`);
+  return { template: w?.spec?.template?.spec?.containers, pods: (list?.items ?? []).map((p: any) => p.metadata.name as string) };
+}
+
+/** A workload's pods' names (Prometheus asks for these pods' containers). */
+export const workloadPods = async (get: Get, r: ScopeRequest) => (await workload(get, r)).pods;
 
 function refs(containers: any[] | undefined, shown: Sample[], pick: (s: Sample) => Map<string, Usage>, perKey: boolean) {
   const res = containerResources(containers);

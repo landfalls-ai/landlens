@@ -84,7 +84,7 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/renderer/src/icons.tsx`, `Mark.tsx`, `present.ts`, `styles.css` | Icons per kind, the brand mark, name splitting and tones, the tokens and styles ([design.md](design.md)) |
 | `packages/kube/src/health.ts` | `clusterHealth`: one health computation for the Overview and the agent's `cluster_overview` |
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
-| `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
+| `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the cluster's Prometheus (found, asked through the service proxy), the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
 | `apps/desktop/src/main/clickland-settings.ts` | Clickland's address, cluster names and the key encrypted with safeStorage |
 | `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars` and the pure `scale.ts` helpers |
 | `apps/desktop/src/renderer/src/Usage.tsx`, `MetricsTab.tsx`, `MetricsNotice.tsx`, `ClicklandSettings.tsx`, `metrics.ts` | The Overview's Usage card, the drawer's Metrics tab, source and empty-state notices, Connect Clickland, the polling hook |

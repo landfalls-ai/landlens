@@ -1,9 +1,11 @@
-// Which source answers: Clickland when a key is stored and it answers for this cluster; else metrics-server sampled
-// while Landlens is open; else nothing, with every reason and what fixes it.
+// Which source answers: Clickland when a key is stored and it answers for this cluster; else the cluster's own
+// Prometheus, if it has one; else metrics-server sampled while Landlens is open; else nothing, with every reason and
+// what fixes it.
 import type { ClicklandTest, MetricsReason, MetricsRequest, MetricsSeries } from "@landlens/contracts";
 import { ClicklandClient, ClicklandError, FILTERS_MISSING, honoursFilters, type ClicklandConfig } from "./clickland.js";
 import { clicklandSeries, RANGE_MS } from "./clickland-series.js";
 import { liveSeries } from "./live-series.js";
+import { findPrometheus, prometheusSeries, type PrometheusTarget } from "./prometheus.js";
 import { MetricsServerSampler, type Get, type SamplerOptions } from "./sampler.js";
 
 export type MetricsDeps = {
@@ -35,6 +37,8 @@ export class MetricsService {
   private readonly samplers = new Map<string, MetricsServerSampler>();
   /** Per Clickland URL: whether it honours `where`, checked at most every five minutes. */
   private readonly filters = new Map<string, { at: number; ok: boolean }>();
+  /** Per cluster: the Prometheus found (or none), looked for again after five minutes. */
+  private readonly prometheus = new Map<string, { at: number; target?: PrometheusTarget }>();
   constructor(private readonly deps: MetricsDeps) {}
 
   private now() {
@@ -59,6 +63,19 @@ export class MetricsService {
         reasons.push({ code: REASON[err.kind], message: err.message });
       }
     } else reasons.push({ code: "clickland-off", message: "Clickland isn't connected, so there is no history." });
+
+    // Prometheus, if the cluster has one: asked through the API server's service proxy as you.
+    const prom = await this.findPrometheus(req.handle, cluster.get);
+    if (prom) {
+      try {
+        const out = await prometheusSeries(opts.read ?? cluster.get, cluster.get, prom, req, this.now());
+        out.reasons = reasons;
+        return out;
+      } catch (err) {
+        if ((err as { status?: number }).status === 400) throw err;
+        reasons.push({ code: "prometheus-failed", message: `Prometheus (${prom.namespace}/${prom.service}) didn't answer: ${(err as Error).message}`.slice(0, 300) });
+      }
+    }
 
     const sampler = this.sampler(req.handle, cluster.get);
     const served = await sampler.available();
@@ -142,6 +159,14 @@ export class MetricsService {
     return ok;
   }
 
+  private async findPrometheus(handle: string, get: Get): Promise<PrometheusTarget | undefined> {
+    const known = this.prometheus.get(handle);
+    if (known && this.now() - known.at < 300_000) return known.target;
+    const target = await findPrometheus(get).catch(() => undefined);
+    this.prometheus.set(handle, { at: this.now(), ...(target ? { target } : {}) });
+    return target;
+  }
+
   private sampler(handle: string, get: Get) {
     let s = this.samplers.get(handle);
     if (!s) this.samplers.set(handle, (s = new MetricsServerSampler(get, this.deps.sampler)));
@@ -152,6 +177,7 @@ export class MetricsService {
   forget(handle: string) {
     this.samplers.get(handle)?.stop();
     this.samplers.delete(handle);
+    this.prometheus.delete(handle);
   }
 
   stopAll() {
