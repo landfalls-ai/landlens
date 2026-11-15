@@ -346,8 +346,70 @@ Code: `packages/kube/src/actions.ts` (builders, the kind table in `action-kinds.
 `apps/desktop/src/main/actions.ts` (`ActionService`), `as-you.ts`, `native-confirm.ts`, `action-log.ts`, and the
 renderer's `ActionSheet.tsx`, `ReviewCard.tsx`, `ObjectMenu.tsx`, `RecentActions.tsx`, `actionAsks.ts`.
 
+## Nodes: cordon and drain
+
+Wave 8 part 2 (D149–D154). A Node's menu (and the drawer's ⋯, and ⌘K's `cordon`, `uncordon` and `drain` verbs) has
+**Cordon** or **Uncordon** by its state, then **Drain…**.
+
+- **Cordon and uncordon** are one merge patch of `spec.unschedulable` (`true`, or `null` to remove it, as kubectl
+  does), pinned to the node's resourceVersion, dry-run and shown on the same card as any action, with the
+  Cluster-wide tag (so a second click). Facts: how many pods keep running on it, and, when no other Ready, schedulable
+  node exists, "This is the only node that takes new pods" (and then new pods "stay Pending"). The Nodes table's
+  Status already reads `Ready,SchedulingDisabled` for a cordoned node.
+- **Drain's preview** (`packages/kube/src/drain.ts`, `DrainPlanView.tsx`) is a plan, not a diff. Main reads the node,
+  its pods (all namespaces, `fieldSelector=spec.nodeName`) and the PodDisruptionBudgets as you, then classes each pod
+  as kubectl drain would: DaemonSet pods and static pods' mirrors stay; finished pods are evicted without a budget
+  check; terminating pods are left; a pod nothing recreates (bare) is blocked until you tick **Delete pods that
+  nothing will recreate**, one with emptyDir volumes until you tick **Lose emptyDir data**; a budget that allows no
+  disruption, or two budgets on one pod (which the eviction API refuses), block. Then main asks the API server with
+  a **dry-run eviction** of each pod it would move, and where the cluster's answer differs from Landlens's reading,
+  the row shows the cluster's (and the sheet says on how many). Past 2,000 pods or budgets, or when a namespace's
+  budgets can't be listed, the plan is partial and can't run.
+- **The sheet.** "Drain node-2", three counts with icons (to evict, blocked, stay), the two ticks (each re-reviews
+  after 300 ms), then one column of rows grouped *Blocked* (a red edge, with what would unblock each), *Will be
+  evicted* and *Stay* (folded): the pod in mono, its namespace, its owner as a link, chips (`budget hands-web-pdb · 0
+  allowed`, `bare`, `emptyDir cache`, `DaemonSet`). **Drain…** is off while a row waits on a tick, the plan is
+  partial, or the build is preview only; a plan blocked only by budgets may run (those pods are retried and
+  reported). **Ask Claude** sends the plan as names, classes and counts only, quoted as data, with "Which blockers
+  matter, and what is a safe order?".
+- **The run.** After main's own dialog ("Drain node-2 on orbstack? 9 pods will be evicted, 1 is blocked by a
+  disruption budget and will be retried, 3 DaemonSet pods stay."), main answers with a run at once and works on its
+  own token (`you · <context> · drain <node>`): the cordon it kept (a 409 there stops the run before any eviction:
+  "The node changed since the preview"), then the evictions of exactly the pods the preview listed, by uid, four at a
+  time. A 429 is tried again every 5 s until the run's 10 minutes are up, then the pod is *blocked*; a 404 or a 409
+  (another pod has its name now) is *gone*; anything else *failed* in a fixed sentence. An evicted pod is followed in
+  the node's pod list until it is gone. **Stop** sends no new eviction; a run also stops when its window or its
+  cluster goes. The node **stays cordoned** in every ending, and the end offers **Uncordon…**. Progress comes to the
+  window that started the run, at most four times a second; one row goes to Recent actions ("Drained Node node-2 ·
+  9 evicted, 1 blocked"). One run per node, two per cluster. Landlens never deletes a pod, never sends a grace
+  period of its own, and never bypasses a budget (no `--disable-eviction`).
+- **A development build is preview only on every cluster** (D153). An unpackaged Landlens sends no node write, no dry
+  run to a node and no dry-run eviction unless the context is named in `LANDLENS_NODE_WRITES` (comma-separated; read
+  only when the app isn't packaged). Every series `ActionService` sends goes through a fence that refuses such a
+  request before it leaves; cordon's card is then Landlens's own reading of the patch and drain's plan has no dry
+  runs, both saying "Development build: preview only. Nothing is sent to nodes on this cluster." with Apply off.
+  Nothing sets the variable, and the e2e takes it out of its environment: OrbStack's one node is shared with the
+  siblings. A packaged app has no such guard.
+
+Code: `packages/kube/src/drain.ts` (the plan, the reads, the dry-run evictions, the run), `actions.ts` (`cordonBody`,
+cordon's facts), `apps/desktop/src/main/actions.ts` (`prepareNode`, the run, `stop`, the fence, `nodeWritesFrom`), the
+renderer's `DrainPlanView.tsx` (the drain sheet) and `ActionSheet.tsx` (cordon's card).
+
 ## Tests
 
+- Nodes (wave 8 part 2): `packages/kube` `drain.test.ts` (every class and block from table-driven pods, the ticks,
+  partial past the caps and on a 403; against the in-memory `fake-api.ts`: a review sends only GETs and dry runs and
+  spends nothing, a run cordons first, evicts only the reviewed uids, retries a 429 and ends it blocked, treats a
+  replaced pod as gone, stops on Stop with the node cordoned, never deletes a pod or sends a grace period), on
+  OrbStack `drain.integration.test.ts` (dry-run evictions of the scenario's pods only: hands-web's answers 429 for
+  hands-web-pdb with the budget unchanged; under a throwaway budget that allows one, hands-bare's is accepted and the
+  budget still allows one, its disruptedPods empty, the pod the same uid; a wrong uid is a 409; the plan of the real
+  node agrees with the API server on the scenario's pods); `apps/desktop` `nodes-main.test.ts` (D153 with the fake's
+  record: nothing to nodes unless listed, packaged ignores the variable, the fence however a path is spelled; cordon;
+  main's dialog and Cancel; the run's token, progress to its window only, Stop from its window only, the window's
+  end, one run per node, the digest) and `nodes.e2e.test.ts` (reads only: the menu, the drain preview with the
+  scenario's pods where they belong, the ticks, cordon's preview, ⌘K; the node and every landlens-dev pod's uid as
+  they were). A real drain runs only against the fake.
 - Your actions (wave 8): `packages/kube` `actions.test.ts` (each body, kubectl's Job, the kind table and refusals,
   every fact, no copied text), `edits.test.ts` (`reviewOps`, apply each, the digest, a Secret's delete), on OrbStack
   `actions.integration.test.ts` (scale, restart, suspend and trigger hands-* for real and put back; the triggered Job

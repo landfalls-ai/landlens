@@ -270,8 +270,13 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setShow((s) => ({ tab: action, n: (s?.n ?? 0) + 1 }));
   };
   /** Your action on one object: the sheet over the main pane; nothing is sent until its review is applied (D145). */
-  const startAction = (type: ResourceType, o: KubeObject, kind: ActionKind, suspend?: boolean) =>
-    setActionOn({ kind, type, objects: [o], ...(kind === "suspend" ? { suspend: !!suspend } : {}) });
+  const startAction = (type: ResourceType, o: KubeObject, kind: ActionKind, flag?: boolean) =>
+    setActionOn({
+      kind, type, objects: [o],
+      ...(kind === "suspend" ? { suspend: !!flag } : {}),
+      // Cordon or uncordon (D149): as asked, else by the node's state.
+      ...(kind === "cordon" ? { on: flag ?? o.spec?.unschedulable !== true } : {}),
+    });
   /** "Ask Claude first" (D148): the review as quoted data, the object, and the action's question. */
   const askFirst = (contexts: AskContext[], question: string) => {
     setAskContext((cs) => [...cs.filter((c) => c.kind !== "action" && !contexts.some((x) => x.label === c.label)), ...contexts]);
@@ -294,7 +299,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       setReachError(`${t.kind} ${t.name}: ${(e as ApiError).message}`);
       return;
     }
-    if (isActionVerb(verb)) return startAction(n.type, o, verb);
+    if (isActionVerb(verb)) return verb === "uncordon" ? startAction(n.type, o, "cordon", false) : startAction(n.type, o, verb, verb === "cordon" ? true : undefined);
     const pod = t.kind === "Pod" && t.group === "";
     if (verb === "shell" && pod) {
       const target = container ? targetOf(o, container, "auto") : direct(o) ?? (() => {
@@ -657,7 +662,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       {rowMenu && list ? (
         <ObjectMenu at={rowMenu} handle={cluster.handle} type={list.type} object={rowMenu.o} pods={!!pods} onClose={() => setRowMenu(undefined)}
           {...(rowMenu.drawer ? {} : { onOpen: (a: "logs" | "shell" | "edit") => act(rowMenu.o, a) })}
-          onAction={(kind, suspend) => startAction(list.type, rowMenu.o, kind, suspend)}
+          onAction={(kind, flag) => startAction(list.type, rowMenu.o, kind, flag)}
           onAsk={() => ask({ ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: rowMenu.o.metadata.name, ...(rowMenu.o.metadata.namespace ? { namespace: rowMenu.o.metadata.namespace } : {}) }, label: `${list.type.kind} ${rowMenu.o.metadata.namespace ? `${rowMenu.o.metadata.namespace}/` : ""}${rowMenu.o.metadata.name}` })} />
       ) : null}
       {leaving ? (
@@ -718,8 +723,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         />
       ) : null}
       {actionOn ? (
-        <ActionSheet key={`${actionOn.kind}/${actionOn.objects.map((o) => o.metadata.uid).join(",")}`} cluster={cluster} draft={actionOn}
-          onClose={() => setActionOn(undefined)} onAsk={askFirst} onApplied={() => setActionsVersion((n) => n + 1)} />
+        <ActionSheet key={`${actionOn.kind}/${actionOn.on ?? ""}/${actionOn.objects.map((o) => o.metadata.uid).join(",")}`} cluster={cluster} draft={actionOn}
+          onClose={() => setActionOn(undefined)} onAsk={askFirst} onApplied={() => setActionsVersion((n) => n + 1)}
+          onUncordon={() => setActionOn({ ...actionOn, kind: "cordon", on: false })} onOpen={go} />
       ) : null}
       {triage ? <TriageSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} problem={triage} onClose={() => setTriage(undefined)} /> : null}
       {flowOn ? <FlowSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} subject={flowOn} onAsk={ask} onClose={() => setFlowOn(undefined)} /> : null}

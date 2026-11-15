@@ -2,14 +2,14 @@
 // action's icon, a sentence built from the row's checked fields, its age and its outcome. A row's object opens on
 // click when it still exists. The status bar shows the count since Landlens started.
 import type { ActionLogEntry } from "@landlens/contracts";
-import { Ban, CircleCheck, CircleX, History, Pause, Play, RotateCcw, Scale, TriangleAlert, Trash2, X } from "lucide-react";
+import { Ban, CircleCheck, CircleSlash, CircleX, History, LogOut, Pause, Play, RotateCcw, Scale, TriangleAlert, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Ic, type LucideIcon } from "./icons";
 import { duration } from "./present";
 
 const STARTED = Date.now();
-const ICON: Partial<Record<ActionLogEntry["action"], LucideIcon>> = { scale: Scale, restart: RotateCcw, delete: Trash2, trigger: Play, suspend: Pause, resume: Play };
+const ICON: Partial<Record<ActionLogEntry["action"], LucideIcon>> = { scale: Scale, restart: RotateCcw, delete: Trash2, trigger: Play, suspend: Pause, resume: Play, cordon: CircleSlash, uncordon: CircleCheck, drain: LogOut };
 const OUTCOME: Record<ActionLogEntry["outcome"], { word: string; tone: string; icon: LucideIcon }> = {
   applied: { word: "Done", tone: "ok", icon: CircleCheck },
   partial: { word: "Partly", tone: "warn", icon: TriangleAlert },

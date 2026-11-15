@@ -75,6 +75,15 @@ restarts, suspends and triggers them and puts each back) and, after `pnpm -s bui
 with `LANDLENS_SHOTS`). The unit tests: `packages/kube/test/actions.test.ts`, `edits.test.ts`, and in `apps/desktop`
 `actions-main.test.ts`, `action-log.test.ts`.
 
+Nodes ([workbench.md](workbench.md#nodes-cordon-and-drain)), with the same scenario: a full drain runs only in unit
+tests, against the in-memory API in `packages/kube/test/fake-api.ts` (`drain.test.ts`, and `apps/desktop`'s
+`nodes-main.test.ts`). On OrbStack, `LANDLENS_INTEGRATION=orbstack npx vitest run test/drain.integration.test.ts` in
+`packages/kube` sends reads and dry-run evictions of the scenario's own pods only (a test-local fence refuses
+anything else) and makes and deletes one throwaway PodDisruptionBudget; `test/nodes.e2e.test.ts` in `apps/desktop`
+is reads only (screenshots `w8p2-*`). An unpackaged build sends no node write and no dry-run eviction unless
+`LANDLENS_NODE_WRITES` names the context (comma-separated): leave it unset. OrbStack's one node runs the siblings
+(landflow-dev, clickland-dev, kube-system); never cordon or drain it.
+
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`
 (namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
 healthy two-replica `catalog-api` with requests, limits and an uneven load.

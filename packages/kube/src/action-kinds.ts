@@ -8,6 +8,9 @@ export const ACTION_KINDS: Record<Exclude<ActionKind, "delete">, readonly string
   restart: ["deployments.apps", "statefulsets.apps", "daemonsets.apps"],
   trigger: ["cronjobs.batch"],
   suspend: ["cronjobs.batch", "jobs.batch"],
+  // Part 2 (D149–D154): a Node, named by the action itself.
+  cordon: ["nodes"],
+  drain: ["nodes"],
 };
 /** Kinds never deleted in bulk, and asked about in main's own dialog even alone (D141, D143). */
 export const WIDE_DELETES: ReadonlySet<string> = new Set([

@@ -176,6 +176,21 @@ Scale, restart, delete, trigger, suspend and resume are yours, sent as you ([wor
 | Limits: 8 reviews being prepared per window (more is 429), 20 kept per window, 60 s for a review's requests | desktop unit test |
 | **Ask Claude first** sends main's title, facts and the agent-scrubbed diff as quoted data, never on a Secret; the agent has no tool that presses Apply | quotes test (head, fence, no Secret, no text without `agent`) |
 
+### Nodes: cordon and drain
+
+Wave 8 part 2 (D149–D154, [workbench.md](workbench.md#nodes-cordon-and-drain)). Every rule's test fails with the rule
+taken out (checked by removing each, as in wave 7).
+
+| Rule | How it's checked |
+|---|---|
+| A development build sends nothing to a node unless told: every series `ActionService` sends goes through a fence that refuses, before it leaves, any request other than a GET to `/api/v1/nodes…` or to a pod's `eviction`, dry run or not, however the path is spelled, unless the context is named in `LANDLENS_NODE_WRITES` (read only when the app isn't packaged; no test or script sets it; the e2e removes it from the app's environment). Cordon and drain are then built from reads, preview only, with no id to apply; a Node's delete is refused the same way | desktop unit test (`nodes-main.test.ts`: the fake API's record holds no node write, dry run or eviction; listed, they are sent; packaged ignores the variable; the fence on seven spellings); e2e (the node's `unschedulable` and every landlens-dev pod's uid unchanged, main's dialog never asked) |
+| A drain evicts only the pods its preview listed, by uid (`preconditions.uid`), through the eviction API: never a pod's DELETE, never a grace period of Landlens's own, never around a budget (no `--disable-eviction`), never `--force` by default (bare and emptyDir pods need their tick) | kube unit tests against the fake API (a pod that arrived after the review is left; a replaced pod is gone, not evicted; no DELETE, no `gracePeriodSeconds`); desktop unit test (the reviewed uids only) |
+| A drain review is main's: its id and the SHA-256 of exactly what Apply sends (the cordon request and the pods); a review waiting on a tick, partial, or preview only has no id. Apply asks in main's own dialog first; Cancel sends nothing and keeps the review | desktop unit tests (no id with a tick missing, a wrong digest drops the review, another window can't apply, Cancel sends nothing) |
+| The run has its own token for its length (`you · <context> · drain <node>`), revoked at its end; its progress goes only to the window that started it; only that window can Stop it; it stops when its window or its cluster goes; one run per node, two per cluster | desktop unit tests (token, pushes, Stop from another window refused, the window's end, a second run refused) |
+| The node stays cordoned in every ending: Landlens never uncordons on its own; Uncordon is a separate action with its own review | kube and desktop unit tests (after Stop, a timeout, a cordon conflict: still cordoned, no `unschedulable: null` sent) |
+| A dry-run eviction changes nothing: it says dry run in the query (so admission treats it as one) and in its DeleteOptions (where the eviction handler reads it); the handler checks the budget and returns before spending it | kube unit test (the body); OrbStack integration (`drain.integration.test.ts`: a budget that allows one still allows one, its disruptedPods empty, the pod the same uid, after a dry-run eviction; every non-GET it sends passes a test-local fence: dry-run evictions of landlens-dev hands-* pods only) |
+| The plan and the sheet show Landlens's sentences and checked names; Ask Claude sends names, classes and counts, never a dry run's text, quoted as data | kube unit test (names checked before a path is built); quotes test (the head takes Cordon, Uncordon and Drain titles only) |
+
 ## Your forwards
 
 Port-forwards are yours, like shells ([workbench.md](workbench.md#port-forward)).

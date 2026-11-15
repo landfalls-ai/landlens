@@ -29,6 +29,11 @@ export function ReviewCard(props: {
   onBack: () => void;
   onAsk?: () => void;
   backLabel?: string;
+  /**
+   * A development build's cordon on a cluster it may not write nodes to (D153): Landlens's own reading of the patch,
+   * not the cluster's dry run. This sentence stands in place of "Dry run passed", and Apply is off.
+   */
+  previewOnly?: string;
 }) {
   const ops = props.review.operations ?? [];
   const risks: ChangeRisk[] = ORDER.filter((r) => ops.some((o) => o.risk.includes(r)));
@@ -41,6 +46,7 @@ export function ReviewCard(props: {
   const shownAt = useRef(Date.now());
   const capped = ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
   const apply = (e: React.MouseEvent) => {
+    if (props.previewOnly) return;
     // A keyboard press (detail 0) in the first half second is a key meant for something else; a click is deliberate.
     if (e.detail === 0 && Date.now() - shownAt.current < 500) return;
     // The whole change is on screen before it can be sent.
@@ -95,7 +101,9 @@ export function ReviewCard(props: {
         </div>
       ) : null}
       <div className="change-foot">
-        <div className="change-fact"><Ic icon={ShieldCheck} size={12} />Dry run passed. Nothing has changed yet.</div>
+        {props.previewOnly
+          ? <div className="change-fact preview-only"><Ic icon={Info} size={12} />{props.previewOnly}</div>
+          : <div className="change-fact"><Ic icon={ShieldCheck} size={12} />Dry run passed. Nothing has changed yet.</div>}
         {props.applying ? (
           <div className="change-applying" role="status"><span className="spinner" />Applying…</div>
         ) : confirm ? (
@@ -110,9 +118,9 @@ export function ReviewCard(props: {
             {capped ? (
               <button ref={props.applyRef} className="primary" onClick={apply}>Show the whole change</button>
             ) : danger || props.nativeLabel ? (
-              <button ref={props.applyRef} className="danger" onClick={apply}><Ic icon={TriangleAlert} size={13} />{props.nativeLabel ?? "Apply…"}</button>
+              <button ref={props.applyRef} className="danger" disabled={!!props.previewOnly} onClick={apply}><Ic icon={TriangleAlert} size={13} />{props.nativeLabel ?? "Apply…"}</button>
             ) : (
-              <button ref={props.applyRef} className="primary" onClick={apply}><Ic icon={Check} size={13} />Apply<kbd aria-hidden="true">↵</kbd></button>
+              <button ref={props.applyRef} className="primary" disabled={!!props.previewOnly} onClick={apply}><Ic icon={Check} size={13} />Apply<kbd aria-hidden="true">↵</kbd></button>
             )}
             <button className="secondary" onClick={props.onBack}>{props.backLabel ?? "Back to editing"}<kbd aria-hidden="true">esc</kbd></button>
             {props.onAsk ? <button className="link-btn small" onClick={props.onAsk}><Ic icon={Sparkles} size={12} />{props.askLabel ?? "Ask Claude to check it"}</button> : null}

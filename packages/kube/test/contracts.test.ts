@@ -137,4 +137,14 @@ describe("your actions' channels (wave 8, D144)", () => {
     expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64), confirmed: true }).success).toBe(false);
     expect(channels["action:log"].safeParse({ context: "orbstack", limit: 500 }).success).toBe(false);
   });
+  it("name a node by its own rule for cordon and drain, with drain's two choices and nothing else (part 2)", () => {
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "cordon", node: "orbstack", on: true } }).success).toBe(true);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "ip-10-0-0-1.ec2.internal", bare: false, emptyDir: true } }).success).toBe(true);
+    for (const node of ["../x", "Node1", "a/b", "a?b", "", "-a", "a".repeat(254)]) expect([node, review.safeParse({ handle: "handle-0001", action: { kind: "cordon", node, on: true } }).success]).toEqual([node, false]);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "orbstack", bare: false } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "orbstack", bare: false, emptyDir: false, force: true } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "orbstack", bare: false, emptyDir: false, gracePeriodSeconds: 0 } }).success).toBe(false);
+    expect(channels["action:stop"].safeParse({ run: "edAAAAAAAAAAAA" }).success).toBe(true);
+    expect(channels["action:stop"].safeParse({ run: "edAAAAAAAAAAAA", node: "orbstack" }).success).toBe(false);
+  });
 });

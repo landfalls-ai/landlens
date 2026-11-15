@@ -279,6 +279,19 @@ all N) and Recent warnings; Nodes. It reads
   **Done**, with **Review again** on a conflict. Recent actions is the status bar's `History` item with the count
   since start, opening a 420px `.pop.recent-actions` above it: a row is the action's icon, its sentence, its age in
   mono and the outcome word in its tone.
+- **Nodes** (wave 8 part 2, `DrainPlanView.tsx`). A Node's menu has **Cordon** (`CircleSlash`) or **Uncordon**
+  (`CircleCheck`), then **Drain…** (`LogOut`). Cordon's sheet is the action card; a preview-only card (D153) shows
+  `Info` and "Development build: preview only. Nothing is sent to nodes on this cluster." in `--ink-2` where "Dry run
+  passed" would be, with Apply disabled. The drain sheet (`.drain-sheet`, the same 720px dialog, `LogOut` in its
+  head): three `.badge` counts with icon and word (`LogOut` to evict, `CircleSlash` blocked in bad when not zero,
+  `Pause` stay), the two ticks (`.drain-ticks`), the preview-only, partial and disagreement notes, then one column
+  of `.drain-row` cards (`--bg-1`, inset `--line`): the pod in mono, its namespace in `--ink-3`, the owner as a
+  `.link-btn`, `.chip`s, and for a blocked row a `--bad-soft` card with a 3px `--bad` inset edge and its unblock
+  sentence in `--bad-text`. Groups: *Blocked*, *Will be evicted*, *Stay* (a fold with a chevron). A re-review dims
+  the list (`.drain-stale`) rather than blanking it. The foot: **Ask Claude** (link), Cancel, and the danger
+  **Drain…**; during the run each row's state on its right (`Clock` waiting, a spinning `LoaderCircle` evicting,
+  `CircleCheck` gone in ok, `CircleSlash` blocked and `CircleX` failed in bad), the elapsed time in mono in the
+  head, **Stop**; at the end the summary, **Uncordon…** and **Done**.
 
 ## Components
 
@@ -339,7 +352,9 @@ the page.
 The e2e test finds things by role and name, so keep (wave 8 adds menu "<Kind> <name>" with its menuitems "Scale…",
 "Restart", "Delete…"; button "More actions"; dialog with `#action-title`; spinbutton "Replicas"; buttons "Review",
 "Done", "Review again", "Recent actions"; region "Review your action"; list "What happened"; dialog "Recent actions"
-with `.recent-row`): heading "Pick a cluster"; buttons "Pods", "Deployments",
+with `.recent-row`; part 2 adds button "Nodes", menuitems "Cordon", "Uncordon", "Drain…", regions "Blocked", "Will be
+evicted", "Stay" with `li[data-pod="<namespace>/<name>"]`, checkboxes "Delete pods that nothing will recreate" and
+"Lose emptyDir data", role note with the preview-only sentence, buttons "Drain…", "Stop", "Uncordon…"): heading "Pick a cluster"; buttons "Pods", "Deployments",
 "Secrets", "Ask Claude", "Stop", "Send"; combobox "Namespace"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's

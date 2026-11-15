@@ -63,7 +63,14 @@ export type BuildInput =
   | { kind: "restart"; targets: ActionTarget[]; now: Date }
   | { kind: "delete"; targets: ActionTarget[] }
   | { kind: "trigger"; targets: ActionTarget[]; cronJob: any; jobs: ChangeTarget; suffix: string }
-  | { kind: "suspend"; targets: ActionTarget[]; suspend: boolean };
+  | { kind: "suspend"; targets: ActionTarget[]; suspend: boolean }
+  | { kind: "cordon"; targets: ActionTarget[]; on: boolean };
+
+/**
+ * Cordon and uncordon (D149): a merge patch of the Node's `spec.unschedulable`, `true` or `null` (kubectl uncordon
+ * removes the field). prepareOp pins it to the version read.
+ */
+export const cordonBody = (on: boolean) => ({ spec: { unschedulable: on ? true : null } });
 
 /** Checks an action's targets: one kind, one that the action takes, at most 50, never a wide kind in bulk. */
 export function checkTargets(kind: ActionKind, targets: ActionTarget[]) {
@@ -72,7 +79,7 @@ export function checkTargets(kind: ActionKind, targets: ActionTarget[]) {
   const k = keyOf(targets[0]!.type);
   if (targets.some((t) => keyOf(t.type) !== k)) throw new ActionError("One kind at a time.");
   if (!actionFits(kind, targets[0]!.type)) throw new ActionError(`Landlens doesn't ${kind} ${targets[0]!.type.resource}.`);
-  if ((kind === "scale" || kind === "trigger" || kind === "suspend") && targets.length !== 1) throw new ActionError(`One object to ${kind}.`);
+  if ((kind === "scale" || kind === "trigger" || kind === "suspend" || kind === "cordon" || kind === "drain") && targets.length !== 1) throw new ActionError(`One object to ${kind}.`);
   if (kind === "delete" && targets.length > 1 && WIDE_DELETES.has(k)) throw new ActionError(`${targets[0]!.type.kind} objects are deleted one at a time.`);
   for (const t of targets) {
     if (t.type.namespaced && !t.namespace) throw new ActionError(`${t.type.kind} ${t.name} needs a namespace.`);
@@ -94,6 +101,8 @@ export function buildOps(a: BuildInput): ChangeOp[] {
       return a.targets.map((t) => ({ verb: "delete", ...at(t) }));
     case "suspend":
       return [{ verb: "patch", patchType: "merge", ...at(a.targets[0]!), body: { spec: { suspend: a.suspend } } }];
+    case "cordon":
+      return [{ verb: "patch", patchType: "merge", ...at(a.targets[0]!), body: cordonBody(a.on) }];
     case "trigger": {
       const t = a.targets[0]!;
       if (a.cronJob?.metadata?.name !== t.name || a.cronJob?.metadata?.namespace !== t.namespace) throw new ActionError("That isn't the CronJob asked for.");
@@ -130,7 +139,14 @@ export type FactInput = {
   pdbs?: any[] | Unread;
   /** delete of a PVC: its bound PersistentVolume by name, or the status its read answered. */
   pvs?: Record<string, any | Unread>;
+  /** cordon: on (true) or off; the pods on the node now (a count), and every Node (for "the only one"). */
+  on?: boolean;
+  nodePods?: number | Unread;
+  nodes?: any[] | Unread;
 };
+
+/** A Node that takes new pods: Ready, and not cordoned. */
+export const schedulable = (n: any) => n?.spec?.unschedulable !== true && (n?.status?.conditions ?? []).some((c: any) => c?.type === "Ready" && c?.status === "True");
 
 /** Whether a label selector (matchLabels and matchExpressions) selects these labels. An empty selector selects all. */
 export function selects(sel: any, labels: Record<string, string> | undefined): boolean {
@@ -253,6 +269,23 @@ function factsFor(i: FactInput, x: FactInput["objects"][number]): ActionFact[] {
       if (key === "jobs.batch" && i.suspend && num(o.status?.active)) out.push({ tone: "warn", code: "suspend-deletes", text: "Suspending deletes its running pods." });
       break;
     }
+    case "cordon": {
+      if (!i.on) {
+        out.push({ tone: "info", code: "uncordon", text: "New pods can be scheduled on it again." });
+        break;
+      }
+      const only = !unread(i.nodes) && !!i.nodes && !i.nodes.some((n) => n?.metadata?.name !== o.metadata?.name && schedulable(n));
+      if (unread(i.nodes)) out.push(couldnt("other nodes", i.nodes.status));
+      else if (only) out.push({ tone: "bad", code: "only-node", text: "This is the only node that takes new pods." });
+      if (unread(i.nodePods)) out.push(couldnt("the pods on it", i.nodePods.status));
+      else if (i.nodePods !== undefined) {
+        const n = num(i.nodePods) ?? 0;
+        out.push({ tone: "info", code: "pods-stay", text: `${plural(n, "pod")} keep${n === 1 ? "s" : ""} running; new ones ${only ? "stay Pending" : "go elsewhere"}.` });
+      }
+      break;
+    }
+    case "drain":
+      break; // the plan is its facts (drain.ts)
   }
   return out;
 }

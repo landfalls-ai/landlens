@@ -41,6 +41,7 @@ vi.mock("@landlens/kube-mcp", () => ({
     return { status: 405, text: "{}", warnings: [] };
   },
 }));
+import type { ActionResult } from "@landlens/contracts";
 import { ActionService, MAX_PREPARING } from "../src/main/actions";
 
 const types = [
@@ -97,7 +98,7 @@ describe("your actions in main", () => {
     expect(dry.path).toContain("dryRun=All");
     expect(JSON.parse(dry.body!)).toEqual({ spec: { replicas: 3 }, metadata: { resourceVersion: "10" } });
     sent.length = 0;
-    const out = await svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async () => { throw new Error("no dialog for a scale"); });
+    const out = await svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async () => { throw new Error("no dialog for a scale"); }) as { results: ActionResult[] };
     expect(out.results).toEqual([{ target: "deployment landlens-dev/hands-web", outcome: "applied" }]);
     expect(sent.map((s) => [s.method, s.path.includes("dryRun"), s.body])).toEqual([["PATCH", false, dry.body]]);
     expect(sent[0]!.token).not.toBe(reviewToken);
@@ -138,7 +139,7 @@ describe("your actions in main", () => {
     expect(asked).toEqual([{ message: "Delete 3 ConfigMaps in landlens-dev on orbstack?", detail: "hands-cm-1\nhands-cm-2\nhands-cm-3", yes: "Delete 3" }]);
     expect(sent).toEqual([]);
     expect(rows.map((x) => x.outcome)).toEqual(["cancelled"]);
-    const out = await svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async () => true);
+    const out = await svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async () => true) as { results: ActionResult[] };
     expect(out.results.map((x) => x.outcome)).toEqual(["applied", "applied", "applied"]);
     const deletes = sent.filter((s) => s.method === "DELETE");
     expect(deletes.map((d) => JSON.parse(d.body!).preconditions)).toEqual([{ uid: "c1", resourceVersion: "1" }, { uid: "c2", resourceVersion: "2" }, { uid: "c3", resourceVersion: "3" }]);
@@ -204,7 +205,7 @@ describe("your actions in main", () => {
     refuse = undefined;
     const ok = await svc.review({ handle: "h1234567", action: { kind: "scale", target: ref, replicas: 3 } }, a);
     objects[DEP].metadata.resourceVersion = "11"; // someone changed it
-    const out = await svc.apply({ handle: "h1234567", id: ok.id!, digest: ok.digest! }, a, async () => true);
+    const out = await svc.apply({ handle: "h1234567", id: ok.id!, digest: ok.digest! }, a, async () => true) as { results: ActionResult[] };
     expect(out.results).toEqual([{ target: "deployment landlens-dev/hands-web", outcome: "conflict", message: "It changed after your review." }]);
     expect(objects[DEP].spec.replicas).toBe(2);
     expect(rows.at(-1).outcome).toBe("conflict");

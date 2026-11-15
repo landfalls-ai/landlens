@@ -12,7 +12,8 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **The approval card is the renderer's.** A compromised renderer could approve a change it was shown; the renderer
   is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. Main's own native
   dialog asks only before your widest actions (a delete of several objects, or of a Namespace, CRD, Node,
-  PersistentVolume or APIService; wave 8); other danger, and the agent's changes, keep the card's second click.
+  PersistentVolume or APIService, and a drain; wave 8); other danger (a cordon included), and the agent's changes,
+  keep the card's second click.
 - **Dry runs trust the API server.** An aggregated API server that ignored `dryRun` would apply at the dry run. The
   agent's commands in the "/" menu are Claude Code's own (with no settings loaded, its built-ins), sent as messages.
 - **Claude Code is the only agent.** Its sandbox fences only Claude Code; another ACP agent (Codex, Gemini CLI) would
@@ -69,10 +70,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **Your actions are one object at a time** (wave 8 part 1): the menu, the drawer and ⌘K act on the object in
-  front of you. Bulk actions on a multi-select come in part 3; cordon, uncordon and drain in part 2; revealing a
-  Secret's value in part 4. A Secret can be deleted (its review shows keys and sizes) but not otherwise acted on.
+  front of you. Bulk actions on a multi-select come in part 3; revealing a Secret's value in part 4. A Secret can be deleted (its review shows keys and sizes) but not otherwise acted on.
   Recent actions keeps no diff and no undo; Rollback, a Helm rollback and an action on several clusters are later
   waves (10, 12).
+- **Cordon and drain are preview only in a development build** (wave 8 part 2, D153), on every cluster, OrbStack
+  included: nothing is sent to a node unless `LANDLENS_NODE_WRITES` names the context. A packaged app has no such
+  guard. **No real drain has run live**: the run is tested against an in-memory API (`fake-api.ts`) and OrbStack sees
+  reads and dry-run evictions of the scenario's pods only (its one node is shared with the siblings); a test on a
+  throwaway two-node `kind` cluster is the person's call (spec, open question 2). **The agent has no cordon or drain
+  tool**: it can explain a plan (Ask Claude), the person runs it. A drain doesn't follow a pod's replacement to see it
+  scheduled elsewhere, and doesn't wait for a PodDisruptionBudget whose status is behind its spec (the API answers
+  429 and the run retries). Closing the sheet while a drain runs isn't offered (Stop first); the run is main's and
+  ends with its window.
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 13).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have

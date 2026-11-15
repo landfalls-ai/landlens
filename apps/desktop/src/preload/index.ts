@@ -12,7 +12,7 @@ const CHANNELS: readonly Channel[] = [
   "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:auto-run", "mcp:remove", "mcp:calls", "mcp:try",
   "mcp:app-open", "mcp:app-call", "mcp:app-close", "mcp:app-link",
   "logs:open", "logs:close", "terminal:open", "terminal:local", "terminal:input", "terminal:resize", "terminal:ack", "terminal:close",
-  "edit:review", "edit:create", "edit:apply", "edit:discard", "action:review", "action:apply", "action:discard", "action:log",
+  "edit:review", "edit:create", "edit:apply", "edit:discard", "action:review", "action:apply", "action:discard", "action:stop", "action:log",
   "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
   "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",
@@ -25,7 +25,7 @@ const CHANNELS: readonly Channel[] = [
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
-  "family:update",
+  "family:update", "action:progress",
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */

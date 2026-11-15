@@ -30,11 +30,45 @@ Departures from the spec, and why:
 - **A review's `prepared` objects stay in the broker's result for main's facts**, then are dropped: main returns the
   review without them.
 
-## Part 2: nodes (D149–D153)
+## Part 2: nodes (D149–D154) — built 16 Nov 2026
 
-- [ ] Cordon, uncordon; drain with a preview and a run that can be stopped
+- [x] `drain.ts` (the plan, the reads, the dry-run evictions, the run), `fake-api.ts`, unit tests (D150–D152)
+- [x] `ActionService`: cordon, the drain review, the run, `action:progress`, `action:stop`, the D153 fence
+- [x] `DrainPlanView.tsx` (the drain sheet), cordon on the action card, the node menu, ⌘K verbs (D149, D154)
+- [x] The [check]: a dry-run eviction reports a budget's block without spending it, live (`drain.integration.test.ts`)
+- [x] `nodes.e2e` (reads only), docs
+- [ ] Fable's security review of part 2
 
-## Part 3: tables and asks (D154–D160)
+The [check] (D151), settled: the source (kubernetes v1.36.0, `pkg/registry/core/pod/storage/eviction.go`:
+`checkAndDecrement` decrements a copy and returns before `UpdateStatus` on a dry run; `addConditionAndDeletePod`
+skips the DisruptionTarget condition and the store's delete is a dry run) and the live test agree. On OrbStack
+(1.36.5): hands-web's dry-run eviction answers 429 with a `DisruptionBudget` cause and hands-web-pdb's status is
+unchanged; under a throwaway budget that allows one, hands-bare's dry-run eviction is accepted (201) and the budget
+still allows one with no disruptedPods, the pod the same uid with no deletionTimestamp. So `dry` stays in the design.
+
+Departures from the spec, and why:
+
+- **A StatusCause's type is read from `reason`**: the API serializes `metav1.StatusCause.Type` as `reason`; the live
+  test caught the first reading (`type`), which would have marked every budget 429 as `other`.
+- **A dry-run eviction says dry run twice**, `?dryRun=All` in the query as well as `deleteOptions.dryRun`, so
+  admission (webhooks with side effects) treats the request as a dry run too; the API server requires the two to
+  match.
+- **The fence covers every series of `ActionService`**, not only cordon and drain: a Node's delete (D141 offers it,
+  behind main's dialog) is a node write as well, and is refused the same way in a development build.
+- **A preview-only cordon shows Landlens's own reading of the patch** (a local merge of `spec.unschedulable`) in the
+  card, marked so, since no dry run may be sent; a preview-only drain has its plan without `dry`.
+- **The drain review is main's own**, not an `EditBroker` review: its id and the SHA-256 over the kept cordon
+  request and pod list; Apply names both, as part 1's actions do. A review waiting on a tick, partial or preview
+  only has no id.
+- **`DrainProgress` carries `startedAt` and a `note`** (the elapsed time, and why a run ended before evicting).
+- **The live test is its own file** (`drain.integration.test.ts`) so it runs without part 1's writes; besides the
+  spec's two dry runs it makes one throwaway budget that allows a disruption, the case that shows a budget isn't
+  spent, and checks a wrong uid answers 409.
+- **Pending pods**: the eviction API lets a Pending pod go without a budget check; the plan still shows its budget
+  (if any) as Landlens reads it, and the dry run's answer corrects the row.
+- **Closing the sheet while a drain runs isn't offered**: Stop first (the run is main's and ends with its window).
+
+## Part 3: tables and asks (D155–D160)
 
 - [ ] Multi-select, bulk actions (main's dialog), the column picker, remembered sort, several namespaces, preset asks
 

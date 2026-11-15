@@ -5,10 +5,16 @@ import type { ActionFact, ActionKind, ActionReview, KubeObject, ResourceType } f
 import { actionFits } from "@landlens/kube/action-kinds";
 import type { AskContext } from "./quotes";
 
-export type ActionVerb = ActionKind | "resume";
+export type ActionVerb = ActionKind | "resume" | "uncordon";
 
-/** What the sheet is asked to do: an action on objects of one kind, as the window has them. */
-export type ActionDraft = { kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean };
+/** D153's sentence, as main says it: a development build sends nothing to nodes it wasn't told it may. */
+export const PREVIEW_ONLY = "Development build: preview only. Nothing is sent to nodes on this cluster.";
+
+/**
+ * What the sheet is asked to do: an action on objects of one kind, as the window has them. `suspend`: suspend (true)
+ * or resume; `on`: cordon (true) or uncordon.
+ */
+export type ActionDraft = { kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean };
 
 /** The question each action's "Ask Claude first" sends (Landlens's own words). */
 export const ACTION_ASKS: Record<ActionVerb, { label: string; question: string }> = {
@@ -18,14 +24,22 @@ export const ACTION_ASKS: Record<ActionVerb, { label: string; question: string }
   trigger: { label: "Ask Claude first", question: "Is it safe to run this job now, outside its schedule? Check what it does and whether a run is already going. Answer yes or no first, then why." },
   suspend: { label: "Ask Claude first", question: "Is it safe to suspend this now? Check what stops running and what waits on it. Answer yes or no first, then why." },
   resume: { label: "Ask Claude first", question: "Is it safe to resume this now? Check what runs when it does and whether that is expected. Answer yes or no first, then why." },
+  cordon: { label: "Ask Claude first", question: "Is it safe to cordon this node now? Check whether other nodes can take new pods and what would stay pending. Answer yes or no first, then why." },
+  uncordon: { label: "Ask Claude first", question: "Is it safe to uncordon this node now? Check whether whatever it was cordoned for is over. Answer yes or no first, then why." },
+  // The drain's own sheet asks with the plan as names, classes and counts (D154), not a diff.
+  drain: { label: "Ask Claude", question: "Which blockers matter, and what is a safe order?" },
 };
+
+/** A verb as the sheet, the log and the asks name it. */
+export const verbOf = (d: Pick<ActionDraft, "kind" | "suspend" | "on">): ActionVerb =>
+  d.kind === "suspend" && !d.suspend ? "resume" : d.kind === "cordon" && d.on === false ? "uncordon" : d.kind;
 
 export const isSecretType = (t: Pick<ResourceType, "group" | "resource">) => t.group === "" && t.resource === "secrets";
 
 /** The actions an object of this kind has, in menu order (D146). Secrets get Delete only. */
-export function actionsFor(t: ResourceType, o?: KubeObject): { kind: ActionKind; suspend?: boolean; label: string }[] {
+export function actionsFor(t: ResourceType, o?: KubeObject): { kind: ActionKind; suspend?: boolean; on?: boolean; label: string }[] {
   if (isSecretType(t)) return actionFits("delete", t) ? [{ kind: "delete", label: "Delete…" }] : [];
-  const out: { kind: ActionKind; suspend?: boolean; label: string }[] = [];
+  const out: { kind: ActionKind; suspend?: boolean; on?: boolean; label: string }[] = [];
   if (actionFits("scale", t)) out.push({ kind: "scale", label: "Scale…" });
   if (actionFits("restart", t)) out.push({ kind: "restart", label: "Restart" });
   if (actionFits("trigger", t)) out.push({ kind: "trigger", label: "Trigger now" });
@@ -33,14 +47,22 @@ export function actionsFor(t: ResourceType, o?: KubeObject): { kind: ActionKind;
     const suspended = o?.spec?.suspend === true;
     out.push({ kind: "suspend", suspend: !suspended, label: suspended ? "Resume" : "Suspend" });
   }
+  // A node (D149, D154): Cordon or Uncordon by its state, then Drain.
+  if (actionFits("cordon", t)) {
+    const cordoned = o?.spec?.unschedulable === true;
+    out.push({ kind: "cordon", on: !cordoned, label: cordoned ? "Uncordon" : "Cordon" });
+  }
+  if (actionFits("drain", t)) out.push({ kind: "drain", label: "Drain…" });
   if (actionFits("delete", t)) out.push({ kind: "delete", label: "Delete…" });
   return out;
 }
 
 /** The RBAC check behind each action, for `cluster:access` (D146): the verb, and the resource it is on. */
-export function accessFor(kind: ActionKind, t: ResourceType): { verb: string; group: string; resource: string } {
+export function accessFor(kind: ActionKind, t: ResourceType): { verb: string; group: string; resource: string; subresource?: string } {
   if (kind === "delete") return { verb: "delete", group: t.group, resource: t.resource };
   if (kind === "trigger") return { verb: "create", group: "batch", resource: "jobs" };
+  // A drain cordons (patch nodes, the menu's Cordon checks that) and evicts pods in any namespace.
+  if (kind === "drain") return { verb: "create", group: "", resource: "pods", subresource: "eviction" };
   return { verb: "patch", group: t.group, resource: t.resource };
 }
 

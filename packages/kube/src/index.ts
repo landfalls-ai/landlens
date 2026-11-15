@@ -19,6 +19,7 @@ export * from "./exec.js";
 export * from "./logs.js";
 export * from "./edits.js";
 export * from "./actions.js";
+export * from "./drain.js";
 export * from "./forward.js";
 export * from "./helm.js";
 export * from "./search.js";

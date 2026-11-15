@@ -6,8 +6,10 @@
 import type { ActionResult, ActionReview, ClusterInfo, KubeObject } from "@landlens/contracts";
 import { CircleCheck, CircleX, Minus, Plus, TriangleAlert, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { askFirst, type ActionDraft } from "./actionAsks";
+import { askFirst, PREVIEW_ONLY, verbOf, type ActionDraft } from "./actionAsks";
 import { api, type ApiError } from "./api";
+import type { NavTarget } from "./Details";
+import { DrainSheet } from "./DrainPlanView";
 import { Ic } from "./icons";
 import type { AskContext } from "./quotes";
 import { ReviewCard } from "./ReviewCard";
@@ -33,10 +35,12 @@ export function sheetTitle(d: ActionDraft): string {
     case "delete": return `Delete ${one}`;
     case "trigger": return `Run ${one} now`;
     case "suspend": return `${d.suspend ? "Suspend" : "Resume"} ${one}`;
+    case "cordon": return `${d.on === false ? "Uncordon" : "Cordon"} ${one}`;
+    case "drain": return `Drain ${one}`;
   }
 }
 
-export function ActionSheet(props: {
+export type SheetProps = {
   cluster: ClusterInfo;
   draft: ActionDraft;
   onClose: () => void;
@@ -44,7 +48,18 @@ export function ActionSheet(props: {
   onAsk: (contexts: AskContext[], question: string) => void;
   /** An apply ended (whatever its outcome): Recent actions reads the log again. */
   onApplied: () => void;
-}) {
+  /** A drain's end offers Uncordon (D152): the cordon sheet, the other way. */
+  onUncordon?: () => void;
+  /** A drain row's owner, opened in its list (the sheet closes first). */
+  onOpen?: (t: NavTarget) => void;
+};
+
+/** The sheet for your action (D145); a drain has its own body, the plan and the run (D154). */
+export function ActionSheet(props: SheetProps) {
+  return props.draft.kind === "drain" ? <DrainSheet {...props} /> : <ChangeSheet {...props} />;
+}
+
+function ChangeSheet(props: SheetProps) {
   const d = props.draft;
   const o = d.objects[0]!;
   const listed = typeof o.spec?.replicas === "number" ? o.spec.replicas : 1;
@@ -69,7 +84,7 @@ export function ActionSheet(props: {
   const field = useRef<HTMLInputElement>(null);
   const reviewId = useRef<string>(undefined);
   reviewId.current = stage.s === "review" ? stage.review.id : undefined;
-  const verb = d.kind === "suspend" && !d.suspend ? "resume" : d.kind;
+  const verb = verbOf(d);
 
   // A review left open when the sheet goes is dropped in main too.
   useEffect(() => () => {
@@ -81,10 +96,12 @@ export function ActionSheet(props: {
     const action = d.kind === "scale" ? { kind: "scale" as const, target: refOf(d, o), replicas }
       : d.kind === "trigger" ? { kind: "trigger" as const, target: refOf(d, o) }
       : d.kind === "suspend" ? { kind: "suspend" as const, target: refOf(d, o), suspend: !!d.suspend }
-      : { kind: d.kind, targets: d.objects.map((x) => refOf(d, x)) };
+      : d.kind === "cordon" ? { kind: "cordon" as const, node: o.metadata.name, on: d.on !== false }
+      : { kind: d.kind as "restart" | "delete", targets: d.objects.map((x) => refOf(d, x)) };
     try {
       const r = await api.invoke("action:review", { handle: props.cluster.handle, action });
-      if (r.id && r.operations) {
+      // A preview-only cordon (D153) is shown like a review, with Apply off.
+      if ((r.id || r.previewOnly) && r.operations) {
         setStage({ s: "review", review: r });
         setTimeout(() => (box.current?.contains(document.activeElement) || document.activeElement === document.body) && applyBtn.current?.focus(), 0);
       } else setStage({ s: "problems", messages: (r.problems ?? []).map((p) => p.message), ...(r.conflict ? { conflict: true } : {}) });
@@ -109,7 +126,7 @@ export function ActionSheet(props: {
     setStage({ s: "applying", review: r });
     try {
       const out = await api.invoke("action:apply", { handle: props.cluster.handle, id: r.id!, digest: r.digest! });
-      setStage({ s: "done", results: out.results });
+      setStage({ s: "done", results: "results" in out ? out.results : [] });
       props.onApplied();
     } catch (e) {
       const err = e as ApiError;
@@ -175,6 +192,7 @@ export function ActionSheet(props: {
               {...(stage.review.facts?.length ? { facts: stage.review.facts } : {})}
               {...(stage.review.native ? { nativeLabel: `${d.kind === "delete" ? "Delete" : "Apply"}${d.objects.length > 1 ? ` ${d.objects.length}` : ""}…` } : {})}
               applying={stage.s === "applying"}
+              {...(stage.review.previewOnly ? { previewOnly: PREVIEW_ONLY } : {})}
               applyRef={applyBtn}
               onApply={() => void apply()}
               onBack={back}
@@ -194,7 +212,7 @@ export function ActionSheet(props: {
               {stage.results.map((r, i) => (
                 <li key={i} className={`result-${r.outcome}`}>
                   <Ic icon={r.outcome === "applied" || r.outcome === "gone" ? CircleCheck : r.outcome === "conflict" ? TriangleAlert : CircleX} size={14} />
-                  <span><span className="mono">{r.target}</span> {r.outcome === "applied" ? (d.kind === "delete" ? "deleted" : d.kind === "trigger" ? "created" : "applied") : r.outcome === "gone" ? "was already gone" : r.outcome === "conflict" ? "changed after your review: not sent" : `failed: ${r.message ?? "the cluster refused it"}`}</span>
+                  <span><span className="mono">{r.target}</span> {r.outcome === "applied" ? (d.kind === "delete" ? "deleted" : d.kind === "trigger" ? "created" : d.kind === "cordon" ? (d.on === false ? "uncordoned" : "cordoned") : "applied") : r.outcome === "gone" ? "was already gone" : r.outcome === "conflict" ? "changed after your review: not sent" : `failed: ${r.message ?? "the cluster refused it"}`}</span>
                 </li>
               ))}
             </ul>

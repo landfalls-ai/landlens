@@ -4,7 +4,7 @@
 // through `cluster:access` (SelfSubjectAccessReview as you) and kept 60 seconds. A Secret has Delete only, and no
 // Ask Claude. Arrow keys, Home and End, type-ahead, Esc.
 import type { ActionKind, KubeObject, ResourceType } from "@landlens/contracts";
-import { Ban, Copy, Pause, Pencil, Play, RotateCcw, Scale, ScrollText, Sparkles, SquareTerminal, Trash2 } from "lucide-react";
+import { Ban, CircleCheck, CircleSlash, Copy, LogOut, Pause, Pencil, Play, RotateCcw, Scale, ScrollText, Sparkles, SquareTerminal, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { accessFor, actionsFor, isSecretType } from "./actionAsks";
 import { api } from "./api";
@@ -23,10 +23,10 @@ export function useCanAct(handle: string, type: ResourceType, namespace: string 
     const out: Partial<Record<ActionKind, boolean>> = {};
     void Promise.all(kinds.map(async (k) => {
       const a = accessFor(k, type);
-      const key = `${handle}/${namespace ?? ""}/${a.verb}/${a.group}/${a.resource}`;
+      const key = `${handle}/${namespace ?? ""}/${a.verb}/${a.group}/${a.resource}/${a.subresource ?? ""}`;
       let p = cache.get(key);
       if (!p) {
-        p = api.invoke("cluster:access", { handle, checks: [{ verb: a.verb, group: a.group, resource: a.resource, ...(namespace && type.namespaced ? { namespace } : {}) }] })
+        p = api.invoke("cluster:access", { handle, checks: [{ verb: a.verb, group: a.group, resource: a.resource, ...(a.subresource ? { subresource: a.subresource } : {}), ...(namespace && type.namespaced ? { namespace } : {}) }] })
           .then((r) => r.allowed[0] !== false, () => true);
         cache.set(key, p);
         setTimeout(() => cache.delete(key), 60_000);
@@ -38,11 +38,11 @@ export function useCanAct(handle: string, type: ResourceType, namespace: string 
   return can;
 }
 
-const ICON: Record<ActionKind | "resume", LucideIcon> = { scale: Scale, restart: RotateCcw, trigger: Play, suspend: Pause, resume: Play, delete: Trash2 };
+const ICON: Record<ActionKind | "resume" | "uncordon", LucideIcon> = { scale: Scale, restart: RotateCcw, trigger: Play, suspend: Pause, resume: Play, delete: Trash2, cordon: CircleSlash, uncordon: CircleCheck, drain: LogOut };
 /** "Your role can't patch deployments in landlens-dev" (D146): the check's own verb and resource. */
 const cant = (k: ActionKind, type: ResourceType, ns?: string) => {
   const a = accessFor(k, type);
-  return `Your role can't ${a.verb} ${a.resource}${ns && type.namespaced ? ` in ${ns}` : ""}`;
+  return `Your role can't ${a.verb} ${a.resource}${a.subresource ? `/${a.subresource}` : ""}${ns && type.namespaced ? ` in ${ns}` : ""}`;
 };
 
 type Item = { key: string; label: string; icon: LucideIcon; kbd?: string; disabled?: boolean; why?: string; tone?: "bad"; run: () => void; section: string };
@@ -55,7 +55,8 @@ export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction
   pods: boolean;
   /** The drawer's own menu leaves out what its tabs already are (Logs, shell, Edit). */
   onOpen?: (a: "logs" | "shell" | "edit") => void;
-  onAction: (kind: ActionKind, suspend?: boolean) => void;
+  /** `flag`: suspend (true) or resume for Suspend; cordon (true) or uncordon for Cordon. */
+  onAction: (kind: ActionKind, flag?: boolean) => void;
   onAsk: () => void;
   onClose: () => void;
   label?: string;
@@ -76,7 +77,8 @@ export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction
   }
   for (const a of acts.filter((x) => x.kind !== "delete")) {
     const no = can[a.kind] === false;
-    items.push({ section: "Actions", key: a.kind, label: a.label, icon: ICON[a.kind === "suspend" && !a.suspend ? "resume" : a.kind], disabled: no, ...(no ? { why: cant(a.kind, type, o.metadata.namespace) } : {}), run: run(() => onAction(a.kind, a.suspend)) });
+    const icon = ICON[a.kind === "suspend" && !a.suspend ? "resume" : a.kind === "cordon" && !a.on ? "uncordon" : a.kind];
+    items.push({ section: "Actions", key: a.kind, label: a.label, icon, disabled: no, ...(no ? { why: cant(a.kind, type, o.metadata.namespace) } : {}), run: run(() => onAction(a.kind, a.kind === "cordon" ? a.on : a.suspend)) });
   }
   if (!secret) items.push({ section: "Ask", key: "ask", label: "Ask Claude", icon: Sparkles, run: run(onAsk) });
   items.push({ section: "Ask", key: "copy", label: "Copy name", icon: Copy, run: run(() => void copyText(o.metadata.name)) });

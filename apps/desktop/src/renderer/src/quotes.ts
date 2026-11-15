@@ -85,7 +85,7 @@ function headName(c: AskContext): string {
   if (c.kind === "landflow") return /^[A-Za-z0-9_-]{1,100}$/.test(c.source ?? "") ? c.source! : "a flow";
   if (c.kind === "gcp") return /^[A-Za-z0-9._-]{1,80}\/[A-Za-z0-9._-]{1,80}$/.test(c.source ?? "") ? c.source! : "a resource";
   // An action's title is main's (wave 8, D144): a verb, a kind and checked names; anything else is a fixed word.
-  if (c.kind === "action") return /^(?:Scale|Restart|Delete|Run|Suspend|Resume) [a-z0-9][-a-z0-9 ./:]{0,400}$/.test(c.source ?? "") ? c.source! : "an action";
+  if (c.kind === "action") return /^(?:Scale|Restart|Delete|Run|Suspend|Resume|Cordon|Uncordon|Drain) [a-z0-9][-a-z0-9 ./:]{0,400}$/.test(c.source ?? "") ? c.source! : "an action";
   return c.source ?? c.label;
 }
 const MAX_PROMPT = 20_000;

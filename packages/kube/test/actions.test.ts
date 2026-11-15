@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { actionFacts, actionFits, buildOps, restartBody, scaleBody, selects, triggerJob, triggerName, type ActionTarget } from "../src/actions.js";
+import { actionFacts, actionFits, buildOps, cordonBody, restartBody, scaleBody, selects, triggerJob, triggerName, type ActionTarget } from "../src/actions.js";
 
 const T = {
   deployments: { group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespaced: true, verbs: ["get", "patch", "delete"] },
@@ -173,5 +173,31 @@ describe("facts: what the diff doesn't say (D142)", () => {
     expect(selects({ matchExpressions: [{ key: "a", operator: "Exists" }] }, {})).toBe(false);
     expect(selects({ matchExpressions: [{ key: "a", operator: "Bogus" }] }, { a: "1" })).toBe(false);
     expect(selects({}, { a: "1" })).toBe(true);
+  });
+});
+
+describe("cordon (wave 8 part 2, D149)", () => {
+  const nodes = { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false, verbs: ["get", "patch", "delete"] };
+  const node = (name: string, o: { unschedulable?: boolean; ready?: boolean } = {}) => ({ metadata: { name }, spec: o.unschedulable ? { unschedulable: true } : {}, status: { conditions: [{ type: "Ready", status: o.ready === false ? "False" : "True" }] } });
+  it("is a merge patch of spec.unschedulable, true or null, on a Node only, one at a time", () => {
+    expect(buildOps({ kind: "cordon", targets: [at(nodes, "n1")], on: true })).toEqual([{ verb: "patch", patchType: "merge", type: { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false }, name: "n1", body: { spec: { unschedulable: true } } }]);
+    expect(cordonBody(false)).toEqual({ spec: { unschedulable: null } });
+    expect(() => buildOps({ kind: "cordon", targets: [at(T.deployments, "web")], on: true })).toThrow(/doesn't cordon/);
+    expect(() => buildOps({ kind: "cordon", targets: [at(nodes, "n1"), at(nodes, "n2")], on: true })).toThrow(/One object/);
+    expect(actionFits("drain", nodes)).toBe(true);
+    expect(actionFits("drain", T.pods)).toBe(false);
+  });
+  it("says how many pods stay, and when it is the only node that takes new ones; never a name that isn't one", () => {
+    const one = [{ group: "", resource: "nodes", kind: "Node", obj: node("n1") }];
+    expect(actionFacts({ kind: "cordon", on: true, objects: one, nodePods: 12, nodes: [node("n1"), node("n2")] })).toEqual([{ tone: "info", code: "pods-stay", text: "12 pods keep running; new ones go elsewhere." }]);
+    // n2 is cordoned and n3 not ready: n1 is the only one.
+    expect(actionFacts({ kind: "cordon", on: true, objects: one, nodePods: 1, nodes: [node("n1"), node("n2", { unschedulable: true }), node("n3", { ready: false })] })).toEqual([
+      { tone: "bad", code: "only-node", text: "This is the only node that takes new pods." },
+      { tone: "info", code: "pods-stay", text: "1 pod keeps running; new ones stay Pending." },
+    ]);
+    expect(actionFacts({ kind: "cordon", on: true, objects: one, nodePods: { status: 403 }, nodes: { status: 403 } }).map((f) => f.text)).toEqual([
+      "Landlens couldn't check for other nodes here (HTTP 403).", "Landlens couldn't check for the pods on it here (HTTP 403).",
+    ]);
+    expect(actionFacts({ kind: "cordon", on: false, objects: one })).toEqual([{ tone: "info", code: "uncordon", text: "New pods can be scheduled on it again." }]);
   });
 });

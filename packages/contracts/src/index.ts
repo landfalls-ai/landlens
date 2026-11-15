@@ -829,15 +829,19 @@ export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?:
  * Your actions (wave 8, D141–D148): what the person asks main to do to objects. The window names an action's closed
  * shape and its targets; main resolves each target's type from the cluster's discovery, builds every request, dry-runs
  * it as you, and keeps it under an `ed…` id. Nothing in a request can carry a body, a path or a title. Cordon and drain
- * join in part 2.
+ * (part 2, D149–D154) name a node, and for a drain the two choices kubectl calls --force and --delete-emptydir-data.
  */
 export const ACTION_TARGETS = 50;
+/** A Node's name: a DNS subdomain (the API server's own rule for nodes). */
+export const NodeName = z.string().min(1).max(253).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/, "not a node name");
 export const Action = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("scale"), target: ResourceRef.strict(), replicas: z.number().int().min(0).max(1000) }).strict(),
   z.object({ kind: z.literal("restart"), targets: z.array(ResourceRef.strict()).min(1).max(ACTION_TARGETS) }).strict(),
   z.object({ kind: z.literal("delete"), targets: z.array(ResourceRef.strict()).min(1).max(ACTION_TARGETS) }).strict(),
   z.object({ kind: z.literal("trigger"), target: ResourceRef.strict() }).strict(),
   z.object({ kind: z.literal("suspend"), target: ResourceRef.strict(), suspend: z.boolean() }).strict(),
+  z.object({ kind: z.literal("cordon"), node: NodeName, on: z.boolean() }).strict(),
+  z.object({ kind: z.literal("drain"), node: NodeName, bare: z.boolean(), emptyDir: z.boolean() }).strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 export type ActionKind = Action["kind"];
@@ -849,9 +853,67 @@ export type ActionFact = { tone: "info" | "warn" | "bad"; code: string; text: st
  * A dry run of your action: the edit review's fields, with main's title and facts. `native`: Apply asks in main's own
  * dialog first (bulk and wide deletes). `digest`: what Apply must name.
  */
-export type ActionReview = EditReview & { title?: string; facts?: ActionFact[]; native?: true; digest?: string };
+export type ActionReview = EditReview & {
+  title?: string;
+  facts?: ActionFact[];
+  native?: true;
+  digest?: string;
+  /** A drain's plan (D150, D151): what would be evicted, what blocks, what stays, and the cluster's own dry runs. */
+  plan?: DrainPlan;
+  /**
+   * D153: a development build that wasn't told it may write to this cluster's nodes. The review is built from reads
+   * only (no dry run to the node, no dry-run eviction) and has no id: there is nothing to apply.
+   */
+  previewOnly?: true;
+  /** Pods where the cluster's dry run and Landlens's reading disagree (the row shows the cluster's answer). */
+  disagree?: number;
+};
 export type ActionOutcome = "applied" | "conflict" | "failed" | "gone";
 export type ActionResult = { target: string; outcome: ActionOutcome; message?: string };
+
+/**
+ * Drain (wave 8 part 2, D150–D152). A pod on the node: what a drain does with it, and why it is blocked if it is.
+ * `evict`: evicted through the eviction API. `daemonset` and `mirror`: skipped (they would come straight back).
+ * `finished`: Succeeded or Failed, evicted without a budget check. `terminating`: already going, left alone.
+ */
+export type DrainClass = "evict" | "daemonset" | "mirror" | "finished" | "terminating";
+export type DrainBlock = "budget" | "many-budgets" | "needs-bare" | "needs-emptydir";
+export type DrainPod = {
+  namespace: string;
+  name: string;
+  uid: string;
+  owner?: { kind: string; name: string };
+  class: DrainClass;
+  /** No controller owner: nothing recreates it. */
+  bare: boolean;
+  /** The names of its emptyDir volumes. */
+  emptyDir: string[];
+  /** The PodDisruptionBudgets whose selector matches it: one with what it allows now, or several by name. */
+  budget?: { name: string; allowed: number } | { many: string[] };
+  blocked?: DrainBlock;
+  /** The API server's answer to a dry-run eviction (D151): 2xx would go; 429 a budget; 403 your role. */
+  dry?: { status: number; reason?: "budget" | "forbidden" | "other" };
+};
+export type DrainPlan = {
+  node: string;
+  cordoned: boolean;
+  pods: DrainPod[];
+  counts: { evict: number; blocked: number; skipped: number };
+  /** Why the plan may be incomplete (past the caps, or budgets that couldn't be listed): Apply stays off. */
+  partial?: string;
+};
+export type DrainPodState = "waiting" | "evicting" | "evicted" | "gone" | "blocked" | "failed";
+/** A drain's run (D152), pushed on `action:progress` to the window that started it, at most four times a second. */
+export type DrainProgress = {
+  run: string;
+  node: string;
+  state: "cordoning" | "evicting" | "done" | "stopped" | "timed-out" | "failed";
+  pods: { namespace: string; name: string; state: DrainPodState; note?: string }[];
+  /** When the run started (ms since the epoch), for the elapsed time. */
+  startedAt: number;
+  /** A run that ended before any eviction: why, in a fixed sentence. */
+  note?: string;
+};
 /** One kept row per action the person applied (D147): names and closed words only, never a diff, a message or a value. */
 export type ActionLogEntry = {
   id: string;
@@ -1000,6 +1062,8 @@ export const channels = {
   "action:review": z.object({ handle: Handle, action: Action }).strict(),
   "action:apply": z.object({ handle: Handle, id: EditId, digest: ActionDigest }).strict(),
   "action:discard": z.object({ id: EditId }).strict(),
+  /** Stop a drain's run (D152): no new eviction is sent; those in flight finish; the node stays cordoned. */
+  "action:stop": z.object({ run: EditId }).strict(),
   "action:log": z.object({ context: z.string().min(1).max(253), limit: z.number().int().min(1).max(200).optional() }).strict(),
   "forward:list": z.object({}),
   /** The local port to offer for a remote one (free now). */
@@ -1169,8 +1233,10 @@ export type Responses = {
   "edit:apply": { results: string[] };
   "edit:discard": { ok: true };
   "action:review": ActionReview;
-  "action:apply": { results: ActionResult[] };
+  /** A drain answers with its run at once (D152); its progress comes on `action:progress`. */
+  "action:apply": { results: ActionResult[] } | { run: string };
   "action:discard": { ok: true };
+  "action:stop": { ok: true };
   "action:log": { entries: ActionLogEntry[] };
   "forward:list": ForwardsPush;
   "forward:suggest": { port: number };
@@ -1642,7 +1708,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
-  "family:update",
+  "family:update", "action:progress",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

@@ -45,7 +45,10 @@ A note on OL at `f1a960fd`: the pod menu (Shell, Attach, Logs) and the node menu
 tree. The core keeps the pieces (`createTerminalTab`, `sendCommand`, `logTabStore.createPodTab`) and exposes them
 through the extension API (`openlens/packages/core/src/extensions/renderer-api/components.ts:133-148`); the menus came from bundled
 extensions that are not part of this snapshot. Freelens moved them into core as `node-pod-menu`
-(`freelens/packages/core/src/renderer/components/node-pod-menu/`).
+(`freelens/packages/core/src/renderer/components/node-pod-menu/`). Landlens took Cordon and Drain in wave 8 part 2
+(D149–D154), not as Freelens runs them (`kubectl cordon` and `kubectl drain` in a terminal tab,
+`node-pod-menu/node-menu.tsx:61-67`) but as a reviewed patch and a previewed plan run in main
+([workbench.md](../workbench.md#nodes-cordon-and-drain)).
 
 ---
 

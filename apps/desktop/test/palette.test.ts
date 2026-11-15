@@ -45,4 +45,13 @@ describe("the ⌘K palette's rules", () => {
     expect(parseQuery("delete-me")).toEqual({ text: "delete-me", commands: false });
     expect(parseQuery("restarter")).toEqual({ text: "restarter", commands: false });
   });
+
+  it("offers cordon, uncordon and drain on a Node only (wave 8 part 2, D154)", () => {
+    expect(verbsFor(kind("Node"))).toEqual(["edit", "cordon", "uncordon", "drain", "ask", "delete"]);
+    expect(verbsFor(kind("Node", "example.com"))).not.toContain("drain");
+    expect(verbsFor(kind("Pod"))).not.toContain("drain");
+    expect(parseQuery("drain orb")).toEqual({ verb: "drain", text: "orb", commands: false });
+    expect(parseQuery("uncordon")).toEqual({ verb: "uncordon", text: "", commands: false });
+    expect(parseQuery("drainage")).toEqual({ text: "drainage", commands: false });
+  });
 });
