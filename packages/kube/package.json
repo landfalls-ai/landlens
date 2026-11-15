@@ -24,6 +24,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./status": "./src/status.ts",
-    "./redact": "./src/redact.ts"
+    "./redact": "./src/redact.ts",
+    "./diff": "./src/diff.ts",
+    "./edit-yaml": "./src/edit-yaml.ts"
   }
 }

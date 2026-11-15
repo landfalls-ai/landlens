@@ -13,7 +13,7 @@ import type { ObjectTarget } from "./app-host";
 import { Ic, iconOfKind } from "./icons";
 import { yamlTokens } from "./Yaml";
 
-const RISK: Record<ChangeRisk, { icon: LucideIcon; words: string; level: "danger" | "caution"; title: string }> = {
+export const RISK: Record<ChangeRisk, { icon: LucideIcon; words: string; level: "danger" | "caution"; title: string }> = {
   deletes: { icon: Trash2, words: "Deletes", level: "danger", title: "Applying this removes the object. Landlens can't bring it back." },
   rbac: { icon: ShieldAlert, words: "Changes access", level: "danger", title: "This changes who can do what in the cluster (RBAC)." },
   "cluster-scoped": { icon: Globe, words: "Cluster-wide", level: "danger", title: "This object isn't in a namespace: the change reaches the whole cluster." },
@@ -27,7 +27,7 @@ const RISK: Record<ChangeRisk, { icon: LucideIcon; words: string; level: "danger
   "restarts-pods": { icon: RotateCw, words: "Restarts pods", level: "caution", title: "Applying this replaces the workload's pods." },
   "changes-image": { icon: Package, words: "Changes image", level: "caution", title: "Applying this runs a different container image." },
 };
-const ORDER: ChangeRisk[] = [
+export const ORDER: ChangeRisk[] = [
   "deletes", "rbac", "cluster-scoped", "reads-secret", "privileged", "host-access", "namespace", "service-account",
   "new-workload", "scales-to-zero", "restarts-pods", "changes-image",
 ];
@@ -322,7 +322,7 @@ function Operations({ change, open, uncapped, onToggle, onUncap, onOpenObject, o
   );
 }
 
-function Diff({ op, capped, create, onUncap, uncapKbd = false, onWide }: {
+export function Diff({ op, capped, create, onUncap, uncapKbd = false, onWide }: {
   op: ChangeOperation; capped: boolean; create: boolean; onUncap?: () => void; uncapKbd?: boolean; onWide?: () => void;
 }) {
   const total = op.diff.lines.filter((l) => l.t !== "…").length;

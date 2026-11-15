@@ -19,12 +19,12 @@ import { slashOptions, slashQuery, SlashMenu, type AgentCommand, type SlashOptio
  * What a question is about: an object (sent as a reference the agent reads itself), or text the person chose from
  * logs or a terminal (sent in the prompt, redacted and capped; the agent never reads a terminal on its own).
  */
-export type AskContext = { ref?: ResourceRef; label: string; text?: string; source?: string; kind?: "logs" | "terminal" };
+export type AskContext = { ref?: ResourceRef; label: string; text?: string; source?: string; kind?: "logs" | "terminal" | "edit" };
 
 /** The question, with the lines the person chose quoted under it (redacted as get_logs is; the prompt's 20,000 cap holds). */
 export function withQuotes(text: string, context: AskContext[]): string {
   const quoted = context.filter((c) => c.text).map((c) =>
-    `\n\n${c.kind === "logs" ? "Log lines" : "Terminal output"} I selected (${c.source ?? c.label}):\n\`\`\`\n${redactText(c.text!)}\n\`\`\``).join("");
+    `\n\n${c.kind === "logs" ? "Log lines" : c.kind === "edit" ? "A change I am making" : "Terminal output"} I selected (${c.source ?? c.label}):\n\`\`\`\n${redactText(c.text!)}\n\`\`\``).join("");
   return (text + quoted).slice(0, 20_000);
 }
 

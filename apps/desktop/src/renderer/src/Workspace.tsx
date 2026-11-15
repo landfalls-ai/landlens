@@ -1,7 +1,7 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
 import type { ClicklandSettings as ClicklandView, ClusterInfo, HealthProblem, KubeContext, KubeObject } from "@landlens/contracts";
-import { Copy, CircleX, Lock, ScrollText, Sparkles, SquareTerminal } from "lucide-react";
+import { Copy, CircleX, Lock, Pencil, ScrollText, Sparkles, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
 import { api, useNow, useWatch, type ApiError } from "./api";
@@ -24,6 +24,8 @@ import { logSourceOf } from "./LogsView";
 import { direct } from "./ShellMenu";
 import { copyText } from "./present";
 import { Toolbar, type StatusFilter } from "./Toolbar";
+import { CreateSheet } from "./CreateSheet";
+import { leaveEdit } from "./editGuard";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
@@ -35,7 +37,13 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [namespace, setNamespace] = useState("");
   const [filter, setFilter] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [selected, setSelected] = useState<KubeObject>();
+  const [selected, setSelectedNow] = useState<KubeObject>();
+  // Anything that takes the drawer's object away asks first while an edit has changes (D31).
+  const setSelected = (o: KubeObject | undefined) => {
+    if (o?.metadata.uid === selected?.metadata.uid && o) return setSelectedNow(o);
+    leaveEdit(() => setSelectedNow(o));
+  };
+  const [creating, setCreating] = useState(false);
   const [want, setWant] = useState<NavTarget>();
   const [dock, setDock] = useState(false);
   const [askContext, setAskContext] = useState<AskContext[]>([]);
@@ -49,7 +57,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [width, setWidth] = useState({ app: window.innerWidth, main: window.innerWidth - 232, height: window.innerHeight });
   const bench = useBench();
   const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number }>();
-  const [show, setShow] = useState<{ tab: "logs" | "shell"; container?: string; n: number }>();
+  const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit"; container?: string; n: number }>();
   const [leaving, setLeaving] = useState<string>();
   const beforeBench = useRef<HTMLElement | null>(null);
   const app = useRef<HTMLDivElement>(null);
@@ -99,7 +107,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   useEffect(() => {
     if (!want || !list || watch.loading) return;
     const o = watch.items.find((x) => x.metadata.name === want.name && (!want.namespace || x.metadata.namespace === want.namespace));
-    if (o) setSelected(o);
+    if (o) setSelectedNow(o);
     setWant(undefined);
   }, [want, watch.items, watch.loading, list]);
 
@@ -110,12 +118,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     return order.filter((s) => by.has(s)).map((s) => [s, by.get(s)!] as const);
   }, [nav]);
 
-  const pick = (c: Current) => {
+  const pick = (c: Current) => leaveEdit(() => {
     setCurrent(c);
-    setSelected(undefined);
+    setSelectedNow(undefined);
     setMcpCall(undefined);
     setStatus("all");
-  };
+  });
   const navItem = (resource: string) => nav.find((n) => n.type.resource === resource && (n.type.group === "" || n.type.group === "apps"));
   const go = (t: NavTarget) => {
     const n = navItem(RESOURCE_OF_KIND[t.kind] ?? "");
@@ -130,8 +138,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     setDock(true);
   };
   /** The drawer for this object, asked to show its logs or open a shell (from a row's menu or its keys). */
-  const act = (o: KubeObject, action: "logs" | "shell") => {
+  const act = (o: KubeObject, action: "logs" | "shell" | "edit") => {
     if (!list) return;
+    if (action === "edit") {
+      if (list.type.group === "" && list.type.resource === "secrets") return;
+      return leaveEdit(() => (setSelectedNow(o), setShow((s) => ({ tab: "edit", n: (s?.n ?? 0) + 1 }))));
+    }
     if (action === "shell" && pods) {
       const d = direct(o);
       if (d) return bench.openShell(d);
@@ -142,7 +154,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     setShow((s) => ({ tab: action, n: (s?.n ?? 0) + 1 }));
   };
   // Switching cluster ends every session (D23): with live terminals, ask once.
-  const switchTo = (context: string) => (bench.terminals ? setLeaving(context) : onSwitch(context));
+  const switchTo = (context: string) => leaveEdit(() => (bench.terminals ? setLeaving(context) : onSwitch(context)));
   const askProblem = (p: HealthProblem) => {
     const n = navItem(RESOURCE_OF_KIND[p.kind] ?? "");
     if (!n) return setDock(true);
@@ -199,7 +211,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       }
       if (inBench) return; // single keys and Esc belong to the terminal or the log there
       if (e.key === "/" && !typing && !mod && filterBox.current) return e.preventDefault(), filterBox.current.focus();
-      if (e.key === "Escape" && !jump && !t?.closest(".dock, .drawer .logs-pane") && selected) setSelected(undefined);
+      if (e.key === "Escape" && !jump && !creating && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine") && selected) setSelected(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && mcpCall) setMcpCall(undefined);
     };
     window.addEventListener("keydown", onKey);
@@ -237,9 +249,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           title={label}
           {...(list ? { count: watch.loading ? undefined : shown.length } : mcp || agentPage ? { hideCount: true } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => { setNamespace(ns); setSelected(undefined); } } } : {})}
+          {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); }) } } : {})}
           {...(list ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
           {...(dock ? {} : { onAsk: () => setDock(true) })}
+          {...(!mcp && !agentPage ? { onCreate: () => setCreating(true) } : {})}
         />
         {mcp ? (
           <McpPage
@@ -321,6 +334,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       {selected && list ? (
         <Details
           handle={cluster.handle}
+          cluster={cluster}
           type={list.type}
           object={live ?? selected}
           tone={tones.get(selected.metadata.uid)}
@@ -371,6 +385,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           </div>
         </div>
       ) : null}
+      {creating ? (
+        <CreateSheet cluster={cluster} namespace={namespace} onAsk={ask} onClose={() => setCreating(false)}
+          onCreated={(first) => (setCreating(false), go(first))} />
+      ) : null}
       {jump ? (
         <JumpPalette nav={nav} current={current} items={watch.items} onPick={pick} onSelect={setSelected} onClose={() => setJump(false)} />
       ) : null}
@@ -378,10 +396,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   );
 }
 
-/** A row's menu (D6): Logs, Open shell, Copy name, Ask Claude. Port-forward and Edit YAML join it in parts 2 and 3. */
+/** A row's menu (D6): Logs, Open shell, Edit YAML, Copy name, Ask Claude. Port-forward joins it in part 3. */
 function RowMenu({ at, kind, pods, onAct, onAsk, onClose }: {
   at: { o: KubeObject; x: number; y: number }; kind: string; pods: boolean;
-  onAct: (a: "logs" | "shell") => void; onAsk: () => void; onClose: () => void;
+  onAct: (a: "logs" | "shell" | "edit") => void; onAsk: () => void; onClose: () => void;
 }) {
   const self = useRef<HTMLDivElement>(null);
   const logs = !!logSourceOf(kind, at.o);
@@ -412,6 +430,7 @@ function RowMenu({ at, kind, pods, onAct, onAsk, onClose }: {
     <div ref={self} className="menu row-menu" role="menu" aria-label={`${kind} ${at.o.metadata.name}`} style={{ left, top }}>
       <button className="cluster-option" role="menuitem" disabled={!logs} onClick={run(() => onAct("logs"))}><Ic icon={ScrollText} size={14} /><span className="name">Logs</span><kbd>L</kbd></button>
       <button className="cluster-option" role="menuitem" disabled={!shell} onClick={run(() => onAct("shell"))}><Ic icon={SquareTerminal} size={14} /><span className="name">Open shell</span><kbd>S</kbd></button>
+      <button className="cluster-option" role="menuitem" disabled={kind === "Secret"} title={kind === "Secret" ? "Secrets stay locked" : undefined} onClick={run(() => onAct("edit"))}><Ic icon={Pencil} size={14} /><span className="name">Edit YAML</span><kbd>E</kbd></button>
       <hr />
       <button className="cluster-option" role="menuitem" onClick={run(() => void copyText(at.o.metadata.name))}><Ic icon={Copy} size={14} /><span className="name">Copy name</span></button>
       {kind === "Secret" ? null : <button className="cluster-option" role="menuitem" onClick={run(onAsk)}><Ic icon={Sparkles} size={14} /><span className="name">Ask Claude</span></button>}

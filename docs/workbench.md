@@ -1,9 +1,9 @@
 # The workbench
 
 Wave 4 turns Landlens from a viewer into a place to work: logs that follow, a shell in any container, a terminal on
-your Mac whose kubectl goes through Landlens, and, in the parts still to come, port-forward, a YAML editor, CRD
-columns, Helm releases and a full command palette. This page covers what is built (part 1: logs and terminals). The
-design is Fable's spec for wave 4 (decisions D1–D46, cited below).
+your Mac whose kubectl goes through Landlens, a YAML editor, and, in the parts still to come, port-forward, CRD
+columns, Helm releases and a full command palette. This page covers what is built (part 1: logs and terminals; part
+2: the YAML editor). The design is Fable's spec for wave 4 (decisions D1–D46, cited below).
 
 ## The panel
 
@@ -96,20 +96,76 @@ Your shell's startup files run as usual, so one that sets `KUBECONFIG` itself wi
 (`ELECTRON_*`, `LANDLENS_*` other than the token, `VITE_*`, `NODE_OPTIONS`, `CHROME_*`) are removed from its
 environment.
 
+## The YAML editor
+
+The drawer's YAML tab has **Edit** beside Copy (D24), as do a row's menu (**Edit YAML**) and the E key on a focused
+row. Secrets stay locked: their Edit is disabled and says so.
+
+- The editor is CodeMirror 6 with YAML highlighting in the `--code-*` colours, line numbers, folding, search (⌘F)
+  and undo. It shows `apiVersion`, `kind`, `metadata` and the rest as you would write them: no `status`, no
+  `managedFields`, `uid`, `resourceVersion`, `generation`, `creationTimestamp` or the last-applied annotation.
+- Changed lines carry a green edge, and the sticky foot says "1 line changed. Nothing is sent until you review."
+  with **Review** (⌘⏎) and **Discard** (D26). The maximise button opens the same editor wide (D25).
+- **Review is a dry run** (D27). Landlens sends a JSON merge patch (RFC 7386) of only what you changed, with the
+  `resourceVersion` you started from, as `PATCH …?fieldManager=landlens&dryRun=All`. The editor gives way to a card
+  of your own ("Your edit", no iris ring: that belongs to the agent's asks): risk badges as wave 3's cards have them,
+  the diff of the live object against the dry run's result, warnings, "Dry run passed. Nothing has changed yet.",
+  **Apply** (Enter; a danger risk asks a second time), **Back to editing** (Esc) and **Ask Claude to check it**,
+  which adds the diff to the dock's composer as a chip.
+- **Apply sends exactly the request the review dry-ran**, without `dryRun`. Only the window that reviewed it can
+  send it, on the same cluster, within 15 minutes, once. The tab then shows the read-only YAML with "Applied ·
+  deployment landlens-dev/shop-web · +1 −1" above it (D31).
+- **Refused** (D28): a 422's causes mark their lines red, with the cluster's message beneath ("Invalid value: -1:
+  must be greater than or equal to 0"); the foot says "The cluster refused this: 1 problem, on line 12. Nothing has
+  changed." Causes without a field go in the foot. A YAML syntax error marks its line the same way, before anything
+  is sent; changing `apiVersion`, `kind`, the name or the namespace is refused, as is "Nothing changed".
+- **Someone changed it** (D29): when the object's `resourceVersion` moves while you edit, your changes are moved
+  onto the new version and a banner says what they changed. Where you both changed a field, yours is kept and the
+  banner names it. A review that is already showing goes back to the editor ("review again"); an apply whose version
+  moved gets a 409 and does the same.
+- **Another owner** (D30): if a field you changed is managed by another field manager (an HPA's replicas, a
+  controller's annotations), the review card says "spec.replicas is managed by horizontal-pod-autoscaler. It may set
+  it back." `kubectl` and Landlens's own managers aren't counted.
+- **Leaving with changes asks first**: Esc, Discard, another row, closing the drawer, another page, a namespace or a
+  cluster switch ask "Discard 1 changed line?" in the foot (D31).
+
+Every review and apply runs **as you**: main issues a front-door token for that one call (`you · <context> · edit`,
+full access to that cluster), sends through the front door, and revokes the token after, so each request is in the
+audit trail under that label and your RBAC applies.
+
+### Create from YAML
+
+The toolbar's **+** opens a wide sheet (D32): an empty editor, a template (Blank, Deployment, Service, ConfigMap,
+Job) with the toolbar's namespace filled in, and the same Review and Apply. A document without a namespace goes in
+the toolbar's; up to ten documents, split with `---`. The review dry-runs a `POST` per document and shows one
+operation each. An object that already exists marks its name ("ConfigMap landlens-dev/x already exists: open it and
+edit it instead"); a kind the cluster doesn't serve, a cluster-scoped kind with a namespace, or a Secret is refused
+before anything is sent. After Apply the first object opens in the drawer.
+
+Code: `YamlEdit.tsx` (the editor's stages, rebase, the review card), `CodeEditor.tsx` (CodeMirror with line marks
+and messages), `CreateSheet.tsx`, `editGuard.ts`, `packages/kube/src/edits.ts` (`EditBroker`: review, create,
+apply, conflict and refusal mapping, other owners from `managedFields`) and `edit-yaml.ts` (what the editor shows,
+merge patches, rebasing).
+
 ## Tests
 
-- `packages/kube`: `workbench.test.ts` (exit statuses, exec and log paths) and, on OrbStack,
+- `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
+  `workbench.test.ts` (exit statuses, exec and log paths) and, on OrbStack,
   `workbench.integration.test.ts` (a followed log in order; a shell through the front door with the size it was
   given, an exit code and the audit's 101; a missing pod refused with 404; a revoked token refused with 401).
 - `apps/desktop`: `workbench.test.ts` (logs go to the window that asked and stop with it or the cluster; each shell's
   token is labelled as you, full access to that one cluster, and revoked when it ends; another window can't type,
   resize or close it; 20 a window; a local terminal's environment), `log-rows.test.ts` (time order, merging pods,
-  ANSI, search).
+  ANSI, search), `edits.test.ts` (reviews and applies as you with a token per call; only the reviewing window, on
+  the same cluster, once).
 - `apps/desktop/test/workbench.e2e.test.ts` on OrbStack with `deploy/scenarios/workbench.yaml` (`shop-web`, two
   pods, an `app` container that logs every second and a `sidecar` with no shell): follows a pod's log, searches it,
   opens a shell that runs as you and reconnects after `exit 3`, the no-shell case, a deployment's two pods merged and
   opened in the panel, a local terminal whose `kubectl get deploy` goes through Landlens, hiding and showing the
-  panel, and 1024×700.
+  panel, and 1024×700. `edit.e2e.test.ts`: edits `shop-web`'s replicas through review and apply (a dry run
+  changes nothing; only `spec.replicas` is Landlens's afterwards), a refused edit marks line 12, Esc asks before
+  discarding, and creates a ConfigMap from the template, then again ("already exists"). It puts `shop-web` back to
+  two replicas and deletes the ConfigMap.
 
 ```bash
 kubectl --context orbstack apply -f deploy/scenarios/workbench.yaml
@@ -119,6 +175,5 @@ LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e
 
 ## Still to come in wave 4
 
-Part 2, the YAML editor (CodeMirror 6, server-side apply after a dry run, D24–D32); part 3, port-forward (D33–D37);
-part 4, CRD printer columns, Helm releases (read), the full ⌘K palette and Prometheus (D38–D45). See
-[limitations.md](limitations.md) for what part 1 leaves out.
+Part 3, port-forward (D33–D37); part 4, CRD printer columns, Helm releases (read), the full ⌘K palette and
+Prometheus (D38–D45). See [limitations.md](limitations.md) for what parts 1 and 2 leave out.

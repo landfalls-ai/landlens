@@ -133,6 +133,19 @@ them on the record.
 | Terminal and log channels are typed and bounded: ids are random (12 bytes, base64url), input at most 64 KB a message, sizes 1–1000, tails at most 10,000 lines, `sinceTime` RFC 3339 | contracts (zod) |
 | The shell buttons are disabled when a SelfSubjectAccessReview says your role can't create `pods/exec` there; the cluster still decides (a refused exec says why) | `useCanExec`; by hand |
 
+## Your edits
+
+Edits from the YAML editor and Create from YAML are yours, sent as you ([workbench.md](workbench.md#the-yaml-editor)).
+
+| Rule | How it's checked |
+|---|---|
+| Every review and apply goes through the front door with a token issued for that one call: full access as you to that one cluster, labelled `you · <context> · edit`, revoked when the call ends, so each request is audited under that label and your RBAC applies | desktop unit test (`edits.test.ts`: label, policy, cluster, revoke after each call); e2e (`edit.e2e`) |
+| Review sends a dry run (`dryRun=All`) and keeps the exact request under a random id for 15 minutes; Apply sends that request and nothing else, once, and only for the window that reviewed it, on the same cluster | desktop unit test (another window, another cluster, a second apply refused); kube unit tests (`edits.test.ts`); e2e (a dry run changes nothing) |
+| An edit is a merge patch of only the changed fields with `metadata.resourceVersion` as a precondition, so a change made meanwhile is a 409, never overwritten | kube and desktop unit tests (the body); kube unit test (409 → conflict) |
+| An edit can't change `apiVersion`, `kind`, the name or the namespace; Secrets can't be edited or created; at most 10 documents and 512 KB | kube unit tests |
+| Edit channels are typed and bounded: review ids match `ed` and 8–32 base64url characters; the YAML is at most 512 KB | contracts (zod) |
+| A window's reviews are forgotten when it closes | desktop unit test |
+
 ## MCP: the gateway and app views
 
 Every MCP call of an agent session goes through Landlens's gateway in main ([mcp.md](mcp.md)), and some tools come

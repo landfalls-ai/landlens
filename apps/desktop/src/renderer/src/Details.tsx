@@ -13,6 +13,8 @@ import { MetricsTab, metricsScope } from "./MetricsTab";
 import type { LogSource, ShellTarget } from "./benchState";
 import { logSourceOf, LogsView } from "./LogsView";
 import { direct, shellable, ShellMenu, targetOf, useCanExec } from "./ShellMenu";
+import { YamlEdit } from "./YamlEdit";
+import type { ClusterInfo } from "@landlens/contracts";
 
 type Tab = "overview" | "events" | "yaml" | "metrics" | "logs";
 export type NavTarget = { kind: string; name: string; namespace?: string };
@@ -23,6 +25,7 @@ const BAD_WAITING = new Set(["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePu
 /** The details drawer: what this object is, what is wrong with it, its events, and its YAML. */
 export function Details(props: {
   handle: string;
+  cluster: ClusterInfo;
   type: ResourceType;
   object: KubeObject;
   /** The object's tone from its list row (Ready for workloads), when it has one. */
@@ -38,7 +41,7 @@ export function Details(props: {
   onShell: (t: ShellTarget) => void;
   onLogsInPanel: (s: LogSource) => void;
   /** Asked from outside (a row's menu): show this tab, on this container. Changes `n` to ask again. */
-  show?: { tab: "logs" | "shell"; container?: string; n: number };
+  show?: { tab: "logs" | "shell" | "edit"; container?: string; n: number };
 }) {
   const { object: o, type, now } = props;
   const logs = logSourceOf(type.kind, o);
@@ -46,6 +49,9 @@ export function Details(props: {
   const [tab, setTab] = useState<Tab>("overview");
   const [logContainer, setLogContainer] = useState<string>();
   const [shellMenu, setShellMenu] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [applied, setApplied] = useState<string>();
+  useEffect(() => (setEditing(false), setApplied(undefined)), [o.metadata.uid]);
   const canExec = useCanExec(props.handle, o.metadata.namespace);
   const pod = type.resource === "pods" && type.group === "";
   const workloadSel = logs?.selector ? { namespace: logs.namespace, selector: logs.selector } : undefined;
@@ -61,7 +67,9 @@ export function Details(props: {
   useEffect(() => {
     if (!props.show) return;
     if (props.show.tab === "logs") showLogs(props.show.container);
-    else openShell();
+    else if (props.show.tab === "edit") {
+      if (!isSecret(type)) (setTab("yaml"), setEditing(true));
+    } else openShell();
   }, [props.show?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();
   const [copied, setCopied] = useState(false);
@@ -157,7 +165,21 @@ export function Details(props: {
         {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate}
           onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec} />}
         {tab === "events" && <Events events={events} now={now} />}
-        {tab === "yaml" && <Yaml text={stringify(view, { lineWidth: 0 })} />}
+        {tab === "yaml" ? (
+          <div className="yaml-tab">
+            {editing ? (
+              <YamlEdit cluster={props.cluster} type={type} object={o} onAsk={props.onAsk} onClose={() => setEditing(false)} onApplied={setApplied} />
+            ) : (
+              <>
+              {applied ? (
+                <div className="change-done" role="status"><Ic icon={Check} size={14} className="tone-ok" /><span>{applied}</span>
+                  <button className="icon-btn" aria-label="Dismiss" onClick={() => setApplied(undefined)}><Ic icon={X} size={12} /></button></div>
+              ) : null}
+              <Yaml text={stringify(view, { lineWidth: 0 })} {...(isSecret(type) ? { editWhy: "Secrets aren't edited in Landlens yet: their values stay hidden" } : { onEdit: () => (setApplied(undefined), setEditing(true)) })} />
+              </>
+            )}
+          </div>
+        ) : null}
         {tab === "metrics" && metricsScope(type) && <MetricsTab handle={props.handle} type={type} object={o} version={props.metricsVersion} onSettings={props.onSettings} />}
       </div>
     </aside>

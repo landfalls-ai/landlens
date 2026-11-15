@@ -9,8 +9,9 @@ import { accessSync, chmodSync, constants, mkdirSync, rmSync, writeFileSync } fr
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { LogsEnd, LogsPush, Request, TerminalData, TerminalStatus } from "@landlens/contracts";
-import { AUTO_SHELL, followLogs, openExec, TOKEN_ENV, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor } from "@landlens/kube";
+import type { EditReview, LogsEnd, LogsPush, Request, TerminalData, TerminalStatus } from "@landlens/contracts";
+import { AUTO_SHELL, EditBroker, followLogs, openExec, TOKEN_ENV, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor, type Send } from "@landlens/kube";
+import { frontDoorSend } from "@landlens/kube-mcp";
 import type { IPty } from "node-pty";
 import type { WebContents } from "electron";
 
@@ -38,7 +39,7 @@ export class WorkbenchService {
   private readonly watched = new WeakSet<WebContents>();
 
   constructor(private readonly deps: {
-    clusters: Pick<ClusterManager, "get" | "onGone">;
+    clusters: Pick<ClusterManager, "get" | "onGone" | "discovery">;
     frontDoor: Pick<FrontDoor, "issueToken" | "revokeToken" | "clusterUrl" | "certificate" | "url">;
     /** Where local terminals' kubeconfigs go (removed when each ends). */
     dataDir: string;
@@ -59,6 +60,7 @@ export class WorkbenchService {
     wc.once("destroyed", () => {
       for (const [k, v] of this.logs) if (v.wc === wc) this.closeLogs(k);
       for (const [k, v] of this.terminals) if (v.wc === wc) this.closeTerminal(k);
+      for (const [k, v] of this.reviews) if (v.wc === wc) this.discardEdit(k, wc);
     });
   }
 
@@ -78,6 +80,54 @@ export class WorkbenchService {
     });
     this.logs.set(stream, { wc, handle: r.handle, stop });
     return { stream };
+  }
+
+  private readonly edits = new EditBroker();
+  /** Each review belongs to the window and cluster it was made for. */
+  private readonly reviews = new Map<string, { wc: WebContents; handle: string }>();
+
+  /**
+   * One request series as you: a token issued for it ("you · <context> · edit"), through the front door so it is
+   * audited, revoked when the series ends.
+   */
+  private async asYou<T>(handle: string, f: (send: Send) => Promise<T>): Promise<T> {
+    const c = this.deps.clusters.get(handle);
+    const token = this.deps.frontDoor.issueToken({ label: `you · ${c.info.context} · edit`, policy: { access: "full" }, clusters: [handle] });
+    try {
+      return await f(frontDoorSend({ url: this.deps.frontDoor.clusterUrl(handle), certificate: this.deps.frontDoor.certificate, token }));
+    } finally {
+      this.deps.frontDoor.revokeToken(token);
+    }
+  }
+
+  private remember(r: EditReview, wc: WebContents, handle: string): EditReview {
+    if (r.id) {
+      this.own(wc);
+      this.reviews.set(r.id, { wc, handle });
+    }
+    return r;
+  }
+
+  reviewEdit(r: Request<"edit:review">, wc: WebContents): Promise<EditReview> {
+    return this.asYou(r.handle, (send) => this.edits.reviewEdit(send, r)).then((x) => this.remember(x, wc, r.handle));
+  }
+
+  async reviewCreate(r: Request<"edit:create">, wc: WebContents): Promise<EditReview> {
+    const types = (await this.deps.clusters.discovery(r.handle)).map((t) => ({ group: t.group, version: t.version, resource: t.resource, kind: t.kind, namespaced: t.namespaced }));
+    return this.asYou(r.handle, (send) => this.edits.reviewCreate(send, { yaml: r.yaml, ...(r.namespace ? { namespace: r.namespace } : {}), types })).then((x) => this.remember(x, wc, r.handle));
+  }
+
+  applyEdit(r: Request<"edit:apply">, wc: WebContents): Promise<{ results: string[] }> {
+    const owner = this.reviews.get(r.id);
+    if (!owner || owner.wc !== wc || owner.handle !== r.handle) throw Object.assign(new Error("no such review"), { status: 404 });
+    this.reviews.delete(r.id);
+    return this.asYou(r.handle, (send) => this.edits.apply(send, r.id));
+  }
+
+  discardEdit(id: string, wc: WebContents) {
+    if (this.reviews.get(id)?.wc !== wc) return;
+    this.reviews.delete(id);
+    this.edits.discard(id);
   }
 
   /** Live shells and local terminals, in every window. */

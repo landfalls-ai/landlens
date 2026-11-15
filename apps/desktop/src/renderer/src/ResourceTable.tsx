@@ -39,7 +39,7 @@ export function ResourceTable(props: {
   /** A row's menu (right-click, Shift+F10), at a point. */
   onMenu?: (o: KubeObject, x: number, y: number) => void;
   /** Single-key actions on the focused row (D6): L logs, S shell. */
-  onAction?: (o: KubeObject, action: "logs" | "shell") => void;
+  onAction?: (o: KubeObject, action: "logs" | "shell" | "edit") => void;
 }) {
   const { items, now } = props;
   const [sort, setSort] = useState<{ id: string; dir: 1 | -1 }>({ id: "name", dir: 1 });
@@ -189,6 +189,7 @@ export function ResourceTable(props: {
                       if (e.metaKey || e.ctrlKey || e.altKey) return;
                       if (e.key === "l" || e.key === "L") return props.onAction?.(o, "logs");
                       if (e.key === "s" || e.key === "S") return props.onAction?.(o, "shell");
+                      if (e.key === "e" || e.key === "E") return props.onAction?.(o, "edit");
                     }}
                   >
                     {columns.map((c) => <Td key={c.id} col={c} cell={c.cell(o, now)} o={o} rowTone={tone} split={split} />)}

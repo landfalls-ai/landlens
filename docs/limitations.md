@@ -34,7 +34,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **macOS only for the fence**: it relies on Claude Code's Seatbelt sandbox. On Linux it would need bubblewrap; the
   session fails rather than run unsandboxed (`failIfUnavailable`).
 - **No `explain` tool yet** (OpenAPI schemas); the agent can run `kubectl explain` instead.
-- **No port-forward, YAML editing or Helm yet** (wave 4, parts 2–4). Logs and terminals are built
+- **No port-forward or Helm yet** (wave 4, parts 3–4). Logs, terminals and the YAML editor are built
   ([workbench.md](workbench.md)), and graphs ([metrics.md](metrics.md)).
   Kinds without their own columns get name, namespace and age; CRDs don't use printer columns yet (wave 4).
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
@@ -78,6 +78,14 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   shell picker offers a workload's pods, but the palette entry (⌘K "shell …") comes with part 4; "Open shell in the new
   pod" matches pods by labels, so it can offer a pod of a different rollout. Input typed while a new session starts
   is dropped. The panel's height is kept for the window, not across restarts.
+- **The YAML editor** ([workbench.md](workbench.md#the-yaml-editor)) sends a JSON merge patch of what you changed,
+  pinned to the version you started from, not a server-side apply: Landlens (field manager `landlens`) owns just the
+  fields it changed, but a field another manager owns is only warned about, so the design's **Take over** (a forced
+  apply) and **Review without line 7** aren't built. A merge patch replaces a list whole, so changing one container
+  sends every container. Where you and someone else both changed a field while you edited, yours is kept (the banner
+  names it) rather than waiting for you. Secrets can't be edited or created. Create sends its documents in order: if
+  one fails at Apply, the ones before it stay created (the error says which). There is no "Show change" on the
+  Applied row, no flash of the row, and the create sheet isn't in the palette yet (part 4). Templates are fixed.
 - **Graphs are CPU and memory only**, for the cluster, nodes, pods and Deployments, StatefulSets and DaemonSets: no
   network, disk, GPU, or Prometheus. Namespaces are a Top namespaces list, not a chart of their own.
 - **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is

@@ -183,3 +183,56 @@
 .shell-menu .cluster-option .mono { font-size: var(--t-12); }
 .drawer-top { position: relative; }
 .c-head + .c-image { margin-top: 2px; }
+
+/* ============ wave 4, part 2: the YAML editor ============ */
+.yaml-edit { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.yaml-edit .yaml-bar { margin: 0; display: flex; align-items: center; gap: 8px; font-size: var(--t-12); color: var(--ink-3); }
+.yaml-edit .yaml-bar > .ic { flex: none; }
+.yaml-edit .yaml-bar .icon-btn { flex: none; width: 24px; height: 24px; }
+.yaml-edit .cm { background: var(--bg-0); border-radius: var(--r-3); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.change.mine .change-actions { flex-wrap: wrap; }
+.change.mine .link-btn { display: inline-flex; align-items: center; gap: 5px; }
+.yaml-edit .change-actions { flex-wrap: wrap; row-gap: 8px; }
+.yaml-edit .yaml-bar .grow { flex: 1; }
+.yaml-edit .cm { margin: 0; padding: 0; white-space: normal; overflow: visible; }
+.yaml-edit .cm:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.cm-host { min-height: 120px; }
+.cm-host .cm-editor { max-height: none; }
+.cm-host .cm-editor.cm-focused { outline: none; }
+.cm-host .cm-l-chg { box-shadow: inset 2px 0 0 var(--ok); }
+.cm-host .cm-l-bad { background: var(--bad-soft); box-shadow: inset 2px 0 0 var(--bad); }
+.cm-host .cm-l-own { background: var(--warn-soft); box-shadow: inset 2px 0 0 var(--warn); }
+.cm-host .cm-msg { padding: 3px 12px 5px 12px; font: var(--t-115)/1.45 var(--font); white-space: normal; }
+.cm-host .cm-msg.bad { color: var(--bad-text); background: var(--bad-soft); }
+.cm-host .cm-msg.own { color: var(--ink-2); background: var(--warn-soft); }
+.yaml-edit .edit-foot { position: sticky; bottom: -24px; margin: 4px -18px -24px; padding: 9px 12px 12px 18px; background: var(--bg-2); border-top: 1px solid var(--line); display: grid; gap: 8px; z-index: 3; }
+.yaml-edit .change-actions .change-fact { margin-right: auto; }
+.change-fact.warn { color: var(--warn-text); } .change-fact.warn .ic { color: var(--warn-text); }
+.change-fact.bad { color: var(--bad-text); } .change-fact.bad .ic { color: var(--bad-text); }
+.yaml-edit > .change-warn { border-radius: var(--r-3); border-top: 0; }
+.yaml-edit > .change-warn .icon-btn { margin-left: auto; width: 20px; height: 20px; }
+.change-warn .owner { display: block; }
+.change-warn.warn { background: var(--warn-soft); }
+.change.mine { --change-ring: var(--line-2); --change-halo: transparent; margin: 0; box-shadow: inset 0 0 0 1px var(--line-2); }
+.change.mine .change-eyebrow { color: var(--ink-2); } .change.mine .change-eyebrow .ic { color: var(--ink-3); }
+.change.mine .change-op { padding: 0 0 6px; }
+.change.mine .change-op-head { height: 28px; }
+.change-warnings { list-style: none; margin: 0; padding: 6px 12px; display: grid; gap: 4px; font-size: var(--t-12); color: var(--warn-text); }
+.change-warnings li { display: flex; gap: 6px; align-items: flex-start; }
+.yaml-tab .change-done { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--r-3); background: var(--bg-1); box-shadow: inset 0 0 0 1px var(--line); font-size: var(--t-12); margin-bottom: 10px; }
+.yaml-tab .change-done .icon-btn { margin-left: auto; width: 20px; height: 20px; }
+.yaml-edit.wide { position: relative; width: min(1100px, calc(100vw - 96px)); height: calc(100vh - 96px); margin-top: -8vh; background: var(--bg-2); border-radius: var(--r-4); box-shadow: var(--shadow-2); padding: 16px 18px 24px; overflow: auto; }
+.yaml-edit.wide .edit-foot { bottom: -24px; }
+.yaml-actions { position: sticky; top: 0; float: right; margin: 6px 6px -34px 0; z-index: 1; display: flex; gap: 6px; }
+.yaml-actions button { height: 26px; font-size: 12px; }
+.yaml-actions button:disabled { opacity: .55; }
+.create-sheet { width: min(980px, calc(100vw - 96px)); max-height: calc(100vh - 96px); margin-top: -6vh; background: var(--bg-2); border-radius: var(--r-4); box-shadow: var(--shadow-2); padding: 14px 18px 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.create-sheet h2 { margin: 0; font-size: var(--t-15); font-weight: 600; }
+.create-sheet .row { display: flex; align-items: center; gap: 8px; }
+.create-sheet .row .grow { flex: 1; }
+.create-sheet .cm { margin: 0; padding: 0; white-space: normal; overflow: visible; }
+.create-sheet .edit-foot { position: sticky; bottom: 0; margin: 0 -18px; padding: 9px 18px 12px; background: var(--bg-2); border-top: 1px solid var(--line); display: grid; gap: 8px; z-index: 3; }
+.create-sheet .change-actions .change-fact { margin-right: auto; }
+.create-sheet .change.mine { margin-bottom: 12px; }
+.create-sheet .cm-host { min-height: 46vh; }
+.create-sheet .field.select select { padding-right: 8px; }

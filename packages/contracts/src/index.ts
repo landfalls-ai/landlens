@@ -203,6 +203,8 @@ export const McpServerInput = z.object({
 /** A container's name (a DNS label). */
 export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
 /** A log stream's or terminal's id, made by main. */
+export const KindName = z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,62}$/, "not a kind");
+export const EditId = z.string().regex(/^ed[A-Za-z0-9_-]{8,32}$/, "not an edit id");
 export const StreamId = z.string().regex(/^[A-Za-z0-9_-]{8,40}$/);
 
 export type LogLine = { ts: string; text: string };
@@ -210,6 +212,13 @@ export type LogsPush = { stream: string; lines: LogLine[] };
 export type LogsEnd = { stream: string; status?: number; message?: string };
 export type TerminalData = { terminal: string; data: string };
 /** A terminal opened, or ended: the shell exited (code), or the connection failed (message). */
+/** A problem with your YAML: a syntax error, or the cluster's reason for refusing it, on a line when it names one. */
+export type EditProblem = { message: string; field?: string; line?: number };
+/** Another manager owns a field you changed (managedFields): it may set it back. */
+export type EditOwner = { path: string; manager: string; line?: number };
+/** A dry run of your edit: the operations to show, kept under `id` for Apply; or the problems; or a conflict. */
+export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean };
+
 /** How a session ended: the shell exited, the connection dropped, or the cluster refused it (status says why). */
 export type TerminalEnd = "exit" | "lost" | "refused";
 export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
@@ -257,6 +266,17 @@ export const channels = {
   "terminal:input": z.object({ terminal: StreamId, data: z.string().max(65_536) }),
   "terminal:resize": z.object({ terminal: StreamId, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
   "terminal:close": z.object({ terminal: StreamId }),
+  // Your edits (docs/workbench.md): dry-run first, then apply exactly what was dry-run.
+  "edit:review": z.object({
+    handle: Handle,
+    type: z.object({ group: GroupName, version: VersionName, resource: ResourceName, kind: KindName, namespaced: z.boolean() }),
+    namespace: NamespaceName.optional(), name: ObjectName,
+    base: z.string().regex(/^[0-9A-Za-z._-]{1,64}$/, "not a resourceVersion"),
+    original: z.string().max(512 * 1024), edited: z.string().max(512 * 1024),
+  }),
+  "edit:create": z.object({ handle: Handle, namespace: NamespaceName.optional(), yaml: z.string().max(512 * 1024) }),
+  "edit:apply": z.object({ handle: Handle, id: EditId }),
+  "edit:discard": z.object({ id: EditId }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -312,6 +332,10 @@ export type Responses = {
   "terminal:input": { ok: true };
   "terminal:resize": { ok: true };
   "terminal:close": { ok: true };
+  "edit:review": EditReview;
+  "edit:create": EditReview;
+  "edit:apply": { results: string[] };
+  "edit:discard": { ok: true };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;

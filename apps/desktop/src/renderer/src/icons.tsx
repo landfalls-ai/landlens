@@ -2,7 +2,7 @@
 // drawn: lucide-react, inline SVG, stroke 1.75, aria-hidden, currentColor.
 import {
   Bot, Box, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
-  KeyRound, Layers, LayoutGrid, Link, Lock, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, User, Waypoints,
+  KeyRound, Layers, LayoutGrid, Link, Lock, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, User, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Tone } from "@landlens/kube/status";
@@ -67,6 +67,6 @@ export function Ic({ icon: I, size = 15, className }: { icon: LucideIcon; size?:
 export const MOD = /Mac/.test(navigator.platform) ? "⌘" : "Ctrl ";
 
 /** A dock chip's icon: the object's kind, or logs or a terminal for selected lines. */
-export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" }): LucideIcon {
-  return c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : SquareTerminal;
+export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" }): LucideIcon {
+  return c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : SquareTerminal;
 }

@@ -1,6 +1,6 @@
 // The YAML well: line numbers from a CSS counter and colours from a per-line tokenizer. Each line is a span ending in
 // its own newline, so the element's text is still exactly the YAML.
-import { Check, Copy, Lock } from "lucide-react";
+import { Check, Copy, Lock, Pencil } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Ic } from "./icons";
 import { copyText } from "./present";
@@ -9,13 +9,14 @@ const KEY = /^(\s*)(- )?((?:"[^"]*"|'[^']*'|[^\s:#'"][^:#]*?)):(?=\s|$)(.*)$/;
 const ITEM = /^(\s*)(- )(.*)$/;
 const REDACTED = "••••••";
 
-export function Yaml({ text }: { text: string }) {
+export function Yaml({ text, onEdit, editWhy }: { text: string; onEdit?: () => void; editWhy?: string }) {
   const [copied, setCopied] = useState(false);
   const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n");
   return (
     <div className="yaml-well">
+      <div className="yaml-actions">
       <button
-        className="secondary yaml-copy"
+        className="secondary"
         onClick={() => void copyText(text).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1200);
@@ -24,6 +25,12 @@ export function Yaml({ text }: { text: string }) {
         <Ic icon={copied ? Check : Copy} size={13} />
         {copied ? "Copied" : "Copy"}
       </button>
+      {onEdit || editWhy ? (
+        <button className="secondary" disabled={!onEdit} title={editWhy ?? "Edit this object's YAML (nothing is sent until you review)"} onClick={onEdit}>
+          <Ic icon={editWhy ? Lock : Pencil} size={13} />Edit
+        </button>
+      ) : null}
+      </div>
       <pre className="yaml">{lines.map((l, i) => <Line key={i} text={l} />)}</pre>
     </div>
   );

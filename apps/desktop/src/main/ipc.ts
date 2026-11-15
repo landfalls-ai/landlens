@@ -128,6 +128,10 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "terminal:input": async ({ terminal, data }, event) => (workbench.input(terminal, data, event.sender), { ok: true }),
     "terminal:resize": async ({ terminal, cols, rows }, event) => (workbench.resize(terminal, cols, rows, event.sender), { ok: true }),
     "terminal:close": async ({ terminal }, event) => (workbench.close(terminal, event.sender), { ok: true }),
+    "edit:review": (r, event) => workbench.reviewEdit(r, event.sender),
+    "edit:create": (r, event) => workbench.reviewCreate(r, event.sender),
+    "edit:apply": (r, event) => workbench.applyEdit(r, event.sender),
+    "edit:discard": async ({ id }, event) => (workbench.discardEdit(id, event.sender), { ok: true }),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {
