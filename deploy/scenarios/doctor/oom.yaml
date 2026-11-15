@@ -1,0 +1,24 @@
+# A container that grows past its 24Mi memory limit and is OOMKilled, again and again.
+# node deploy/scenarios/doctor/up.mjs (all of them), or kubectl --context orbstack -n landlens-dev apply -f this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thumbnailer
+  namespace: landlens-dev
+  labels: { app: thumbnailer, scenario: doctor }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: thumbnailer } }
+  template:
+    metadata:
+      labels: { app: thumbnailer, scenario: doctor }
+    spec:
+      terminationGracePeriodSeconds: 1
+
+      containers:
+        - name: resize
+          image: busybox:1.36
+          command: ["sh", "-c", "echo resizing; tail /dev/zero"]
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+            limits: { memory: 24Mi }

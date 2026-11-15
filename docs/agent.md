@@ -62,7 +62,7 @@ the dock shows inline under the tool's card; the model still gets the same text.
 
 | Tool | What it returns |
 |---|---|
-| `cluster_overview` | Problems first: crash-looping, image-pull, OOM-killed, pending and unready pods; deployments short of replicas; unready nodes; recent warning events |
+| `cluster_overview` | The doctor's problems ([doctor.md](doctor.md)), worst first, grouped by owner, each with its id; what it couldn't check; counts; the last hour's warning events |
 | `describe` | One object with its state, owner chain up to the Deployment, each container's state, last exit, env names, probes and resources, and its events |
 | `get_logs` | A container's log tail; `previous: true` for the run before the last restart |
 | `get_events` | Recent events, newest first, for a namespace or one object, optionally warnings only |

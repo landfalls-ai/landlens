@@ -611,18 +611,68 @@ export type ClicklandTest = {
 };
 
 /** What is wrong in a cluster right now, problems first: the Overview page and the agent's cluster_overview. */
-export type HealthProblem = {
-  kind: "Pod" | "Deployment" | "Node";
+/** The doctor's classes of problem (docs/doctor.md), in the order its rules are tried. */
+export type ProblemClass =
+  | "crashloop" | "start" | "image" | "config" | "oom" | "pending" | "probe" | "notready"
+  | "restarts" | "unavailable" | "node" | "warning" | "cert";
+/** What the doctor could read; a missing check is said plainly rather than read as "no problems". */
+export type DoctorCheck = "pods" | "workloads" | "nodes" | "events" | "certs";
+export type DoctorCheckState = "ok" | "forbidden" | "error" | "off";
+/** A TLS Secret's certificate as main reads it from `tls.crt`: dates and names, never the key or the PEM. */
+export type CertFact = {
+  notBefore: string;
+  /** The earliest notAfter in the chain. */
+  notAfter: string;
+  which: "leaf" | "chain";
+  subject: string;
+  issuer: string;
+  sans: string[];
+  selfSigned: boolean;
+  unreadable?: true;
+};
+export type ProblemEvent = { at: string; reason: string; message: string; count: number };
+/** Small, structured evidence: what the row, the drawer and the agent's brief read. No env, labels or annotations. */
+export type ProblemFacts = {
+  lastState?: { reason?: string; exitCode?: number; signal?: number; finishedAt?: string; message?: string };
+  image?: string;
+  scheduling?: string;
+  probe?: { type: "readiness" | "liveness" | "startup"; how: string; period?: number; timeout?: number; failureThreshold?: number; lastMessage?: string };
+  available?: string;
+  limit?: string;
+  events: ProblemEvent[];
+  cert?: CertFact;
+  usedBy?: string[];
+};
+export type Problem = {
+  id: string;
+  class: ProblemClass;
+  /** "bad" is failing, "warn" is to watch. */
+  tone: "bad" | "warn";
+  /** The subject: the owner (a Deployment), not each of its pods. */
+  kind: string;
   namespace?: string;
   name: string;
-  /** CrashLoopBackOff, OOMKilled, Pending, NotReady, Unavailable, Restarts, … */
+  group: string;
+  version: string;
+  resource: string;
+  /** CrashLoopBackOff, OOMKilled, Unschedulable, ReadinessProbe, FailedMount, Expired, … */
   reason: string;
-  /** One line: "in container api, 11 restarts; last exit Error code 1". */
+  /** "orders-api is crash-looping". */
+  title: string;
+  /** One line: "container api · exit 1 (Error) · 14 restarts · 5 pods". */
   detail: string;
-  tone: "bad" | "warn";
   container?: string;
   restarts?: number;
+  /** At most 50 names; podCount is exact. */
+  pods: string[];
+  podCount: number;
+  since?: string;
+  facts: ProblemFacts;
+  /** Landlens's own rule-based first suggestion: static text with names and numbers, never workload-written text. */
+  hint: { cause: string; next: string[] };
 };
+/** Kept for the callers that predate the doctor. */
+export type HealthProblem = Problem;
 export type HealthEvent = {
   at: string;
   namespace?: string;
@@ -638,8 +688,12 @@ export type ClusterHealth = {
   pods: { total: number; running: number; succeeded: number; pending: number; failing: number; restarts: number };
   deployments: { total: number; available: number } | null;
   namespaces: number;
-  problems: HealthProblem[];
+  problems: Problem[];
   warnings: HealthEvent[];
+  /** What could be read; absent from callers that predate the doctor. */
+  checks: Record<DoctorCheck, DoctorCheckState>;
+  /** More problems than the cap (500). */
+  cut: boolean;
 };
 
 /** A choice the agent offers: a mode, or a value of a config option such as the model. */

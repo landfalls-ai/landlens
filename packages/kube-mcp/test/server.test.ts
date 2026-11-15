@@ -19,7 +19,7 @@ const types: ResourceType[] = [
 const pod = {
   kind: "Pod",
   metadata: {
-    name: "orders-api-7d9f-x1", namespace: "landlens-dev", uid: "pod-uid", creationTimestamp: now,
+    name: "orders-api-7d9f-x1", namespace: "landlens-dev", uid: "pod-uid", creationTimestamp: now, labels: { "pod-template-hash": "7d9f" },
     ownerReferences: [{ apiVersion: "apps/v1", kind: "ReplicaSet", name: "orders-api-7d9f", uid: "rs-uid", controller: true }],
     managedFields: [{ manager: "kubectl" }],
   },
@@ -51,6 +51,8 @@ function fakeCluster(): AgentCluster & { paths: string[] } {
     "/apis/apps/v1/namespaces/landlens-dev/replicasets/orders-api-7d9f": rs,
     "/apis/apps/v1/namespaces/landlens-dev/deployments/orders-api": deploy,
     "/apis/apps/v1/deployments": { items: [deploy] },
+    "/apis/apps/v1/statefulsets": { items: [] },
+    "/apis/apps/v1/daemonsets": { items: [] },
     "/api/v1/namespaces/landlens-dev/events": { items: [event] },
     "/api/v1/events": { items: [event] },
     "/api/v1/nodes": { items: [{ metadata: { name: "orbstack" }, status: { conditions: [{ type: "Ready", status: "True" }] } }] },
@@ -107,8 +109,10 @@ describe("landlens-kube MCP server", () => {
 
   it("puts the crash loop first in the overview", async () => {
     const { text } = await call("cluster_overview");
-    expect(text).toMatch(/pod landlens-dev\/orders-api-7d9f-x1: CrashLoopBackOff in container api \(7 restarts\); last exit Error code 1/);
-    expect(text).toContain("deployment landlens-dev/orders-api: 0/1 available");
+    // The pod's problem is its Deployment's (D50), with the shortfall on the same line rather than a second one.
+    expect(text).toContain("- [failing] Deployment landlens-dev/orders-api: orders-api is crash-looping (container api · exit 1 (Error) · 7 restarts). id: crashloop|Deployment/landlens-dev/orders-api|api|CrashLoopBackOff");
+    expect(text).toContain("Problems (1)");
+    expect(text).not.toContain("Not checked");
     expect(text).toContain("Back-off restarting failed container api");
   });
 
@@ -167,7 +171,7 @@ describe("landlens-kube MCP server", () => {
   it("gives the view structured data beside the same text", async () => {
     const r: any = await client.callTool({ name: "cluster_overview", arguments: {} });
     expect(r.content[0].text).toContain("CrashLoopBackOff");
-    expect(r.structuredContent.health.problems[0]).toMatchObject({ kind: "Pod", name: "orders-api-7d9f-x1", tone: "bad" });
+    expect(r.structuredContent.health.problems[0]).toMatchObject({ kind: "Deployment", name: "orders-api", pods: ["orders-api-7d9f-x1"], podCount: 1, tone: "bad", facts: { available: "0/1" } });
     const d: any = await client.callTool({ name: "describe", arguments: { kind: "po", name: "orders-api-7d9f-x1", namespace: "landlens-dev" } });
     expect(d.structuredContent).toMatchObject({ kind: "Pod", name: "orders-api-7d9f-x1", namespace: "landlens-dev" });
     expect(JSON.stringify(d.structuredContent)).not.toContain("hunter2");

@@ -7,7 +7,7 @@ const running = (name: string, ns: string, restarts = 0) => pod(name, ns, { stat
 const data: Record<string, any> = {
   "/api/v1/pods": { items: [
     running("web-1", "shop"),
-    running("flaky-1", "shop", 9),
+    { ...running("flaky-1", "shop", 9), status: { phase: "Running", conditions: [{ type: "Ready", status: "True" }], containerStatuses: [{ name: "api", ready: true, restartCount: 9, state: { running: {} }, lastState: { terminated: { reason: "Error", exitCode: 1, finishedAt: "2026-11-14T11:50:00Z" } } }] } },
     pod("orders-api-1", "landlens-dev", { status: { phase: "Running", containerStatuses: [{ name: "api", ready: false, restartCount: 11, state: { waiting: { reason: "CrashLoopBackOff" } }, lastState: { terminated: { reason: "Error", exitCode: 1 } } }] } }),
     pod("stuck-1", "shop", { status: { phase: "Pending", conditions: [{ type: "PodScheduled", status: "False", message: "0/1 nodes are available" }] } }),
   ] },
@@ -15,6 +15,8 @@ const data: Record<string, any> = {
     { metadata: { name: "orders-api", namespace: "landlens-dev" }, spec: { replicas: 1 }, status: { availableReplicas: 0 } },
     { metadata: { name: "web", namespace: "shop" }, spec: { replicas: 2 }, status: { availableReplicas: 2 } },
   ] },
+  "/apis/apps/v1/statefulsets": { items: [] },
+  "/apis/apps/v1/daemonsets": { items: [] },
   "/api/v1/nodes": { items: [{ metadata: { name: "n1", labels: { "node-role.kubernetes.io/control-plane": "" } }, status: { nodeInfo: { kubeletVersion: "v1.36.5" }, conditions: [{ type: "Ready", status: "True" }] } }] },
   "/api/v1/events": { items: [{ type: "Warning", reason: "BackOff", message: "Back-off restarting failed container api", count: 40, lastTimestamp: "2026-11-14T11:59:00Z", involvedObject: { kind: "Pod", namespace: "landlens-dev", name: "orders-api-1" } }] },
 };
@@ -33,23 +35,28 @@ describe("clusterHealth", () => {
     expect(h.namespaces).toBe(2);
     expect(h.problems.map((p) => `${p.kind}/${p.name} ${p.reason} ${p.tone}`)).toEqual([
       "Pod/orders-api-1 CrashLoopBackOff bad",
+      "Pod/stuck-1 Unschedulable bad",
       "Deployment/orders-api Unavailable bad",
       "Pod/flaky-1 Restarts warn",
-      "Pod/stuck-1 Pending warn",
     ]);
+    expect(h.checks).toEqual({ pods: "ok", workloads: "ok", nodes: "ok", events: "ok", certs: "off" });
+    expect(h.cut).toBe(false);
     expect(h.warnings[0]).toMatchObject({ reason: "BackOff", name: "orders-api-1", count: 40 });
   });
 
   it("reads as the agent's overview", async () => {
     const t = healthText(await clusterHealth(get, { now }));
-    expect(t).toContain("pod landlens-dev/orders-api-1: CrashLoopBackOff in container api (11 restarts); last exit Error code 1");
-    expect(t).toContain("pod shop/stuck-1: Pending for 2h; 0/1 nodes are available");
+    expect(t).toContain("- [failing] Pod landlens-dev/orders-api-1: orders-api-1 is crash-looping (container api · exit 1 (Error) · 11 restarts). id: crashloop|Pod/landlens-dev/orders-api-1|api|CrashLoopBackOff");
+    expect(t).toContain("- [failing] Pod shop/stuck-1: stuck-1 can't be scheduled (Unschedulable · for 2h)");
     expect(t).toContain("Back-off restarting failed container api");
+    expect(t).not.toContain("Not checked");
   });
 
   it("leaves out what the access can't read", async () => {
     const h = await clusterHealth(async (p) => (p.includes("nodes") || p.includes("deployments") ? Promise.reject(new Error("403")) : get(p)), { now });
     expect(h.nodes).toBeNull();
     expect(h.deployments).toBeNull();
+    expect(h.checks).toMatchObject({ nodes: "forbidden", workloads: "forbidden" });
+    expect(healthText(h)).toContain("Not checked: Can't read Deployments, StatefulSets or DaemonSets here, so short workloads aren't checked. Can't read nodes here.");
   });
 });

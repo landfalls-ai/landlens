@@ -43,6 +43,11 @@ default the dev one), which they use only to make a read-scoped key and revoke i
 read key once and paste it into Connect Clickland ([metrics.md](metrics.md), "Setup"). The e2e test runs the app with
 its own profile (`LANDLENS_USER_DATA`, development only), so it never touches your settings.
 
+The doctor ([doctor.md](doctor.md)): `node deploy/scenarios/doctor/up.mjs` starts one broken workload per problem
+class in `landlens-dev` (and `--down` removes them); `LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/kube
+test:integration` starts them itself and waits up to 4 minutes for each problem, since pending and not-ready count
+only after 2.
+
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`
 (namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
 healthy two-replica `catalog-api` with requests, limits and an uneven load.

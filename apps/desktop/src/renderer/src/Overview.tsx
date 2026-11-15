@@ -147,21 +147,10 @@ function Verdict({ h, onAsk }: { h: ClusterHealth; onAsk: () => void }) {
   );
 }
 
-/** "A pod is crash-looping in landlens-dev": one clause for the verdict; the second one leans on the first. */
+/** "orders-api is crash-looping in landlens-dev": one clause for the verdict, from the doctor's title. */
 function describe(p: HealthProblem, before?: HealthProblem): ReactNode {
-  const a = before ? "a" : "A";
   const where = p.namespace && p.namespace !== before?.namespace ? <> in <b>{p.namespace}</b></> : null;
-  if (p.kind === "Node") return <>node <b>{p.name}</b> is {p.reason === "NotReady" ? "not ready" : `under ${p.reason}`}</>;
-  if (p.kind === "Deployment") {
-    const its = before?.kind === "Pod" && before.namespace === p.namespace && before.name.startsWith(`${p.name}-`);
-    return <>{its ? "its" : a} deployment{its ? null : where} has {p.tone === "bad" ? "no available replicas" : "too few replicas"}</>;
-  }
-  const what: Record<string, string> = {
-    CrashLoopBackOff: "is crash-looping", ImagePullBackOff: "can't pull its image", ErrImagePull: "can't pull its image",
-    OOMKilled: "ran out of memory", Pending: "is stuck pending", NotReady: "is running but not ready", Restarts: "keeps restarting",
-    CreateContainerConfigError: "has a broken container config",
-  };
-  return <>{a} pod {what[p.reason] ?? `is failing (${p.reason})`}{where}</>;
+  return <>{p.title}{where}</>;
 }
 
 function ProblemRow({ p, onOpen, onAsk }: { p: HealthProblem; onOpen: (p: HealthProblem) => void; onAsk: (p: HealthProblem) => void }) {

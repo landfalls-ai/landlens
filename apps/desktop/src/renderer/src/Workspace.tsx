@@ -291,7 +291,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const bad = h?.problems.filter((p) => p.tone === "bad").length ?? 0;
   const warn = (h?.problems.length ?? 0) - bad;
   const worst = h?.problems.find((p) => p.tone === "bad");
-  const suggestion = worst ? (worst.kind === "Pod" && worst.reason === "CrashLoopBackOff" ? `Why is ${splitByShape(worst.name).base} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
+  const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
   const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : helmPage ? "Helm releases" : "Overview");
 

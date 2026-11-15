@@ -1,0 +1,22 @@
+# An image that can't be pulled: registry.invalid never resolves (RFC 6761), so nothing leaves the machine.
+# node deploy/scenarios/doctor/up.mjs (all of them), or kubectl --context orbstack -n landlens-dev apply -f this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reports
+  namespace: landlens-dev
+  labels: { app: reports, scenario: doctor }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: reports } }
+  template:
+    metadata:
+      labels: { app: reports, scenario: doctor }
+    spec:
+      terminationGracePeriodSeconds: 1
+
+      containers:
+        - name: reports
+          image: registry.invalid/shop/reports:9.9.9
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }

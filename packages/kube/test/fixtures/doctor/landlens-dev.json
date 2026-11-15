@@ -1,0 +1,4194 @@
+{
+ "at": "2026-11-15T06:34:51Z",
+ "note": "Recorded from deploy/scenarios/doctor on OrbStack (landlens-dev); managedFields and annotations removed.",
+ "pods": [
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generateName": "cart-api-5d4bff78c9-",
+    "generation": 1,
+    "labels": {
+     "app": "cart-api",
+     "pod-template-hash": "5d4bff78c9",
+     "scenario": "doctor"
+    },
+    "name": "cart-api-5d4bff78c9-t7rgc",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "cart-api-5d4bff78c9",
+      "uid": "4faca435-9dda-4ce1-8659-d00588e97e6d"
+     }
+    ],
+    "resourceVersion": "1042762",
+    "uid": "47a26e0f-a18c-41ba-b2c0-79500364eaf6"
+   },
+   "spec": {
+    "containers": [
+     {
+      "command": [
+       "sh",
+       "-c",
+       "echo listening on :8080; while true; do echo ok | nc -l -p 8080; done"
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "api",
+      "ports": [
+       {
+        "containerPort": 8080,
+        "name": "http",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "failureThreshold": 2,
+       "periodSeconds": 5,
+       "successThreshold": 1,
+       "tcpSocket": {
+        "port": 8081
+       },
+       "timeoutSeconds": 1
+      },
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-4hgk7",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-4hgk7",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "containers with unready status: [api]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "containers with unready status: [api]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://93961857acea96b577ca0cd1418186f314cf8e371f736738efe7bebb82d3c0a0",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {},
+      "name": "api",
+      "ready": false,
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 0,
+      "started": true,
+      "state": {
+       "running": {
+        "startedAt": "2026-11-15T06:32:20Z"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-4hgk7",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.120",
+    "podIPs": [
+     {
+      "ip": "192.168.194.120"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:19Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generateName": "gpu-trainer-74cd75547d-",
+    "generation": 1,
+    "labels": {
+     "app": "gpu-trainer",
+     "pod-template-hash": "74cd75547d",
+     "scenario": "doctor"
+    },
+    "name": "gpu-trainer-74cd75547d-r2pqr",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "gpu-trainer-74cd75547d",
+      "uid": "f9b972af-6ceb-41f1-86e5-75fc83036e33"
+     }
+    ],
+    "resourceVersion": "1042426",
+    "uid": "78d8ce6f-7878-4173-8036-e94661ab03b6"
+   },
+   "spec": {
+    "containers": [
+     {
+      "command": [
+       "sleep",
+       "3600"
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "trainer",
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-wtmld",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeSelector": {
+     "landlens.dev/pool": "gpu-a100"
+    },
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-wtmld",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector. no new claims to deallocate, preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.",
+      "observedGeneration": 1,
+      "reason": "Unschedulable",
+      "status": "False",
+      "type": "PodScheduled"
+     }
+    ],
+    "phase": "Pending",
+    "qosClass": "Burstable"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generateName": "invoice-renderer-758b7c4957-",
+    "generation": 1,
+    "labels": {
+     "app": "invoice-renderer",
+     "pod-template-hash": "758b7c4957",
+     "scenario": "doctor"
+    },
+    "name": "invoice-renderer-758b7c4957-49zct",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "invoice-renderer-758b7c4957",
+      "uid": "948c9462-18b6-4910-ba5e-b770d1c7694b"
+     }
+    ],
+    "resourceVersion": "1042451",
+    "uid": "e08c7214-2bbf-4894-914d-43b5773cff08"
+   },
+   "spec": {
+    "containers": [
+     {
+      "command": [
+       "sleep",
+       "3600"
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "renderer",
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/templates",
+        "name": "templates"
+       },
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-h72fl",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "configMap": {
+       "defaultMode": 420,
+       "name": "invoice-templates"
+      },
+      "name": "templates"
+     },
+     {
+      "name": "kube-api-access-h72fl",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "False",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "containers with unready status: [renderer]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "containers with unready status: [renderer]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "image": "busybox:1.36",
+      "imageID": "",
+      "lastState": {},
+      "name": "renderer",
+      "ready": false,
+      "restartCount": 0,
+      "started": false,
+      "state": {
+       "waiting": {
+        "reason": "ContainerCreating"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/templates",
+        "name": "templates"
+       },
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-h72fl",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Pending",
+    "qosClass": "Burstable",
+    "resources": {
+     "requests": {
+      "cpu": "5m",
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:19Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "ledger-worker-79756648df-",
+    "generation": 1,
+    "labels": {
+     "app": "ledger-worker",
+     "pod-template-hash": "79756648df",
+     "scenario": "doctor"
+    },
+    "name": "ledger-worker-79756648df-5frhf",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "ledger-worker-79756648df",
+      "uid": "c523fd7a-41a1-4485-8841-b40b1509e292"
+     }
+    ],
+    "resourceVersion": "1042806",
+    "uid": "cf30e668-3098-4ef8-89d7-312ff70781a4"
+   },
+   "spec": {
+    "containers": [
+     {
+      "args": [
+       "echo \"ledger-worker 1.8.0 starting\"\necho \"FATAL: cannot parse LEDGER_SHARDS=three (want a number)\" >&2\nexit 2\n"
+      ],
+      "command": [
+       "sh",
+       "-c"
+      ],
+      "env": [
+       {
+        "name": "LEDGER_SHARDS",
+        "value": "three"
+       }
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "worker",
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-wwbpv",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-wwbpv",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://8f9c837535d173a6214cbe5f1cf1fa53dfd64595343cc466d0637acae712c416",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://dc8f678308db4fa34eeef60dc7688db88be8c6147aa67b030090be3d557bf248",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:33:02Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:33:02Z"
+       }
+      },
+      "name": "worker",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 4,
+      "started": false,
+      "state": {
+       "terminated": {
+        "containerID": "docker://8f9c837535d173a6214cbe5f1cf1fa53dfd64595343cc466d0637acae712c416",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:34:00Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:34:00Z"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-wwbpv",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.118",
+    "podIPs": [
+     {
+      "ip": "192.168.194.118"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "16Mi"
+     },
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "ledger-worker-79756648df-",
+    "generation": 1,
+    "labels": {
+     "app": "ledger-worker",
+     "pod-template-hash": "79756648df",
+     "scenario": "doctor"
+    },
+    "name": "ledger-worker-79756648df-75hpk",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "ledger-worker-79756648df",
+      "uid": "c523fd7a-41a1-4485-8841-b40b1509e292"
+     }
+    ],
+    "resourceVersion": "1042803",
+    "uid": "42b5e058-b6ba-4c91-ae6e-2051fdf86198"
+   },
+   "spec": {
+    "containers": [
+     {
+      "args": [
+       "echo \"ledger-worker 1.8.0 starting\"\necho \"FATAL: cannot parse LEDGER_SHARDS=three (want a number)\" >&2\nexit 2\n"
+      ],
+      "command": [
+       "sh",
+       "-c"
+      ],
+      "env": [
+       {
+        "name": "LEDGER_SHARDS",
+        "value": "three"
+       }
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "worker",
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-nq4zc",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-nq4zc",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://1b6b5dbf9404a64f42c63996abfb642564290d3ee6d9033ef797c774da98607d",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://1b6b5dbf9404a64f42c63996abfb642564290d3ee6d9033ef797c774da98607d",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:33:56Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:33:56Z"
+       }
+      },
+      "name": "worker",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 4,
+      "started": false,
+      "state": {
+       "waiting": {
+        "message": "back-off 1m20s restarting failed container=worker pod=ledger-worker-79756648df-75hpk_landlens-dev(42b5e058-b6ba-4c91-ae6e-2051fdf86198)",
+        "reason": "CrashLoopBackOff"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-nq4zc",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.115",
+    "podIPs": [
+     {
+      "ip": "192.168.194.115"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "16Mi"
+     },
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "ledger-worker-79756648df-",
+    "generation": 1,
+    "labels": {
+     "app": "ledger-worker",
+     "pod-template-hash": "79756648df",
+     "scenario": "doctor"
+    },
+    "name": "ledger-worker-79756648df-kj4wc",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "ledger-worker-79756648df",
+      "uid": "c523fd7a-41a1-4485-8841-b40b1509e292"
+     }
+    ],
+    "resourceVersion": "1042764",
+    "uid": "58ad6488-f612-4fbb-8d75-bc32295af21b"
+   },
+   "spec": {
+    "containers": [
+     {
+      "args": [
+       "echo \"ledger-worker 1.8.0 starting\"\necho \"FATAL: cannot parse LEDGER_SHARDS=three (want a number)\" >&2\nexit 2\n"
+      ],
+      "command": [
+       "sh",
+       "-c"
+      ],
+      "env": [
+       {
+        "name": "LEDGER_SHARDS",
+        "value": "three"
+       }
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "worker",
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-55nv2",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-55nv2",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://f360ff95be883999a513063569c0e51867f5e023c94ecd38e0d21abb84c29295",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://dc894127b4833fec8c1c417c153ee21388b52f47c0f4dd8522b05504daebee52",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:32:59Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:32:59Z"
+       }
+      },
+      "name": "worker",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 4,
+      "started": false,
+      "state": {
+       "terminated": {
+        "containerID": "docker://f360ff95be883999a513063569c0e51867f5e023c94ecd38e0d21abb84c29295",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:33:45Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:33:45Z"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-55nv2",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.121",
+    "podIPs": [
+     {
+      "ip": "192.168.194.121"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "16Mi"
+     },
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "ledger-worker-79756648df-",
+    "generation": 1,
+    "labels": {
+     "app": "ledger-worker",
+     "pod-template-hash": "79756648df",
+     "scenario": "doctor"
+    },
+    "name": "ledger-worker-79756648df-wnllm",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "ledger-worker-79756648df",
+      "uid": "c523fd7a-41a1-4485-8841-b40b1509e292"
+     }
+    ],
+    "resourceVersion": "1042790",
+    "uid": "3cfd1731-a3d7-4d73-9bcd-a3aa718cb15b"
+   },
+   "spec": {
+    "containers": [
+     {
+      "args": [
+       "echo \"ledger-worker 1.8.0 starting\"\necho \"FATAL: cannot parse LEDGER_SHARDS=three (want a number)\" >&2\nexit 2\n"
+      ],
+      "command": [
+       "sh",
+       "-c"
+      ],
+      "env": [
+       {
+        "name": "LEDGER_SHARDS",
+        "value": "three"
+       }
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "worker",
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-qtbtv",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-qtbtv",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://33b05dfa3079523ff81c1aa94d0609a4b60f8c437464dfe4be512ca1e09625f3",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://3954239423dadc285ea9a1ecf7c04e34225eb3bdae5b55cda2b5bb7cbded9fab",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:33:01Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:33:01Z"
+       }
+      },
+      "name": "worker",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 4,
+      "started": false,
+      "state": {
+       "terminated": {
+        "containerID": "docker://33b05dfa3079523ff81c1aa94d0609a4b60f8c437464dfe4be512ca1e09625f3",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:33:54Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:33:54Z"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-qtbtv",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.123",
+    "podIPs": [
+     {
+      "ip": "192.168.194.123"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "16Mi"
+     },
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "ledger-worker-79756648df-",
+    "generation": 1,
+    "labels": {
+     "app": "ledger-worker",
+     "pod-template-hash": "79756648df",
+     "scenario": "doctor"
+    },
+    "name": "ledger-worker-79756648df-ztcxn",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "ledger-worker-79756648df",
+      "uid": "c523fd7a-41a1-4485-8841-b40b1509e292"
+     }
+    ],
+    "resourceVersion": "1042776",
+    "uid": "6cefcb72-b30d-40f8-bab9-6969520fce30"
+   },
+   "spec": {
+    "containers": [
+     {
+      "args": [
+       "echo \"ledger-worker 1.8.0 starting\"\necho \"FATAL: cannot parse LEDGER_SHARDS=three (want a number)\" >&2\nexit 2\n"
+      ],
+      "command": [
+       "sh",
+       "-c"
+      ],
+      "env": [
+       {
+        "name": "LEDGER_SHARDS",
+        "value": "three"
+       }
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "worker",
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-xxc2z",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-xxc2z",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [worker]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://f70b3557abb18e7e3da3e9966e7ff0727b0bbddc857597de84c928d414e4793a",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://be496021a571423eef18054d0cd3c16e1e793ce2afc01d8167c2e2788de4e05e",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:32:58Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:32:58Z"
+       }
+      },
+      "name": "worker",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "16Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 4,
+      "started": false,
+      "state": {
+       "terminated": {
+        "containerID": "docker://f70b3557abb18e7e3da3e9966e7ff0727b0bbddc857597de84c928d414e4793a",
+        "exitCode": 2,
+        "finishedAt": "2026-11-15T06:33:49Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:33:49Z"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-xxc2z",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.122",
+    "podIPs": [
+     {
+      "ip": "192.168.194.122"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "16Mi"
+     },
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-14T22:51:37Z",
+    "generateName": "orders-api-846c7f64f7-",
+    "generation": 1,
+    "labels": {
+     "app": "orders-api",
+     "pod-template-hash": "846c7f64f7"
+    },
+    "name": "orders-api-846c7f64f7-pn75s",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "orders-api-846c7f64f7",
+      "uid": "8c93b050-8f94-4a41-9513-dce4405db974"
+     }
+    ],
+    "resourceVersion": "1042284",
+    "uid": "3b34e3e5-026b-4eb1-95eb-cdf113ab87d8"
+   },
+   "spec": {
+    "containers": [
+     {
+      "args": [
+       "echo \"orders-api 2.4.1 starting\"\necho \"config: DATABASE_HOST=${DATABASE_HOST} DATABASE_NAME=${DATABASE_NAME}\"\nif [ -z \"${DATABASE_URL}\" ]; then\n  echo \"FATAL: DATABASE_URL is not set; refusing to start without a database\" >&2\n  exit 1\nfi\necho \"listening on :8080\"; sleep 3600\n"
+      ],
+      "command": [
+       "sh",
+       "-c"
+      ],
+      "envFrom": [
+       {
+        "configMapRef": {
+         "name": "orders-api-config"
+        }
+       }
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "api",
+      "resources": {
+       "limits": {
+        "memory": "32Mi"
+       },
+       "requests": {
+        "cpu": "10m",
+        "memory": "16Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-shw7q",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 30,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-shw7q",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "10m",
+     "memory": "16Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-14T22:51:38Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-14T22:51:37Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-14T22:51:37Z",
+      "message": "containers with unready status: [api]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-14T22:51:37Z",
+      "message": "containers with unready status: [api]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-14T22:51:37Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "10m",
+       "memory": "16Mi"
+      },
+      "containerID": "docker://8d3e32ae027969c10d60cd41fe70dee7d644f409e631191bc0f8fccb7a0e5903",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://8d3e32ae027969c10d60cd41fe70dee7d644f409e631191bc0f8fccb7a0e5903",
+        "exitCode": 1,
+        "finishedAt": "2026-11-15T06:29:34Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:29:34Z"
+       }
+      },
+      "name": "api",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "32Mi"
+       },
+       "requests": {
+        "cpu": "10m",
+        "memory": "16Mi"
+       }
+      },
+      "restartCount": 92,
+      "started": false,
+      "state": {
+       "waiting": {
+        "message": "back-off 5m0s restarting failed container=api pod=orders-api-846c7f64f7-pn75s_landlens-dev(3b34e3e5-026b-4eb1-95eb-cdf113ab87d8)",
+        "reason": "CrashLoopBackOff"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-shw7q",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.7",
+    "podIPs": [
+     {
+      "ip": "192.168.194.7"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "32Mi"
+     },
+     "requests": {
+      "memory": "16Mi"
+     }
+    },
+    "startTime": "2026-11-14T22:51:37Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "reports-67db766489-",
+    "generation": 1,
+    "labels": {
+     "app": "reports",
+     "pod-template-hash": "67db766489",
+     "scenario": "doctor"
+    },
+    "name": "reports-67db766489-6wd84",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "reports-67db766489",
+      "uid": "03d33c53-737a-44b4-a16f-0c9f609ac6f1"
+     }
+    ],
+    "resourceVersion": "1042821",
+    "uid": "ef703013-fb2d-4074-a8c0-486801e2b5e9"
+   },
+   "spec": {
+    "containers": [
+     {
+      "image": "registry.invalid/shop/reports:9.9.9",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "reports",
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-wj6ml",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-wj6ml",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [reports]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "message": "containers with unready status: [reports]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "image": "registry.invalid/shop/reports:9.9.9",
+      "imageID": "",
+      "lastState": {},
+      "name": "reports",
+      "ready": false,
+      "restartCount": 0,
+      "started": false,
+      "state": {
+       "waiting": {
+        "message": "Back-off pulling image \"registry.invalid/shop/reports:9.9.9\": ErrImagePull: Error response from daemon: failed to resolve reference \"registry.invalid/shop/reports:9.9.9\": failed to do request: Head \"https://registry.invalid/v2/shop/reports/manifests/9.9.9\": Bad Gateway",
+        "reason": "ImagePullBackOff"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-wj6ml",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Pending",
+    "podIP": "192.168.194.117",
+    "podIPs": [
+     {
+      "ip": "192.168.194.117"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "requests": {
+      "cpu": "5m",
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generateName": "search-indexer-6f5bbfd655-",
+    "generation": 1,
+    "labels": {
+     "app": "search-indexer",
+     "pod-template-hash": "6f5bbfd655",
+     "scenario": "doctor"
+    },
+    "name": "search-indexer-6f5bbfd655-2w7sz",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "search-indexer-6f5bbfd655",
+      "uid": "3e8903be-0624-432b-b78c-04dfd63fe33f"
+     }
+    ],
+    "resourceVersion": "1042854",
+    "uid": "224a7df2-ce78-45a9-a712-7e78a1c3d5d7"
+   },
+   "spec": {
+    "containers": [
+     {
+      "command": [
+       "sh",
+       "-c",
+       "echo indexing; sleep 3600"
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "livenessProbe": {
+       "exec": {
+        "command": [
+         "cat",
+         "/tmp/alive"
+        ]
+       },
+       "failureThreshold": 2,
+       "initialDelaySeconds": 2,
+       "periodSeconds": 5,
+       "successThreshold": 1,
+       "timeoutSeconds": 1
+      },
+      "name": "indexer",
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-g7j2z",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-g7j2z",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:34:42Z",
+      "message": "containers with unready status: [indexer]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:34:42Z",
+      "message": "containers with unready status: [indexer]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://444bdd84b0f61833ed46f8f8b1848914676f0468b0560a6e08ecdd499aa4fe20",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://444bdd84b0f61833ed46f8f8b1848914676f0468b0560a6e08ecdd499aa4fe20",
+        "exitCode": 137,
+        "finishedAt": "2026-11-15T06:34:41Z",
+        "reason": "Error",
+        "startedAt": "2026-11-15T06:34:28Z"
+       }
+      },
+      "name": "indexer",
+      "ready": false,
+      "resources": {
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 5,
+      "started": false,
+      "state": {
+       "waiting": {
+        "message": "back-off 1m20s restarting failed container=indexer pod=search-indexer-6f5bbfd655-2w7sz_landlens-dev(224a7df2-ce78-45a9-a712-7e78a1c3d5d7)",
+        "reason": "CrashLoopBackOff"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-g7j2z",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.119",
+    "podIPs": [
+     {
+      "ip": "192.168.194.119"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:18Z"
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Pod",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generateName": "thumbnailer-67f758548-",
+    "generation": 1,
+    "labels": {
+     "app": "thumbnailer",
+     "pod-template-hash": "67f758548",
+     "scenario": "doctor"
+    },
+    "name": "thumbnailer-67f758548-nn5sb",
+    "namespace": "landlens-dev",
+    "ownerReferences": [
+     {
+      "apiVersion": "apps/v1",
+      "blockOwnerDeletion": true,
+      "controller": true,
+      "kind": "ReplicaSet",
+      "name": "thumbnailer-67f758548",
+      "uid": "14cfc981-8c28-4421-b896-6b7d30f273a1"
+     }
+    ],
+    "resourceVersion": "1042778",
+    "uid": "ea8e45e1-dd3b-4148-a90b-5274c97d0d9b"
+   },
+   "spec": {
+    "containers": [
+     {
+      "command": [
+       "sh",
+       "-c",
+       "echo resizing; tail /dev/zero"
+      ],
+      "image": "busybox:1.36",
+      "imagePullPolicy": "IfNotPresent",
+      "name": "resize",
+      "resources": {
+       "limits": {
+        "memory": "24Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "File",
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-v7cvs",
+        "readOnly": true
+       }
+      ]
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "enableServiceLinks": true,
+    "nodeName": "orbstack",
+    "preemptionPolicy": "PreemptLowerPriority",
+    "priority": 0,
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {},
+    "serviceAccount": "default",
+    "serviceAccountName": "default",
+    "terminationGracePeriodSeconds": 1,
+    "tolerations": [
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/not-ready",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     },
+     {
+      "effect": "NoExecute",
+      "key": "node.kubernetes.io/unreachable",
+      "operator": "Exists",
+      "tolerationSeconds": 300
+     }
+    ],
+    "volumes": [
+     {
+      "name": "kube-api-access-v7cvs",
+      "projected": {
+       "defaultMode": 420,
+       "sources": [
+        {
+         "serviceAccountToken": {
+          "expirationSeconds": 3607,
+          "path": "token"
+         }
+        },
+        {
+         "configMap": {
+          "items": [
+           {
+            "key": "ca.crt",
+            "path": "ca.crt"
+           }
+          ],
+          "name": "kube-root-ca.crt"
+         }
+        },
+        {
+         "downwardAPI": {
+          "items": [
+           {
+            "fieldRef": {
+             "apiVersion": "v1",
+             "fieldPath": "metadata.namespace"
+            },
+            "path": "namespace"
+           }
+          ]
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   "status": {
+    "allocatedResources": {
+     "cpu": "5m",
+     "memory": "8Mi"
+    },
+    "conditions": [
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodReadyToStartContainers"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "Initialized"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "containers with unready status: [resize]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "message": "containers with unready status: [resize]",
+      "observedGeneration": 1,
+      "reason": "ContainersNotReady",
+      "status": "False",
+      "type": "ContainersReady"
+     },
+     {
+      "lastProbeTime": null,
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "observedGeneration": 1,
+      "status": "True",
+      "type": "PodScheduled"
+     }
+    ],
+    "containerStatuses": [
+     {
+      "allocatedResources": {
+       "cpu": "5m",
+       "memory": "8Mi"
+      },
+      "containerID": "docker://449373f3fb3086fa0639691d1df3b0fc580d112b3beee5876026884e1c1c17e1",
+      "image": "busybox:1.36",
+      "imageID": "docker-pullable://busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+      "lastState": {
+       "terminated": {
+        "containerID": "docker://449373f3fb3086fa0639691d1df3b0fc580d112b3beee5876026884e1c1c17e1",
+        "exitCode": 137,
+        "finishedAt": "2026-11-15T06:33:49Z",
+        "reason": "OOMKilled",
+        "startedAt": "2026-11-15T06:33:49Z"
+       }
+      },
+      "name": "resize",
+      "ready": false,
+      "resources": {
+       "limits": {
+        "memory": "24Mi"
+       },
+       "requests": {
+        "cpu": "5m",
+        "memory": "8Mi"
+       }
+      },
+      "restartCount": 4,
+      "started": false,
+      "state": {
+       "waiting": {
+        "message": "back-off 1m20s restarting failed container=resize pod=thumbnailer-67f758548-nn5sb_landlens-dev(ea8e45e1-dd3b-4148-a90b-5274c97d0d9b)",
+        "reason": "CrashLoopBackOff"
+       }
+      },
+      "volumeMounts": [
+       {
+        "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+        "name": "kube-api-access-v7cvs",
+        "readOnly": true,
+        "recursiveReadOnly": "Disabled"
+       }
+      ]
+     }
+    ],
+    "hostIP": "192.168.139.2",
+    "hostIPs": [
+     {
+      "ip": "192.168.139.2"
+     },
+     {
+      "ip": "fd07:b51a:cc66::2"
+     }
+    ],
+    "observedGeneration": 1,
+    "phase": "Running",
+    "podIP": "192.168.194.116",
+    "podIPs": [
+     {
+      "ip": "192.168.194.116"
+     }
+    ],
+    "qosClass": "Burstable",
+    "resources": {
+     "limits": {
+      "memory": "24Mi"
+     },
+     "requests": {
+      "memory": "8Mi"
+     }
+    },
+    "startTime": "2026-11-15T06:32:19Z"
+   }
+  }
+ ],
+ "deployments": [
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generation": 1,
+    "labels": {
+     "app": "cart-api",
+     "scenario": "doctor"
+    },
+    "name": "cart-api",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042455",
+    "uid": "643eb12b-2777-4b13-a564-d87595246cdd"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "cart-api"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "cart-api",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "command": [
+         "sh",
+         "-c",
+         "echo listening on :8080; while true; do echo ok | nc -l -p 8080; done"
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "api",
+        "ports": [
+         {
+          "containerPort": 8080,
+          "name": "http",
+          "protocol": "TCP"
+         }
+        ],
+        "readinessProbe": {
+         "failureThreshold": 2,
+         "periodSeconds": 5,
+         "successThreshold": 1,
+         "tcpSocket": {
+          "port": 8081
+         },
+         "timeoutSeconds": 1
+        },
+        "resources": {
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "ReplicaSet \"cart-api-5d4bff78c9\" is progressing.",
+      "reason": "ReplicaSetUpdated",
+      "status": "True",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generation": 1,
+    "labels": {
+     "app": "gpu-trainer",
+     "scenario": "doctor"
+    },
+    "name": "gpu-trainer",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042428",
+    "uid": "8969824c-7611-4c96-b0d6-af13572149eb"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "gpu-trainer"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "gpu-trainer",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "command": [
+         "sleep",
+         "3600"
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "trainer",
+        "resources": {
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "nodeSelector": {
+       "landlens.dev/pool": "gpu-a100"
+      },
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "ReplicaSet \"gpu-trainer-74cd75547d\" is progressing.",
+      "reason": "ReplicaSetUpdated",
+      "status": "True",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generation": 1,
+    "labels": {
+     "app": "invoice-renderer",
+     "scenario": "doctor"
+    },
+    "name": "invoice-renderer",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042456",
+    "uid": "bbc9a595-36ee-4a84-b9af-8a2c092a0694"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "invoice-renderer"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "invoice-renderer",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "command": [
+         "sleep",
+         "3600"
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "renderer",
+        "resources": {
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File",
+        "volumeMounts": [
+         {
+          "mountPath": "/templates",
+          "name": "templates"
+         }
+        ]
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1,
+      "volumes": [
+       {
+        "configMap": {
+         "defaultMode": 420,
+         "name": "invoice-templates"
+        },
+        "name": "templates"
+       }
+      ]
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "ReplicaSet \"invoice-renderer-758b7c4957\" is progressing.",
+      "reason": "ReplicaSetUpdated",
+      "status": "True",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generation": 1,
+    "labels": {
+     "app": "ledger-worker",
+     "scenario": "doctor"
+    },
+    "name": "ledger-worker",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042372",
+    "uid": "49aa4295-913e-4617-b0e3-3bf8debe96e9"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 5,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "ledger-worker"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "ledger-worker",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "args": [
+         "echo \"ledger-worker 1.8.0 starting\"\necho \"FATAL: cannot parse LEDGER_SHARDS=three (want a number)\" >&2\nexit 2\n"
+        ],
+        "command": [
+         "sh",
+         "-c"
+        ],
+        "env": [
+         {
+          "name": "LEDGER_SHARDS",
+          "value": "three"
+         }
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "worker",
+        "resources": {
+         "limits": {
+          "memory": "16Mi"
+         },
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "lastUpdateTime": "2026-11-15T06:32:18Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "lastUpdateTime": "2026-11-15T06:32:18Z",
+      "message": "ReplicaSet \"ledger-worker-79756648df\" is progressing.",
+      "reason": "ReplicaSetUpdated",
+      "status": "True",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 5,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 5,
+    "updatedReplicas": 5
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-14T22:51:37Z",
+    "generation": 1,
+    "labels": {
+     "app": "orders-api",
+     "scenario": "crashloop"
+    },
+    "name": "orders-api",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1026880",
+    "uid": "8fbbb3fb-7e24-4816-b9fb-51b9ea2ca91e"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "orders-api"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "orders-api"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "args": [
+         "echo \"orders-api 2.4.1 starting\"\necho \"config: DATABASE_HOST=${DATABASE_HOST} DATABASE_NAME=${DATABASE_NAME}\"\nif [ -z \"${DATABASE_URL}\" ]; then\n  echo \"FATAL: DATABASE_URL is not set; refusing to start without a database\" >&2\n  exit 1\nfi\necho \"listening on :8080\"; sleep 3600\n"
+        ],
+        "command": [
+         "sh",
+         "-c"
+        ],
+        "envFrom": [
+         {
+          "configMapRef": {
+           "name": "orders-api-config"
+          }
+         }
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "api",
+        "resources": {
+         "limits": {
+          "memory": "32Mi"
+         },
+         "requests": {
+          "cpu": "10m",
+          "memory": "16Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 30
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-14T22:51:37Z",
+      "lastUpdateTime": "2026-11-14T22:51:37Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-14T23:01:38Z",
+      "lastUpdateTime": "2026-11-14T23:01:38Z",
+      "message": "ReplicaSet \"orders-api-846c7f64f7\" has timed out progressing.",
+      "reason": "ProgressDeadlineExceeded",
+      "status": "False",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generation": 1,
+    "labels": {
+     "app": "reports",
+     "scenario": "doctor"
+    },
+    "name": "reports",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042390",
+    "uid": "b920c4ab-fd33-4287-b4e7-6a203188e541"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "reports"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "reports",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "image": "registry.invalid/shop/reports:9.9.9",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "reports",
+        "resources": {
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "lastUpdateTime": "2026-11-15T06:32:18Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "lastUpdateTime": "2026-11-15T06:32:18Z",
+      "message": "ReplicaSet \"reports-67db766489\" is progressing.",
+      "reason": "ReplicaSetUpdated",
+      "status": "True",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:18Z",
+    "generation": 1,
+    "labels": {
+     "app": "search-indexer",
+     "scenario": "doctor"
+    },
+    "name": "search-indexer",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042856",
+    "uid": "461472db-ed49-4e5d-8d86-4e3d53e05f22"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "search-indexer"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "search-indexer",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "command": [
+         "sh",
+         "-c",
+         "echo indexing; sleep 3600"
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "livenessProbe": {
+         "exec": {
+          "command": [
+           "cat",
+           "/tmp/alive"
+          ]
+         },
+         "failureThreshold": 2,
+         "initialDelaySeconds": 2,
+         "periodSeconds": 5,
+         "successThreshold": 1,
+         "timeoutSeconds": 1
+        },
+        "name": "indexer",
+        "resources": {
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:18Z",
+      "lastUpdateTime": "2026-11-15T06:32:20Z",
+      "message": "ReplicaSet \"search-indexer-6f5bbfd655\" has successfully progressed.",
+      "reason": "NewReplicaSetAvailable",
+      "status": "True",
+      "type": "Progressing"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:34:42Z",
+      "lastUpdateTime": "2026-11-15T06:34:42Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  },
+  {
+   "apiVersion": "apps/v1",
+   "kind": "Deployment",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "generation": 1,
+    "labels": {
+     "app": "thumbnailer",
+     "scenario": "doctor"
+    },
+    "name": "thumbnailer",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042416",
+    "uid": "4e4d7928-cc08-4ade-bad2-886460bb5d9e"
+   },
+   "spec": {
+    "progressDeadlineSeconds": 600,
+    "replicas": 1,
+    "revisionHistoryLimit": 10,
+    "selector": {
+     "matchLabels": {
+      "app": "thumbnailer"
+     }
+    },
+    "strategy": {
+     "rollingUpdate": {
+      "maxSurge": "25%",
+      "maxUnavailable": "25%"
+     },
+     "type": "RollingUpdate"
+    },
+    "template": {
+     "metadata": {
+      "labels": {
+       "app": "thumbnailer",
+       "scenario": "doctor"
+      }
+     },
+     "spec": {
+      "containers": [
+       {
+        "command": [
+         "sh",
+         "-c",
+         "echo resizing; tail /dev/zero"
+        ],
+        "image": "busybox:1.36",
+        "imagePullPolicy": "IfNotPresent",
+        "name": "resize",
+        "resources": {
+         "limits": {
+          "memory": "24Mi"
+         },
+         "requests": {
+          "cpu": "5m",
+          "memory": "8Mi"
+         }
+        },
+        "terminationMessagePath": "/dev/termination-log",
+        "terminationMessagePolicy": "File"
+       }
+      ],
+      "dnsPolicy": "ClusterFirst",
+      "restartPolicy": "Always",
+      "schedulerName": "default-scheduler",
+      "securityContext": {},
+      "terminationGracePeriodSeconds": 1
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "Deployment does not have minimum availability.",
+      "reason": "MinimumReplicasUnavailable",
+      "status": "False",
+      "type": "Available"
+     },
+     {
+      "lastTransitionTime": "2026-11-15T06:32:19Z",
+      "lastUpdateTime": "2026-11-15T06:32:19Z",
+      "message": "ReplicaSet \"thumbnailer-67f758548\" is progressing.",
+      "reason": "ReplicaSetUpdated",
+      "status": "True",
+      "type": "Progressing"
+     }
+    ],
+    "observedGeneration": 1,
+    "replicas": 1,
+    "terminatingReplicas": 0,
+    "unavailableReplicas": 1,
+    "updatedReplicas": 1
+   }
+  }
+ ],
+ "events": [
+  {
+   "apiVersion": "v1",
+   "count": 25,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:20Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{api}",
+    "kind": "Pod",
+    "name": "cart-api-5d4bff78c9-t7rgc",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042433",
+    "uid": "47a26e0f-a18c-41ba-b2c0-79500364eaf6"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:16Z",
+   "message": "Readiness probe failed: dial tcp 192.168.194.120:8081: connect: connection refused",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:20Z",
+    "name": "cart-api-5d4bff78c9-t7rgc.18e824477b3cc3fa",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042819",
+    "uid": "ab84a32c-e990-4a7d-98fb-7cc9563377bb"
+   },
+   "reason": "Unhealthy",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "action": "Scheduling",
+   "apiVersion": "v1",
+   "eventTime": "2026-11-15T06:32:19.070536Z",
+   "firstTimestamp": null,
+   "involvedObject": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "name": "gpu-trainer-74cd75547d-r2pqr",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042422",
+    "uid": "78d8ce6f-7878-4173-8036-e94661ab03b6"
+   },
+   "kind": "Event",
+   "lastTimestamp": null,
+   "message": "0/1 nodes are available: 1 node(s) didn't match Pod's node affinity/selector. no new claims to deallocate, preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling.",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "name": "gpu-trainer-74cd75547d-r2pqr.18e824470c0c10b8",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042429",
+    "uid": "044b0758-c83f-4faf-8457-8d9dfc59462b"
+   },
+   "reason": "FailedScheduling",
+   "reportingComponent": "default-scheduler",
+   "reportingInstance": "default-scheduler-orbstack",
+   "source": {},
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 1,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:19Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "kind": "PersistentVolumeClaim",
+    "name": "invoice-archive",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042441",
+    "uid": "7a95c9df-483f-44c8-8479-c53e7e58d56c"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:32:19Z",
+   "message": "storageclass.storage.k8s.io \"landlens-missing\" not found",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "name": "invoice-archive.18e8244712187c88",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042442",
+    "uid": "0e230e15-c48f-49d6-b2bf-9a38c5de8071"
+   },
+   "reason": "ProvisioningFailed",
+   "reportingComponent": "persistentvolume-controller",
+   "reportingInstance": "",
+   "source": {
+    "component": "persistentvolume-controller"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 9,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:19Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "name": "invoice-renderer-758b7c4957-49zct",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042448",
+    "uid": "e08c7214-2bbf-4894-914d-43b5773cff08"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:27Z",
+   "message": "MountVolume.SetUp failed for volume \"templates\" : configmap \"invoice-templates\" not found",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "name": "invoice-renderer-758b7c4957-49zct.18e82447245bde26",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042828",
+    "uid": "b5aa0253-889c-4b88-a01d-5a781ef2bff1"
+   },
+   "reason": "FailedMount",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 4,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:21Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{worker}",
+    "kind": "Pod",
+    "name": "ledger-worker-79756648df-5frhf",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042364",
+    "uid": "cf30e668-3098-4ef8-89d7-312ff70781a4"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:00Z",
+   "message": "Back-off restarting failed container worker in pod ledger-worker-79756648df-5frhf_landlens-dev(cf30e668-3098-4ef8-89d7-312ff70781a4)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:21Z",
+    "name": "ledger-worker-79756648df-5frhf.18e82447b00bb30a",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042805",
+    "uid": "6cfd7b1b-88e9-4cd8-866f-2e327d2bb3f8"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 6,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:21Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{worker}",
+    "kind": "Pod",
+    "name": "ledger-worker-79756648df-75hpk",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042362",
+    "uid": "42b5e058-b6ba-4c91-ae6e-2051fdf86198"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:00Z",
+   "message": "Back-off restarting failed container worker in pod ledger-worker-79756648df-75hpk_landlens-dev(42b5e058-b6ba-4c91-ae6e-2051fdf86198)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:21Z",
+    "name": "ledger-worker-79756648df-75hpk.18e82447a1cfced2",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042802",
+    "uid": "5a51025f-78fb-43fc-a4e4-7f993049e3b8"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 4,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:21Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{worker}",
+    "kind": "Pod",
+    "name": "ledger-worker-79756648df-kj4wc",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042361",
+    "uid": "58ad6488-f612-4fbb-8d75-bc32295af21b"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:33:46Z",
+   "message": "Back-off restarting failed container worker in pod ledger-worker-79756648df-kj4wc_landlens-dev(58ad6488-f612-4fbb-8d75-bc32295af21b)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:21Z",
+    "name": "ledger-worker-79756648df-kj4wc.18e82447b666df79",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042763",
+    "uid": "059c51e3-4098-4733-9f9d-d5b62b00127f"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 5,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:22Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{worker}",
+    "kind": "Pod",
+    "name": "ledger-worker-79756648df-wnllm",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042365",
+    "uid": "3cfd1731-a3d7-4d73-9bcd-a3aa718cb15b"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:33:55Z",
+   "message": "Back-off restarting failed container worker in pod ledger-worker-79756648df-wnllm_landlens-dev(3cfd1731-a3d7-4d73-9bcd-a3aa718cb15b)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:22Z",
+    "name": "ledger-worker-79756648df-wnllm.18e82447c5d0ea53",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042789",
+    "uid": "58953db6-e7aa-491f-b467-0c3a6633a20c"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 4,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:22Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{worker}",
+    "kind": "Pod",
+    "name": "ledger-worker-79756648df-ztcxn",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042363",
+    "uid": "6cefcb72-b30d-40f8-bab9-6969520fce30"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:33:50Z",
+   "message": "Back-off restarting failed container worker in pod ledger-worker-79756648df-ztcxn_landlens-dev(6cefcb72-b30d-40f8-bab9-6969520fce30)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:22Z",
+    "name": "ledger-worker-79756648df-ztcxn.18e82447bf8a79de",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042775",
+    "uid": "97726b3e-efcf-4b73-b669-baab5331dfe5"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 401,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-14T22:51:38Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{api}",
+    "kind": "Pod",
+    "name": "orders-api-846c7f64f7-pn75s",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1026560",
+    "uid": "3b34e3e5-026b-4eb1-95eb-cdf113ab87d8"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:32:17Z",
+   "message": "Back-off restarting failed container api in pod orders-api-846c7f64f7-pn75s_landlens-dev(3b34e3e5-026b-4eb1-95eb-cdf113ab87d8)",
+   "metadata": {
+    "creationTimestamp": "2026-11-14T22:51:38Z",
+    "name": "orders-api-846c7f64f7-pn75s.18e80b2392e93b9c",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042343",
+    "uid": "fced922a-a19a-4c8b-8816-e8c3d3acb890"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 4,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:19Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{reports}",
+    "kind": "Pod",
+    "name": "reports-67db766489-6wd84",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042386",
+    "uid": "ef703013-fb2d-4074-a8c0-486801e2b5e9"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:33:51Z",
+   "message": "Failed to pull image \"registry.invalid/shop/reports:9.9.9\": Error response from daemon: failed to resolve reference \"registry.invalid/shop/reports:9.9.9\": failed to do request: Head \"https://registry.invalid/v2/shop/reports/manifests/9.9.9\": Bad Gateway",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "name": "reports-67db766489-6wd84.18e8244742ea08cd",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042781",
+    "uid": "edd24bc8-add9-48ed-b0a0-febc26cee914"
+   },
+   "reason": "Failed",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 4,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:19Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{reports}",
+    "kind": "Pod",
+    "name": "reports-67db766489-6wd84",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042386",
+    "uid": "ef703013-fb2d-4074-a8c0-486801e2b5e9"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:33:51Z",
+   "message": "Error: ErrImagePull",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:19Z",
+    "name": "reports-67db766489-6wd84.18e8244742ee4259",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042782",
+    "uid": "2daa65eb-c7f6-4ea0-bb1b-2f6ca19d5b56"
+   },
+   "reason": "Failed",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 9,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:20Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{reports}",
+    "kind": "Pod",
+    "name": "reports-67db766489-6wd84",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042386",
+    "uid": "ef703013-fb2d-4074-a8c0-486801e2b5e9"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:43Z",
+   "message": "Error: ImagePullBackOff",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:20Z",
+    "name": "reports-67db766489-6wd84.18e82447787a271f",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042858",
+    "uid": "485c5019-e4c7-487e-a201-d0a8b3106479"
+   },
+   "reason": "Failed",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 12,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:24Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{indexer}",
+    "kind": "Pod",
+    "name": "search-indexer-6f5bbfd655-2w7sz",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042398",
+    "uid": "224a7df2-ce78-45a9-a712-7e78a1c3d5d7"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:39Z",
+   "message": "Liveness probe failed: cat: can't open '/tmp/alive': No such file or directory\n",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:24Z",
+    "name": "search-indexer-6f5bbfd655-2w7sz.18e8244844970377",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042846",
+    "uid": "2f9fe56b-1376-454e-9f35-a6029af663f7"
+   },
+   "reason": "Unhealthy",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 6,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:33:01Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{indexer}",
+    "kind": "Pod",
+    "name": "search-indexer-6f5bbfd655-2w7sz",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042398",
+    "uid": "224a7df2-ce78-45a9-a712-7e78a1c3d5d7"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:34:42Z",
+   "message": "Back-off restarting failed container indexer in pod search-indexer-6f5bbfd655-2w7sz_landlens-dev(224a7df2-ce78-45a9-a712-7e78a1c3d5d7)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:33:01Z",
+    "name": "search-indexer-6f5bbfd655-2w7sz.18e82450e4268917",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042853",
+    "uid": "5133f503-0ceb-49d7-891d-ec76d0f642e5"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  },
+  {
+   "apiVersion": "v1",
+   "count": 7,
+   "eventTime": null,
+   "firstTimestamp": "2026-11-15T06:32:21Z",
+   "involvedObject": {
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{resize}",
+    "kind": "Pod",
+    "name": "thumbnailer-67f758548-nn5sb",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042412",
+    "uid": "ea8e45e1-dd3b-4148-a90b-5274c97d0d9b"
+   },
+   "kind": "Event",
+   "lastTimestamp": "2026-11-15T06:33:51Z",
+   "message": "Back-off restarting failed container resize in pod thumbnailer-67f758548-nn5sb_landlens-dev(ea8e45e1-dd3b-4148-a90b-5274c97d0d9b)",
+   "metadata": {
+    "creationTimestamp": "2026-11-15T06:32:21Z",
+    "name": "thumbnailer-67f758548-nn5sb.18e824478dd006a0",
+    "namespace": "landlens-dev",
+    "resourceVersion": "1042777",
+    "uid": "9379db54-1b0c-45a7-a6ca-741d256b4061"
+   },
+   "reason": "BackOff",
+   "reportingComponent": "kubelet",
+   "reportingInstance": "orbstack",
+   "source": {
+    "component": "kubelet",
+    "host": "orbstack"
+   },
+   "type": "Warning"
+  }
+ ]
+}
