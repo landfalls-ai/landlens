@@ -168,10 +168,13 @@ describe("the pin (D111)", () => {
     await s.settled();
     s.drifted("clickland");
     expect(s.info("clickland").drift).toBe(true);
-    // A pin is bound to its origin: another Clickland is accepted afresh, never under the old pin.
+    // A pin is bound to its origin: another Clickland starts with Tools for Claude off (wave 7 review, M3), and is
+    // accepted afresh when it is turned on, never under the old pin.
     const other = await up(new FakeClickland());
     clickland.set({ url: other.origin, key: CK_READ });
     s.clicklandChanged();
+    expect(s.info("clickland").toSessions).toBe(false);
+    s.set("clickland", { toSessions: true });
     await s.settled();
     expect(s.info("clickland").drift).toBeUndefined();
     expect(s.store.pin("clickland", other.origin)?.origin).toBe(other.origin);
@@ -179,6 +182,7 @@ describe("the pin (D111)", () => {
     // A Check of the old origin can't be accepted for the new one.
     clickland.set({ url: ck.origin, key: CK_READ });
     s.clicklandChanged();
+    s.set("clickland", { toSessions: true });
     await s.settled();
     await s.test("clickland");
     clickland.set({ url: other.origin, key: CK_READ });

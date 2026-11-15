@@ -79,6 +79,25 @@ abstract class FakeBase {
     await new Promise<void>((r) => this.server.close(() => r()));
   }
 
+  private readonly holds = new Map<string, { gate: Promise<void>; after: boolean }>();
+  /**
+   * Hold the next request to this path until the returned function is called: before it is handled, or (`after`, where
+   * a route supports it) once its answer is made but before it is sent, as a slow server would.
+   */
+  hold(path: string, after = false): () => void {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    this.holds.set(path, { gate, after });
+    return release;
+  }
+
+  protected async held(path: string, after: boolean) {
+    const h = this.holds.get(path);
+    if (!h || h.after !== after) return;
+    this.holds.delete(path);
+    await h.gate;
+  }
+
   /** Every request that carried this string anywhere (a header or the body). */
   carrying(secret: string): FamilyRecorded[] {
     return this.requests.filter((r) => Object.values(r.headers).some((v) => v.includes(secret)) || r.body.includes(secret));
@@ -130,6 +149,7 @@ abstract class FakeBase {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) if (typeof v === "string") headers[k] = v;
     this.requests.push({ method: req.method ?? "", path: url.pathname, authorization: req.headers.authorization, headers, body });
+    await this.held(url.pathname, false);
     await this.handle(req, res, url, body);
   }
 }
@@ -290,6 +310,12 @@ export class FakeLandfall extends FakeBase {
   /** Seconds an access token lives (expires_in). */
   expiresIn: number | undefined;
   refuseRefresh = false;
+  /** The scope its token answers grant, whatever was asked (a Landfall that gives more than asked). */
+  grantScope: string | undefined;
+  /** The access token its next answer gives (a token Landlens must refuse). */
+  nextAccess: string | undefined;
+  /** Every pair it issued, in order. */
+  readonly issued: { access: string; refresh: string }[] = [];
   readonly clients = new Map<string, { redirect_uris: string[] }>();
   private readonly codes = new Map<string, { client: string; redirect: string; challenge: string; scope: string }>();
   readonly valid = new Map<string, string>();
@@ -319,11 +345,14 @@ export class FakeLandfall extends FakeBase {
     };
   }
 
-  private issue(scope: string) {
-    const access = `lfa_fake_access_${randomBytes(16).toString("hex")}`;
+  private issue(asked: string) {
+    const scope = this.grantScope ?? asked;
+    const access = this.nextAccess ?? `lfa_fake_access_${randomBytes(16).toString("hex")}`;
+    this.nextAccess = undefined;
     const refresh = `lfa_fake_refresh_${randomBytes(16).toString("hex")}`;
     this.valid.set(access, scope);
     this.refresh.set(refresh, scope);
+    this.issued.push({ access, refresh });
     return { access_token: access, token_type: "Bearer", refresh_token: refresh, scope, ...(this.expiresIn ? { expires_in: this.expiresIn } : {}) };
   }
 
@@ -376,7 +405,9 @@ export class FakeLandfall extends FakeBase {
           const scope = this.refresh.get(f.get("refresh_token") ?? "");
           if (!scope || this.refuseRefresh) return this.json(res, 400, { error: "invalid_grant" });
           this.refresh.delete(f.get("refresh_token")!);
-          return this.json(res, 200, this.issue(scope));
+          const out = this.issue(scope);
+          await this.held(p, true);
+          return this.json(res, 200, out);
         }
         return this.json(res, 400, { error: "unsupported_grant_type" });
       }

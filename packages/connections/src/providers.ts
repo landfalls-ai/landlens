@@ -127,6 +127,40 @@ export function pinnedFetch(origins: readonly string[], base: typeof fetch = fet
   };
 }
 
+/** An answer over the size limit; the read was stopped there. */
+export class TooLarge extends Error {
+  constructor(readonly max: number) {
+    super(`the answer is over ${max} bytes`);
+  }
+}
+
+/**
+ * An answer's body as text, at most `max` bytes: a Content-Length over the limit is refused before reading, and a body
+ * that streams past it is cancelled there (the connection closes), so a server can't fill main's memory.
+ */
+export async function readCapped(r: Response, max: number): Promise<string> {
+  const declared = Number(r.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > max) {
+    await r.body?.cancel().catch(() => {});
+    throw new TooLarge(max);
+  }
+  if (!r.body) return "";
+  const reader = r.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      throw new TooLarge(max);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** One line of text a provider sent, safe for a text node: control, format and separator characters gone, cut. */
 export function oneLine(v: unknown, max = 100): string | undefined {
   if (typeof v !== "string") return undefined;

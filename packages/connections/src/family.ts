@@ -8,7 +8,7 @@
 import { FAMILY_NOTES, familyHttpNote, type FamilyAccount, type Sibling } from "@landlens/contracts";
 import { z } from "zod";
 import { type McpOAuthNotes, type McpOAuthTarget } from "./mcp-oauth.js";
-import { failureKind, oneLine, OriginRefused, pinnedFetch } from "./providers.js";
+import { failureKind, oneLine, OriginRefused, pinnedFetch, readCapped, TooLarge } from "./providers.js";
 
 export const SIBLINGS: readonly Sibling[] = ["clickland", "landflow", "landfall"];
 export const SIBLING_NAME = { clickland: "Clickland", landflow: "Landflow", landfall: "Landfall" } as const satisfies Record<Sibling, string>;
@@ -22,10 +22,22 @@ export class FamilyError extends Error {
   }
 }
 
-/** An address as stored: its origin. Throws if it isn't an http(s) URL. */
+/**
+ * An address as stored: its origin. Throws FamilyError(400) if it isn't an http(s) URL, if URL can't read it, or if URL
+ * reads another host than the one typed (https://1.2.3 is 1.2.0.3, https://0x7f.1 is 127.0.0.1): the card shows the
+ * address the person typed, and a key goes only there.
+ */
 export function originOf(url: string): string {
-  const u = new URL(url);
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new FamilyError(400, FAMILY_NOTES.httpOnlyHere);
+  }
   if ((u.protocol !== "https:" && u.protocol !== "http:") || u.username || u.password) throw new FamilyError(400, FAMILY_NOTES.httpOnlyHere);
+  const typed = /^https?:\/\/([^/]+?)\/?$/i.exec(url)?.[1]?.toLowerCase();
+  const fallback = u.protocol === "https:" ? ":443" : ":80";
+  if (!typed || (typed.endsWith(fallback) ? typed.slice(0, -fallback.length) : typed) !== u.host) throw new FamilyError(400, FAMILY_NOTES.httpOnlyHere);
   return u.origin;
 }
 
@@ -43,7 +55,7 @@ function sentFailed(s: Sibling, err: unknown): FamilyError {
   return k === "answer" ? new FamilyError(502, ANSWER[s], err) : new FamilyError(502, FAMILY_NOTES.unreachable, err);
 }
 
-/** At most this much of an answer is read (who-am-I and health are small). */
+/** At most this much of an answer is read (who-am-I and health are small): a longer one is cut off while it streams. */
 const MAX_ANSWER = 256 * 1024;
 
 /** GET a JSON answer from the sibling. A 401 or 403 is "refused"; any other non-2xx its HTTP sentence. */
@@ -59,11 +71,11 @@ async function getJson(s: Sibling, origin: string, path: string, key: string | u
   if (!r.ok) throw new FamilyError(502, familyHttpNote(SIBLING_NAME[s], r.status));
   let text: string;
   try {
-    text = await r.text();
+    text = await readCapped(r, MAX_ANSWER);
   } catch (err) {
+    if (err instanceof TooLarge) throw new FamilyError(502, ANSWER[s], err);
     throw sentFailed(s, err);
   }
-  if (text.length > MAX_ANSWER) throw new FamilyError(502, ANSWER[s]);
   try {
     return JSON.parse(text);
   } catch {
@@ -139,13 +151,17 @@ export const LANDFALL_NOTES: McpOAuthNotes = {
   unreachable: FAMILY_NOTES.landfallUnreachable,
   denied: FAMILY_NOTES.landfallDenied,
   timeout: FAMILY_NOTES.landfallTimeout,
+  wider: FAMILY_NOTES.landfallWider,
 };
 /** The one scope Landlens asks Landfall for: never `mcp:ack` (D103). */
 export const LANDFALL_SCOPE = "mcp:read";
 
-/** Landfall's hosted connector as an OAuth target: resource `<origin>/mcp`, everything on that origin, read only. */
+/**
+ * Landfall's hosted connector as an OAuth target: resource `<origin>/mcp`, everything on that origin, read only. A
+ * grant of anything beyond `mcp:read` (at sign-in or at a refresh) is revoked and not kept.
+ */
 export function landfallTarget(origin: string): McpOAuthTarget {
-  return { resource: `${origin}/mcp`, origin, clientName: "Landlens", scope: LANDFALL_SCOPE, scopes: ["mcp:read", "mcp:ack"], notes: LANDFALL_NOTES };
+  return { resource: `${origin}/mcp`, origin, clientName: "Landlens", scope: LANDFALL_SCOPE, scopes: [LANDFALL_SCOPE], grantOnly: [LANDFALL_SCOPE], notes: LANDFALL_NOTES };
 }
 
 /**

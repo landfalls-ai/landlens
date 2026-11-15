@@ -8,6 +8,9 @@ import { fakeCrypto, tempFile } from "./helpers.js";
 const ACCESS = `lfa_fake_access_${"a".repeat(32)}`;
 const REFRESH = `lfa_fake_refresh_${"b".repeat(32)}`;
 const client = { client_id: "lfc_fake", issuer: "http://127.0.0.1:3001", redirect_uri: "http://127.0.0.1:5555/callback" };
+const PIN = (origin: string) => ({ origin, hash: "a".repeat(64), tools: { list_workflows: "b".repeat(16) }, read: 1, write: 0 });
+/** The store's own writer: what this store (or an older build of it) would have written, sealed. */
+const writeSealed = (s: FamilyStore, f: unknown) => (s as unknown as { write(f: unknown): void }).write(f);
 
 const store = (available = true) => {
   const file = tempFile("family.json");
@@ -64,13 +67,15 @@ describe("the family's store (D101)", () => {
     expect(s.landflowSecrets()?.triageSecret).toBeUndefined();
   });
 
-  it("Disconnect forgets the blobs, account and scopes; the address, switches and webhook's names stay", () => {
+  it("Disconnect forgets the blobs, account, scopes, switches and accepted listing; the address and webhook's names stay", () => {
     const { s, file } = store();
     s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: { name: "P" }, scopes: ["run"] });
     s.setTriage({ path: "alerts", header: "X-Webhook-Secret", secret: TRIAGE_SECRET });
-    s.setPrefs("landflow", { toSessions: true });
+    s.setPrefs("landflow", { toSessions: true, readsAuto: false });
+    s.setPin("landflow", PIN("http://127.0.0.1:3000"));
     s.remove("landflow");
-    expect(s.info("landflow")).toEqual({ sibling: "landflow", state: "off", url: "http://127.0.0.1:3000", toSessions: true, readsAuto: true, triage: { path: "alerts", header: "X-Webhook-Secret", hasSecret: false } });
+    expect(s.info("landflow")).toEqual({ sibling: "landflow", state: "off", url: "http://127.0.0.1:3000", toSessions: false, readsAuto: true, triage: { path: "alerts", header: "X-Webhook-Secret", hasSecret: false } });
+    expect(s.pin("landflow", "http://127.0.0.1:3000")).toBeUndefined();
     expect(s.landflowSecrets()).toBeUndefined();
     expect(readFileSync(file, "utf8")).not.toMatch(/"key"|"triageSecret"/);
   });
@@ -80,7 +85,7 @@ describe("the family's store (D101)", () => {
     s.saveLandfall({ url: "http://127.0.0.1:3001", access: ACCESS, refresh: REFRESH, client, scopes: ["mcp:read"] });
     s.markExpired();
     expect(s.info("landfall")).toMatchObject({ state: "expired", note: FAMILY_NOTES.landfallExpired });
-    s.setTokens({ access: `${ACCESS}2`, refresh: `${REFRESH}2` });
+    expect(s.setTokens({ access: `${ACCESS}2`, refresh: `${REFRESH}2` }, { origin: "http://127.0.0.1:3001", used: { access: ACCESS, refresh: REFRESH } })).toBe(true);
     expect(s.info("landfall").state).toBe("ready");
   });
 
@@ -110,5 +115,93 @@ describe("the family's store (D101)", () => {
     expect(s.info("landflow").state).toBe("ready");
     expect(s.damaged).toMatch(/family\.json\.damaged-\d+$/);
     expect(s.info("landfall").state).toBe("off");
+  });
+});
+
+describe("Fable's security review of wave 7 part 1, fixed", () => {
+  it("M2: an entry changed by anything but the store doesn't count: its address, a blob from another entry, a pin, a missing seal", () => {
+    const edits: [string, (j: Record<string, Record<string, unknown>>) => void][] = [
+      ["the address", (j) => (j.landflow!.url = "https://evil.example")],
+      ["the switches", (j) => (j.landflow!.toSessions = true)],
+      ["the scopes", (j) => (j.landflow!.scopes = ["admin"])],
+      ["a pin", (j) => (j.landflow!.pin = PIN("http://127.0.0.1:3000"))],
+      ["Landfall's token as Landflow's key", (j) => (j.landflow!.key = j.landfall!.access)],
+      ["the seal gone", (j) => (delete j.landflow!.mac, delete j.landflow!.seal)],
+      ["the whole entry as Landfall's", (j) => (j.landfall = j.landflow!)],
+    ];
+    for (const [what, edit] of edits) {
+      const { s, file } = store();
+      s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: { name: "P" }, scopes: ["run"] });
+      s.saveLandfall({ url: "http://127.0.0.1:3001", access: ACCESS, refresh: REFRESH, client, scopes: ["mcp:read"] });
+      const j = JSON.parse(readFileSync(file, "utf8"));
+      edit(j);
+      writeFileSync(file, JSON.stringify(j));
+      const changed = what === "the whole entry as Landfall's" ? "landfall" : "landflow";
+      expect(s.info(changed).state, what).toBe("off");
+      expect(changed === "landflow" ? s.landflowSecrets() : s.landfallSecrets(), what).toBeUndefined();
+      expect(s.prefs(changed).toSessions, what).toBe(false);
+      expect(s.pin(changed, "http://127.0.0.1:3000"), what).toBeUndefined();
+      expect(s.damaged, what).toMatch(/family\.json\.damaged-\d+$/);
+      // The entry nobody touched is still there, sealed.
+      if (changed === "landflow") expect(s.landfallSecrets()?.access, what).toBe(ACCESS);
+    }
+  });
+
+  it("M2: what leaves for the page is held to D100's shapes, whatever was stored", () => {
+    const { s, file } = store();
+    s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, scopes: ["run"] });
+    const j = JSON.parse(readFileSync(file, "utf8"));
+    j.landflow.account = { name: `Mallory\n${"x".repeat(3990)}`, email: `m@example.com\u202e` };
+    j.landflow.scopes = ["run", "not a scope!", "x".repeat(300)];
+    writeSealed(s, j);
+    const info = s.info("landflow");
+    expect(info.state).toBe("ready");
+    expect(info.account!.name!.length).toBeLessThanOrEqual(100);
+    expect(info.account!.name).not.toMatch(/\n/);
+    expect(info.account!.email).toBe("m@example.com");
+    expect(info.scopes).toEqual(["run"]);
+  });
+
+  it("M1: refreshed tokens are stored only for the sign-in the refresh was made with", () => {
+    const { s } = store();
+    s.saveLandfall({ url: "http://127.0.0.1:3001", access: ACCESS, refresh: REFRESH, client, scopes: ["mcp:read"] });
+    const next = { access: `${ACCESS}2`, refresh: `${REFRESH}2` };
+    // Another server's refresh, or one made with a refresh token that isn't the stored one: not kept.
+    expect(s.setTokens(next, { origin: "http://127.0.0.1:3009", used: { access: ACCESS, refresh: REFRESH } })).toBe(false);
+    expect(s.setTokens(next, { origin: "http://127.0.0.1:3001", used: { access: ACCESS, refresh: `${REFRESH}x` } })).toBe(false);
+    expect(s.landfallSecrets()).toMatchObject({ access: ACCESS, refresh: REFRESH });
+    // After a Disconnect: nothing to put them in.
+    s.remove("landfall");
+    expect(s.setTokens(next, { origin: "http://127.0.0.1:3001", used: { access: ACCESS, refresh: REFRESH } })).toBe(false);
+    expect(s.landfallSecrets()).toBeUndefined();
+  });
+
+  it("M3: another address or another person turns Tools for Claude off and forgets the pin; the same keeps them", () => {
+    const { s } = store();
+    const on = (origin: string) => (s.setPrefs("landflow", { toSessions: true, readsAuto: false }), s.setPin("landflow", PIN(origin)));
+    const fable = { name: "Fable Person", email: "fable@example.com" };
+    s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: fable, scopes: ["run"] });
+    on("http://127.0.0.1:3000");
+    // The same origin and the same person (a new key): kept.
+    s.saveLandflow({ url: "http://127.0.0.1:3000/", key: `lf_${"G".repeat(43)}`, account: fable, scopes: ["run"] });
+    expect(s.prefs("landflow")).toEqual({ toSessions: true, readsAuto: false });
+    expect(s.pin("landflow", "http://127.0.0.1:3000")).toBeDefined();
+    // Another person on the same origin.
+    s.saveLandflow({ url: "http://127.0.0.1:3000", key: LF_KEY, account: { name: "Other", email: "other@example.com" }, scopes: ["run"] });
+    expect(s.prefs("landflow")).toEqual({ toSessions: false, readsAuto: true });
+    expect(s.pin("landflow", "http://127.0.0.1:3000")).toBeUndefined();
+    // Another origin, the same person.
+    on("http://127.0.0.1:3000");
+    s.saveLandflow({ url: "http://127.0.0.1:3010", key: LF_KEY, account: { name: "Other", email: "other@example.com" }, scopes: ["run"] });
+    expect(s.prefs("landflow")).toEqual({ toSessions: false, readsAuto: true });
+    // Landfall names no account: every new sign-in starts over, even at the same origin.
+    s.saveLandfall({ url: "http://127.0.0.1:3001", access: ACCESS, refresh: REFRESH, client, scopes: ["mcp:read"] });
+    s.setPrefs("landfall", { toSessions: true });
+    s.saveLandfall({ url: "http://127.0.0.1:3001", access: `${ACCESS}2`, client, scopes: ["mcp:read"] });
+    expect(s.prefs("landfall").toSessions).toBe(false);
+    // Clickland's are reset by main when its key or origin changes.
+    s.setPrefs("clickland", { toSessions: true, readsAuto: false });
+    s.resetSwitches("clickland");
+    expect(s.prefs("clickland")).toEqual({ toSessions: false, readsAuto: true });
   });
 });

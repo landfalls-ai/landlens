@@ -95,3 +95,54 @@ describe("Landfall's sign-in through McpOAuth", () => {
     expect(await mcpRevoke("http://127.0.0.1:9", [r.access], r.client)).toBe(false);
   });
 });
+
+describe("Fable's security review of wave 7 part 1, fixed", () => {
+  const until = async (f: () => boolean) => {
+    for (let i = 0; i < 300 && !f(); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(f()).toBe(true);
+  };
+
+  it("M4: a Landfall that grants more than mcp:read is refused at sign-in, and both tokens are revoked", async () => {
+    const f = await start();
+    f.grantScope = "mcp:read mcp:ack";
+    await expect(mcpSignIn({ target: landfallTarget(f.origin), open: browser([]), signal: new AbortController().signal })).rejects.toThrow(FAMILY_NOTES.landfallWider);
+    expect(f.issued).toHaveLength(1);
+    expect(f.revoked).toEqual([f.issued[0]!.access, f.issued[0]!.refresh]);
+  });
+
+  it("M4: a refresh that widens the grant marks the sign-in expired, keeps nothing, and revokes what it gave", async () => {
+    const f = await start();
+    const r = await mcpSignIn({ target: landfallTarget(f.origin), open: browser([]), signal: new AbortController().signal });
+    f.grantScope = "mcp:read mcp:ack";
+    const kept: string[] = [];
+    let expired: unknown;
+    await expect(mcpRefresh({ target: landfallTarget(f.origin), client: r.client, tokens: { access: r.access, refresh: r.refresh! }, onTokens: (t) => kept.push(t.access), onExpired: (u) => (expired = u) })).rejects.toThrow(FAMILY_NOTES.landfallWider);
+    expect(kept).toEqual([]);
+    expect(expired).toEqual({ access: r.access, refresh: r.refresh });
+    const wide = f.issued[1]!;
+    await until(() => f.revoked.length === 2);
+    expect(f.revoked).toEqual([wide.access, wide.refresh]);
+  });
+
+  it("L2: Cancel during discovery or registration stops the browser from opening", async () => {
+    const f = await start();
+    const release = f.hold("/mcp/register");
+    const opened: string[] = [];
+    const ac = new AbortController();
+    const signing = mcpSignIn({ target: landfallTarget(f.origin), open: browser(opened), signal: ac.signal });
+    await until(() => f.requests.some((q) => q.path === "/mcp/register"));
+    ac.abort(new Error("cancelled"));
+    release();
+    await expect(signing).rejects.toThrow("cancelled");
+    expect(opened).toEqual([]);
+  });
+
+  it("L6: a refreshed token that isn't one printable line is refused, not stored", async () => {
+    const f = await start();
+    const r = await mcpSignIn({ target: landfallTarget(f.origin), open: browser([]), signal: new AbortController().signal });
+    f.nextAccess = `lfa_fake_access_${"c".repeat(20)}\nX-Injected: 1`;
+    const kept: string[] = [];
+    await expect(mcpRefresh({ target: landfallTarget(f.origin), client: r.client, tokens: { access: r.access, refresh: r.refresh! }, onTokens: (t) => kept.push(t.access), onExpired: () => undefined })).rejects.toThrow(FAMILY_NOTES.landfallAnswer);
+    expect(kept).toEqual([]);
+  });
+});

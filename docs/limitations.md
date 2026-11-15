@@ -191,3 +191,10 @@ person's check reads them), and Ask Claude sends one problem at a time.
   only against the fake. A Landflow key that can change workflows is kept, with a note. Landbright sign-in for
   Landlens itself is not planned until a sibling accepts Landbright tokens (D104). The Land family cards were checked
   at 1024×700. Below the page's 640px container width they have a rule, but no test is narrow enough to reach it.
+  Landfall names no account to Landlens, so every new Landfall sign-in starts with Tools for Claude off, even at the
+  same address (wave 7 review, M3).
+- **Clickland's address is an origin now** (wave 7, D102). Before wave 7 a Clickland behind a path prefix
+  (`https://host/clickland`) was taken and stored; now **Connect Clickland** and its **Test** refuse an address with a
+  path, and a stored one keeps working for graphs only until it is saved again, while the family's who-am-I goes to
+  `<origin>/api/auth/me`. Serve Clickland at its own origin (a host name of its own) instead. The dialog shows the
+  rule's sentence, not why a stored address that worked before is now refused.

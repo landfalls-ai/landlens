@@ -19,6 +19,8 @@ export type Crypto = {
   isEncryptionAvailable(): boolean;
   encryptString(plain: string): Buffer;
   decryptString(encrypted: Buffer): string;
+  /** Electron's backend name on Linux; "basic_text" is a key fixed in the app, not real encryption. */
+  getSelectedStorageBackend?(): string;
 };
 
 /** `console`: the console's origin, for Open in Clickland (wave 7, D118); in clear, no secret. */
@@ -44,13 +46,26 @@ export class ClicklandSettingsStore {
     chmodSync(this.path, 0o600);
   }
 
+  /**
+   * Encryption that is real, as the family's and the connections' stores have it (wave 6 L1, wave 7 review L10): not
+   * on Linux's basic_text backend. A new key isn't stored without it; one stored before is still read.
+   */
+  get canStore(): boolean {
+    if (!this.crypto.isEncryptionAvailable()) return false;
+    try {
+      return this.crypto.getSelectedStorageBackend?.() !== "basic_text";
+    } catch {
+      return true;
+    }
+  }
+
   /** What the renderer may know: the address, whether a key is stored, and the cluster name for a context. */
   view(context?: string): ClicklandSettings {
     const s = this.read();
     return {
       url: s.url ?? DEFAULT_CLICKLAND_URL,
       hasKey: !!s.key,
-      canStore: this.crypto.isEncryptionAvailable(),
+      canStore: this.canStore,
       ...(context ? { cluster: s.clusters?.[context] ?? context } : {}),
     };
   }
@@ -76,7 +91,7 @@ export class ClicklandSettingsStore {
     s.url = input.url;
     if (input.key === undefined && moved) delete s.key; // a stored key never follows the address to another origin
     if (input.key !== undefined) {
-      if (!this.crypto.isEncryptionAvailable()) throw Object.assign(new Error("This machine can't encrypt the key (safeStorage is unavailable), so Landlens won't store it."), { status: 409 });
+      if (!this.canStore) throw Object.assign(new Error("This machine can't encrypt the key (safeStorage is unavailable), so Landlens won't store it."), { status: 409 });
       s.key = this.crypto.encryptString(input.key).toString("base64");
     }
     if (input.cluster) {

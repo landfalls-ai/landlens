@@ -14,11 +14,11 @@
 // From part 2 a ready sibling with "Tools for Claude" on is an upstream on the MCP gateway (remotes(), D107): its own
 // MCP server, with the key or sign-in added here, never in a session's environment. Its reads are Landlens's list, the
 // server's hints and the accepted listing together (D110, D111); its writes always ask (D113).
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { FAMILY_HTTP_HOST, FAMILY_NOTES, familyUrlAllowed, type FamilyInfo, type FamilyList, type McpServerInfo, type McpTest, type McpToolInfo, type Sibling } from "@landlens/contracts";
 import {
   clicklandWho, ConnError, FamilyError, FamilyStore, landfallConnector, landfallTarget, landflowWho, McpOAuth, mcpRefresh, mcpRevoke, mcpSignIn, originOf, siblingHealth,
-  SIBLINGS, type Crypto, type FamilyPin, type McpOAuthUsed, type McpSignIn,
+  SIBLINGS, type Crypto, type FamilyPin, type McpOAuthTokens, type McpOAuthUsed, type McpSignIn, type OAuthClientRecord,
 } from "@landlens/connections";
 import { familyIsRead, familyReadTools, listingDiff, listingHash, rawError, testRemote, toolDigest, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -41,6 +41,8 @@ export function familyOverrides(env: NodeJS.ProcessEnv, packaged: boolean): Fami
 
 type Flow = { id: string; owner: FlowOwner; abort: AbortController };
 type Transient = { state?: "failed"; note?: string };
+/** Landfall's bearer for a request, or the sentence why there is none (L7). */
+type Bearer = { access: string } | { note: string };
 
 /** How long a sibling's listing is used for sessions before it is listed again (as wave 6's D78). */
 export const FAMILY_LISTING_TTL = 10 * 60_000;
@@ -63,7 +65,9 @@ export class FamilyService {
   /** Secrets main holds that aren't stored (yet): a pasted key being checked, a sign-in being saved. */
   private readonly held = new Set<string>();
   /** The one refresh of Landfall's token in flight: a rotating refresh token can be spent only once. */
-  private refreshing: Promise<string | undefined> | undefined;
+  private refreshing: Promise<Bearer> | undefined;
+  /** Clickland's key origin and a hash of its key when the switches were last right for it (M3). */
+  private clicklandWas: string | undefined;
   /** The Clickland key origin a who-am-I was last started for, so a list doesn't start another. */
   private clicklandAsked: string | undefined;
   /** Each sibling server's listing, for sessions (10 minutes) and the pages. */
@@ -89,6 +93,7 @@ export class FamilyService {
     takenNames?: () => string[];
   }) {
     this.store = new FamilyStore(o.file, o.crypto);
+    this.clicklandWas = this.clicklandId();
   }
 
   private get fetch(): typeof fetch {
@@ -122,10 +127,44 @@ export class FamilyService {
     return fail(typeof (err as { status?: unknown })?.status === "number" ? (err as { status: number }).status : 502, answer);
   }
 
-  /** An address the person typed, as its origin, if this build may use it (D102). */
+  /** An address the person typed, as its origin, if this build may use it (D102), and as typed (L4). */
   private origin(url: string): string {
-    if (!familyUrlAllowed(url, this.o.overrides?.httpHosts ?? [])) throw fail(400, FAMILY_NOTES.httpOnlyHere);
-    return originOf(url);
+    if (!this.allowed(url)) throw fail(400, FAMILY_NOTES.httpOnlyHere);
+    try {
+      return originOf(url);
+    } catch {
+      throw fail(400, FAMILY_NOTES.httpOnlyHere);
+    }
+  }
+
+  /** Whether this build may send a secret to an address: at every use, not only when it was typed (M2). */
+  private allowed(url: string | undefined): url is string {
+    return !!url && familyUrlAllowed(url, this.o.overrides?.httpHosts ?? []);
+  }
+
+  /** Landflow's key and webhook secret, only while its stored address is one this build takes (M2). */
+  private landflowSec() {
+    const sec = this.store.landflowSecrets();
+    return sec && this.allowed(sec.url) ? sec : undefined;
+  }
+
+  /** Landfall's tokens and client, only while its stored address is one this build takes (M2). */
+  private landfallSec() {
+    const sec = this.store.landfallSecrets();
+    return sec && this.allowed(sec.url) ? sec : undefined;
+  }
+
+  /** Clickland's key and the origin it was saved for, only while that origin is one this build takes (M2). */
+  private clicklandKey(): { origin: string; key: string } | undefined {
+    const cfg = this.o.clickland.config();
+    const origin = this.o.clickland.keyOrigin();
+    return cfg && this.allowed(origin) ? { origin, key: cfg.key } : undefined;
+  }
+
+  /** Which key Clickland has, as an origin and a hash (never the key itself). */
+  private clicklandId(): string | undefined {
+    const k = this.clicklandKey();
+    return k ? `${k.origin} ${createHash("sha256").update(k.key).digest("hex")}` : undefined;
   }
 
   private refuseIfCantStore() {
@@ -135,8 +174,8 @@ export class FamilyService {
   // ---- What the page may know -------------------------------------------------------------------------------------
 
   private clicklandInfo(): FamilyInfo {
-    const cfg = this.o.clickland.config();
-    const keyOrigin = this.o.clickland.keyOrigin();
+    const cfg = this.clicklandKey();
+    const keyOrigin = cfg?.origin;
     const who = cfg ? this.store.clicklandWho(keyOrigin) : undefined;
     const t = this.transient.clickland;
     const consoleUrl = this.o.clickland.consoleUrl();
@@ -162,7 +201,11 @@ export class FamilyService {
 
   private baseInfo(s: Sibling): FamilyInfo {
     if (s === "clickland") return this.clicklandInfo();
-    const base = this.store.info(s);
+    const stored = this.store.info(s);
+    // A stored address this build doesn't take (another build's LANDLENS_FAMILY_HTTP_HOSTS): off, connect again (M2).
+    const base: FamilyInfo = stored.state === "off" || this.allowed(stored.url)
+      ? stored
+      : { sibling: s, state: "off", url: stored.url, toSessions: stored.toSessions, readsAuto: stored.readsAuto, note: FAMILY_NOTES.httpOnlyHere };
     const t = this.transient[s];
     const connecting = s === "landfall" && !!this.flow;
     return {
@@ -209,14 +252,14 @@ export class FamilyService {
 
   /** Who Clickland's stored key is (D103), kept for the key's origin. */
   private async readClickland(): Promise<void> {
-    const cfg = this.o.clickland.config();
-    const keyOrigin = this.o.clickland.keyOrigin();
-    if (!cfg || !keyOrigin) return;
+    const ck = this.clicklandKey();
+    if (!ck) return;
+    const keyOrigin = ck.origin;
     this.clicklandAsked = keyOrigin;
     try {
-      const who = await clicklandWho(keyOrigin, cfg.key, this.fetch);
+      const who = await clicklandWho(keyOrigin, ck.key, this.fetch);
       // The key changed while it was asked: this answer is another key's.
-      if (this.o.clickland.keyOrigin() !== keyOrigin || this.o.clickland.config()?.key !== cfg.key) return;
+      if (!this.sameClicklandKey(ck)) return;
       this.store.setClicklandWho(keyOrigin, who);
       this.changed("clickland", undefined);
     } catch (err) {
@@ -226,8 +269,21 @@ export class FamilyService {
     }
   }
 
-  /** Clickland's key or address changed (metrics:configure, metrics:disconnect): ask who it is again. */
+  /** Whether Clickland's key and its origin are still these. */
+  private sameClicklandKey(ck: { origin: string; key: string }): boolean {
+    const now = this.clicklandKey();
+    return !!now && now.origin === ck.origin && now.key === ck.key;
+  }
+
+  /**
+   * Clickland's key or address changed (metrics:configure, metrics:disconnect): ask who it is again. Another key or
+   * another origin (or none) turns Tools for Claude off and forgets the accepted listing (M3); the same key at the same
+   * origin (a new cluster name) keeps them.
+   */
   clicklandChanged() {
+    const id = this.clicklandId();
+    if (id === undefined || id !== this.clicklandWas) this.store.resetSwitches("clickland");
+    this.clicklandWas = id;
     this.clicklandAsked = undefined;
     this.store.forgetClicklandWho();
     delete this.transient.clickland;
@@ -254,7 +310,7 @@ export class FamilyService {
     const origin = this.origin(url);
     let use = key;
     if (!use) {
-      const stored = this.store.landflowSecrets();
+      const stored = this.landflowSec();
       if (!stored || stored.url !== origin) throw fail(400, FAMILY_NOTES.keyElsewhere);
       use = stored.key;
     }
@@ -305,6 +361,7 @@ export class FamilyService {
     let got: McpSignIn | undefined;
     let stored = false;
     const open = async (address: string) => {
+      if (flow.abort.signal.aborted) throw flow.abort.signal.reason;
       const u = new URL(address);
       // Only Landfall's own page, on the origin being signed in to.
       if (u.origin !== origin || u.username || u.password || (u.protocol !== "https:" && u.protocol !== "http:")) throw new ConnError(FAMILY_NOTES.landfallElsewhere, 502);
@@ -321,44 +378,42 @@ export class FamilyService {
         this.held.add(r.access);
         if (r.refresh) this.held.add(r.refresh);
         if (flow.abort.signal.aborted) return; // dropped: revoked in finally
+        const replaced = this.landfallSec();
         this.store.saveLandfall({ url: origin, access: r.access, ...(r.refresh ? { refresh: r.refresh } : {}), ...(r.expiresAt ? { expiresAt: r.expiresAt } : {}), client: r.client, scopes: r.scopes });
         stored = true;
+        // A refresh of the last sign-in still in flight is that sign-in's: its answer isn't kept (M1).
+        this.refreshing = undefined;
+        // The sign-in this one replaces is ended at its own server, so no grant is left behind (L1).
+        if (replaced?.client) void this.revokeLandfall(replaced.url, [replaced.access, ...(replaced.refresh ? [replaced.refresh] : [])], replaced.client, "the sign-in this one replaced");
         end();
         this.forgetListing("landfall");
         if (this.store.prefs("landfall").toSessions) this.acceptSoon("landfall");
         this.changed("landfall", undefined);
       } catch (err) {
         end();
+        // Told once (L3): the card and the log here; the starter, if it is still waiting, gets the same answer.
         if (flow.abort.signal.aborted) {
           this.changed("landfall", undefined);
-        } else {
-          const e = this.failure("landfall", err);
-          this.changed("landfall", { state: "failed", note: e.message });
+          throw fail(499, "The sign-in was cancelled.");
         }
-        throw err;
+        const e = this.failure("landfall", err);
+        this.changed("landfall", { state: "failed", note: e.message });
+        throw e;
       } finally {
         // Tokens Landfall gave that weren't stored (cancelled, the window went, the save failed) are revoked at once,
         // best effort, so no grant is left that Landlens can't show or end.
         if (got) {
           const t = got;
-          if (!stored) {
-            void mcpRevoke(origin, [t.access, ...(t.refresh ? [t.refresh] : [])], t.client, this.fetch).then((ok) => {
-              if (!ok) this.say("[family] landfall: a sign-in that wasn't kept couldn't be revoked");
-            }).finally(() => {
-              this.held.delete(t.access);
-              if (t.refresh) this.held.delete(t.refresh);
-            });
-          } else {
+          if (!stored) void this.revokeLandfall(origin, [t.access, ...(t.refresh ? [t.refresh] : [])], t.client, "a sign-in that wasn't kept");
+          else {
             this.held.delete(t.access);
             if (t.refresh) this.held.delete(t.refresh);
           }
         }
       }
     })();
-    await Promise.race([browserAsked, done.then(() => undefined)]).catch((err) => {
-      throw this.failure("landfall", err);
-    });
     done.catch(() => {});
+    await Promise.race([browserAsked, done.then(() => undefined)]);
     return { flow: flow.id };
   }
 
@@ -375,6 +430,37 @@ export class FamilyService {
     if (this.flow && this.flow.owner === owner) this.cancel(this.flow.id, owner);
   }
 
+  /** Revoke Landfall tokens at their own origin, best effort; the log says if it wasn't confirmed. */
+  private revokeLandfall(origin: string, tokens: string[], client: OAuthClientRecord, what: string): Promise<boolean> {
+    for (const t of tokens) this.held.add(t);
+    return mcpRevoke(origin, tokens, client, this.fetch).then((ok) => {
+      if (!ok) this.say(`[family] landfall: ${what} couldn't be revoked`);
+      return ok;
+    }).finally(() => {
+      for (const t of tokens) this.held.delete(t);
+    });
+  }
+
+  /**
+   * New tokens from a refresh, kept only if the sign-in is still the one the refresh was made with (M1); otherwise
+   * revoked at the origin they came from, and the refresh fails.
+   */
+  private keepTokens(origin: string, client: OAuthClientRecord, holding?: Set<string>) {
+    return (t: McpOAuthTokens, used?: McpOAuthUsed) => {
+      const fresh = [t.access, ...(t.refresh ? [t.refresh] : [])];
+      // Held while they are stored (and, for landfallToken, until its log line is written): a keychain error that
+      // echoes them is cut from the log (M6).
+      for (const x of fresh) (this.held.add(x), holding?.add(x));
+      try {
+        if (used && this.store.setTokens(t, { origin, used })) return;
+      } finally {
+        if (!holding) for (const x of fresh) this.held.delete(x);
+      }
+      void this.revokeLandfall(origin, fresh, client, "a refresh that wasn't kept");
+      throw new ConnError(FAMILY_NOTES.landfallChanged, 409);
+    };
+  }
+
   /** A refresh Landfall refused marks the sign-in expired, unless another refresh rotated the tokens first. */
   private expiredIfStill(used: McpOAuthUsed) {
     const s = this.store.landfallSecrets();
@@ -385,32 +471,50 @@ export class FamilyService {
 
   /** Main only: Landfall's bearer, refreshed first if it ran out. One refresh at a time. */
   async landfallBearer(): Promise<string | undefined> {
-    const s = this.store.landfallSecrets();
-    if (!s || this.store.info("landfall").state !== "ready") return undefined;
-    if (s.client && s.refresh && s.expiresAt && s.expiresAt - 60_000 < Date.now()) {
-      if (this.refreshing) return this.refreshing;
-      const client = s.client;
-      const refresh = s.refresh;
-      const run = (async () => {
-        try {
-          const t = await mcpRefresh({
-            target: landfallTarget(s.url), client, tokens: { access: s.access, refresh }, fetch: this.fetch,
-            onTokens: (t) => this.store.setTokens(t),
-            onExpired: (used) => this.expiredIfStill(used),
-          });
-          return t.access;
-        } catch (err) {
-          this.say(`[family] landfall refresh: ${rawError(err)}`);
-          this.o.push(this.info("landfall"));
-          return undefined;
-        } finally {
-          this.refreshing = undefined;
-        }
-      })();
-      this.refreshing = run;
-      return run;
+    const b = await this.landfallToken();
+    return "access" in b ? b.access : undefined;
+  }
+
+  /**
+   * Landfall's bearer, or why there is none (L7): not signed in, ran out (a refused refresh, or a token past its
+   * time with nothing to refresh it), or a refresh that didn't get through.
+   */
+  private async landfallToken(): Promise<Bearer> {
+    const s = this.landfallSec();
+    if (!s) return { note: "Landfall isn't signed in." };
+    if (this.store.info("landfall").state !== "ready") return { note: FAMILY_NOTES.landfallExpired };
+    if (!s.expiresAt || s.expiresAt - 60_000 >= Date.now()) return { access: s.access };
+    if (!s.client || !s.refresh) {
+      if (s.expiresAt > Date.now()) return { access: s.access };
+      this.expiredIfStill({ access: s.access, ...(s.refresh ? { refresh: s.refresh } : {}) });
+      this.o.push(this.info("landfall"));
+      return { note: FAMILY_NOTES.landfallExpired };
     }
-    return s.access;
+    if (this.refreshing) return this.refreshing;
+    const client = s.client;
+    const refresh = s.refresh;
+    const holding = new Set<string>();
+    let run!: Promise<Bearer>;
+    run = (async () => {
+      try {
+        const t = await mcpRefresh({
+          target: landfallTarget(s.url), client, tokens: { access: s.access, refresh }, fetch: this.fetch,
+          onTokens: this.keepTokens(s.url, client, holding),
+          onExpired: (used) => this.expiredIfStill(used),
+        });
+        return { access: t.access };
+      } catch (err) {
+        const raw = (err as { raw?: unknown }).raw;
+        this.say(`[family] landfall refresh: ${rawError(err)}${raw !== undefined ? ` (${rawError(raw)})` : ""}`);
+        this.o.push(this.info("landfall"));
+        return { note: err instanceof ConnError ? err.message : FAMILY_NOTES.landfallUnreachable };
+      } finally {
+        for (const x of holding) this.held.delete(x);
+        if (this.refreshing === run) this.refreshing = undefined;
+      }
+    })();
+    this.refreshing = run;
+    return run;
   }
 
   // ---- Settings, Test, Disconnect -----------------------------------------------------------------------------------
@@ -471,9 +575,9 @@ export class FamilyService {
 
   /** The origin a sibling's server is at, while it is signed in: Clickland's key origin, else the stored one. */
   private serverOrigin(s: Sibling): string | undefined {
-    if (s === "clickland") return this.o.clickland.config() ? this.o.clickland.keyOrigin() : undefined;
-    if (s === "landflow") return this.store.landflowSecrets()?.url;
-    return this.store.landfallSecrets()?.url;
+    if (s === "clickland") return this.clicklandKey()?.origin;
+    if (s === "landflow") return this.landflowSec()?.url;
+    return this.landfallSec()?.url;
   }
 
   /**
@@ -481,17 +585,20 @@ export class FamilyService {
    * refresh Landfall refused marks the sign-in expired.
    */
   private landfallAuth(): McpOAuth | undefined {
-    const sec = this.store.landfallSecrets();
+    const sec = this.landfallSec();
     if (!sec?.client) return undefined;
+    const client = sec.client;
     return new McpOAuth({
-      target: landfallTarget(sec.url), redirectUri: sec.client.redirect_uri, client: sec.client,
+      target: landfallTarget(sec.url), redirectUri: client.redirect_uri, client,
       tokens: { access: sec.access, ...(sec.refresh ? { refresh: sec.refresh } : {}) },
-      // Each use reads the stored tokens, so a refresh made elsewhere is picked up, not spent again.
+      // Each use reads the stored tokens, so a refresh made elsewhere is picked up, not spent again; only while they
+      // are still for this origin.
       load: () => {
-        const now = this.store.landfallSecrets();
-        return now ? { access: now.access, ...(now.refresh ? { refresh: now.refresh } : {}) } : undefined;
+        const now = this.landfallSec();
+        return now && now.url === sec.url ? { access: now.access, ...(now.refresh ? { refresh: now.refresh } : {}) } : undefined;
       },
-      onTokens: (t) => this.store.setTokens(t),
+      onTokens: this.keepTokens(sec.url, client),
+      revoke: (tokens) => this.revokeLandfall(sec.url, tokens, client, "a grant wider than mcp:read"),
       onExpired: (used) => {
         this.expiredIfStill(used);
         this.o.push(this.info("landfall"));
@@ -508,14 +615,14 @@ export class FamilyService {
     if (!origin || this.baseInfo(s).state !== "ready") return undefined;
     const base = { name: s, url: familyMcpUrl(s, origin), origins: [origin] };
     if (s === "clickland") {
-      const cfg = this.o.clickland.config();
-      return cfg ? { ...base, headers: { Authorization: `Bearer ${cfg.key}` } } : undefined;
+      const ck = this.clicklandKey();
+      return ck && ck.origin === origin ? { ...base, headers: { Authorization: `Bearer ${ck.key}` } } : undefined;
     }
     if (s === "landflow") {
-      const sec = this.store.landflowSecrets();
+      const sec = this.landflowSec();
       return sec ? { ...base, headers: { Authorization: `Bearer ${sec.key}` }, noViews: true } : undefined;
     }
-    const sec = this.store.landfallSecrets();
+    const sec = this.landfallSec();
     if (!sec) return undefined;
     const auth = this.landfallAuth();
     return { ...base, noViews: true, ...(auth ? { authProvider: auth } : { headers: { Authorization: `Bearer ${sec.access}` } }) };
@@ -643,9 +750,10 @@ export class FamilyService {
     const who = (a: { name?: string; email?: string; role?: string } | undefined, scopes: string[]) =>
       [a?.name ?? a?.email ?? "a key", a?.role ? `role ${a.role}` : "", scopes.length ? `scopes ${scopes.join(", ")}` : "no scopes"].filter(Boolean).join(" · ");
     if (s === "clickland") {
-      const cfg = this.o.clickland.config();
-      const origin = this.o.clickland.keyOrigin();
-      if (!cfg || !origin) return { ok: false, steps: [{ name: "key", ok: false, detail: "No Clickland key is stored." }] };
+      const ck = this.clicklandKey();
+      if (!ck) return { ok: false, steps: [{ name: "key", ok: false, detail: "No Clickland key is stored." }] };
+      const cfg = ck;
+      const origin = ck.origin;
       await step("health", async () => {
         const h = await siblingHealth("clickland", origin, this.fetch);
         return h.ok ? `ok${h.version ? `, version ${h.version}` : ""}` : "answered, but not ok";
@@ -653,14 +761,15 @@ export class FamilyService {
       const ok = await step("who-am-I", async () => {
         this.clicklandAsked = origin;
         const w = await clicklandWho(origin, cfg.key, this.fetch);
-        this.store.setClicklandWho(origin, w);
+        // The key changed while it was checked: this answer is the old key's, so it isn't kept (L8).
+        if (this.sameClicklandKey(ck)) this.store.setClicklandWho(origin, w);
         return who(w.account, w.scopes);
       });
       this.changed("clickland", ok ? undefined : { ...(steps.at(-1)?.detail === FAMILY_NOTES.clicklandRefused ? { state: "failed" as const } : {}), note: steps.at(-1)!.detail });
       if (ok) return this.withListing(s, steps);
     } else if (s === "landflow") {
-      const sec = this.store.landflowSecrets();
-      if (!sec) return { ok: false, steps: [{ name: "key", ok: false, detail: "Landflow isn't connected." }] };
+      const sec = this.landflowSec();
+      if (!sec) return { ok: false, steps: [{ name: "key", ok: false, detail: this.store.landflowSecrets() ? FAMILY_NOTES.httpOnlyHere : "Landflow isn't connected." }] };
       await step("health", async () => ((await siblingHealth("landflow", sec.url, this.fetch)).ok ? "ok" : "answered, but not ok"));
       this.held.add(sec.key);
       try {
@@ -675,11 +784,11 @@ export class FamilyService {
       this.o.push(this.info("landflow"));
       if (steps.every((x) => x.ok)) return this.withListing(s, steps);
     } else {
-      const sec = this.store.landfallSecrets();
-      if (!sec) return { ok: false, steps: [{ name: "sign-in", ok: false, detail: "Landfall isn't signed in." }] };
+      const sec = this.landfallSec();
+      if (!sec) return { ok: false, steps: [{ name: "sign-in", ok: false, detail: this.store.landfallSecrets() ? FAMILY_NOTES.httpOnlyHere : "Landfall isn't signed in." }] };
       if (await step("connector", async () => (await landfallConnector(sec.url, this.fetch), "its OAuth metadata answers, on its own origin"))) {
-        const token = await this.landfallBearer();
-        if (!token) steps.push({ name: "sign-in", ok: false, detail: FAMILY_NOTES.landfallExpired });
+        const token = await this.landfallToken();
+        if ("note" in token) steps.push({ name: "sign-in", ok: false, detail: token.note });
         else {
           this.o.push(this.info("landfall"));
           return this.withListing(s, steps, true);
@@ -732,11 +841,10 @@ export class FamilyService {
     }
     if (s === "landfall") {
       if (this.flow) this.cancel(this.flow.id, this.flow.owner);
-      const sec = this.store.landfallSecrets();
-      if (sec?.client) {
-        const ok = await mcpRevoke(sec.url, [sec.access, ...(sec.refresh ? [sec.refresh] : [])], sec.client, this.fetch);
-        if (!ok) this.say("[family] landfall: the revocation wasn't confirmed; the stored sign-in is deleted anyway");
-      }
+      // A refresh in flight is this sign-in's: its answer won't be kept, and is revoked when it comes (M1).
+      this.refreshing = undefined;
+      const sec = this.landfallSec();
+      if (sec?.client) await this.revokeLandfall(sec.url, [sec.access, ...(sec.refresh ? [sec.refresh] : [])], sec.client, "the sign-in (deleted anyway)");
     }
     this.store.remove(s);
     delete this.listings[s];

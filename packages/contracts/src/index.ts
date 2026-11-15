@@ -324,7 +324,10 @@ export const TriagePath = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9/_-]{0,119}$/,
 export const TriageHeader = z
   .string()
   .regex(/^[A-Za-z0-9-]{1,64}$/, "not a header name")
-  .refine((h) => !/^(host|cookie|authorization|proxy-authorization|connection|content-(length|type|encoding)|transfer-encoding|idempotency-key|x-landlens-.*)$/i.test(h), "Landlens sets this header itself, or it can't carry the secret");
+  .refine(
+    (h) => !/^(host|cookie|authorization|proxy-authorization|connection|keep-alive|upgrade|expect|te|trailer|origin|forwarded|x-forwarded-.*|content-(length|type|encoding)|transfer-encoding|idempotency-key|x-landlens-.*)$/i.test(h),
+    "Landlens sets this header itself, or it can't carry the secret",
+  );
 /** The webhook's secret: one line of printable characters, no space at either end. */
 export const TriageSecret = z.string().max(400).regex(/^[\x21-\x7e](?:[\x20-\x7e]{0,398}[\x21-\x7e])?$/, "one line of printable characters");
 export type FamilyAccount = { name?: string; email?: string; org?: string; role?: string };
@@ -381,6 +384,8 @@ export const FAMILY_NOTES = {
   landfallTimeout: "The sign-in wasn't finished within 5 minutes. Sign in again.",
   landfallExpired: "Landfall's sign-in ran out. Sign in again.",
   landfallUnreachable: "Couldn't reach Landfall.",
+  landfallWider: "Landfall gave this sign-in more than read access, so Landlens didn't keep it.",
+  landfallChanged: "Landfall's sign-in changed while it was refreshed. Try again.",
   drift: "Its tools changed since you accepted them. Review them, then accept.",
   unaccepted: "Its tools aren't accepted yet. Check them, then accept, so its reads can run without asking.",
   nameTaken: "A server you added on the MCP page has this name, so its tools stay off. Rename that server first.",

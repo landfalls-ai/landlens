@@ -33,6 +33,22 @@ before registering: "Landfall's sign-in named another server, so Landlens stoppe
 tokens at the metadata's `revocation_endpoint` (best effort, 5 s), then forgets them. A refresh that Landfall refuses
 leaves the card at **Sign-in ran out**, with **Sign in again**.
 
+What Landfall gives is held to what Landlens asked for (the wave 7 review of part 1):
+
+- A grant of anything beyond `mcp:read` (a server default, a consent page that lets you tick more) is revoked at
+  once and not kept: "Landfall gave this sign-in more than read access, so Landlens didn't keep it." A refresh that
+  widens the grant is revoked too, and the card goes to **Sign-in ran out**. Linear's target sets no such limit.
+- Refreshed tokens are held to the same shape as a sign-in's (one printable line, 16–2,048 characters).
+- Signing in again revokes the sign-in it replaces, at its own server. A sign-in that wasn't kept (cancelled, the
+  window went, the save failed) is revoked too.
+- A refresh is kept only if the sign-in is still the one it was made with (the same origin and the refresh token it
+  used). A slow answer from the last Landfall, after you signed in to another one or signed out, is revoked at the
+  server it came from, never stored under the new address. Two refreshes never run at once.
+- **Cancel** stops the browser from opening even while discovery and registration are still answering, and the
+  start answers "The sign-in was cancelled." (status 499), with nothing in the log.
+- A refresh that didn't get through says "Couldn't reach Landfall." and leaves the card **Ready**; a token past its
+  time with nothing to refresh it is **Sign-in ran out**.
+
 Landlens never opens a war room itself. It never calls Landfall's `POST /triggers` (nor its timeline or artifact
 routes). Rooms open only through Landflow's triage flow, from part 4. The Landfall card carries that sentence as its
 one fixed row.
@@ -52,8 +68,21 @@ One rule for all three (`FamilyUrl` in the contracts; `ClicklandUrl` is now the 
   no override: forward `landflow-host` port 3000 in Landlens (Forwards) and type `http://127.0.0.1:<port>`. The
   card's help says so.
 
-Main checks the rule again on every request; the window's check is only for the help text. Every request goes only
-to the stored origin, refuses redirects, and has a time limit: 8 s for health and who-am-I. A failure is a fixed
+Main checks the rule again on every request, for a stored address as well as a typed one: an address this build
+doesn't take (one stored by an unpackaged build with `LANDLENS_FAMILY_HTTP_HOSTS`, opened by a build without it) is
+**off** with "Use https, or plain http only to this machine (127.0.0.1, localhost).", no request is made with its
+secret, and you connect again. The window's check is only for the help text. An address is stored as typed: one that
+`URL` reads as another host (`https://1.2.3` is `1.2.0.3`, `https://0x7f.1` is `127.0.0.1`) or can't read at all
+(`https://1.2.3.4.5`) is refused with the same sentence. Every request goes only to the stored origin, refuses
+redirects, and has a time limit: 8 s for health and who-am-I. An answer is read only up to 256 KiB: a longer
+`Content-Length` is refused unread and a longer stream is cut off there.
+
+`localhost` is looked up by the system's resolver (Node doesn't pin it as browsers do). On a Mac it is this machine;
+if your resolver could send it elsewhere, type `127.0.0.1` or `[::1]`.
+
+A failure's sentence for an address with no stored sign-in still names the HTTP status ("Landflow answered HTTP
+404."), which helps with a mistyped address. The page can so learn the status an https address answers to a request
+from main that carries no stored secret ([security.md](security.md#the-land-family), row 3). A failure is a fixed
 sentence, never what the other end sent: "Landflow answered HTTP 502.", "Nothing is listening at that address.",
 "Landflow refused the key.", "Landflow didn't answer in time." The raw error goes only to main's log, with every held
 secret cut out. The sentences are `FAMILY_NOTES` in `packages/contracts/src/index.ts`.
@@ -75,8 +104,23 @@ forgotten when the key or address changes in **Connect Clickland**, and asked ag
 A secret is bound to the origin it was saved for. Connecting Landflow at another address without pasting the key
 again is refused: "Paste the key again: a stored key never follows a new address." Moving the address also drops the
 webhook secret. If `safeStorage` can't encrypt, nothing is stored: "This machine can't encrypt the token, so Landlens
-won't store it." **Disconnect** drops the secrets, the account and the scopes. It keeps the address, the switches and
-the webhook's path and header name, so connecting again is quick.
+won't store it." Clickland's own store has the same rule now: on Linux's `basic_text` backend (a key fixed in the
+app) a new Clickland key isn't stored, and the card says `canStore: false` with the others.
+
+Each entry is sealed: an HMAC-SHA256 over everything in it (the address, account, scopes, switches, accepted listing
+and blobs) under a key made once per entry and kept encrypted beside it, as wave 6 seals its pins. An entry changed by
+anything but Landlens (a sync tool, a restore, another program writing the file) doesn't verify and is moved aside
+with the file, as a damaged one is, so a changed address never gets the key it was bound to. On a machine that can't
+encrypt nothing is sealed, and nothing there decrypts either. What leaves for the page is held to its shape again
+(one line, 100 characters; scopes as words), whatever the file says.
+
+The switches and the accepted listing belong to one sign-in. **Disconnect** drops the secrets, the account, the
+scopes, **Tools for Claude** (off), **Reads run without asking** (back to on) and the accepted listing. It keeps the
+address and the webhook's path and header name, so connecting again is quick. Connecting Landflow at another address
+or as another person (by email, else name) does the same; the same key, or another key of the same person at the
+same address, keeps them. Every new Landfall sign-in starts over, because Landfall doesn't say who signed in. For
+Clickland, another key or another origin in **Connect Clickland** (or its **Disconnect**) turns them off; a new
+cluster name keeps them.
 
 ## The Connections page
 
@@ -191,12 +235,12 @@ left alone. Main's log says what moved.
 
 | Channel | Request → answer |
 |---|---|
-| `family:list` | `{ context? }` → `{ canStore, clickland, landflow, landfall }`, each a `FamilyInfo` |
+| `family:list` | `{ context? }` → `{ canStore, clickland, landflow, landfall }`, each a `FamilyInfo`. `context` is taken and unused so far (the cluster name is per context in Clickland's own dialog) |
 | `family:connect` | `{ sibling: "landflow", url, key? }` → `FamilyInfo`. Without `key`, the stored one is used only for the same origin |
 | `family:signin` | `{ sibling: "landfall", url }` → `{ flow }`. The browser opens. `conn:cancel` ends the flow, and the flow belongs to the window that started it |
 | `family:set` | `{ sibling, toSessions?, readsAuto?, console?, triage? }` → `FamilyInfo`. `console` is Clickland's only and `triage` is Landflow's only; `triage: null` removes the webhook |
 | `family:test` | `{ sibling }` → the check's steps |
-| `family:repin` | `{ sibling }` → `FamilyInfo`. Accepts the listing the last **Check tools** of this origin showed; 409 "Check it first, so you've seen the tools you're accepting." without one |
+| `family:repin` | `{ sibling }` → `FamilyInfo`. Accepts the listing the last **Check tools** of this origin showed; 409 "Check it first, so you've seen the tools you're accepting." without one. Part 2 added it (D105) |
 | `family:disconnect` | `{ sibling }` → `FamilyInfo` |
 | push `family:update` | `FamilyInfo` |
 
@@ -217,7 +261,9 @@ come with their part.
 - `apps/desktop/src/main/family.ts`: `FamilyService`, `familyOverrides`.
 - `ipc.ts`, `index.ts` and the preload list.
 - `apps/desktop/src/renderer/src/FamilyCards.tsx`, the marks in `icons.tsx`, and the styles in `connections.css`.
-- `packages/kube/src/redact.ts` scrubs `lf_…` and `ck_…` shaped keys from what the agent reads.
+- `packages/kube/src/redact.ts` scrubs `lf_…` and `ck_…` shaped keys from what the agent reads. Landfall's connector
+  tokens have no known shape; they never reach a session (the gateway adds them in main), and main's log cuts every
+  token it holds or stores exactly, whatever its shape.
 - Part 2: `packages/mcp-gateway/src/providers/family.ts` (`FAMILY_READS`, `familyIsRead`, the data lines,
   `familyHeld`, `listingDiff`), `providers/index.ts`, `approval.ts` (`toolDigest`, the hint check in `readsOnly`),
   `upstream.ts` (views only for Clickland), `gateway.ts` (reads from the session's listing, no autonomy, the hold);
@@ -239,13 +285,24 @@ sibling, built from the sibling's docs and code. Each records every request and 
 
 Clickland's `/api/search` and traces come with part 3.
 
-- `family.test.ts`: the address rule and its overrides, the key shapes, who-am-I for each sibling, every sentence, a
-  redirect and a timeout.
+- `family.test.ts`: the address rule and its overrides, this machine's odd spellings, an address stored as typed, the
+  key shapes, who-am-I for each sibling (one request, the key only in `Authorization`, `redirect: "error"`), every
+  sentence, a redirect (the server it points at sees nothing) and a timeout, an answer cut off at 256 KiB.
 - `mcp-oauth.test.ts`: Landfall's sign-in asks for `mcp:read` only, the origin pin, a turned-down sign-in, refresh
-  and expiry, and revoke.
+  and expiry, and revoke; a wider grant refused and revoked at sign-in and at a refresh; Cancel during registration
+  opens no browser; a refreshed token with a newline refused.
 - `family-store.test.ts`: encryption and the file's mode, origin binding, no secret in `FamilyInfo`, the webhook,
-  disconnect, damaged files.
-- `apps/desktop/test/family-main.test.ts`: `FamilyService` end to end against the fakes.
+  disconnect, damaged files; the seal (an address, switches, scopes, pin or blob changed in the file, a missing seal,
+  an entry moved to another sibling); shapes on the way out; refreshed tokens kept only for their sign-in; the
+  switches reset by another address, person or sign-in.
+- `apps/desktop/test/family-main.test.ts`: `FamilyService` end to end against the fakes, with the review's cases: a
+  held refresh answering after a sign-in elsewhere or a Disconnect; a stored address another build doesn't take; the
+  switches after another Landflow, Landfall sign-in or Clickland key; one refresh for two bearers; a stale refusal;
+  a sign-in revoked when cancelled after the code exchange or when its save failed; the webhook secret and Landfall's
+  tokens cut from the log when an error echoes them; the replaced sign-in revoked; a cancelled start; addresses read
+  as another host; an unreachable refresh; a Check whose Clickland key changed meanwhile. The fakes can hold a request
+  (before it is handled, or Landfall's refresh after its answer is made), grant a wider scope, and list what they
+  issued.
 - `packages/mcp-gateway/test/family.test.ts` (part 2): the list matches the fakes' reads; the three conditions; the
   session's own hint wins; no autonomy and **Always allow** as once; the hold; the data lines and Clickland's view; a
   changed listing asks for everything; a spec on another origin sends no key. When you have recorded a sibling's

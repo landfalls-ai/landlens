@@ -2,7 +2,7 @@ import { channels, FAMILY_NOTES, familyUrlAllowed, FamilyOrigin, FamilyUrl, Clic
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { clicklandWho, FamilyError, landfallConnector, landflowCan, landflowWho, siblingHealth } from "../src/family.js";
+import { clicklandWho, FamilyError, landfallConnector, landflowCan, landflowWho, originOf, siblingHealth } from "../src/family.js";
 import { CK_READ, CK_WRITE, FakeClickland, FakeLandfall, FakeLandflow, LF_KEY, LF_KEY_ADMIN, LF_KEY_NARROW } from "./fake-family.js";
 
 let stops: (() => Promise<void>)[] = [];
@@ -15,10 +15,10 @@ const up = async <T extends { start(): Promise<T>; stop(): Promise<void> }>(f: T
   stops.push(() => f.stop());
   return f;
 };
-/** A server that answers everything with this status (and, for 3xx, a redirect elsewhere). */
-async function answering(status: number): Promise<string> {
+/** A server that answers everything with this status (and, for 3xx, a redirect to `location`). */
+async function answering(status: number, location = "http://127.0.0.1:9/elsewhere"): Promise<string> {
   const s = createServer((_q, r) => {
-    r.writeHead(status, status >= 300 && status < 400 ? { Location: "http://127.0.0.1:9/elsewhere" } : { "Content-Type": "application/json" });
+    r.writeHead(status, status >= 300 && status < 400 ? { Location: location } : { "Content-Type": "application/json" });
     r.end(status >= 300 && status < 400 ? "" : JSON.stringify({ error: `secret ${LF_KEY}` }));
   });
   await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
@@ -56,6 +56,30 @@ describe("a sibling's address (D102)", () => {
     }
   });
 
+  it("refuses this machine's odd spellings and look-alikes for plain http (M6)", () => {
+    for (const bad of ["http://127.1", "http://2130706433", "http://localhost.", "http://[::ffff:7f00:1]", "http://[0:0:0:0:0:0:0:1]", "http://0.0.0.0", "http://127.0.0.1\n", "http://127.0.0.1.nip.io", "http://[::1]:0", "http://localhost.evil.example"]) {
+      expect(familyUrlAllowed(bad), JSON.stringify(bad)).toBe(false);
+    }
+    expect(familyUrlAllowed("http://LOCALHOST:1")).toBe(true);
+  });
+
+  it("stores the address as typed: one URL reads as another host, or can't read, is refused (L4)", () => {
+    expect(originOf("https://landflow.example:443/")).toBe("https://landflow.example");
+    expect(originOf("http://LOCALHOST:3000")).toBe("http://localhost:3000");
+    expect(originOf("http://[::1]:3000")).toBe("http://[::1]:3000");
+    for (const bad of ["https://1.2.3.4.5", "https://1.2.3", "https://0x7f.1", "https://[0:0:0:0:0:0:0:1]", "http://127.0.0.1:03000", "not a url"]) {
+      const e = (() => {
+        try {
+          originOf(bad);
+        } catch (err) {
+          return err;
+        }
+      })();
+      expect(e, bad).toBeInstanceOf(FamilyError);
+      expect((e as FamilyError).message, bad).toBe(FAMILY_NOTES.httpOnlyHere);
+    }
+  });
+
   it("takes plain http to a listed host only, exactly", () => {
     const hosts = ["landflow-host.landflow-dev.svc.cluster.local"];
     expect(familyUrlAllowed("http://landflow-host.landflow-dev.svc.cluster.local:3000", hosts)).toBe(true);
@@ -86,7 +110,10 @@ describe("key shapes and the channels' schemas", () => {
     expect(TriagePath.safeParse("team/alerts_2").success).toBe(true);
     for (const bad of ["../api/brain/work", "/alerts", "a?b=1", "a%2F..", ""]) expect(TriagePath.safeParse(bad).success, bad).toBe(false);
     expect(TriageHeader.safeParse("X-Webhook-Secret").success).toBe(true);
-    for (const bad of ["Authorization", "authorization", "Host", "Cookie", "X-Landlens-Thing", "Content-Type", "Idempotency-Key", "Bad Header"]) expect(TriageHeader.safeParse(bad).success, bad).toBe(false);
+    for (const bad of ["Authorization", "authorization", "Host", "Cookie", "X-Landlens-Thing", "Content-Type", "Idempotency-Key", "Bad Header", "Expect", "Upgrade", "TE", "Trailer", "Keep-Alive", "Origin", "Forwarded", "X-Forwarded-For", "x-forwarded-host"]) {
+      expect(TriageHeader.safeParse(bad).success, bad).toBe(false);
+    }
+    expect(TriageHeader.safeParse("X-Team-Secret").success).toBe(true);
     expect(TriageSecret.safeParse("s3cret value").success).toBe(true);
     for (const bad of [" lead", "trail ", "two\nlines", "x".repeat(401)]) expect(TriageSecret.safeParse(bad).success, bad).toBe(false);
   });
@@ -151,8 +178,10 @@ describe("who a key is (D103)", () => {
   });
 
   it("refuses a redirect (the key would follow it) and says a slow sibling is slow", async () => {
-    const r = await caught(landflowWho(await answering(307), LF_KEY));
+    const elsewhere = await up(new FakeLandflow());
+    const r = await caught(landflowWho(await answering(307, `${elsewhere.origin}/api/auth/me`), LF_KEY));
     expect(r.message).toBe(FAMILY_NOTES.landflowAnswer);
+    expect(elsewhere.requests).toEqual([]);
     const slow = (async () => {
       throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
     }) as typeof fetch;
@@ -160,13 +189,56 @@ describe("who a key is (D103)", () => {
   });
 
   it("sends the key only to the origin it was given, in the Authorization header, and health with no key", async () => {
-    const seen: { url: string; auth?: string; redirect?: string }[] = [];
-    const f = (async (u: string | URL | Request, init?: RequestInit) => {
-      seen.push({ url: String(u), auth: (init?.headers as Record<string, string>)?.Authorization, redirect: init?.redirect as string });
-      return new Response(JSON.stringify({ status: "ok" }));
+    const seen: { url: string; headers: Record<string, string>; redirect?: string; body?: unknown }[] = [];
+    const recording = (answer: unknown) => (async (u: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(u), headers: { ...(init?.headers as Record<string, string>) }, redirect: init?.redirect as string, body: init?.body });
+      return new Response(JSON.stringify(answer));
     }) as typeof fetch;
-    await siblingHealth("landflow", "http://127.0.0.1:3000", f);
-    expect(seen).toEqual([{ url: "http://127.0.0.1:3000/api/health", redirect: "error" }]);
+    await siblingHealth("landflow", "http://127.0.0.1:3000", recording({ status: "ok" }));
+    expect(seen).toEqual([{ url: "http://127.0.0.1:3000/api/health", headers: { Accept: "application/json" }, redirect: "error", body: undefined }]);
+
+    const asks: [string, (o: string, k: string, f: typeof fetch) => Promise<unknown>, string, unknown][] = [
+      ["landflow", landflowWho, LF_KEY, { user: { name: "P" }, via: "api-key", apiKey: { scopes: ["run"] } }],
+      ["clickland", clicklandWho, CK_READ, { kind: "key", user: { name: "P" }, scopes: ["read"] }],
+    ];
+    for (const [who, ask, key, answer] of asks) {
+      seen.length = 0;
+      await ask("http://127.0.0.1:3000", key, recording(answer));
+      expect(seen, who).toEqual([{ url: "http://127.0.0.1:3000/api/auth/me", headers: { Accept: "application/json", Authorization: `Bearer ${key}` }, redirect: "error", body: undefined }]);
+      // The key is in the Authorization header and nowhere else.
+      const { Authorization: _a, ...rest } = seen[0]!.headers;
+      expect(JSON.stringify([seen[0]!.url, rest, seen[0]!.body]), who).not.toContain(key);
+    }
+  });
+
+  it("L5: an answer is read only up to 256 KiB: a longer stream is cut off, a longer Content-Length refused unread", async () => {
+    let sent = 0;
+    let closed = false;
+    const big = createServer((_q, r) => {
+      r.writeHead(200, { "Content-Type": "application/json" });
+      const chunk = Buffer.alloc(64 * 1024, 0x20);
+      const pump = () => {
+        while (!closed && sent < 64 * 1024 * 1024) {
+          sent += chunk.length;
+          if (!r.write(chunk)) return void r.once("drain", pump);
+        }
+        r.end();
+      };
+      r.on("close", () => (closed = true));
+      pump();
+    });
+    await new Promise<void>((r) => big.listen(0, "127.0.0.1", r));
+    stops.push(() => new Promise<void>((r) => (big.closeAllConnections(), big.close(() => r()))));
+    const at = `http://127.0.0.1:${(big.address() as AddressInfo).port}`;
+    expect((await caught(landflowWho(at, LF_KEY))).message).toBe(FAMILY_NOTES.landflowAnswer);
+    for (let i = 0; i < 100 && !closed; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(closed).toBe(true);
+    expect(sent).toBeLessThan(16 * 1024 * 1024);
+
+    let bodyRead = false;
+    const declared = (async () => new Response(new ReadableStream({ pull: (c) => { bodyRead = true; c.close(); } }, { highWaterMark: 0 }), { headers: { "Content-Length": String(1024 * 1024) } })) as typeof fetch;
+    expect((await caught(landflowWho("http://127.0.0.1:3000", LF_KEY, declared))).message).toBe(FAMILY_NOTES.landflowAnswer);
+    expect(bodyRead).toBe(false);
   });
 });
 

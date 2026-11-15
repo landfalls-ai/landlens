@@ -13,13 +13,13 @@ import { auth, type OAuthClientProvider, type OAuthDiscoveryState } from "@model
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { ConnError } from "./github.js";
 import { openLoopback, LoopbackError, LOOPBACK_TIMEOUT } from "./loopback.js";
-import { failureKind, pinnedFetch } from "./providers.js";
+import { failureKind, pinnedFetch, readCapped } from "./providers.js";
 
 /** The client a sign-in registered, with the loopback redirect it registered. A public client has no secret. */
 export type OAuthClientRecord = { client_id: string; issuer: string; redirect_uri: string };
 
 /** The sentences a sign-in's failures are told in (fixed; the raw error goes to main's log). */
-export type McpOAuthNotes = { answer: string; elsewhere: string; expired: string; unreachable: string; denied: string; timeout: string };
+export type McpOAuthNotes = { answer: string; elsewhere: string; expired: string; unreachable: string; denied: string; timeout: string; wider?: string };
 
 export type McpOAuthTarget = {
   /** The MCP server's address: auth()'s serverUrl, and the `resource` parameter. */
@@ -31,6 +31,11 @@ export type McpOAuthTarget = {
   scope: string;
   /** The scopes kept from a token answer's `scope` (anything else is dropped). */
   scopes: readonly string[];
+  /**
+   * If set, a token answer that grants any scope outside this list is not kept: its tokens are revoked and the sign-in
+   * (or the refresh, which then marks the sign-in expired) fails with `notes.wider`. Landfall's is `mcp:read` (D103).
+   */
+  grantOnly?: readonly string[];
   notes: McpOAuthNotes;
 };
 
@@ -68,6 +73,13 @@ export class McpOAuth implements OAuthClientProvider {
   private saved: OAuthTokens | undefined;
   /** The SDK threw the tokens away because the server refused them (invalidateCredentials "tokens" or "all"). */
   private refused: McpOAuthUsed | undefined;
+  /**
+   * Why the last saveTokens refused what a refresh gave. The SDK swallows a refresh's failure and falls through to
+   * redirectToAuthorization, which throws this instead of "unreachable".
+   */
+  private failed: unknown;
+  /** The revocation of tokens this provider didn't keep, for mcpSignIn to wait on. */
+  revoking: Promise<unknown> | undefined;
 
   constructor(private readonly o: {
     target: McpOAuthTarget;
@@ -80,8 +92,11 @@ export class McpOAuth implements OAuthClientProvider {
     load?: () => { access: string; refresh?: string } | undefined;
     /** Interactive: open the authorization address (already checked). Absent in a session. */
     open?: (url: string) => Promise<void>;
-    onTokens?: (t: McpOAuthTokens) => void;
+    /** New tokens, with the ones they replace (none at a sign-in). Throwing refuses them: they aren't kept. */
+    onTokens?: (t: McpOAuthTokens, used?: McpOAuthUsed) => void;
     onExpired?: (used: McpOAuthUsed) => void;
+    /** Revoke tokens this provider was given and didn't keep (a grant beyond `grantOnly`). */
+    revoke?: (tokens: string[]) => Promise<unknown>;
   }) {
     this.client = o.client;
     if (o.tokens) this.saved = { access_token: o.tokens.access, token_type: "Bearer", ...(o.tokens.refresh ? { refresh_token: o.tokens.refresh } : {}), ...(o.client ? { issuer: o.client.issuer } : {}) };
@@ -141,14 +156,32 @@ export class McpOAuth implements OAuthClientProvider {
   }
 
   saveTokens(t: OAuthTokens) {
-    if (!this.onOrigin(t.issuer)) throw new ConnError(this.o.target.notes.elsewhere, 502);
+    const notes = this.o.target.notes;
+    const used = this.saved ? { access: this.saved.access_token, ...(this.saved.refresh_token ? { refresh: this.saved.refresh_token } : {}) } : undefined;
+    try {
+      if (!this.onOrigin(t.issuer)) throw new ConnError(notes.elsewhere, 502);
+      // One printable line each, at a refresh as at a sign-in: a token is put in a header as it is.
+      if (!OAUTH_TOKEN.test(t.access_token) || (t.refresh_token !== undefined && !OAUTH_TOKEN.test(t.refresh_token))) throw new ConnError(notes.answer, 502);
+      const only = this.o.target.grantOnly;
+      if (only && (t.scope ?? "").split(/\s+/).some((g) => g !== "" && !only.includes(g))) {
+        this.revoking = this.o.revoke?.([t.access_token, ...(t.refresh_token ? [t.refresh_token] : [])]).catch(() => false);
+        // A refresh that widened the grant: the sign-in is over (the old refresh token was spent on it).
+        if (!this.o.open && used) this.o.onExpired?.(used);
+        throw new ConnError(notes.wider ?? notes.answer, 403);
+      }
+      this.o.onTokens?.(this.tokensOf(t), used);
+    } catch (err) {
+      this.failed = err;
+      throw err;
+    }
     this.saved = t;
-    this.o.onTokens?.(this.current()!);
   }
 
   current(): McpOAuthTokens | undefined {
-    const t = this.saved;
-    if (!t) return undefined;
+    return this.saved ? this.tokensOf(this.saved) : undefined;
+  }
+
+  private tokensOf(t: OAuthTokens): McpOAuthTokens {
     const expiresIn = typeof t.expires_in === "number" && t.expires_in > 0 ? t.expires_in : undefined;
     return {
       access: t.access_token,
@@ -166,6 +199,9 @@ export class McpOAuth implements OAuthClientProvider {
 
   async redirectToAuthorization(url: URL) {
     if (!this.o.open) {
+      const failed = this.failed;
+      this.failed = undefined;
+      if (failed) throw failed;
       // Refused, or there was no refresh token to try: expired. Otherwise the SDK swallowed a refresh that didn't get
       // through (offline, a 5xx) and fell through to here: the sign-in stays as it is.
       if (this.refused) this.expire(this.refused);
@@ -202,11 +238,12 @@ export class McpOAuth implements OAuthClientProvider {
 export type McpSignIn = McpOAuthTokens & { client: OAuthClientRecord };
 
 /** A failure as one of the target's sentences. */
-export function oauthNote(err: unknown, notes: McpOAuthNotes): ConnError {
+export function oauthNote(err: unknown, notes: McpOAuthNotes): ConnError & { raw?: unknown } {
   if (err instanceof ConnError) return err;
   if (err instanceof LoopbackError) return new ConnError(err.kind === "timeout" ? notes.timeout : notes.denied, err.kind === "timeout" ? 408 : 403);
   const k = failureKind(err);
-  return new ConnError(k === "elsewhere" ? notes.elsewhere : k === "unreachable" ? notes.unreachable : notes.answer, 502);
+  // The raw error rides along for main's log (which cuts every secret it holds); the page gets the sentence.
+  return Object.assign(new ConnError(k === "elsewhere" ? notes.elsewhere : k === "unreachable" ? notes.unreachable : notes.answer, 502), { raw: err });
 }
 
 /** An access token as Landlens will store it: one printable line. */
@@ -222,9 +259,19 @@ export async function mcpSignIn(o: { target: McpOAuthTarget; open: (url: string)
   const onAbort = () => lb.close();
   o.signal.addEventListener("abort", onAbort, { once: true });
   const notes = o.target.notes;
+  const fetchFn = pinnedFetch([o.target.origin], o.fetch ?? fetch);
+  let provider: McpOAuth | undefined;
   try {
-    const provider = new McpOAuth({ target: o.target, redirectUri: lb.redirectUri, state, open: o.open });
-    const fetchFn = pinnedFetch([o.target.origin], o.fetch ?? fetch);
+    // Cancel stops the browser too: discovery and registration may still be answering when it comes (L2).
+    const open = async (url: string) => {
+      if (o.signal.aborted) throw o.signal.reason;
+      await o.open(url);
+    };
+    const revoke = (tokens: string[]) => {
+      const client = provider?.storedClient();
+      return client ? mcpRevoke(o.target.origin, tokens, client, o.fetch ?? fetch) : Promise.resolve(false);
+    };
+    provider = new McpOAuth({ target: o.target, redirectUri: lb.redirectUri, state, open, revoke });
     const opts = { serverUrl: o.target.resource, scope: o.target.scope, fetchFn };
     const first = await auth(provider, opts);
     if (first !== "REDIRECT") throw new ConnError(notes.answer, 502);
@@ -236,6 +283,7 @@ export async function mcpSignIn(o: { target: McpOAuthTarget; open: (url: string)
     if (!t || !client || !OAUTH_TOKEN.test(t.access) || (t.refresh !== undefined && !OAUTH_TOKEN.test(t.refresh))) throw new ConnError(notes.answer, 502);
     return { ...t, client };
   } catch (err) {
+    await provider?.revoking;
     if (o.signal.aborted) throw o.signal.reason;
     throw oauthNote(err, notes);
   } finally {
@@ -248,8 +296,9 @@ export async function mcpSignIn(o: { target: McpOAuthTarget; open: (url: string)
  * Refresh a stored sign-in if it can be: the SDK's auth() with the stored client and refresh token. A refresh the
  * server refuses calls onExpired with the tokens it was tried with; one that doesn't get through throws unreachable.
  */
-export async function mcpRefresh(o: { target: McpOAuthTarget; client: OAuthClientRecord; tokens: { access: string; refresh?: string }; onTokens: (t: McpOAuthTokens) => void; onExpired: (used: McpOAuthUsed) => void; fetch?: typeof fetch }): Promise<McpOAuthTokens> {
-  const provider = new McpOAuth({ target: o.target, redirectUri: o.client.redirect_uri, client: o.client, tokens: o.tokens, onTokens: o.onTokens, onExpired: o.onExpired });
+export async function mcpRefresh(o: { target: McpOAuthTarget; client: OAuthClientRecord; tokens: { access: string; refresh?: string }; onTokens: (t: McpOAuthTokens, used?: McpOAuthUsed) => void; onExpired: (used: McpOAuthUsed) => void; fetch?: typeof fetch }): Promise<McpOAuthTokens> {
+  const revoke = (tokens: string[]) => mcpRevoke(o.target.origin, tokens, o.client, o.fetch ?? fetch);
+  const provider = new McpOAuth({ target: o.target, redirectUri: o.client.redirect_uri, client: o.client, tokens: o.tokens, onTokens: o.onTokens, onExpired: o.onExpired, revoke });
   try {
     await auth(provider, { serverUrl: o.target.resource, scope: o.target.scope, fetchFn: pinnedFetch([o.target.origin], o.fetch ?? fetch) });
   } catch (err) {
@@ -266,7 +315,7 @@ export async function mcpRefresh(o: { target: McpOAuthTarget; client: OAuthClien
 export async function mcpRevoke(origin: string, tokens: string | string[], client: OAuthClientRecord, base: typeof fetch = fetch): Promise<boolean> {
   const f = pinnedFetch([origin], base, 5_000);
   try {
-    const m = (await (await f(`${origin}/.well-known/oauth-authorization-server`, { headers: { Accept: "application/json" } })).json()) as { revocation_endpoint?: unknown };
+    const m = JSON.parse(await readCapped(await f(`${origin}/.well-known/oauth-authorization-server`, { headers: { Accept: "application/json" } }), 256 * 1024)) as { revocation_endpoint?: unknown };
     if (typeof m.revocation_endpoint !== "string" || new URL(m.revocation_endpoint).origin !== origin) return false;
     let ok = true;
     for (const token of [...new Set(Array.isArray(tokens) ? tokens : [tokens])]) {

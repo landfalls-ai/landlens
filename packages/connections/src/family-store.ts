@@ -5,9 +5,18 @@
 // origin it was read for, so a key saved for another address never shows the old account.
 //
 // A secret is bound to the origin it was saved for: storing another origin drops every secret that wasn't given again.
+// The binding holds against the file too (wave 7 review, M2): each entry is sealed with an HMAC-SHA256 under a key made
+// once per entry and kept encrypted beside it (wave 6's pin seal, store.ts), over everything in the entry. An entry
+// changed by anything but this store (its address, account, scopes, switches, pin or a blob moved from another entry)
+// doesn't verify, and is moved aside with the file like a damaged one. On a machine that can't encrypt, nothing is
+// sealed (nothing there decrypts either).
+//
+// The switches and the accepted listing belong to one sign-in (M3): Disconnect, another address or another account
+// turns Tools for Claude off, Reads run without asking back to on, and forgets the pin.
+//
 // Nothing here is returned to the renderer but FamilyInfo; secrets() is for main alone. A file that doesn't parse, or
 // an entry that isn't what this store writes, is moved aside (family.json.damaged-…) and never written over.
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { FAMILY_NOTES, type FamilyAccount, type FamilyInfo, type Sibling } from "@landlens/contracts";
 import { z } from "zod";
@@ -40,6 +49,10 @@ type Entry = {
   expired?: boolean;
   /** The tool listing the person accepted for its server (D111), for the origin it was listed at. */
   pin?: FamilyPin;
+  /** The seal's key: 32 random bytes, hex, encrypted with safeStorage (base64). */
+  seal?: string;
+  /** HMAC-SHA256 of the sibling and the rest of the entry under the seal's key. */
+  mac?: string;
 };
 /**
  * An accepted listing (D111): its hash (approval.ts listingHash), each tool's short hash by name (for Review's diff),
@@ -73,6 +86,8 @@ const ENTRY = z.object({
     read: z.number().int().min(0).max(500),
     write: z.number().int().min(0).max(500),
   }).strict().optional(),
+  seal: blob.optional(),
+  mac: z.string().regex(/^[0-9a-f]{64}$/).optional(),
 }).strict();
 
 /** Off until the person turns it on (D108); reads run without asking once it is (D110). */
@@ -88,6 +103,27 @@ export function cleanFamilyAccount(a: FamilyAccount | undefined): FamilyAccount 
   }
   return Object.keys(out).length ? out : undefined;
 }
+
+/** JSON with every object's keys in order: the same entry always gives the same text. */
+const canon = (v: unknown): string =>
+  Array.isArray(v)
+    ? `[${v.map(canon).join(",")}]`
+    : v && typeof v === "object"
+      ? `{${Object.keys(v).filter((k) => (v as Record<string, unknown>)[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`).join(",")}}`
+      : JSON.stringify(v);
+
+/** The same person: by email, else by name, as each was cleaned. Unknown on either side is another person. */
+const sameAccount = (a: FamilyAccount | undefined, b: FamilyAccount | undefined) => {
+  const id = (x: FamilyAccount | undefined) => x?.email?.toLowerCase() ?? x?.name;
+  return !!id(a) && id(a) === id(b);
+};
+
+/** Tools for Claude off, Reads run without asking back to on, the accepted listing gone (M3). */
+const resetSwitches = (e: Entry) => {
+  delete e.toSessions;
+  delete e.readsAuto;
+  delete e.pin;
+};
 
 const sameOrigin = (a: string | undefined, b: string | undefined) => {
   try {
@@ -144,7 +180,7 @@ export class FamilyStore {
     for (const [k, v] of Object.entries(s)) {
       if (!(SIBLINGS as readonly string[]).includes(k)) continue;
       const e = ENTRY.safeParse(v);
-      if (e.success) out[k as Sibling] = e.data as Entry;
+      if (e.success && this.holds(k as Sibling, e.data as Entry)) out[k as Sibling] = e.data as Entry;
       else bad = true;
     }
     if (bad) {
@@ -154,7 +190,36 @@ export class FamilyStore {
     return out;
   }
 
+  /** The seal's key for an entry, made (and stored encrypted in it) if it has none and `make`. */
+  private sealKey(e: Entry, make: boolean): Buffer | undefined {
+    const k = this.dec(e.seal);
+    if (k && /^[0-9a-f]{64}$/.test(k)) return Buffer.from(k, "hex");
+    if (!make) return undefined;
+    const fresh = randomBytes(32);
+    e.seal = this.enc(fresh.toString("hex"));
+    return fresh;
+  }
+
+  private mac(s: Sibling, key: Buffer, e: Entry): string {
+    const { seal: _seal, mac: _mac, ...rest } = e;
+    return createHmac("sha256", key).update(`family\0${s}\0${canon(rest)}`).digest("hex");
+  }
+
+  /** Whether an entry read from the file is one this store sealed, unchanged. */
+  private holds(s: Sibling, e: Entry): boolean {
+    if (!this.canStore) return true;
+    const key = e.mac ? this.sealKey(e, false) : undefined;
+    if (!key || !e.mac) return false;
+    return timingSafeEqual(Buffer.from(this.mac(s, key, e), "hex"), Buffer.from(e.mac, "hex"));
+  }
+
   private write(f: File) {
+    if (this.canStore) {
+      for (const s of SIBLINGS) {
+        const e = f[s];
+        if (e) e.mac = this.mac(s, this.sealKey(e, true)!, e);
+      }
+    }
     const tmp = `${this.path}.${randomBytes(8).toString("hex")}.tmp`;
     try {
       writeFileSync(tmp, JSON.stringify(f, null, 2), { mode: 0o600, flag: "wx" });
@@ -200,7 +265,9 @@ export class FamilyStore {
   info(s: "landflow" | "landfall"): FamilyInfo {
     const e = this.read()[s] ?? {};
     const connected = s === "landflow" ? !!e.key : !!e.access;
-    const scopes = connected ? e.scopes : undefined;
+    // Held to D100's shapes as they leave, as well as when they were stored.
+    const scopes = connected && e.scopes ? scopeList(e.scopes) : undefined;
+    const account = connected ? cleanFamilyAccount(e.account) : undefined;
     const base: FamilyInfo = {
       sibling: s,
       state: !connected ? "off" : e.expired ? "expired" : "ready",
@@ -208,7 +275,7 @@ export class FamilyStore {
       toSessions: e.toSessions ?? DEFAULTS.toSessions,
       readsAuto: e.readsAuto ?? DEFAULTS.readsAuto,
       ...(connected && e.method ? { method: e.method } : {}),
-      ...(connected && e.account ? { account: e.account } : {}),
+      ...(account ? { account } : {}),
       ...(scopes ? { scopes } : {}),
     };
     if (s === "landfall") return { ...base, ...(connected && e.expired ? { note: FAMILY_NOTES.landfallExpired } : {}) };
@@ -235,17 +302,19 @@ export class FamilyStore {
 
   /**
    * Store Landflow's key for an origin, with who it is. Another origin than the stored one drops the triage secret
-   * (it was saved for the other address); the webhook's path and header name stay.
+   * (it was saved for the other address); the webhook's path and header name stay. Another origin or another person
+   * than the stored ones also resets the switches and the accepted listing (M3).
    */
   saveLandflow(c: { url: string; key: string; account?: FamilyAccount; scopes: string[] }) {
     if (!this.canStore) throw new FamilyError(409, FAMILY_NOTES.cantStore);
     const key = this.enc(c.key);
     this.update("landflow", (e) => {
+      const account = cleanFamilyAccount(c.account);
       if (!sameOrigin(e.url, c.url)) delete e.triageSecret;
+      if (!sameOrigin(e.url, c.url) || !e.key || !sameAccount(e.account, account)) resetSwitches(e);
       e.url = new URL(c.url).origin;
       e.method = "key";
       e.key = key;
-      const account = cleanFamilyAccount(c.account);
       if (account) e.account = account;
       else delete e.account;
       e.scopes = scopeList(c.scopes);
@@ -283,7 +352,10 @@ export class FamilyStore {
     });
   }
 
-  /** Store a Landfall sign-in for an origin (D103): tokens and client encrypted; the switches stay. */
+  /**
+   * Store a Landfall sign-in for an origin (D103): tokens and client encrypted. Landfall names no account to Landlens,
+   * so a new sign-in can't be shown to be the same person: the switches and the accepted listing start over (M3).
+   */
   saveLandfall(c: { url: string; access: string; refresh?: string; expiresAt?: number; client: OAuthClientRecord; scopes: string[] }) {
     if (!this.canStore) throw new FamilyError(409, FAMILY_NOTES.cantStore);
     const access = this.enc(c.access);
@@ -291,6 +363,7 @@ export class FamilyStore {
     const client = this.enc(JSON.stringify(c.client));
     this.update("landfall", (e) => {
       for (const k of ["account", "scopes", "refresh", "client", "expiresAt", "expired"] as const) delete e[k];
+      resetSwitches(e);
       e.url = new URL(c.url).origin;
       e.method = "oauth";
       e.access = access;
@@ -301,18 +374,26 @@ export class FamilyStore {
     });
   }
 
-  /** A refresh gave Landfall new tokens. */
-  setTokens(t: { access: string; refresh?: string; expiresAt?: number }) {
+  /**
+   * A refresh gave Landfall new tokens: stored only if the sign-in is still the one the refresh was made with (the same
+   * origin, and the refresh token, or else the access token, it used). False if not: the caller revokes them at the
+   * origin they came from (M1), so a slow answer from the last server never lands under another's address.
+   */
+  setTokens(t: { access: string; refresh?: string; expiresAt?: number }, made: { origin: string; used: { access: string; refresh?: string } }): boolean {
     const access = this.enc(t.access);
     const refresh = t.refresh ? this.enc(t.refresh) : undefined;
+    let kept = false;
     this.update("landfall", (e) => {
-      if (!e.access) return;
+      if (!e.access || !sameOrigin(e.url, made.origin)) return;
+      if (made.used.refresh ? this.dec(e.refresh) !== made.used.refresh : this.dec(e.access) !== made.used.access) return;
       e.access = access;
       if (refresh) e.refresh = refresh;
       if (t.expiresAt) e.expiresAt = t.expiresAt;
       else delete e.expiresAt;
       delete e.expired;
+      kept = true;
     });
+    return kept;
   }
 
   markExpired() {
@@ -345,6 +426,13 @@ export class FamilyStore {
     });
   }
 
+  /** Tools for Claude off, Reads run without asking on, no accepted listing: Clickland's key or origin changed (M3). */
+  resetSwitches(s: Sibling) {
+    const e = this.read()[s];
+    if (!e || (e.toSessions === undefined && e.readsAuto === undefined && !e.pin)) return;
+    this.update(s, resetSwitches);
+  }
+
   /** Clickland's key changed: who the old one was no longer counts. */
   forgetClicklandWho() {
     const all = this.read();
@@ -360,7 +448,8 @@ export class FamilyStore {
   clicklandWho(keyOrigin: string | undefined): { account?: FamilyAccount; scopes: string[] } | undefined {
     const e = this.read().clickland;
     if (!e?.keyOrigin || !e.scopes || !sameOrigin(e.keyOrigin, keyOrigin)) return undefined;
-    return { ...(e.account ? { account: e.account } : {}), scopes: e.scopes };
+    const account = cleanFamilyAccount(e.account);
+    return { ...(account ? { account } : {}), scopes: scopeList(e.scopes) };
   }
 
   /** Main only: Landflow's key and webhook secret, decrypted, if its key is stored and decrypts. */
@@ -392,8 +481,9 @@ export class FamilyStore {
   }
 
   /**
-   * Forget a sign-in (D103): every blob, the account and scopes. The address, the switches and the webhook's path and
-   * header name stay; its secret goes.
+   * Forget a sign-in (D103): every blob, the account and scopes, the switches and the accepted listing (M3: they were
+   * the person's choice for that sign-in). The address and the webhook's path and header name stay, for the form; the
+   * webhook's secret goes.
    */
   remove(s: Sibling) {
     const all = this.read();
@@ -401,11 +491,7 @@ export class FamilyStore {
     if (!e) return;
     const next: Entry = {};
     if (e.url) next.url = e.url;
-    if (e.toSessions !== undefined) next.toSessions = e.toSessions;
-    if (e.readsAuto !== undefined) next.readsAuto = e.readsAuto;
     if (e.triage) next.triage = e.triage;
-    // The accepted listing stays, bound to its origin: signing in there again finds a changed listing (D111).
-    if (e.pin) next.pin = e.pin;
     all[s] = next;
     this.write(all);
   }
