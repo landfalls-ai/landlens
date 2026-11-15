@@ -1,9 +1,10 @@
-// Enough Markdown for an agent's answers: paragraphs, headings, lists, code blocks, inline code, bold, italics and
-// links. It builds React elements from text, never HTML, so nothing the agent writes can run in the page.
+// Enough Markdown for an agent's answers: paragraphs, headings, lists, tables, code blocks, inline code, bold,
+// italics and links. It builds React elements from text, never HTML, so nothing the agent writes can run in the page.
 import { Check, Copy } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { Ic } from "./icons";
+import { parseTable, TABLE_MAX, tableStarts, type MdTable } from "./mdTable";
 import { copyText } from "./present";
 
 export function Markdown({ text }: { text: string }) {
@@ -26,6 +27,12 @@ export function Markdown({ text }: { text: string }) {
       i++;
       continue;
     }
+    const table = parseTable(lines, i);
+    if (table) {
+      blocks.push(<Table key={key++} t={table} />);
+      i = table.end;
+      continue;
+    }
     const heading = /^(#{1,4})\s+(.*)$/.exec(line);
     if (heading) {
       blocks.push(<p key={key++} className="md-h">{inline(heading[2]!)}</p>);
@@ -46,12 +53,29 @@ export function Markdown({ text }: { text: string }) {
       continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i]!.trim() && !/^\s*```/.test(lines[i]!) && !/^(#{1,4})\s/.test(lines[i]!) && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i]!)) {
+    while (i < lines.length && lines[i]!.trim() && !/^\s*```/.test(lines[i]!) && !/^(#{1,4})\s/.test(lines[i]!) && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i]!) && !tableStarts(lines, i)) {
       para.push(lines[i++]!);
     }
     blocks.push(<p key={key++}>{inline(para.join(" "))}</p>);
   }
   return <div className="md">{blocks}</div>;
+}
+
+/** A table: scrolls sideways inside the dock; cells use the inline rules, so they stay text. */
+function Table({ t }: { t: MdTable }) {
+  const cols = Math.min(t.head.length, TABLE_MAX.cols);
+  const rows = t.rows.slice(0, TABLE_MAX.rows);
+  const style = (j: number) => (t.align[j] ? { textAlign: t.align[j] } : undefined);
+  const hidden = [t.rows.length > rows.length ? `${t.rows.length - rows.length} more rows` : "", t.head.length > cols ? `${t.head.length - cols} more columns` : ""].filter(Boolean);
+  return (
+    <div className="md-table-wrap" tabIndex={0} role="region" aria-label="Table">
+      <table className="md-table">
+        <thead><tr>{t.head.slice(0, cols).map((h, j) => <th key={j} scope="col" style={style(j)}>{inline(h)}</th>)}</tr></thead>
+        <tbody>{rows.map((r, k) => <tr key={k}>{r.slice(0, cols).map((c, j) => <td key={j} style={style(j)}>{inline(c)}</td>)}</tr>)}</tbody>
+      </table>
+      {hidden.length ? <p className="md-table-more">{hidden.join(" and ")} not shown</p> : null}
+    </div>
+  );
 }
 
 /** A fenced block: horizontal scroll, and a Copy button on hover. */

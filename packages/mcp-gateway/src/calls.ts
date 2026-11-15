@@ -74,6 +74,14 @@ export class CallLog {
     this.emit(c);
   }
 
+  /** How the call got to run (the gateway decided before forwarding it): read, asked, autonomous, preview. */
+  gate(id: string, gate: NonNullable<McpCall["gate"]>) {
+    const c = this.byId.get(id);
+    if (!c || c.gate === gate) return;
+    c.gate = gate;
+    this.emit(c);
+  }
+
   /** Remember an app tool's full result, for its view; only the last MAX_APP_RESULTS. */
   keepResult(id: string, r: AppResult) {
     this.results.set(id, r);

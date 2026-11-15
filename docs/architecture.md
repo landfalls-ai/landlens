@@ -74,6 +74,14 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/mcp-gateway/src/` | The MCP gateway: endpoint, upstreams (in memory, streamable HTTP), approval rules, call log, card pairing ([mcp.md](mcp.md)) |
 | `apps/desktop/src/main/mcp.ts`, `mcp-store.ts`, `app-views.ts` | `McpService` (servers, Test, Preview, views, links), the server store (headers in safeStorage), the `landlens-app:` scheme |
 | `apps/desktop/src/renderer/src/McpPage.tsx`, `AppFrame.tsx`, `app-host.ts`, `mcpStore.ts` | The MCP page and call drawer, a view's frame, the MCP Apps host, the live call log |
+| `packages/connections/src/` | GitHub and Linear sign-in: provider origins (`providers.ts`), the encrypted store, the device flow, Linear's MCP OAuth and the loopback redirect ([connections.md](connections.md)) |
+| `apps/desktop/src/main/connections.ts` | `ConnectionsService`: sign-in flows per window, pasted tokens, test and pin, disconnect, the connections as gateway upstreams (`remotes()`); the development overrides |
+| `packages/mcp-gateway/src/providers/` | Connections' servers on the gateway: reads by the vendor's read-only listing, what the model gets from them |
+| `apps/desktop/src/renderer/src/ConnectionsPage.tsx` | The Connections page: a card per provider (sign-in, level, switches, tools, drift review) |
+| `packages/gcp/src/` | Google Cloud, read-only: gcloud's account and token (`auth.ts`), the pinned GET client (`client.ts`), projects and Cloud Asset search (`assets.ts`), GKE clusters and Landlens's GKE kubeconfig with its exec plugin (`gke.ts`), what Claude may see of a resource (`scrub.ts`), the error sentences (`errors.ts`) ([gcp.md](gcp.md)) |
+| `packages/gcp-mcp/src/` | `landlens-gcp`: the agent's five read-only Google Cloud tools, over a `GcpReader` main gives it |
+| `apps/desktop/src/main/gcp.ts` | `GcpService`: on or off (`gcpMode`, the development overrides), the chosen projects, Claude's switch and the GKE yeses (`gcp.json`), the caches and read limits, the `gcp:*` answers, the GKE catalog entries and how to connect one, the agent's reader, Ask Claude's brief |
+| `apps/desktop/src/renderer/src/GcpPage.tsx` | The Google Cloud page (projects, types, resources), its drawer (Open in Landlens, Ask Claude), the chooser, the Connections card and its switch for Claude |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |
 | `apps/desktop/src/renderer/src/AgentDock.tsx` | The dock: session, transcript, composer |
 | `apps/desktop/src/renderer/src/DockParts.tsx` | The dock's tool groups, wells, plan and permission ask |

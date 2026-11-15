@@ -319,3 +319,50 @@ describe("the MCP gateway", () => {
     expect(none.steps[0]!.detail).toBe("Nothing is listening at that address.");
   });
 });
+
+describe("built-ins as a map: landlens-gcp (wave 6, D93)", () => {
+  /** A stand-in for landlens-gcp: one read-only tool. */
+  const gcpServer = () => {
+    const s = new McpServer({ name: "landlens-gcp", version: "0.1.0" });
+    s.registerTool("gcp_projects", { description: "Chosen projects.", inputSchema: {}, annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: "text", text: "demo-shop" }] }));
+    return s;
+  };
+
+  it("serves it at /mcp/landlens-gcp, allowed whole, and runs its calls without a permit", async () => {
+    const s = await gateway.open({ label: "agent 9 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [], builtins: [{ name: "landlens-gcp", server: gcpServer }] });
+    try {
+      s.bind("acp-9");
+      expect(s.servers().map((x) => [x.name, x.url])).toEqual([["landlens-kube", gateway.url], ["landlens-gcp", `${gateway.url}/landlens-gcp`]]);
+      expect(s.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);
+      const c = await connect(`${gateway.url}/landlens-gcp`, s.token);
+      const r: any = await c.callTool({ name: "gcp_projects", arguments: {} });
+      expect(r.isError).toBeFalsy();
+      expect(r.content[0].text).toBe("demo-shop");
+      await c.close();
+      const call = gateway.log.list().find((x) => x.server === "landlens-gcp" && x.session === "acp-9")!;
+      expect(call.status).toBe("ok");
+      expect((await gateway.autonomyCheck("acp-9", "mcp__landlens-gcp__gcp_projects", {})).ok).toBe(false);
+      // Turned off: it leaves the open session at once.
+      gateway.dropBuiltin("landlens-gcp");
+      expect(s.allow).toEqual(["mcp__landlens-kube"]);
+      const post = await fetch(`${gateway.url}/landlens-gcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${s.token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect(post.status).toBe(404);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("isn't served to a session that wasn't given it, and no remote server may take its name", async () => {
+    const plain = await gateway.open({ label: "agent 10 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [] });
+    try {
+      expect(plain.servers().map((x) => x.name)).toEqual(["landlens-kube"]);
+      const post = await fetch(`${gateway.url}/landlens-gcp`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${plain.token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect(post.status).toBe(404);
+    } finally {
+      await plain.close();
+    }
+    for (const name of ["landlens-gcp", "landlens-kube", "landlens-x"]) {
+      await expect(gateway.open({ label: "x", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [{ name, url: remoteUrl }] })).rejects.toThrow(/bad MCP server name/);
+    }
+  });
+});

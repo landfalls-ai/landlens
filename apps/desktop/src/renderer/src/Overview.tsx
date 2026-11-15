@@ -24,6 +24,9 @@ export function Overview(props: {
   onSettings: () => void;
   health?: ClusterHealth;
   error?: ApiError;
+  /** A namespace is chosen; when not, a 403 means the account can't read across all namespaces. */
+  scoped?: boolean;
+  onNamespace?: (ns: string) => void;
   now: number;
   onOpenList: (resource: "nodes" | "pods" | "deployments", failing?: boolean) => void;
   /** A row opens the problem's drawer on the Problems page (D57). */
@@ -35,6 +38,9 @@ export function Overview(props: {
   const { health: h, now } = props;
   const [range, setRange] = useState<MetricsRange>("1h");
   const usage = useMetrics({ handle: props.handle, scope: "cluster" }, range, props.metricsVersion);
+  if (!h && props.error && props.error.status === 403 && !props.scoped && props.onNamespace) {
+    return <div className="ov"><NamespaceNeeded message={props.error.message} onNamespace={props.onNamespace} /></div>;
+  }
   if (!h && props.error) {
     return (
       <div className="ov">
@@ -239,6 +245,29 @@ function OverviewSkeleton() {
       <div className="skel" style={{ height: 76, borderRadius: 12 }} />
       <div className="tiles">{[0, 1, 2, 3].map((i) => <div key={i} className="skel" style={{ height: 112, borderRadius: 12 }} />)}</div>
       <div className="ov-cols">{[0, 1].map((i) => <div key={i} className="skel" style={{ height: 220, borderRadius: 12 }} />)}</div>
+    </div>
+  );
+}
+
+/**
+ * The account can't list pods across all namespaces (a namespace-limited role, a GKE workload identity): say so in
+ * plain words, and open a namespace it can read. The cluster's own message stays underneath.
+ */
+function NamespaceNeeded(props: { message: string; onNamespace: (ns: string) => void }) {
+  const [ns, setNs] = useState("");
+  const valid = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/.test(ns);
+  return (
+    <div className="notice" role="alert">
+      <Ic icon={Lock} size={15} className="dim" />
+      <div className="notice-body">
+        <strong>Your account can't read the whole cluster.</strong>
+        <p>The Overview reads pods in every namespace, and the cluster refused. Open a namespace you can read, or pick one at the top.</p>
+        <form className="ns-needed" onSubmit={(e) => (e.preventDefault(), valid && props.onNamespace(ns))}>
+          <label className="field"><input aria-label="Namespace" placeholder="namespace" value={ns} spellCheck={false} autoCapitalize="off" onChange={(e) => setNs(e.target.value.trim())} /></label>
+          <button type="submit" className="secondary" disabled={!valid}>Open</button>
+        </form>
+        <p className="dim">{props.message}</p>
+      </div>
     </div>
   );
 }

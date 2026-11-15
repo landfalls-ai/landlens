@@ -31,6 +31,16 @@ export const KubeContext = z.object({
   server: z.string(),
   namespace: z.string().optional(),
   current: z.boolean(),
+  /**
+   * Where the context comes from: your kubeconfig, or a GKE cluster of a Google Cloud project you chose (wave 6, D91),
+   * which Landlens lists from its own kubeconfig in its data folder and never writes to yours.
+   */
+  source: z.enum(["kubeconfig", "gke"]),
+  /** A GKE context's project and location. */
+  project: z.string().optional(),
+  location: z.string().optional(),
+  /** A GKE context you already said yes to connecting (asked once per cluster, D91). */
+  confirmed: z.boolean().optional(),
 });
 export type KubeContext = z.infer<typeof KubeContext>;
 
@@ -171,6 +181,8 @@ export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fat
 
 /** The built-in server's name; no remote server may take it or anything starting with "landlens". */
 export const BUILTIN_MCP_SERVER = "landlens-kube";
+/** Server names Connections serves on the gateway (wave 6): a server you add can't take one. */
+export const RESERVED_MCP_NAMES = ["github", "linear", "landlens-gcp"] as const;
 /** How a remote server is named in Claude Code (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */
 export const McpServerName = z
   .string()
@@ -206,6 +218,169 @@ export const McpServerInput = z.object({
   header: z.object({ name: McpHeaderName, value: McpHeaderValue.optional() }).optional(),
   appOrigins: z.array(McpAppOrigin).max(10).optional(),
 });
+
+// Connections (docs/connections.md, wave 6): Landlens's own sign-in to GitHub and Linear. Tokens come in on
+// conn:token and nothing ever sends one back; the page names a provider, never an address.
+export const ConnProvider = z.enum(["github", "linear"]);
+export type ConnProvider = z.infer<typeof ConnProvider>;
+/** "read": the read-only endpoint is the upstream; "ask": every write asks. Autonomous is per session, never stored. */
+export const ConnMode = z.enum(["read", "ask"]);
+export type ConnMode = z.infer<typeof ConnMode>;
+export type ConnMethod = "device" | "oauth" | "token";
+/** A sign-in in progress (a device code or a browser sign-in), made by main. */
+export const FlowId = z.string().regex(/^fl[A-Za-z0-9_-]{16}$/, "not a flow id");
+/** A GitHub token Landlens accepts pasted: classic (`ghp_…` and the other `gh?_` kinds) or fine-grained. */
+export const GITHUB_TOKEN_SHAPE = /^(gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/;
+/** A Linear API key or OAuth token. */
+export const LINEAR_KEY_SHAPE = /^lin_(api|oauth)_[A-Za-z0-9]{20,255}$/;
+export const ConnTokenInput = z
+  .object({ provider: ConnProvider, token: z.string().min(1).max(400).regex(/^[\x21-\x7e]+$/, "one line of printable characters") })
+  .refine((t) => (t.provider === "github" ? GITHUB_TOKEN_SHAPE : LINEAR_KEY_SHAPE).test(t.token), "not shaped like a token for that provider");
+/** Who a connection signed in as; each field one line, at most 100 characters. */
+export type ConnAccount = { login: string; name?: string; org?: string };
+/** What the renderer may know about a connection: never a token. */
+export type ConnInfo = {
+  provider: ConnProvider;
+  state: "off" | "connecting" | "ready" | "expired" | "failed";
+  method?: ConnMethod;
+  account?: ConnAccount;
+  /** As the provider reported them. */
+  scopes?: string[];
+  mode: ConnMode;
+  /** Its read tools run without asking (D79). */
+  readsAuto: boolean;
+  /** "Give to Claude sessions": a ready connection's tools are served to every agent session (D77). */
+  give: boolean;
+  /** From the last listing (conn:test). */
+  tools?: { read: number; write: number };
+  /** One of CONN_NOTES. */
+  note?: string;
+  /** GitHub: a client id is built in, so the device flow is offered. */
+  canDevice?: boolean;
+};
+/** Every sentence a connection's note can be. */
+export const CONN_NOTES = {
+  cantStore: "This machine can't encrypt the token, so Landlens won't store it.",
+  githubRefused: "GitHub didn't accept the token.",
+  linearRefused: "Linear didn't accept the key.",
+  githubUnreachable: "Couldn't reach GitHub.",
+  linearUnreachable: "Couldn't reach Linear.",
+  githubAnswer: "GitHub's answer wasn't what Landlens expected.",
+  linearAnswer: "Linear's answer wasn't what Landlens expected.",
+  deviceExpired: "The code expired before it was entered. Connect again.",
+  deviceDenied: "The sign-in was turned down at GitHub.",
+  noDevice: "GitHub sign-in needs Landlens's app, which isn't registered yet. Use a token instead.",
+  linearDenied: "The sign-in was turned down at Linear.",
+  linearTimeout: "The sign-in wasn't finished within 5 minutes. Connect again.",
+  linearElsewhere: "Linear's sign-in named another server, so Landlens stopped.",
+  linearExpired: "Linear's sign-in ran out. Connect again.",
+  linearReadScope: "Linear was connected for reading only. Connect again to let Claude ask for writes.",
+  drift: "The tools changed since you accepted them. Look at them, then accept.",
+  unaccepted: "Look at its tools, then accept them, so its reads can run without asking.",
+  readonlyUnproven: "Its read-only endpoint didn't list fewer tools than the full one, so no tool counts as a read and Read only isn't served.",
+  githubNameTaken: "Rename your server named github first.",
+  linearNameTaken: "Rename your server named linear first.",
+} as const;
+export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
+
+// Google Cloud (docs/gcp.md, wave 6 part 4): browse every resource of the projects you choose, read-only, with
+// gcloud's own sign-in. Landlens stores no Google credential; the token stays in main. Names are held to Google's
+// shapes before they go into a path or a query.
+/** A project id: 6–30 lowercase letters, digits and dashes, starting with a letter, not ending in a dash. */
+export const GcpProjectId = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/, "not a project id");
+/** A Cloud Asset type, such as compute.googleapis.com/Instance. */
+export const GcpAssetType = z.string().regex(/^[a-z0-9.-]{1,80}\/[A-Za-z0-9]{1,80}$/, "not an asset type");
+/** A resource's full name: starts with //, at most 1,000 characters, no quote, backslash or control character. */
+export const GcpResourceName = z.string().max(1000).regex(/^\/\/[^"\\\u0000-\u001f\u007f]+$/, "not a resource name");
+/** A Cloud Asset query typed in the page: one line, at most 500 characters. */
+export const GcpQuery = z.string().min(1).max(500).regex(/^[^\u0000-\u001f\u007f]+$/, "one line");
+/** Where Google Cloud stands: off in a development build, gcloud missing, nobody signed in to gcloud, or ready. */
+export type GcpState = "off-dev" | "missing" | "signed-out" | "ready";
+export type GcpStatus = {
+  state: GcpState;
+  /** gcloud's account, when signed in. */
+  account?: string;
+  /** The projects you chose to browse (ids only). */
+  projects: string[];
+  /** "Claude can read these projects" (D93): the landlens-gcp tools in agent sessions. Off by default. */
+  agentRead: boolean;
+  /**
+   * While agentRead: the chosen projects you said yes to, for this account (review of part 5, M3). A project chosen
+   * after that question isn't readable by Claude until main asks again (gcp:agent-read with on).
+   */
+  agentProjects?: string[];
+};
+export type GcpProject = { id: string; name: string; number: string };
+/** One resource as Cloud Asset's search returns it: every string cut to 300 characters, at most 20 labels. */
+export type GcpResource = {
+  name: string;
+  assetType: string;
+  displayName?: string;
+  location?: string;
+  state?: string;
+  createTime?: string;
+  updateTime?: string;
+  parent?: string;
+  labels?: Record<string, string>;
+};
+export type GcpTypeCount = { assetType: string; count: number };
+export type GkeCluster = { project: string; location: string; name: string; status: string; version: string; endpoint: string; context: string };
+/** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
+export const GCP_MCP_SERVER = "landlens-gcp";
+/** What a GKE context needs said once before the first connect (D91); main asks it in a native dialog (part 5, L3). */
+export const CLOUD_CONFIRM = "This is a cloud cluster. Claude will read it, and can change it only through changes you approve.";
+/** cluster:connect's answer when you said no to that question: the page shows nothing for it. */
+export const CLOUD_DECLINED = "You didn't connect the cloud cluster.";
+/** cluster:status: main disconnected a cluster (a GKE cluster whose project you unchose, or gcloud's account changed). */
+export type ClusterStatusEvent = { handle: string; context: string; state: "disconnected"; reason: string };
+/** The most resources Landlens reads in one project (10 pages of 500), and the most one gcp:resources answer holds. */
+export const GCP_MAX_RESOURCES = 5000;
+export const GCP_PAGE = 500;
+
+// The autonomous mode (docs/connections.md, D82–D84): per session, per connection, turned on in the dock, never
+// stored. It covers GitHub and Linear writes only; cluster writes always go through the approval broker.
+/** A GitHub repository as `owner/repo`. */
+export const RepoName = z.string().regex(/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/, "not owner/repo");
+/** A Linear team key, such as ENG. */
+export const TeamKey = z.string().regex(/^[A-Z][A-Z0-9]{0,9}$/, "not a team key");
+/** A branch name as the person types it in the scope sheet (the repository's default branch). */
+export const BranchName = z.string().regex(/^(?!-)[A-Za-z0-9._/-]{1,100}$/, "not a branch name");
+/** Where autonomous writes may go: 1–5 repositories (GitHub, with their default branch), or one team (Linear). */
+export const AutonomyScope = z.object({
+  repos: z.array(RepoName).min(1).max(5).optional(),
+  /** The repositories' default branch, as the person typed it; file writes never go to it, main or master. */
+  branch: BranchName.optional(),
+  team: TeamKey.optional(),
+}).strict();
+export type AutonomyScope = z.infer<typeof AutonomyScope>;
+/** The most autonomous writes in one session per provider, and in any minute (D83). */
+export const AUTONOMY_BUDGET = 20;
+export const AUTONOMY_PER_MINUTE = 5;
+/** Why autonomous ended: Stop, the budget, the tools changed, the session ended, or 3 refusals in a row. */
+export type AutonomyOff = "you" | "budget" | "drift" | "session" | "refused";
+/** A connection's autonomy in one agent session (agent:autonomy, answered and pushed). */
+export type AutonomyState = {
+  session: string;
+  provider: ConnProvider;
+  on: boolean;
+  scope?: AutonomyScope;
+  /** Autonomous writes run in this session, and the most it may run. */
+  used: number;
+  budget: number;
+  offBecause?: AutonomyOff;
+  /** The connection's level for this session: at "read" no write exists, so there is no autonomy to turn on. */
+  mode: ConnMode;
+  /** Why it can't be turned on in this session (its tools changed, or were never accepted). */
+  blocked?: string;
+  /**
+   * Why every write asks in this session even while it is on (review of wave 6 part 5, W1): Google Cloud data was read
+   * in it, through landlens-gcp or a resource the person quoted.
+   */
+  held?: string;
+};
+/** Turn a connection's autonomy on (with its scope) or off, for one session. */
+export const AutonomyRequest = z.object({ session: SessionId, provider: ConnProvider, on: z.boolean(), scope: AutonomyScope.optional() })
+  .refine((r) => !r.on || (r.provider === "github" ? !!r.scope?.repos?.length && r.scope.team === undefined : !!r.scope?.team && r.scope.repos === undefined && r.scope.branch === undefined), "a scope for that provider is needed: GitHub repositories, or one Linear team");
 
 /** A container's name (a DNS label). */
 export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
@@ -296,6 +471,7 @@ export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
+  // A GKE context (D91): main asks "This is a cloud cluster…" itself, in a native dialog, once per cluster (part 5, L3).
   "cluster:connect": z.object({ context: z.string().min(1).max(253) }),
   "cluster:disconnect": z.object({ handle: Handle }),
   "cluster:discovery": z.object({ handle: Handle }),
@@ -390,11 +566,36 @@ export const channels = {
   "mcp:app-call": z.object({ view: McpViewId, name: McpToolName, arguments: z.record(z.string(), z.unknown()).optional() }),
   "mcp:app-close": z.object({ view: McpViewId }),
   "mcp:app-link": z.object({ view: McpViewId, url: z.string().min(1).max(2000) }),
+  // Connections (docs/connections.md). A token comes in on conn:token; no channel sends one back.
+  "conn:list": z.object({}),
+  "conn:github-device": z.object({}),
+  "conn:linear-signin": z.object({ mode: ConnMode }),
+  "conn:token": ConnTokenInput,
+  "conn:cancel": z.object({ flow: FlowId }),
+  "conn:set": z.object({ provider: ConnProvider, mode: ConnMode.optional(), readsAuto: z.boolean().optional(), give: z.boolean().optional() }),
+  "conn:test": z.object({ provider: ConnProvider }),
+  "conn:repin": z.object({ provider: ConnProvider }),
+  "conn:disconnect": z.object({ provider: ConnProvider }),
+  // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
+  // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
+  "agent:autonomy": AutonomyRequest,
+  // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; no channel takes an address or returns a token.
+  "gcp:status": z.object({ fresh: z.boolean().optional() }),
+  "gcp:projects": z.object({ fresh: z.boolean().optional() }),
+  // Ids you can see (checked in main against the project search); "Claude can read" is its own channel (L6 of part 4's review).
+  "gcp:choose": z.object({ projects: z.array(GcpProjectId).max(20) }),
+  // "Claude can read these projects" (D93): turning it on asks you in a native dialog in main.
+  "gcp:agent-read": z.object({ on: z.boolean() }),
+  "gcp:types": z.object({ project: GcpProjectId, fresh: z.boolean().optional() }),
+  "gcp:resources": z.object({ project: GcpProjectId, assetType: GcpAssetType.optional(), query: GcpQuery.optional(), offset: z.number().int().min(0).max(GCP_MAX_RESOURCES).optional() }),
+  "gcp:resource": z.object({ project: GcpProjectId, name: GcpResourceName }),
+  "gcp:clusters": z.object({}),
 } as const;
 export type Channel = keyof typeof channels;
 
 export type Responses = {
-  "catalog:list": { contexts: KubeContext[]; error?: string };
+  /** `gke`: the GKE clusters' projects that couldn't be listed, each with its sentence (D88). */
+  "catalog:list": { contexts: KubeContext[]; error?: string; gke?: { errors: { project: string; message: string }[] } };
   "cluster:connect": ClusterInfo;
   "cluster:disconnect": { ok: true };
   "cluster:discovery": { types: ResourceType[] };
@@ -462,6 +663,28 @@ export type Responses = {
   "mcp:app-call": McpToolResult;
   "mcp:app-close": { ok: true };
   "mcp:app-link": { opened: boolean };
+  "conn:list": ConnList & { gcp: GcpStatus };
+  "conn:github-device": { flow: string; userCode: string; verificationUri: "https://github.com/login/device"; expiresIn: number };
+  "conn:linear-signin": { flow: string };
+  "conn:token": ConnInfo;
+  "conn:cancel": { ok: true };
+  "conn:set": ConnInfo;
+  "conn:test": McpTest;
+  "conn:repin": ConnInfo;
+  "conn:disconnect": ConnInfo;
+  "agent:autonomy": AutonomyState;
+  "gcp:status": GcpStatus;
+  "gcp:projects": { projects: GcpProject[]; cut: boolean };
+  "gcp:choose": GcpStatus;
+  "gcp:agent-read": GcpStatus;
+  /** A project's asset types with their counts, from the cached read; `error` is one fixed sentence (D88). */
+  "gcp:types": { types: GcpTypeCount[]; total: number; cut: boolean; error?: string };
+  /** At most 500 from `offset` into the cached list; `total` is the whole list's length. */
+  "gcp:resources": { items: GcpResource[]; total: number; cut: boolean; error?: string };
+  /** `json`: the resource's own JSON (versionedResources[0].resource), cut at 256 KB. */
+  /** `brief`: what Ask Claude quotes (D94): the fields and the scrubbed JSON, at most 8,000 characters, built in main. */
+  "gcp:resource": { resource: GcpResource; json?: string; cut: boolean; brief?: string };
+  "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
 };
 
 /** A tool as the MCP page shows it. */
@@ -477,12 +700,16 @@ export type McpToolInfo = {
   visibility: ("model" | "app")[];
   /** Arguments it requires. */
   required: string[];
+  /** A connection's write that may run on its own in an autonomous session (D83's allowlist). */
+  routine?: boolean;
 };
 export type McpServerInfo = {
-  /** "landlens-kube" for the built-in server, else its stored id. */
+  /** "landlens-kube" for the built-in server, the provider for a connection, else its stored id. */
   id: string;
   name: string;
   builtin: boolean;
+  /** Served from Connections (wave 6): managed on the Connections page, not edited or removed here ("gcp": landlens-gcp). */
+  connection?: ConnProvider | "gcp";
   url: string;
   /** The header Landlens adds, and whether a value is stored. The value itself never leaves main. */
   header?: { name: string; stored: boolean };
@@ -539,6 +766,11 @@ export type McpCall = {
   app?: string;
   /** For landlens-kube: what it asked the front door. */
   requests: McpFrontDoorRequest[];
+  /**
+   * How a remote server's call got to run (set by the gateway): a read that runs without asking, your yes in the
+   * dock, autonomous (a routine write in scope, wave 6), or Preview on the MCP page.
+   */
+  gate?: "read" | "asked" | "autonomous" | "preview";
 };
 export type McpToolResult = { content: unknown[]; structuredContent?: Record<string, unknown>; isError?: boolean; _meta?: Record<string, unknown> };
 /** A view ready to load: the frame's address on the sandbox origin, and what the host hands the view. */
@@ -728,6 +960,8 @@ export type AgentSessionInfo = {
   mode?: { current: string; available: AgentChoice[] };
   /** Select-type config options (model, effort): current value and choices. */
   options: { id: string; name: string; current: string; choices: AgentChoice[] }[];
+  /** The connections (GitHub, Linear) in this session and their autonomy, which starts off. */
+  autonomy?: AutonomyState[];
 };
 
 /**
@@ -742,6 +976,10 @@ export type AgentPermissionRequest = {
   session: string;
   toolCall: { toolCallId: string; title?: string | null; kind?: string | null; rawInput?: unknown };
   options: { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" }[];
+  /** A connection's tool (GitHub, Linear): the dock shows its mark and its arguments as a table. */
+  provider?: ConnProvider;
+  /** Autonomous was on, and this write asks anyway: why (D82), e.g. "not one of the routine writes". */
+  reason?: string;
 };
 
 /** What a change does to one object. */
@@ -820,7 +1058,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 /** Main → renderer push channels. */
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

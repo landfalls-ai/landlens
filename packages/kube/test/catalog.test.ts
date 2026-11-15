@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { kubeconfigPaths, listContexts } from "../src/catalog.js";
+import { kubeconfigPaths, listContexts, mergeCatalog } from "../src/catalog.js";
 import { withoutSecretValues } from "../src/client.js";
 
 const write = (dir: string, name: string, body: string) => {
@@ -27,8 +27,8 @@ current-context: prod
 `);
     const got = listContexts([a, b, join(dir, "missing")]);
     expect(got).toEqual([
-      { name: "dev", cluster: "dev", user: "me", server: "https://dev:6443", namespace: "apps", current: true },
-      { name: "prod", cluster: "prod", user: "me", server: "https://prod:6443", current: false },
+      { name: "dev", cluster: "dev", user: "me", server: "https://dev:6443", namespace: "apps", current: true, source: "kubeconfig" },
+      { name: "prod", cluster: "prod", user: "me", server: "https://prod:6443", current: false, source: "kubeconfig" },
     ]);
     expect(JSON.stringify(got)).not.toContain("secret-token");
   });
@@ -36,6 +36,26 @@ current-context: prod
   it("uses KUBECONFIG, else ~/.kube/config", () => {
     expect(kubeconfigPaths({ KUBECONFIG: "/a:/b" })).toEqual(["/a", "/b"]);
     expect(kubeconfigPaths({})[0]).toMatch(/\.kube\/config$/);
+  });
+});
+
+describe("mergeCatalog (GKE clusters, wave 6 D91)", () => {
+  const own = (name: string, current = false) => ({ name, cluster: name, user: "me", server: "https://k:6443", current, source: "kubeconfig" as const });
+  const gke = (name: string) => ({ name, cluster: name, user: name, server: "https://203.0.113.9", current: true, source: "gke" as const, project: "demo-shop", location: "us-central1" });
+
+  it("lists your contexts first, then GKE's, never current", () => {
+    const got = mergeCatalog([own("orbstack", true)], [gke("gke_demo-shop_us-central1_shop-prod")]);
+    expect(got.map((c) => `${c.source}:${c.name}:${c.current}`)).toEqual(["kubeconfig:orbstack:true", "gke:gke_demo-shop_us-central1_shop-prod:false"]);
+  });
+
+  it("leaves out a GKE context your kubeconfig already names: yours wins", () => {
+    const got = mergeCatalog([own("gke_demo-shop_us-central1_shop-prod")], [gke("gke_demo-shop_us-central1_shop-prod"), gke("gke_demo-shop_us-east1_batch")]);
+    expect(got.map((c) => c.source)).toEqual(["kubeconfig", "gke"]);
+    expect(got[1]!.name).toBe("gke_demo-shop_us-east1_batch");
+  });
+
+  it("takes only GKE entries from the GKE list", () => {
+    expect(mergeCatalog([], [own("sneaky")])).toEqual([]);
   });
 });
 

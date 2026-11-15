@@ -69,11 +69,26 @@ describe("redactText", () => {
     ["token eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW0ifQ.c2lnbmF0dXJlc2lnbmF0dXJl", "<redacted jwt>"],
     ["key AKIAABCDEFGHIJKLMNOP", "<redacted aws key id>"],
     ["ghp_" + "a".repeat(36), "<redacted github token>"],
+    ["token gho_" + "b".repeat(20), "<redacted github token>"],
+    ["github_pat_11ABCDEFG0" + "c".repeat(30), "<redacted github token>"],
+    ["key lin_api_" + "d".repeat(40), "<redacted linear key>"],
+    ["lin_oauth_" + "e".repeat(32), "<redacted linear key>"],
+    ["gcloud printed ya29.a0AfB_" + "g".repeat(40), "<redacted google token>"],
+    ["maps key AIzaSyA" + "b".repeat(32), "<redacted google api key>"],
+    ["refresh 1//0g" + "c".repeat(60), "<redacted google refresh token>"],
+    ["oauth GOCSPX-" + "d".repeat(28), "<redacted google client secret>"],
     ["password=correcthorse", "password=<redacted>"],
     ['"client_secret": "abcdef123456"', '"client_secret": "<redacted>"'],
     ["-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----", "<redacted private key>"],
   ])("%s", (input, want) => {
     expect(redactText(input)).toContain(want);
+  });
+
+  it("cuts a GitHub token with text glued to its end, and Linear's refresh tokens (Fable's L5)", () => {
+    const gh = "ghp_" + "a".repeat(36);
+    expect(redactText(`${gh}_tail`)).not.toContain(gh);
+    const refresh = "lin_refresh_" + "f".repeat(32);
+    expect(redactText(`refresh ${refresh}`)).toBe("refresh <redacted linear key>");
   });
 
   it("leaves ordinary log lines alone", () => {

@@ -48,12 +48,32 @@ describe("the session fence", () => {
     });
     expect(o.settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__clickland__list_services"]);
   });
+
+  it("allows landlens-gcp whole only by its exact rule, when the gateway gives it (wave 6, D93)", () => {
+    const base = { home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234, path: "/usr/bin" };
+    expect(sessionOptions({ ...base, mcpAllow: ["mcp__landlens-gcp"] }).settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);
+    const loose = sessionOptions({ ...base, mcpAllow: ["mcp__landlens-gcpx", "mcp__landlens-gcp__gcp_projects", "mcp__landlens-g*", "mcp__landlens"] });
+    expect(loose.settings.permissions.allow).toEqual(["mcp__landlens-kube"]);
+    expect(sessionOptions(base).settings.permissions.allow).toEqual(["mcp__landlens-kube"]);
+  });
+
+  it("keeps Landlens's data folder (the GKE kubeconfig is in it) out of the agent's reach: the home folder is denied", () => {
+    const o = sessionOptions({ home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 1, path: "/usr/bin" });
+    expect(o.sandbox.filesystem.denyRead).toContain("/Users/me");
+    expect(o.sandbox.filesystem.allowRead.some((p) => p.includes("Application Support"))).toBe(false);
+    expect(o.sandbox.filesystem.denyRead).toContain("/Users/me/.config/gcloud");
+  });
 });
 
 describe("the Claude Code process's environment", () => {
   it("is an allowlist: none of Landlens's own environment reaches the agent's shell", () => {
     const env = agentEnv({ HOME: "/Users/me", LANG: "en_US.UTF-8", LC_ALL: "C", CLAUDE_CONFIG_DIR: "/c", AWS_SECRET_ACCESS_KEY: "x", GITHUB_TOKEN: "y", KUBECONFIG: "/k", LANDLENS_TOKEN: "z", CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "s", CLAUDE_CODE_MESSAGING_TOKEN: "m" }, { PATH: "/usr/bin" });
     expect(env).toEqual({ HOME: "/Users/me", LANG: "en_US.UTF-8", LC_ALL: "C", CLAUDE_CONFIG_DIR: "/c", PATH: "/usr/bin" });
+  });
+
+  it("carries none of the connections' variables or tokens (wave 6)", () => {
+    const env = agentEnv({ HOME: "/h", GH_TOKEN: "ghp_x", GITHUB_PAT: "p", LINEAR_API_KEY: "lin_api_x", LANDLENS_GITHUB_ENDPOINT: "http://127.0.0.1:1", LANDLENS_LINEAR_ENDPOINT: "http://127.0.0.1:2", LANDLENS_GITHUB_CLIENT_ID: "c", LANDLENS_USER_DATA: "/u" }, { PATH: "/usr/bin" });
+    expect(env).toEqual({ HOME: "/h", PATH: "/usr/bin" });
   });
 });
 

@@ -8,6 +8,21 @@ export type SidecarOptions = {
   context: string;
   /** KUBECONFIG-style list; empty means the default rules (KUBECONFIG or ~/.kube/config). */
   kubeconfig?: string;
+  /**
+   * Variables set over Landlens's own environment (minus its secrets) for this sidecar and the exec plugins client-go
+   * runs from it: a GKE cluster's gets the login PATH, so gcloud finds its Python (D91).
+   */
+  env?: Record<string, string>;
+  /**
+   * `env` is the whole environment, not set over Landlens's (review of part 5, L6): a GKE cluster's sidecar and the
+   * gcloud its exec plugin runs get gcloud's allowlist only (HOME, PATH, CLOUDSDK_*, proxies).
+   */
+  envOnly?: boolean;
+  /**
+   * The sidecar refuses to dial loopback, link-local, unspecified and multicast addresses, checked on the address it
+   * resolved (review of part 5, L1): a GKE cluster's, unless it is the development fake's.
+   */
+  refuseLocal?: boolean;
   startTimeoutMs?: number;
   log?: (line: string) => void;
 };
@@ -30,11 +45,12 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
   const secret = randomBytes(32).toString("hex");
   const args = ["--context", opts.context];
   if (opts.kubeconfig) args.push("--kubeconfig", opts.kubeconfig);
+  if (opts.refuseLocal) args.push("--refuse-local");
   const child: ChildProcess = spawn(opts.binary, args, {
     // stdin stays open as a pipe: its first line is the secret (never the environment, which any same-user process
     // can read with `ps eww`), and when Landlens dies it closes and the sidecar exits.
     stdio: ["pipe", "pipe", "pipe"],
-    env: withoutLandlensSecrets(process.env),
+    env: opts.envOnly ? withoutLandlensSecrets(opts.env ?? {}) : { ...withoutLandlensSecrets(process.env), ...withoutLandlensSecrets(opts.env ?? {}) },
   });
   child.stdin?.on("error", () => {}); // EPIPE if it exits early; `exited` reports that
   child.stdin?.write(secret + "\n");

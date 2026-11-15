@@ -14,23 +14,28 @@ const CHANNELS: readonly Channel[] = [
   "edit:review", "edit:create", "edit:apply", "edit:discard",
   "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
   "helm:list", "helm:get", "search:index", "metrics:prometheus",
+  "conn:list", "conn:github-device", "conn:linear-signin", "conn:token", "conn:cancel", "conn:set", "conn:test", "conn:repin", "conn:disconnect",
+  "agent:autonomy",
+  "gcp:status", "gcp:projects", "gcp:choose", "gcp:agent-read", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */
-function unwrap(err: unknown): Error & { status: number } {
+function unwrap(err: unknown): Error {
   const text = err instanceof Error ? err.message : String(err);
   const m = /(\{"status":\d+,"message":.*\})$/s.exec(text);
   const parsed = m ? (JSON.parse(m[1]!) as { status: number; message: string }) : { status: 500, message: text };
-  return Object.assign(new Error(parsed.message), { status: parsed.status });
+  // contextBridge copies only an Error's message into the page (custom properties such as `status` are dropped), so
+  // the status rides in the message as JSON and the renderer's api.ts reads it back (apiError.ts).
+  return new Error(JSON.stringify({ status: parsed.status, message: parsed.message }));
 }
 
 const bridge: LandlensBridge = {
   async invoke(channel, request) {
-    if (!CHANNELS.includes(channel)) throw Object.assign(new Error(`unknown channel ${channel}`), { status: 400 });
+    if (!CHANNELS.includes(channel)) throw new Error(JSON.stringify({ status: 400, message: `unknown channel ${channel}` }));
     try {
       return await ipcRenderer.invoke(channel, request);
     } catch (err) {

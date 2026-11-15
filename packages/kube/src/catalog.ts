@@ -40,5 +40,15 @@ export function listContexts(paths: string[] = kubeconfigPaths()): KubeContext[]
     server: clusters.get(c.cluster) ?? "",
     ...(c.namespace ? { namespace: c.namespace } : {}),
     current: name === current,
+    source: "kubeconfig" as const,
   }));
+}
+
+/**
+ * Your kubeconfig's contexts, then the GKE clusters of the Google Cloud projects you chose (wave 6, D91). A GKE context
+ * whose name your kubeconfig already has is left out: yours wins, and connecting by that name uses your credentials.
+ */
+export function mergeCatalog(own: KubeContext[], gke: KubeContext[]): KubeContext[] {
+  const names = new Set(own.map((c) => c.name));
+  return [...own, ...gke.filter((c) => c.source === "gke" && !names.has(c.name)).map((c) => ({ ...c, current: false }))];
 }

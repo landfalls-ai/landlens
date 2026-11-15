@@ -14,6 +14,9 @@ import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
+import { connectionOverrides, ConnectionsService } from "./connections";
+import { gcpMode, GcpService } from "./gcp";
+import { loginPath, which } from "@landlens/acp-host";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
@@ -70,14 +73,48 @@ async function start() {
   // series reads from the cluster is read as the session. The usage numbers are Clickland's or the shared sampler's.
   const series = (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">, read?: (path: string) => Promise<any>) =>
     metrics.series({ handle, ...r }, read ? { read } : {});
+  const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
+  // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
+  const connections = new ConnectionsService({
+    file: join(app.getPath("userData"), "connections.json"),
+    crypto: safeStorage,
+    overrides: connectionOverrides(process.env, app.isPackaged),
+    // Only GitHub's device page or an address on Linear's own origin reach this (connections.ts checks).
+    openExternal: (url) => shell.openExternal(url),
+    // Open sessions follow a connection's change at once (M2).
+    push: (info) => {
+      send("conn:update", info);
+      mcp?.connectionChanged(info);
+    },
+    // A server you added under github or linear keeps that name, and the connection stays off.
+    takenNames: () => mcpStore.list().map((s) => s.name),
+    log: (l) => console.log(l),
+  });
+  // Google Cloud (docs/gcp.md): gcloud's sign-in, read-only. An unpackaged build is off unless it has a loopback fake
+  // (LANDLENS_GCP_ENDPOINT, with LANDLENS_GCLOUD for a fake gcloud) or the person set LANDLENS_GCP_REAL=1.
+  const gcp = new GcpService({
+    file: join(app.getPath("userData"), "gcp.json"),
+    gkeDir: join(app.getPath("userData"), "gke"),
+    mode: gcpMode(process.env, app.isPackaged),
+    findGcloud: async () => which("gcloud", await loginPath()),
+    loginPath: () => loginPath(),
+    env: process.env,
+    log: (l) => console.log(l),
+    // gcloud's account changed: the grant to Claude ends, and landlens-gcp leaves open sessions at once (part 5, M3).
+    onAgentOff: () => mcp?.gcpOff(),
+  });
   mcp = new McpService({
-    store: new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage),
+    store: mcpStore,
+    connections,
+    // landlens-gcp (D93): read-only Google Cloud tools for sessions, when you turned "Claude can read" on.
+    gcp: { reader: () => gcp.agentReader((context) => clusters.list().some((c) => c.context === context)) },
     clickland: settings,
     frontDoor,
     clusters,
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     push: (call) => send("mcp:call", call),
+    pushAutonomy: (s) => send("agent:autonomy", s),
     ask: {
       confirm: async ({ message, detail, yes }) => {
         const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
@@ -91,6 +128,7 @@ async function start() {
   await mcp.start();
   registerAppProtocol(mcp.views);
   const gateway = mcp.gateway;
+  const mcpSvc = mcp;
   const agent = new AgentService({
     frontDoor,
     clusters,
@@ -99,6 +137,13 @@ async function start() {
     mcp: mcp.forSessions(),
     onToolCall: (u) => gateway.card(u),
     onPermit: (p) => gateway.permit(p.session, p),
+    // GitHub's and Linear's autonomous mode: main answers a routine write's question only when the gateway's check passes.
+    autonomy: {
+      check: (session, toolName, input) => mcpSvc.autonomyCheck(session, toolName, input),
+      permit: (session, p) => mcpSvc.autonomyPermit(session, p),
+      states: (session) => mcpSvc.autonomyStates(session),
+      gcpQuoted: (session) => gateway.gcpQuoted(session),
+    },
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     history: new AgentHistory(join(app.getPath("userData"), "agent-history.json")),
@@ -115,11 +160,12 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor, connections, gcp);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();
     metrics.stopAll();
+    connections.stop();
     await agent.stop();
     await service.stop();
     await hub.stopAll();

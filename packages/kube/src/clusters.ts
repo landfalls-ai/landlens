@@ -17,6 +17,9 @@ export type Connected = {
   scope?: Map<string, boolean>;
 };
 
+/** `envOnly` and `refuseLocal`: a GKE cluster's (sidecar.ts). */
+export type ConnectOptions = { kubeconfig?: string; env?: Record<string, string>; envOnly?: boolean; refuseLocal?: boolean };
+
 export class ClusterManager {
   private readonly clusters = new Map<string, Connected>();
   /** Connects in flight, by context, so two clicks don't start two sidecars. */
@@ -32,21 +35,29 @@ export class ClusterManager {
     this.goneListeners.push(fn);
   }
 
-  async connect(context: string): Promise<ClusterInfo> {
+  /**
+   * Connect to a context. `opts` is for a context that isn't in your kubeconfig: a GKE cluster's comes from Landlens's
+   * own kubeconfig in its data folder, with the environment its exec plugin needs (wave 6, D91).
+   */
+  async connect(context: string, opts: ConnectOptions = {}): Promise<ClusterInfo> {
     for (const c of this.clusters.values()) if (c.info.context === context) return c.info;
     let p = this.connecting.get(context);
     if (!p) {
-      p = this.start(context).finally(() => this.connecting.delete(context));
+      p = this.start(context, opts).finally(() => this.connecting.delete(context));
       this.connecting.set(context, p);
     }
     return p;
   }
 
-  private async start(context: string): Promise<ClusterInfo> {
+  private async start(context: string, opts: ConnectOptions): Promise<ClusterInfo> {
+    const kubeconfig = opts.kubeconfig ?? this.opts.kubeconfig;
     const sidecar = await startSidecar({
       binary: this.opts.sidecarBinary,
       context,
-      ...(this.opts.kubeconfig ? { kubeconfig: this.opts.kubeconfig } : {}),
+      ...(kubeconfig ? { kubeconfig } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+      ...(opts.envOnly ? { envOnly: true } : {}),
+      ...(opts.refuseLocal ? { refuseLocal: true } : {}),
       ...(this.opts.log ? { log: this.opts.log } : {}),
     });
     const client = new KubeClient(sidecar);

@@ -6,7 +6,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { foldGutter, foldKeymap, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { EditorState, RangeSetBuilder, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { Decoration, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, WidgetType, type DecorationSet } from "@codemirror/view";
+import { Decoration, EditorView, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, WidgetType, type DecorationSet } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
@@ -114,6 +114,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
 
   useEffect(() => {
     const extensions: Extension[] = [
+      // Control and format characters (a bidi override, zero-width) show as marks, never act on the text around them.
+      highlightSpecialChars(),
       lineNumbers(), foldGutter(), highlightActiveLine(), highlightActiveLineGutter(), history(), indentOnInput(),
       search({ top: false }), highlightSelectionMatches(),
       yaml(), syntaxHighlighting(highlight), theme, marksField,

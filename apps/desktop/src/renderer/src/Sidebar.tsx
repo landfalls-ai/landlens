@@ -1,14 +1,14 @@
 // One sidebar: the cluster switcher, the jump row, and the resource nav. Folds to a 52px rail of icons when the
 // drawer and the dock both want room (or on ⌘B).
 import type { ClusterInfo, KubeContext } from "@landlens/contracts";
-import { Check, ChevronDown, ChevronsUpDown, PanelLeft, Search, Shapes, Star } from "lucide-react";
+import { Check, ChevronDown, ChevronsUpDown, Cloud, PanelLeft, Search, Shapes, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Badge } from "./health";
 import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview" | "problems" | "mcp" | "agent" | "helm";
+export type Current = NavItem | "overview" | "problems" | "connections" | "mcp" | "agent" | "helm" | "gcp";
 
 /** A kind's key for pins: `group/resource`. */
 export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
@@ -27,6 +27,8 @@ export function Sidebar(props: {
   onPick: (c: Current) => void;
   onToggle: () => void;
   onSwitch: (context: string) => void;
+  /** The cluster menu opened: the catalog is read again (a GKE cluster may have come or gone). */
+  onMenu?: () => void;
   onJump: () => void;
   /** Kinds pinned under Agent (D39), by navKey. */
   pins: string[];
@@ -41,7 +43,10 @@ export function Sidebar(props: {
   const flyWrap = useRef<HTMLDivElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const seen = useRef(new Set<string>());
-  const tile = clusterTile(cluster.context);
+  // A GKE cluster (D91) goes by its short name, with the cloud tile; its full context is in the title.
+  const gkeNow = (props.contexts ?? []).some((c) => c.name === cluster.context && c.source === "gke");
+  const shortName = gkeNow ? (cluster.context.split("_").at(-1) ?? cluster.context) : cluster.context;
+  const tile = clusterTile(shortName);
 
   // Sections that arrive after discovery start folded unless they are the known ones.
   useEffect(() => {
@@ -190,28 +195,36 @@ export function Sidebar(props: {
         </button>
       </div>
       <div className="switch-wrap" ref={wrap}>
-        <button className="cluster-switch" aria-label={`${cluster.context}, switch cluster`} aria-haspopup="menu" aria-expanded={menu} title={rail ? cluster.context : undefined} onClick={() => setMenu((m) => !m)}>
-          <span className={`cl-tile ${tile.g}`}>{tile.initials}<i className="live" aria-hidden="true" /></span>
+        <button className="cluster-switch" aria-label={`${cluster.context}, switch cluster`} aria-haspopup="menu" aria-expanded={menu} title={rail || gkeNow ? cluster.context : undefined} onClick={() => setMenu((m) => (!m && props.onMenu?.(), !m))}>
+          <span className={`cl-tile ${tile.g}${gkeNow ? " gke" : ""}`}>{gkeNow ? <Ic icon={Cloud} size={13} /> : tile.initials}<i className="live" aria-hidden="true" /></span>
           <span className="cl-text">
-            <span className="cl-name">{cluster.context}</span>
+            <span className="cl-name">{shortName}</span>
             <span className="cl-ver mono">{cluster.version}{props.nodes !== undefined ? ` · ${props.nodes} node${props.nodes === 1 ? "" : "s"}` : ""}</span>
           </span>
           <Ic icon={ChevronsUpDown} size={14} className="cl-chev" />
         </button>
         {menu ? (
           <div className="cluster-menu" role="menu" aria-label="Clusters">
-            <div className="menu-label">Clusters in your kubeconfig</div>
-            {(props.contexts ?? []).map((c) => {
-              const t = clusterTile(c.name);
+            {([["kubeconfig", "Clusters in your kubeconfig"], ["gke", "Google Cloud"]] as const).map(([source, label]) => {
+              const list = (props.contexts ?? []).filter((c) => (c.source ?? "kubeconfig") === source);
+              if (!list.length) return null;
               return (
-                <button key={c.name} role="menuitem" className="cluster-option" onClick={() => {
-                  setMenu(false);
-                  if (c.name !== cluster.context) props.onSwitch(c.name);
-                }}>
-                  <span className={`cl-tile ${t.g}`}>{t.initials}</span>
-                  <span className="name">{c.name}</span>
-                  {c.name === cluster.context ? <Ic icon={Check} size={14} className="check" /> : null}
-                </button>
+                <div key={source} role="group" aria-label={label} style={{ display: "contents" }}>
+                  <div className="menu-label">{label}</div>
+                  {list.map((c) => {
+                    const t = clusterTile(source === "gke" ? (c.name.split("_").at(-1) ?? c.name) : c.name);
+                    return (
+                      <button key={c.name} role="menuitem" className="cluster-option" title={c.name} onClick={() => {
+                        setMenu(false);
+                        if (c.name !== cluster.context) props.onSwitch(c.name);
+                      }}>
+                        <span className={`cl-tile ${t.g}${source === "gke" ? " gke" : ""}`}>{source === "gke" ? <Ic icon={Cloud} size={12} /> : t.initials}</span>
+                        <span className="name">{source === "gke" ? <>{c.name.split("_").at(-1)}<span className="dim small"> · {c.project}</span></> : c.name}</span>
+                        {c.name === cluster.context ? <Ic icon={Check} size={14} className="check" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
               );
             })}
           </div>
@@ -225,6 +238,7 @@ export function Sidebar(props: {
       <nav className="nav">
         {item("overview", "Overview", "overview", props.current === "overview", undefined, () => props.onPick("overview"))}
         {item("problems", "Problems", "problems", props.current === "problems", props.badges.problems, () => props.onPick("problems"))}
+        {item("connections", "Connections", "connections", props.current === "connections", undefined, () => props.onPick("connections"))}
         {item("mcp", "MCP", "mcp", props.current === "mcp", undefined, () => props.onPick("mcp"))}
         {item("agent", "Agent", "agent", props.current === "agent", undefined, () => props.onPick("agent"))}
         {pinned.length ? (
@@ -233,6 +247,10 @@ export function Sidebar(props: {
             {pinned.map((n) => item(`pin:${navKey(n)}`, n.label, n.type.resource, props.current === n, props.badges.byResource[n.type.resource], () => props.onPick(n), n))}
           </div>
         ) : null}
+        <div role="group" aria-label="Cloud" style={{ display: "contents" }}>
+          <div className="nav-sec static"><span>Cloud</span></div>
+          {item("gcp", "Google Cloud", "gcp", props.current === "gcp", undefined, () => props.onPick("gcp"))}
+        </div>
         {props.navError ? <p className="small tone-bad">{props.navError}</p> : null}
         {props.sections.map(([section, items]) => {
           if (section === CUSTOM && rail) return <div key={section} role="group" aria-label={section} style={{ display: "contents" }}>{custom(items)}</div>;

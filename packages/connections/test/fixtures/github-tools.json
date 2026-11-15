@@ -1,0 +1,1753 @@
+{
+ "recorded": false,
+ "note": "HAND-MADE from the vendor's documented tool names (15 November 2026), not a recorded listing. Replace by running scripts/record-provider-tools.mjs with your own token (docs/development.md).",
+ "full": [
+  {
+   "name": "get_me",
+   "description": "Get my user profile",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_file_contents",
+   "description": "Get file or directory contents",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "ref": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_branches",
+   "description": "List branches",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_commits",
+   "description": "List commits",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "sha": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_commit",
+   "description": "Get commit details",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "sha": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "sha"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_tags",
+   "description": "List tags",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_tag",
+   "description": "Get tag details",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "tag": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "tag"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_releases",
+   "description": "List releases",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_latest_release",
+   "description": "Get latest release",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_release_by_tag",
+   "description": "Get a release by tag name",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "tag": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "tag"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_code",
+   "description": "Search code",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_commits",
+   "description": "Search commits",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_repositories",
+   "description": "Search repositories",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_repository_collaborators",
+   "description": "List repository collaborators",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "issue_read",
+   "description": "Get issue details",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "issue_number",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issues",
+   "description": "List issues",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_issues",
+   "description": "Search issues",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issue_types",
+   "description": "List available issue types",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_label",
+   "description": "Get a specific label",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "name"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "pull_request_read",
+   "description": "Get details for a single pull request",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_pull_requests",
+   "description": "List pull requests",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_pull_requests",
+   "description": "Search pull requests",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "actions_list",
+   "description": "List workflows, runs, jobs and artifacts",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "actions_get",
+   "description": "Get details of Actions resources",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     },
+     "resource_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method",
+     "resource_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_job_logs",
+   "description": "Get workflow job logs",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "job_id": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "create_branch",
+   "description": "Create branch",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "branch": {
+      "type": "string"
+     },
+     "from_branch": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "branch"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "create_or_update_file",
+   "description": "Create or update file",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "content": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "branch": {
+      "type": "string"
+     },
+     "sha": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "path",
+     "content",
+     "message",
+     "branch"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "push_files",
+   "description": "Push files to repository",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "branch": {
+      "type": "string"
+     },
+     "files": {
+      "type": "array"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "branch",
+     "files",
+     "message"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "delete_file",
+   "description": "Delete file",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     },
+     "branch": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "path",
+     "message",
+     "branch"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "create_repository",
+   "description": "Create repository",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "private": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "name"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "delete_repository",
+   "description": "Delete repository",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "fork_repository",
+   "description": "Fork repository",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "issue_write",
+   "description": "Create or update issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "title": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "add_issue_comment",
+   "description": "Add comment to issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "issue_number",
+     "body"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "update_issue_comment",
+   "description": "Update issue comment",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "comment_id": {
+      "type": "number"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "comment_id",
+     "body"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "sub_issue_write",
+   "description": "Change sub-issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "sub_issue_id": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method",
+     "issue_number",
+     "sub_issue_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "create_pull_request",
+   "description": "Open new pull request",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "head": {
+      "type": "string"
+     },
+     "base": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "title",
+     "head",
+     "base"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "update_pull_request",
+   "description": "Edit pull request",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "title": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "update_pull_request_branch",
+   "description": "Update pull request branch",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "merge_pull_request",
+   "description": "Merge pull request",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "merge_method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
+  },
+  {
+   "name": "pull_request_review_write",
+   "description": "Write operations on pull request reviews",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "method": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     },
+     "event": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "add_comment_to_pending_review",
+   "description": "Add review comment to the requester's latest pending review",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "path": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber",
+     "path",
+     "body"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "add_reply_to_pull_request_comment",
+   "description": "Add reply to pull request comment",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "commentId": {
+      "type": "number"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber",
+     "commentId",
+     "body"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "actions_run_trigger",
+   "description": "Trigger GitHub Actions workflow actions",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  }
+ ],
+ "readonly": [
+  {
+   "name": "get_me",
+   "description": "Get my user profile",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_file_contents",
+   "description": "Get file or directory contents",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "ref": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_branches",
+   "description": "List branches",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_commits",
+   "description": "List commits",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "sha": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_commit",
+   "description": "Get commit details",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "sha": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "sha"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_tags",
+   "description": "List tags",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_tag",
+   "description": "Get tag details",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "tag": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "tag"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_releases",
+   "description": "List releases",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_latest_release",
+   "description": "Get latest release",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_release_by_tag",
+   "description": "Get a release by tag name",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "tag": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "tag"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_code",
+   "description": "Search code",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_commits",
+   "description": "Search commits",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_repositories",
+   "description": "Search repositories",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_repository_collaborators",
+   "description": "List repository collaborators",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "issue_read",
+   "description": "Get issue details",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "issue_number",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issues",
+   "description": "List issues",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_issues",
+   "description": "Search issues",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issue_types",
+   "description": "List available issue types",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_label",
+   "description": "Get a specific label",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "name"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "pull_request_read",
+   "description": "Get details for a single pull request",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "pullNumber": {
+      "type": "number"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "pullNumber",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_pull_requests",
+   "description": "List pull requests",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_pull_requests",
+   "description": "Search pull requests",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "actions_list",
+   "description": "List workflows, runs, jobs and artifacts",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "actions_get",
+   "description": "Get details of Actions resources",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "method": {
+      "type": "string"
+     },
+     "resource_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "method",
+     "resource_id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_job_logs",
+   "description": "Get workflow job logs",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "owner": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "job_id": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  }
+ ]
+}

@@ -1,4 +1,4 @@
-import { McpServerInput } from "@landlens/contracts";
+import { CONN_NOTES, McpServerInput, type ConnInfo } from "@landlens/contracts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
@@ -8,7 +8,10 @@ import { describe, expect, it } from "vitest";
 import { AppViews, viewCsp, VIEW_HEADERS } from "../src/main/app-views";
 import { ClicklandSettingsStore, type Crypto } from "../src/main/clickland-settings";
 import { CSP_PROD } from "../src/main/csp";
+import { listingHash, readTools, testRemote, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { FakeProvider, listing } from "../../../packages/connections/test/fake-provider";
 import { McpService } from "../src/main/mcp";
+import type { GcpReader } from "@landlens/gcp-mcp";
 import { DRIFT_NOTE, McpServerStore } from "../src/main/mcp-store";
 
 const SECRET = "Bearer k_live_abcdefghijklmnopqrstuvwxyz";
@@ -86,6 +89,24 @@ describe("the MCP server store", () => {
     s.save({ id: a.id, name: "a", url: "https://mcp.example.com/other", header: { name: "Authorization" } });
     expect(s.info(a.id).autoRun).toBe(false);
     expect(() => s.setAutoRun(a.id, true)).toThrow(/Test it first/);
+  });
+
+  it("refuses the names Connections serves; a server already saved under one keeps it", async () => {
+    const { path, s } = store();
+    for (const name of ["github", "linear", "landlens-gcp"]) {
+      expect(() => s.save({ name, url: "https://mcp.example.com/mcp" })).toThrow("That name is used by Connections.");
+      try {
+        s.save({ name, url: "https://mcp.example.com/mcp" });
+      } catch (e) {
+        expect((e as { status?: number }).status).toBe(409);
+      }
+    }
+    const a = s.save({ name: "mine", url: "https://mcp.example.com/mcp" });
+    expect(() => s.save({ id: a.id, name: "github", url: "https://mcp.example.com/mcp" })).toThrow("That name is used by Connections.");
+    // One saved before wave 6 keeps its name when it is edited.
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(path, JSON.stringify({ servers: [{ id: "s_old", name: "github", url: "https://mcp.example.com/mcp", appOrigins: [], contexts: [] }] }));
+    expect(s.save({ id: "s_old", name: "github", url: "https://mcp.example.com/v2" }).name).toBe("github");
   });
 
   it("won't store a header it can't encrypt", () => {
@@ -204,6 +225,187 @@ describe("McpService", () => {
       expect(st.info(a.id).status).toBe("unknown");
     } finally {
       srv.close();
+    }
+  });
+
+  it("gives sessions the connections after your servers, names them for the prompt, and sends their drift back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
+    const mine = st.save({ name: "mine", url: "http://127.0.0.1:1/mcp" });
+    st.enable(mine.id, "orbstack", true);
+    const drifted: string[] = [];
+    const conn: RemoteSpec = { name: "github", url: "http://127.0.0.1:1/mcp/", pin: "0".repeat(64), provider: { id: "github", readTools: new Set(), mode: "ask", readsAuto: true } };
+    const svc = new McpService({
+      store: st,
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      connections: {
+        remotes: async () => [conn],
+        servers: () => [{ id: "github", name: "github", builtin: false, connection: "github", url: conn.url, enabled: true, autoRun: true, appOrigins: [], status: "ready" }],
+        drifted: (p) => drifted.push(p),
+      },
+    });
+    await svc.start();
+    try {
+      const listed = await svc.servers("orbstack");
+      expect(listed.servers.map((x) => x.name)).toEqual(["landlens-kube", "github", "mine"]);
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const s = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(s.servers.map((x) => x.name)).toEqual(["landlens-kube", "mine", "github"]);
+      expect(s.providers).toEqual(["GitHub"]);
+      // Nothing answers at the connection's address, so its listing isn't said to have changed.
+      expect(drifted).toEqual([]);
+      await s.close();
+      (svc.gateway as unknown as { opts: { onDrift: (s: RemoteSpec) => void } }).opts.onDrift(conn);
+      expect(drifted).toEqual(["github"]);
+    } finally {
+      await svc.stop();
+    }
+  });
+
+  it("gives sessions landlens-gcp, allowed whole, only while Claude may read Google Cloud; off leaves them at once (D93)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    let on = false;
+    const reader: GcpReader = {
+      projects: async () => [{ id: "demo-shop", name: "Demo Shop" }], types: async () => ({ types: [], total: 0, cut: false }),
+      resources: async () => ({ items: [], total: 0, cut: false }), resource: async () => { throw new Error("none"); },
+      clusters: async () => ({ clusters: [], errors: [] }), connected: () => false,
+    };
+    const svc = new McpService({
+      store: new McpServerStore(join(dir, "mcp-servers.json"), fake()),
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      gcp: { reader: async () => (on ? { reader, projects: ["demo-shop"] } : undefined) },
+    });
+    await svc.start();
+    try {
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const off = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(off.servers.map((x) => x.name)).toEqual(["landlens-kube"]);
+      expect(off.gcp).toBeUndefined();
+      await off.close();
+      expect((await svc.servers("orbstack")).servers.map((x) => x.name)).toEqual(["landlens-kube"]);
+      on = true;
+      const s = await svc.forSessions().open({ label: "agent 2 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(s.servers.map((x) => x.name)).toEqual(["landlens-kube", "landlens-gcp"]);
+      expect(s.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);
+      expect(s.gcp).toEqual(["demo-shop"]);
+      const page = (await svc.servers("orbstack")).servers.find((x) => x.name === "landlens-gcp")!;
+      expect(page).toMatchObject({ builtin: true, connection: "gcp", status: "ready" });
+      expect(page.tools!.every((t) => t.readOnly)).toBe(true);
+      const list = () => fetch(s.servers[1]!.url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: s.servers[1]!.headers[0]!.value }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect((await list()).status).toBe(200);
+      svc.gcpOff();
+      expect((await list()).status).toBe(404);
+      await s.close();
+    } finally {
+      await svc.stop();
+    }
+  });
+
+  it("M2 (review of part 2): a connection's change reaches open sessions at once", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
+    const conn: RemoteSpec = { name: "github", url: "http://127.0.0.1:1/mcp/", provider: { id: "github", readTools: new Set(["list_issues"]), mode: "ask", readsAuto: true } };
+    const svc = new McpService({
+      store: st,
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      connections: { remotes: async () => [conn], servers: () => [], drifted: () => {} },
+    });
+    await svc.start();
+    try {
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const open = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      open.bind("acp-m2");
+      const session = () => [...(svc.gateway as unknown as { sessions: Map<string, GatewaySession> }).sessions.values()].find((x) => x.acpSession === "acp-m2")!;
+      // Two unused yeses for a write (an "always" for a connection's write is one call's yes since part 3's review, M1).
+      svc.gateway.permit("acp-m2", { toolCallId: "t2", toolName: "mcp__github__issue_write", always: false });
+      svc.gateway.permit("acp-m2", { toolCallId: "t3", toolName: "mcp__github__issue_write", always: false });
+      const info = { provider: "github" as const, state: "ready" as const, mode: "ask" as const, readsAuto: true, give: true };
+      svc.connectionChanged(info);
+      expect(session().takePermit("mcp__github__issue_write", "t2")).toBe(true); // nothing changed: the yes stands
+      svc.connectionChanged({ ...info, readsAuto: false });
+      expect(session().takePermit("mcp__github__issue_write", "t3")).toBe(false);
+      expect(session().upstreams.has("github")).toBe(true);
+      svc.connectionChanged({ ...info, mode: "read" });
+      expect(session().upstreams.has("github")).toBe(false);
+      await open.close();
+    } finally {
+      await svc.stop();
+    }
+  });
+
+  it("autonomous (part 3): turned on only for a connection ready at Ask for writes; a change to it stops it at once", async () => {
+    const TOKEN = `ghp_${"A".repeat(36)}`;
+    const fp = await new FakeProvider("github").start();
+    fp.valid.add(TOKEN);
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const headers = { Authorization: `Bearer ${TOKEN}` };
+    const full = await testRemote({ name: "github", url: `${fp.origin}/mcp/`, headers, noViews: true });
+    const ro = await testRemote({ name: "github", url: `${fp.origin}/mcp/readonly`, headers, noViews: true });
+    const gh = listing("github");
+    const conn: RemoteSpec = {
+      name: "github", url: `${fp.origin}/mcp/`, headers, origins: [fp.origin], noViews: true,
+      pin: listingHash(full.tools!), readUrl: `${fp.origin}/mcp/readonly`, readPin: listingHash(ro.tools!),
+      provider: { id: "github", readTools: readTools(gh.full, gh.readonly), mode: "ask", readsAuto: true },
+    };
+    let info: ConnInfo = { provider: "github", state: "ready", mode: "ask", readsAuto: true, give: true } as ConnInfo;
+    const pushed: unknown[] = [];
+    const svc = new McpService({
+      store: new McpServerStore(join(dir, "mcp-servers.json"), fake()),
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      pushAutonomy: (s) => pushed.push(s),
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      connections: { remotes: async () => [conn], servers: () => [], drifted: () => {}, info: () => info },
+    });
+    await svc.start();
+    const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+    const scope = { repos: ["landfalls-ai/landlens"] };
+    try {
+      const open = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      open.bind("acp-auto");
+      expect(svc.autonomyStates("acp-auto")).toMatchObject([{ provider: "github", on: false, mode: "ask" }]);
+      // Not while the connection is read only, not given to sessions, or its tools need a look.
+      for (const c of [{ mode: "read" }, { give: false }, { state: "expired" }, { note: CONN_NOTES.drift }] as Partial<ConnInfo>[]) {
+        info = { ...info, ...c } as ConnInfo;
+        expect(() => svc.setAutonomy("acp-auto", "github", true, scope)).toThrow(/isn't connected|read only|need a look/);
+        info = { provider: "github", state: "ready", mode: "ask", readsAuto: true, give: true } as ConnInfo;
+      }
+      expect(svc.setAutonomy("acp-auto", "github", true, scope)).toMatchObject({ on: true, used: 0, budget: 20 });
+      // Reads off leaves it on; Read only stops it ("you"); a listing found changed stops it ("drift").
+      svc.connectionChanged({ ...info, readsAuto: false });
+      expect(svc.autonomyStates("acp-auto")[0]!.on).toBe(true);
+      svc.connectionChanged({ ...info, mode: "read" });
+      expect(svc.autonomyStates("acp-auto")[0]).toMatchObject({ on: false, offBecause: "you" });
+      await open.close();
+      const again = await svc.forSessions().open({ label: "agent 2 · orbstack", context: "orbstack", handle: "h", cluster });
+      again.bind("acp-auto2");
+      expect(svc.autonomyStates("acp-auto2")[0]!.on).toBe(false); // never stored: a new session starts off
+      svc.setAutonomy("acp-auto2", "github", true, scope);
+      svc.connectionChanged({ ...info, note: CONN_NOTES.drift });
+      expect(svc.autonomyStates("acp-auto2")[0]).toMatchObject({ on: false, offBecause: "drift" });
+      expect(pushed.length).toBeGreaterThanOrEqual(4); // each change reached the dock
+      await again.close();
+    } finally {
+      await svc.stop();
+      await fp.stop();
     }
   });
 

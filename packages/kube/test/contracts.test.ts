@@ -48,4 +48,52 @@ describe("IPC contracts", () => {
     }
     expect(channels["forward:check"].safeParse({ port: 1023 }).success).toBe(false);
   });
+
+  it("hold connections to a provider, a flow id and a token of that provider's shape", () => {
+    const gh = "ghp_" + "a".repeat(36);
+    const lin = "lin_api_" + "b".repeat(40);
+    const token = channels["conn:token"];
+    expect(token.safeParse({ provider: "github", token: gh }).success).toBe(true);
+    expect(token.safeParse({ provider: "github", token: "github_pat_11AB" + "c".repeat(40) }).success).toBe(true);
+    expect(token.safeParse({ provider: "linear", token: lin }).success).toBe(true);
+    for (const bad of [
+      { provider: "github", token: lin }, { provider: "linear", token: gh }, { provider: "gitlab", token: gh },
+      { provider: "github", token: gh + "\n" }, { provider: "github", token: ` ${gh}` }, { provider: "github", token: "ghp_short" },
+      { provider: "github", token: "ghp_" + "a".repeat(400) }, { provider: "github", token: "Bearer " + gh },
+    ]) expect(token.safeParse(bad).success, JSON.stringify(bad).slice(0, 60)).toBe(false);
+    expect(channels["conn:cancel"].safeParse({ flow: "fl" + "A".repeat(16) }).success).toBe(true);
+    for (const flow of ["fl" + "A".repeat(15), "fl../../" + "A".repeat(10), "xx" + "A".repeat(16)]) expect(channels["conn:cancel"].safeParse({ flow }).success).toBe(false);
+    expect(channels["conn:linear-signin"].safeParse({ mode: "autonomous" }).success).toBe(false);
+    expect(channels["conn:set"].safeParse({ provider: "linear", mode: "read", readsAuto: false }).success).toBe(true);
+    // No channel takes an address.
+    expect(channels["conn:test"].safeParse({ provider: "github", url: "https://evil.example" }).data).not.toHaveProperty("url");
+  });
+  it("hold Google Cloud names to Google's shapes before they reach a path or a query (D87)", () => {
+    const res = channels["gcp:resources"];
+    expect(res.safeParse({ project: "demo-shop", assetType: "compute.googleapis.com/Instance", query: "state:RUNNING", offset: 500 }).success).toBe(true);
+    for (const bad of [
+      { project: "Demo-Shop" }, { project: "demo" }, { project: "demo-shop-" }, { project: "demo-shop/../x" }, { project: "demo-shop:x" },
+      { project: "demo-shop", assetType: "compute.googleapis.com" }, { project: "demo-shop", assetType: "compute.googleapis.com/../x" },
+      { project: "demo-shop", query: "a\nb" }, { project: "demo-shop", query: "x".repeat(501) }, { project: "demo-shop", offset: 5001 },
+    ]) expect(res.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    const one = channels["gcp:resource"];
+    expect(one.safeParse({ project: "demo-shop", name: "//storage.googleapis.com/demo-shop-assets" }).success).toBe(true);
+    for (const name of ['//x/a" OR name:*', "//x/a\\b", "storage.googleapis.com/x", "//x/a\u0007", "//" + "a".repeat(1000)]) {
+      expect(one.safeParse({ project: "demo-shop", name }).success, name.slice(0, 40)).toBe(false);
+    }
+    expect(channels["gcp:choose"].safeParse({ projects: Array.from({ length: 21 }, (_, i) => `project-${i + 10}`) }).success).toBe(false);
+    // No channel takes an address or a token.
+    expect(channels["gcp:status"].safeParse({ endpoint: "http://127.0.0.1:1" }).data).not.toHaveProperty("endpoint");
+    expect(channels["gcp:projects"].safeParse({ token: "ya29.x" }).data).not.toHaveProperty("token");
+  });
+
+  it("takes Claude's Google Cloud reading only on its own channel, and no cloud cluster's yes from the page (part 5, L3)", () => {
+    // gcp:choose no longer turns on what Claude reads (L6 of part 4's review): the key is dropped.
+    expect(channels["gcp:choose"].safeParse({ projects: ["demo-shop"], agentRead: true }).data).not.toHaveProperty("agentRead");
+    expect(channels["gcp:agent-read"].safeParse({ on: true }).success).toBe(true);
+    expect(channels["gcp:agent-read"].safeParse({ on: "yes" }).success).toBe(false);
+    // Main asks the cloud-cluster question in a native dialog: a page's `cloud: true` is dropped, never a yes.
+    expect(channels["cluster:connect"].safeParse({ context: "gke_demo-shop_us-central1_shop-prod", cloud: true }).data).not.toHaveProperty("cloud");
+    expect(channels["cluster:connect"].safeParse({ context: "x", kubeconfig: "/tmp/k" }).data).not.toHaveProperty("kubeconfig");
+  });
 });

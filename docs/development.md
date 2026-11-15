@@ -57,6 +57,42 @@ built-in server in memory). The e2e test opens the MCP page, previews `cluster_o
 (with `orbstack`); adds Clickland's MCP server with its own read key and shows Clickland's view (with `clickland`); and
 asks the agent to call `cluster_overview` and `describe` and checks both views inline in the dock (with `claude`).
 
+Connections ([connections.md](connections.md)): `pnpm test` runs `@landlens/connections`'s unit tests against
+`packages/connections/test/fake-provider.ts`, a loopback server that plays GitHub or Linear (MCP, OAuth, the device
+flow, `/user`, `/graphql`) and records every request; no test reaches GitHub or Linear. An unpackaged build reads:
+
+| Variable | What |
+|---|---|
+| `LANDLENS_GITHUB_ENDPOINT` | `http://127.0.0.1:<port>`: every GitHub origin (github.com, api.github.com, api.githubcopilot.com) becomes this fake |
+| `LANDLENS_LINEAR_ENDPOINT` | `http://127.0.0.1:<port>`: every Linear origin (mcp.linear.app, api.linear.app) becomes this fake |
+| `LANDLENS_GITHUB_CLIENT_ID` | A GitHub OAuth App's client id for the device flow, until one is built in |
+
+A packaged app reads none of them, and anything but a loopback address is ignored. The fake's tool listings
+(`packages/connections/test/fixtures/*-tools.json`) are hand-made until recorded: `node
+scripts/record-provider-tools.mjs github` (or `linear`) asks for your token without echo, lists the full and the
+read-only endpoint (two `tools/list` calls, nothing written to the provider) and writes the fixture. Only the person
+runs it, with their own token; no test or agent does.
+
+Google Cloud ([gcp.md](gcp.md)): `pnpm test` runs `@landlens/gcp`'s unit tests against
+`packages/gcp/test/fake-gcp.ts` (a loopback server for Resource Manager, Cloud Asset and Kubernetes Engine that
+records every request) and `fake-gcloud.sh`; no test reaches Google, and gcloud needn't be installed. An unpackaged
+build has Google Cloud off unless it reads one of:
+
+| Variable | What |
+|---|---|
+| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the three Google origins become this fake |
+| `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the fake); otherwise it is looked up on the login PATH |
+| `LANDLENS_GCP_REAL=1` | an unpackaged build may reach the real Google Cloud with your gcloud; only the person sets it |
+| `LANDLENS_GKE_REAL=1` | with `LANDLENS_GCP_REAL=1` and no fake endpoint, an unpackaged build may also connect a real GKE cluster; without it, it opens only the fake's clusters on `127.x`. Only the person sets it, and never against a cluster during development (CLAUDE.md) |
+
+A packaged app reads none of them. `pnpm test` also runs `@landlens/gcp-mcp`'s tests (`landlens-gcp` against the
+fake). The e2e: `pnpm -s build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run
+test/gcp.e2e.test.ts test/gke.e2e.test.ts` (screenshots `g4-*`, `g5-*` and `f5-*` with `LANDLENS_SHOTS`). Main's
+native questions (connect a cloud cluster, let Claude read projects) are answered by a stub the test installs in main. `gke.e2e` makes a
+throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (read-only, deleted after) and points the fake's
+GKE cluster at OrbStack's API server; it never writes `~/.kube/config`. With `orbstack,claude` it also asks a live
+session one question about the fake Google Cloud, on your own Claude Code subscription.
+
 ## Where things start
 
 See [architecture.md](architecture.md), "Code map". New IPC: add the channel and its schema to

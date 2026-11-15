@@ -8,7 +8,7 @@
 // page showed you (its hash); a session that finds another listing, or a Test that does, turns it off again.
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import type { McpServerInfo, McpToolInfo } from "@landlens/contracts";
+import { RESERVED_MCP_NAMES, type McpServerInfo, type McpToolInfo } from "@landlens/contracts";
 import type { RemoteSpec } from "@landlens/mcp-gateway";
 import type { Crypto } from "./clickland-settings";
 
@@ -91,6 +91,8 @@ export class McpServerStore {
     const all = this.read();
     const prev = input.id ? all.find((s) => s.id === input.id) : undefined;
     if (input.id && !prev) throw fail(404, "no such MCP server");
+    // github, linear and landlens-gcp are Connections' servers. One you already saved under such a name keeps it.
+    if ((RESERVED_MCP_NAMES as readonly string[]).includes(input.name) && prev?.name !== input.name) throw fail(409, "That name is used by Connections.");
     if (all.some((s) => s.name === input.name && s.id !== input.id)) throw fail(409, `There's already a server named ${input.name}.`);
     let header: Stored["header"];
     if (input.header) {

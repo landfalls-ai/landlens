@@ -83,6 +83,12 @@ floating drawer ends at the panel's top. `Workspace.tsx` sets classes on it from
 | dock | sidebar, dock 392 | rail 52, dock 360 |
 | drawer + dock | rail, drawer 372, dock 392 | rail, dock 360, drawer 372 floating over the table |
 
+The dock's widths above are defaults. Its left edge is a grip (`DockGrip.tsx`, `dockWidth.ts`): drag it, or focus it
+and use ← → (16px a step), Home for the narrowest (320) and End for the widest; a double click goes back to the
+default. The widest leaves the rail and 600px of table, and beside a drawer in a wide window the drawer's 372 too (at
+most 960). The width you chose is kept in `localStorage` (`landlens.dock.width`) and held to that room as the window
+or the panes change; the floating drawer at 1024–1279 sits beside whatever width the dock has.
+
 ⌘B folds the sidebar to the rail by hand. The main pane is a container (`container-name: main`), so the toolbar and
 table shrink by the pane's width, not the window's: under 860px the key hints go and the filter says "Filter"; under
 760 the status words; under 640 "Ask Claude" becomes its icon (and always while a drawer is open, which has its own
@@ -100,7 +106,16 @@ Linux keep the native frame. The window's background follows the theme so it doe
 
 - **Welcome** (`Welcome.tsx`): a centred column with the mark, "Pick a cluster", the contexts as rows (two-letter
   tile hashed over six gradients, `current` pill, server in mono), the current context first and focused; ↑/↓, Enter
-  and number keys. Connecting dims the others; an error rings the row and offers "Try again".
+  and number keys. Connecting dims the others; an error rings the row and offers "Try again". GKE clusters of the
+  chosen Google Cloud projects follow your own contexts under a `.cards-label` heading (**Google Cloud** with the
+  `Cloud` icon and "GKE clusters of the projects you chose" in `--ink-3`): the row's tile is the blue `.cl-tile.gke`
+  with the `Cloud` icon, the short name with a **GKE** pill, and "project · location" in mono where the server would
+  be; the footer counts "N contexts in your kubeconfig · M GKE"; a project that couldn't be listed is one small dim
+  line under the cards. The first connect to a GKE cluster opens an `alertdialog` (`.dialog`, 420px): a `kind-tile`
+  with `Cloud` and "Connect <short name>?", the cloud sentence, then the project and location in a small dim line;
+  **Cancel** (focused) and **Connect** (primary). The sidebar's switcher menu groups **Clusters in your kubeconfig** and
+  **Google Cloud** (the GKE tile, short name, " · project" dim); a connected GKE cluster shows its short name and the
+  GKE tile in the switcher, its full context in the tooltip.
 - **Overview** (`Overview.tsx`, the landing page): a verdict sentence ("2 problems need attention", "Nothing is
   broken; n things to watch", "All clear") with "Ask Claude what's wrong"; tiles for nodes, pods (a segmented bar),
   deployments and restarts, which open those lists; the worst five problems (a row opens it on the Problems page; See
@@ -132,6 +147,26 @@ all N) and Recent warnings; Nodes. It reads
   `.skel` lines. The body reserves its scrollbar gutter (`scrollbar-gutter: stable`) and its right padding plus the
   gutter equals the composer's inset, so cards and composer share one right edge; the user's bubble uses the cards'
   10px padding.
+- **Autonomous mode in the dock** (`DockParts.tsx`, `agent.css`; [connections.md](connections.md#autonomous-mode)).
+  The one place the dock uses amber as a state: autonomous is a standing permission, so it reads as a warning, never
+  as the iris accent. A row of `.auto-pill`s above the composer's foot, one per connection (`GitHub · asks`, 24px, a
+  `--line` ring like the pill selects; `GitHub · autonomous 3/20` on `--warn-soft` in `--warn-text` with a `Zap`;
+  `Linear · read only` as quiet text, hidden when the window is narrow). A pill opens the scope sheet, a popover
+  above the composer built like the slash menu (`--bg-2`, `--shadow-2`, 10px radius): the provider's mark in a 22px
+  tile, "GitHub writes in this session", the level sentence, the scope `.field`s in mono, the D83 sentence in an
+  amber well, then **Turn on** (filled `--warn`, dark ink; the one amber button) and Cancel; when on, the scope, the
+  count and Stop. Under the dock's head, while any connection is autonomous, a full-width strip on `--warn-soft` with a
+  hairline under it: `Zap`, "**Autonomous:** GitHub writes to … run without asking." with the count dimmed, and a
+  small secondary **Stop**; no close button. A tool row that ran on its own has an `.auto-chip` (18px, amber,
+  `Zap` and "ran on its own") after its label; the transcript notes why autonomous stopped in `--warn-text`.
+- **A GitHub or Linear question** is the ask card with the provider's mark in a 22px tile, "GitHub · issue write?",
+  "Asked because: …" in `--warn-text` with a `CircleAlert` when autonomous said no, and an `.args-table`: a ringed
+  `<dl>` of 92px labels and mono values divided by hairlines (Repository, Team, Issue, Pull request, Method, Branch,
+  From, Into, Title, File, Files with up to 20 paths, then every other argument, nested ones as JSON), the Body in
+  the sans face, pre-wrapped, its first 600 characters and "(+N more characters)", at most 140px before it scrolls.
+  Under it, **Show all arguments** (`.args-all`, a `<details>`) opens every argument as indented mono JSON in a ringed
+  `--bg-1` well, at most 260px before it scrolls. The answers are Claude Code's own, with ↵ and esc hints, without
+  **Always allow** for these writes. The warn strip stays under the head while History is open.
 - **Views in the dock**: only the newest view stays open; earlier ones fold to their tool row plus a one-line verdict
   (the tool's first line of text, ellipsised, with "Show view"; a heading ending in ":" takes its first item), and
   reopen on a click ("Hide view" folds them back). A view shows at most 320px; past that a fade to `--bg-2` with
@@ -147,9 +182,44 @@ all N) and Recent warnings; Nodes. It reads
   (quiet: runs without asking) or an amber **Asks first**; where Preview can't run, a disabled button in its place says
   why (Needs arguments, Not read-only, Server off). Calls are `.ov-row`s with a status icon and word, `server · tool`
   and the target as words, the session (and "from a view") in the sub line, a `view` chip, filtered by two selects
-  with the toolbar's chevron and a `.seg`; a row opens the call in the `.drawer`, where the session id is
+  with the toolbar's chevron and a `.seg` (All, OK, Failed, Refused, Autonomous); a call that ran on its own has the amber `.auto-chip`; a row
+  opens the call in the `.drawer` (with **Allowed by**: a read, you, the autonomous mode, or a preview), where the session id is
   middle-truncated with a copy button and a JSON result is indented. The add-server dialog reuses `.dialog`,
   `.form-row`, `.test-steps`.
+- **Connections** (`ConnectionsPage.tsx`, `connections.css`; sidebar above MCP, `Cable`; also "Connections" under
+  Welcome's list, where the page stands alone with a **Clusters** button back): one column of `.panel` cards, at most
+  820px. A card's head is the provider's own mark (drawn in ink, in a `.kind-tile`), the name, a state `.badge` with
+  its icon (Connected ok, Not connected muted, Connecting… with a spinner, Sign-in ran out warn, Failed bad) and one
+  action at the right (Connect primary, Disconnect or Cancel secondary). The device code sits in an accent-ringed
+  well on `--bg-1`, the code at `--t-26` in mono with spaced letters, then Copy and **Open github.com/login/device**; a
+  pasted token is one password `.field` in a quiet well, its shape checked as you type, with the advice and **Make
+  one** under it. Connected, the body is rows on one grid (a 210px label column, the control, its sentence), divided
+  by hairlines: **Level** as a `.seg` (Read only · Ask for writes), then the `.switch`es "Reads run without asking" and
+  "Give to Claude sessions"; then the tool count as a link that opens the tools (`.mcp-tool` rows with the name, a
+  one-line description that expands, and **Read-only** or the amber **Asks first**, reads first; a routine write
+  also has a muted **Routine** badge with a `Zap`; the badges sit right-aligned) and **Check tools**.
+  A note that needs you is amber with its icon and **Review tools**; a card whose tools changed gets an amber ring.
+  On the MCP page a connection's panel carries its mark, a **From Connections** chip and **Manage in Connections**.
+- **Google Cloud** (`GcpPage.tsx`, `gcp.css`; the sidebar's **Cloud** section after Pinned, `Cloud`; also under
+  Welcome's list, standing alone with a **Clusters** button back): three columns in the main pane. **Projects**
+  (240px, `--bg-0`): two-line items (name, then the id in mono), a filter, **Choose projects…** in the foot. **Types**
+  (260px, `--bg-1`): **All**, then the types under service headers (the service's icon, its name, its host in mono at
+  the right, one line, ellipsis), each type an item with its count in tabular mono; the picked item is `--bg-3` with
+  a hairline ring and an accent icon. **Resources**: the list table (`ResourceTable`; name, type, location, state as a
+  tone pill, created), a 280px filter, a query chip, the count right-aligned. Under 1,100px of main the projects
+  become a select atop the types; under 720px the types become a select (optgroups by service) in the resources
+  header, and the table takes the pane. A project's error sits in the Types column as a bad-tinted box with the
+  sentence. The drawer is the usual `.drawer`: a service tile, "Google Cloud / <project>" (ellipsised first), then
+  **Open in Landlens** (secondary, on a GKE cluster the catalog lists), **Copy name** (an icon button), **Ask Claude**
+  (primary, `Sparkles`; disabled while the brief is read; without a cluster a disabled "Connect a cluster to ask
+  Claude") and close; the name, a type chip, location and state; tabs **Summary** (the drawer's key/value grid; labels as `key= value` chips) and
+  **JSON** (the YAML editor's well, read-only, filling the body). States are one `.notice` each with its next step.
+  The chooser is a `.dialog` with a filter and a checklist (checkbox, name, id in mono). On Connections, a **Google
+  Cloud** card after the providers: the state, account, chosen projects as mono chips, **Choose projects…** and
+  **Open Google Cloud**, then a `.conn-row` with the switch **Claude can read these projects** and a dim sentence that
+  says what on and off mean (on asks in a native dialog first; an error is a `tone-bad` line). On the MCP page,
+  `landlens-gcp` follows `landlens-kube` while it is on: the `Cloud` tile, **Built in**, **From Connections**, and
+  **Manage in Connections** in place of Test, Edit and Remove.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
   the call drawer. A view from a server you added (not `landlens-kube`) sits in `.app-third`: a `--line-2` ring, 8px
   inset, and "View from <server>" above, drawn by the page outside the frame, so it never reads as Landlens's own.
@@ -214,15 +284,30 @@ the page.
 The e2e test finds things by role and name, so keep: heading "Pick a cluster"; buttons "Pods", "Deployments",
 "Secrets", "Ask Claude", "Stop", "Send"; combobox "Namespace"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
-`.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Graphs: regions "Usage" and "Nodes", status "Metrics
+`.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's
+complementary "Resources" and Welcome); regions "Projects", "Types", "Resources" and "Google Cloud connection";
+dialog "Choose projects" with its checkboxes named by project id and "Save"; searchbox "Filter resources"; buttons
+"Read again", "Clear the query", "Copy name", "Open in Landlens"; complementary "Google Cloud resource <name>"; the
+GKE heading "Google Cloud" on Welcome and cards named "<short name> GKE …"; alertdialog "Connect <short name>?"; menu
+"Clusters" with groups "Clusters in your kubeconfig" and "Google Cloud"; button "<context>, switch cluster"; switch
+"Claude can read these projects"; region "MCP server landlens-gcp"; the JSON well
+`.gcp-json .cm-content` (label "Resource JSON"); selects "Project" and "Type" when narrow. Graphs: regions "Usage" and "Nodes", status "Metrics
 unavailable", button "Connect Clickland", dialog "Connect Clickland" with fields "Clickland address" and "Clickland
 API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes `.metrics-src`, `.mtab`,
 `.chart-plot`, `.chart-tip` (Overview only), `.chart-now`, `.chart-legend`, `path.edge`, `path.line`, `.test-steps`. MCP: button "MCP"; tabs
 "Servers" and "Calls"; regions "MCP server <name>"; lists "<name> tools" and "MCP calls"; buttons "Add server",
 "Preview <tool>", "Test", "Save"; dialog "Add an MCP server" with fields "Server name", "Server address", "Header
 name", "Header value"; a `switch`; complementary "MCP call" with list "Front-door requests"; classes `.mcp-tool`,
-`.mcp-call`, `.tool-app`, `.app-frame`, `.tool-with-app.folded`, `.tool-verdict`; switch "Use clickland on
-<context>". Badges and key hints inside buttons are `aria-hidden`,
+`.mcp-call`, `.tool-app`, `.app-frame`, `.tool-with-app.folded`, `.tool-verdict`; the status `.seg` (group
+"Status") with "Autonomous"; the drawer's "Allowed by"; switch "Use clickland on
+<context>". Connections: button "Connections" (sidebar and Welcome); heading "Connections" (standalone); regions
+"GitHub connection" and "Linear connection"; the tool rows' **Routine** badge; buttons "Connect", "Disconnect", "Use a token instead", "Use an API key
+instead", "Open github.com/login/device", "Read only", "Ask for writes", "Review tools", "Accept these tools",
+"Manage in Connections"; label "Device code"; fields "GitHub token" and "Linear API key"; switches "<Name>: reads run
+without asking" and "Give <Name> to Claude sessions"; lists "<Name> tools"; regions "MCP server github".
+Autonomous: buttons "GitHub · asks", "GitHub · autonomous <n>/20", "Turn on", "Stop GitHub autonomous"; dialog
+"GitHub autonomous" with fields "Repositories", "Default branch" (Linear: "Team key"); status "Autonomous" (the
+strip); region "Claude asks"; classes `.auto-chip`, `section.change`, `.change-done.rejected`. Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
 
 `LANDLENS_SHOTS=<folder>` saves screenshots of every screen in dark, light and at 1024×700 ([development.md](development.md)).

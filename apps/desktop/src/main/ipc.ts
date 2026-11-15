@@ -1,8 +1,8 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
-import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, getRelease, KubeError, listContexts, listReleases, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
-import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { channels, type Channel, type ClusterStatusEvent, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
+import { checkAccess, getRelease, KubeError, listContexts, listReleases, mergeCatalog, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { DoctorService } from "./doctor";
@@ -11,37 +11,78 @@ import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
+import { flowOwners, type ConnectionsService } from "./connections";
+import type { GcpService } from "./gcp";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
+  /** Windows that started a sign-in: when one goes, its sign-ins stop. */
+  const flowOwner = flowOwners(connections);
+  /** Clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name isn't one). */
+  const gkeHandles = new Set<string>();
+  clusters.onGone((handle) => gkeHandles.delete(handle));
+
+  /** Main's own question, in a native dialog on the asking window: the renderer can't answer it (part 5, L3). */
+  const nativeConfirm = (event: IpcMainInvokeEvent) => async ({ message, detail, yes }: { message: string; detail: string; yes: string }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
+    const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    return r.response === 0;
+  };
+
+  const disconnect = async (handle: string) => {
+    metrics.service.forget(handle);
+    doctor.forget(handle);
+    await mcp.forget(handle);
+    await hub.stopAll(handle);
+    await clusters.disconnect(handle);
+  };
+
+  // A GKE cluster whose project you took out, or that left the listing (Google Cloud off, gcloud signed out, another
+  // account, a new address), is disconnected at once, and every window is told (review of part 5, L7).
+  gcp.onGkeGone((contexts) => {
+    for (const info of clusters.list()) {
+      if (!gkeHandles.has(info.handle) || !contexts.includes(info.context)) continue;
+      const event: ClusterStatusEvent = { handle: info.handle, context: info.context, state: "disconnected", reason: "its Google Cloud project is no longer chosen, or gcloud's sign-in changed." };
+      void disconnect(info.handle).finally(() => {
+        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send("cluster:status", event);
+      });
+    }
+  });
 
   const handlers: Handlers = {
     "catalog:list": async () => {
+      let own: ReturnType<typeof listContexts> = [];
+      let error: string | undefined;
       try {
-        return { contexts: listContexts() };
+        own = listContexts();
       } catch (err) {
-        return { contexts: [], error: `Could not read your kubeconfig: ${(err as Error).message}` };
+        error = `Could not read your kubeconfig: ${(err as Error).message}`;
       }
+      // The GKE clusters of the Google Cloud projects you chose (D91), after yours; a name yours has is left out.
+      const gke = await gcp.gkeContexts().catch((err: Error) => ({ contexts: [], errors: [{ project: "", message: err.message }] }));
+      return { contexts: mergeCatalog(own, gke.contexts), ...(error ? { error } : {}), ...(gke.errors.length ? { gke: { errors: gke.errors } } : {}) };
     },
-    "cluster:connect": async ({ context }) => {
-      // Only contexts from the user's kubeconfig; the name goes to the sidecar as an argument.
-      if (!listContexts().some((c) => c.name === context)) throw ipcError(404, `no context named ${context} in your kubeconfig`);
-      const info = await clusters.connect(context);
+    "cluster:connect": async ({ context }, event) => {
+      // Only contexts from the user's kubeconfig, or a GKE cluster Landlens listed (its own kubeconfig, D91); the name
+      // goes to the sidecar as an argument. Yours wins when both have the name. A GKE cluster's first connect asks in
+      // main's own dialog (L3).
+      const own = listContexts().some((c) => c.name === context);
+      const gke = own ? undefined : await gcp.gkeConnect(context, nativeConfirm(event));
+      if (!own && !gke) throw ipcError(404, `no context named ${context} in your kubeconfig`);
+      const info = await clusters.connect(context, gke ?? {});
+      if (gke) gkeHandles.add(info.handle);
       // Kept forwards for this context start again (D37), without opening anything.
       forwards.restore(info);
       return info;
     },
     "cluster:disconnect": async ({ handle }) => {
-      metrics.service.forget(handle);
-      doctor.forget(handle);
-      await mcp.forget(handle);
-      await hub.stopAll(handle);
-      await clusters.disconnect(handle);
+      await disconnect(handle);
       return { ok: true };
     },
     "cluster:discovery": async ({ handle }) => ({ types: await clusters.discovery(handle) }),
@@ -108,6 +149,8 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       return { opened: true };
     },
     "agent:close": async ({ session }) => (await agent.close(session), { ok: true }),
+    // The autonomous mode (D82): on or off for one connection in one session; main alone answers for it.
+    "agent:autonomy": async ({ session, provider, on, scope }) => mcp.setAutonomy(session, provider, on, scope),
     // Graphs (docs/metrics.md). The Clickland key comes in with configure and test; nothing sends it back.
     "metrics:series": (req) => metrics.service.series(req),
     "metrics:settings": async ({ context }) => metrics.settings.view(context),
@@ -135,6 +178,31 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:app-call": ({ view, name, arguments: args }) => mcp.viewCall(view, name, args ?? {}),
     "mcp:app-close": async ({ view }) => (mcp.views.close(view), { ok: true }),
     "mcp:app-link": async ({ view, url }) => ({ opened: await mcp.viewLink(view, url) }),
+    // Connections (docs/connections.md). A token comes in on conn:token; nothing sends one back. A sign-in belongs to
+    // the window that started it.
+    "conn:list": async () => ({ ...connections.list(), gcp: await gcp.status() }),
+    "conn:github-device": async (_r, event) => connections.githubDevice(flowOwner(event.sender)),
+    "conn:linear-signin": async ({ mode }, event) => connections.linearSignIn(mode, flowOwner(event.sender)),
+    "conn:token": ({ provider, token }) => connections.token(provider, token),
+    "conn:cancel": async ({ flow }, event) => (connections.cancel(flow, event.sender), { ok: true }),
+    "conn:set": async ({ provider, mode, readsAuto, give }) => connections.set(provider, { ...(mode ? { mode } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}), ...(give !== undefined ? { give } : {}) }),
+    "conn:test": ({ provider }) => connections.test(provider),
+    "conn:repin": async ({ provider }) => connections.repin(provider),
+    "conn:disconnect": ({ provider }) => connections.disconnect(provider),
+    // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
+    "gcp:status": ({ fresh }) => gcp.status(!!fresh),
+    "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),
+    "gcp:choose": ({ projects }) => gcp.choose(projects),
+    // A grant to the agent: main asks in a native dialog before turning it on; off leaves open sessions at once.
+    "gcp:agent-read": async ({ on }, event) => {
+      const s = await gcp.setAgentRead(on, nativeConfirm(event));
+      if (!s.agentRead) mcp.gcpOff();
+      return s;
+    },
+    "gcp:types": ({ project, fresh }) => gcp.types(project, !!fresh),
+    "gcp:resources": (r) => gcp.resources(r),
+    "gcp:resource": ({ project, name }) => gcp.resource(project, name),
+    "gcp:clusters": () => gcp.clusters(),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

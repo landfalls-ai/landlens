@@ -1,0 +1,658 @@
+{
+ "recorded": false,
+ "note": "HAND-MADE from the vendor's documented tool names (15 November 2026), not a recorded listing. Replace by running scripts/record-provider-tools.mjs with your own token (docs/development.md).",
+ "full": [
+  {
+   "name": "list_issues",
+   "description": "List issues",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     },
+     "query": {
+      "type": "string"
+     },
+     "limit": {
+      "type": "number"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_issue",
+   "description": "Get an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_comments",
+   "description": "List comments on an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "issueId": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "issueId"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_teams",
+   "description": "List teams",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_team",
+   "description": "Get a team",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_projects",
+   "description": "List projects",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_project",
+   "description": "Get a project",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_users",
+   "description": "List users",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_user",
+   "description": "Get a user",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issue_statuses",
+   "description": "List issue statuses for a team",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "team"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issue_labels",
+   "description": "List issue labels",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_cycles",
+   "description": "List a team's cycles",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "teamId": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "teamId"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_documents",
+   "description": "List documents",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_document",
+   "description": "Get a document",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_documentation",
+   "description": "Search Linear's documentation",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "create_issue",
+   "description": "Create an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "team",
+     "title"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "update_issue",
+   "description": "Update an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "create_comment",
+   "description": "Create a comment on an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "issueId": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "issueId",
+     "body"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "create_project",
+   "description": "Create a project",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "team",
+     "name"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "update_project",
+   "description": "Update a project",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  },
+  {
+   "name": "create_issue_label",
+   "description": "Create an issue label",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "teamId": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": false
+   }
+  }
+ ],
+ "readonly": [
+  {
+   "name": "list_issues",
+   "description": "List issues",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     },
+     "query": {
+      "type": "string"
+     },
+     "limit": {
+      "type": "number"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_issue",
+   "description": "Get an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_comments",
+   "description": "List comments on an issue",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "issueId": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "issueId"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_teams",
+   "description": "List teams",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_team",
+   "description": "Get a team",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_projects",
+   "description": "List projects",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_project",
+   "description": "Get a project",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_users",
+   "description": "List users",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_user",
+   "description": "Get a user",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issue_statuses",
+   "description": "List issue statuses for a team",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "team"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_issue_labels",
+   "description": "List issue labels",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "team": {
+      "type": "string"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_cycles",
+   "description": "List a team's cycles",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "teamId": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "teamId"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "list_documents",
+   "description": "List documents",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": []
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "get_document",
+   "description": "Get a document",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  },
+  {
+   "name": "search_documentation",
+   "description": "Search Linear's documentation",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "annotations": {
+    "readOnlyHint": true
+   }
+  }
+ ]
+}
