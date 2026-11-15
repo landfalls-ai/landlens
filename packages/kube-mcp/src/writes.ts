@@ -5,7 +5,7 @@
 //
 // The agent's own token stays read-only, so these tools are the only way its changes reach a cluster.
 import type { ResourceType } from "@landlens/contracts";
-import { CHANGE_TTL_MS, type ChangeOp, type Outcome, type PatchType, type ProposedChange } from "@landlens/kube";
+import { CHANGE_TTL_MS, restartBody, scaleBody, type ChangeOp, type Outcome, type PatchType, type ProposedChange } from "@landlens/kube";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { parseAllDocuments } from "yaml";
 import { z } from "zod";
@@ -140,7 +140,7 @@ export function registerWriteTools(server: McpServer, cluster: AgentCluster) {
     annotations: { ...WRITE, destructiveHint: false, idempotentHint: true },
   }, run((a: { kind?: string; name: string; namespace: string; replicas: number; reason: string }, types) => {
     const x = target(types, `${a.kind ?? "deployment"}s.apps`, a.name, a.namespace);
-    return { tool: "scale", title: `Scale ${label(x.t, a.name, a.namespace)} to ${a.replicas} replica${a.replicas === 1 ? "" : "s"}`, reason: a.reason, operations: [{ verb: "patch", patchType: "merge", type: x.type, namespace: a.namespace, name: a.name, body: { spec: { replicas: a.replicas } } }] };
+    return { tool: "scale", title: `Scale ${label(x.t, a.name, a.namespace)} to ${a.replicas} replica${a.replicas === 1 ? "" : "s"}`, reason: a.reason, operations: [{ verb: "patch", patchType: "merge", type: x.type, namespace: a.namespace, name: a.name, body: scaleBody(a.replicas) }] };
   }));
 
   server.registerTool("rollout_restart", {
@@ -150,7 +150,7 @@ export function registerWriteTools(server: McpServer, cluster: AgentCluster) {
     annotations: { ...WRITE, destructiveHint: false, idempotentHint: false },
   }, run((a: { kind?: string; name: string; namespace: string; reason: string }, types) => {
     const x = target(types, `${a.kind ?? "deployment"}s.apps`, a.name, a.namespace);
-    const body = { spec: { template: { metadata: { annotations: { "kubectl.kubernetes.io/restartedAt": new Date().toISOString() } } } } };
+    const body = restartBody(new Date());
     return { tool: "rollout_restart", title: `Restart ${label(x.t, a.name, a.namespace)}`, reason: a.reason, operations: [{ verb: "patch", patchType: "strategic", type: x.type, namespace: a.namespace, name: a.name, body }] };
   }));
 

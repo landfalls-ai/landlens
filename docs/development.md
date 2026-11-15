@@ -65,6 +65,16 @@ class in `landlens-dev` (and `--down` removes them); `LANDLENS_INTEGRATION=orbst
 test:integration` starts them itself and waits up to 4 minutes for each problem, since pending and not-ready count
 only after 2.
 
+Your actions ([workbench.md](workbench.md#your-actions)): `node deploy/scenarios/hands/up.mjs` makes the `hands-*`
+objects in `landlens-dev` (a Deployment with a PodDisruptionBudget, a StatefulSet, a DaemonSet, a bare Pod, a CronJob
+that never fires, six ConfigMaps, and two Secrets made locally: one holding a random `LLMARK-` marker, one a fresh
+self-signed certificate); `node deploy/scenarios/hands/down.mjs` removes everything labelled `scenario=hands`. Then
+`LANDLENS_INTEGRATION=orbstack npx vitest run test/actions.integration.test.ts` in `packages/kube` (scales,
+restarts, suspends and triggers them and puts each back) and, after `pnpm -s build`, in `apps/desktop`
+`LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/actions.e2e.test.ts` (screenshots `w8p1-*`
+with `LANDLENS_SHOTS`). The unit tests: `packages/kube/test/actions.test.ts`, `edits.test.ts`, and in `apps/desktop`
+`actions-main.test.ts`, `action-log.test.ts`.
+
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`
 (namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
 healthy two-replica `catalog-api` with requests, limits and an uneven load.

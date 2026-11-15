@@ -1,0 +1,177 @@
+// Your actions (wave 8, D141–D142): what each action sends, which kinds it takes, and the facts beside the diff.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { actionFacts, actionFits, buildOps, restartBody, scaleBody, selects, triggerJob, triggerName, type ActionTarget } from "../src/actions.js";
+
+const T = {
+  deployments: { group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespaced: true, verbs: ["get", "patch", "delete"] },
+  statefulsets: { group: "apps", version: "v1", resource: "statefulsets", kind: "StatefulSet", namespaced: true, verbs: ["patch", "delete"] },
+  daemonsets: { group: "apps", version: "v1", resource: "daemonsets", kind: "DaemonSet", namespaced: true, verbs: ["patch", "delete"] },
+  cronjobs: { group: "batch", version: "v1", resource: "cronjobs", kind: "CronJob", namespaced: true, verbs: ["patch", "delete"] },
+  jobs: { group: "batch", version: "v1", resource: "jobs", kind: "Job", namespaced: true, verbs: ["create", "patch", "delete"] },
+  configmaps: { group: "", version: "v1", resource: "configmaps", kind: "ConfigMap", namespaced: true, verbs: ["delete"] },
+  namespaces: { group: "", version: "v1", resource: "namespaces", kind: "Namespace", namespaced: false, verbs: ["delete"] },
+  pods: { group: "", version: "v1", resource: "pods", kind: "Pod", namespaced: true, verbs: ["delete"] },
+  events: { group: "", version: "v1", resource: "events", kind: "Event", namespaced: true, verbs: ["get", "list"] },
+};
+const at = (type: ActionTarget["type"], name: string, namespace: string | undefined = "landlens-dev"): ActionTarget => ({ type, name, ...(type.namespaced && namespace ? { namespace } : {}) });
+
+const cronJob = {
+  apiVersion: "batch/v1", kind: "CronJob",
+  metadata: { name: "hands-report", namespace: "landlens-dev", uid: "cj-uid", resourceVersion: "9" },
+  spec: {
+    schedule: "0 0 31 2 *", concurrencyPolicy: "Forbid",
+    jobTemplate: {
+      metadata: { labels: { app: "hands-report" }, annotations: { team: "ops" } },
+      spec: { backoffLimit: 0, template: { spec: { restartPolicy: "Never", containers: [{ name: "r", image: "busybox:1.36", env: [{ name: "DB_PASSWORD", value: "hunter2" }] }] } } },
+    },
+  },
+  status: {},
+};
+
+describe("what each action sends (D141)", () => {
+  it("scale: a merge patch of replicas, the agent's body", () => {
+    const [op] = buildOps({ kind: "scale", targets: [at(T.deployments, "hands-web")], replicas: 3 });
+    expect(op).toEqual({ verb: "patch", patchType: "merge", type: { group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespaced: true }, namespace: "landlens-dev", name: "hands-web", body: { spec: { replicas: 3 } } });
+    expect(op!.body).toEqual(scaleBody(3));
+    expect(() => buildOps({ kind: "scale", targets: [at(T.deployments, "x")], replicas: 1001 })).toThrow(/0 to 1000/);
+    expect(() => buildOps({ kind: "scale", targets: [at(T.daemonsets, "x")], replicas: 1 })).toThrow(/doesn't scale daemonsets/);
+  });
+
+  it("restart: a strategic patch of the template's restartedAt, the agent's body, one per target", () => {
+    const now = new Date("2026-11-16T00:00:00.000Z");
+    const ops = buildOps({ kind: "restart", targets: [at(T.deployments, "a"), at(T.deployments, "b")], now });
+    expect(ops.map((o) => [o.verb, o.patchType, o.name])).toEqual([["patch", "strategic", "a"], ["patch", "strategic", "b"]]);
+    expect(ops[0]!.body).toEqual({ spec: { template: { metadata: { annotations: { "kubectl.kubernetes.io/restartedAt": "2026-11-16T00:00:00.000Z" } } } } });
+    expect(ops[0]!.body).toEqual(restartBody(now));
+  });
+
+  it("the agent's scale and rollout_restart tools build their bodies with the same functions", () => {
+    const src = readFileSync(resolve(__dirname, "../../kube-mcp/src/writes.ts"), "utf8");
+    expect(src).toContain("body: scaleBody(a.replicas)");
+    expect(src).toContain("const body = restartBody(new Date());");
+  });
+
+  it("delete: one DELETE per object; a mix of kinds, a wide kind in bulk, more than 50, or a kind that doesn't delete is refused", () => {
+    const ops = buildOps({ kind: "delete", targets: [at(T.configmaps, "a"), at(T.configmaps, "b")] });
+    expect(ops.map((o) => [o.verb, o.name, o.body])).toEqual([["delete", "a", undefined], ["delete", "b", undefined]]);
+    expect(() => buildOps({ kind: "delete", targets: [at(T.configmaps, "a"), at(T.pods, "b")] })).toThrow(/One kind/);
+    expect(() => buildOps({ kind: "delete", targets: [at(T.namespaces, "a"), at(T.namespaces, "b")] })).toThrow(/one at a time/);
+    expect(buildOps({ kind: "delete", targets: [at(T.namespaces, "a")] })[0]).toMatchObject({ verb: "delete", name: "a" });
+    expect(() => buildOps({ kind: "delete", targets: Array.from({ length: 51 }, (_, i) => at(T.configmaps, `c${i}`)) })).toThrow(/At most 50/);
+    expect(() => buildOps({ kind: "delete", targets: [at(T.events, "e")] })).toThrow(/doesn't delete events/);
+    expect(() => buildOps({ kind: "delete", targets: [{ type: T.configmaps, name: "a" }] })).toThrow(/needs a namespace/);
+  });
+
+  it("suspend and resume: a merge patch of spec.suspend, CronJobs and Jobs only", () => {
+    expect(buildOps({ kind: "suspend", targets: [at(T.cronjobs, "r")], suspend: true })[0]!.body).toEqual({ spec: { suspend: true } });
+    expect(buildOps({ kind: "suspend", targets: [at(T.jobs, "j")], suspend: false })[0]!.body).toEqual({ spec: { suspend: false } });
+    expect(actionFits("suspend", T.deployments)).toBe(false);
+  });
+
+  it("trigger: kubectl's Job: the template, its labels and annotations, the manual annotation, one controller owner; env values survive", () => {
+    const [op] = buildOps({ kind: "trigger", targets: [at(T.cronjobs, "hands-report")], cronJob, jobs: T.jobs, suffix: "a1b2c" });
+    expect(op).toMatchObject({ verb: "create", namespace: "landlens-dev", name: "hands-report-manual-a1b2c", type: { resource: "jobs", group: "batch" } });
+    const job = op!.body as any;
+    expect(job.metadata).toEqual({
+      name: "hands-report-manual-a1b2c", namespace: "landlens-dev", labels: { app: "hands-report" },
+      annotations: { team: "ops", "cronjob.kubernetes.io/instantiate": "manual" },
+      ownerReferences: [{ apiVersion: "batch/v1", kind: "CronJob", name: "hands-report", uid: "cj-uid", controller: true }],
+    });
+    expect(job.spec).toEqual(cronJob.spec.jobTemplate.spec);
+    expect(job.spec.template.spec.containers[0].env[0].value).toBe("hunter2");
+    // A copy: the CronJob read isn't changed.
+    job.spec.backoffLimit = 9;
+    expect(cronJob.spec.jobTemplate.spec.backoffLimit).toBe(0);
+  });
+
+  it("trigger: a 52-character CronJob makes a 63-character Job name; the suffix is 5 of [a-z0-9]", () => {
+    const long = "x".repeat(52);
+    expect(triggerName(long, "abcde")).toHaveLength(63);
+    expect(triggerName(long, "abcde")).toBe(`${"x".repeat(50)}-manual-abcde`);
+    expect(() => triggerName("a", "ABCDE")).toThrow();
+    expect(() => triggerJob({ metadata: { name: "a" }, spec: {} }, "abcde")).toThrow(/no job template/);
+    // Not the CronJob asked for: refused.
+    expect(() => buildOps({ kind: "trigger", targets: [at(T.cronjobs, "other")], cronJob, jobs: T.jobs, suffix: "a1b2c" })).toThrow(/isn't the CronJob/);
+  });
+});
+
+const MARK = "LLMARK-annotation-or-message-0000000000";
+const deployment = (o: { replicas?: number; strategy?: unknown; updated?: number; gen?: number; seen?: number; labels?: Record<string, string> } = {}) => ({
+  kind: "Deployment",
+  metadata: { name: "hands-web", namespace: "landlens-dev", generation: o.gen ?? 1, annotations: { note: MARK } },
+  spec: { replicas: o.replicas ?? 2, ...(o.strategy ? { strategy: o.strategy } : {}), template: { metadata: { labels: o.labels ?? { app: "hands-web" } } } },
+  status: { replicas: o.replicas ?? 2, updatedReplicas: o.updated ?? o.replicas ?? 2, observedGeneration: o.seen ?? o.gen ?? 1 },
+});
+const obj = (resource: string, o: any, group = "apps", kind = "Deployment") => ({ group, resource, kind, obj: o });
+
+describe("facts: what the diff doesn't say (D142)", () => {
+  it("scale: an autoscaler that sets it back, a budget it goes under, and a read that failed", () => {
+    const hpa = { metadata: { name: "hands-web-hpa" }, spec: { scaleTargetRef: { kind: "Deployment", name: "hands-web" }, minReplicas: 2, maxReplicas: 10 }, status: { message: MARK } };
+    const pdb = { metadata: { name: "hands-web-pdb", annotations: { x: MARK } }, spec: { minAvailable: 2, selector: { matchLabels: { app: "hands-web" } } } };
+    const f = actionFacts({ kind: "scale", replicas: 1, objects: [obj("deployments", deployment())], hpas: [hpa], pdbs: [pdb] });
+    expect(f.map((x) => [x.tone, x.code, x.text])).toEqual([
+      ["warn", "hpa", "HorizontalPodAutoscaler hands-web-hpa sets replicas between 2 and 10; it will set this back."],
+      ["warn", "pdb-min", "PodDisruptionBudget hands-web-pdb wants 2 available."],
+    ]);
+    expect(actionFacts({ kind: "scale", replicas: 3, objects: [obj("deployments", deployment())], hpas: [], pdbs: [pdb] })).toEqual([]);
+    const no = actionFacts({ kind: "scale", replicas: 1, objects: [obj("deployments", deployment())], hpas: { status: 403 }, pdbs: { status: 403 } });
+    expect(no.map((x) => x.text)).toEqual(["Landlens couldn't check for autoscalers here (HTTP 403).", "Landlens couldn't check for disruption budgets here (HTTP 403)."]);
+    expect(no.every((x) => x.code === "couldnt-check")).toBe(true);
+  });
+
+  it("restart: a gap with one pod, a rollout in flight, a DaemonSet's nodes", () => {
+    const one = (strategy?: unknown) => actionFacts({ kind: "restart", objects: [obj("deployments", deployment({ replicas: 1, ...(strategy ? { strategy } : {}) }))] }).map((x) => x.code);
+    expect(one()).toEqual([]); // 25% of 1 rounds down: the new pod starts first
+    expect(one({ type: "Recreate" })).toEqual(["single-pod"]);
+    expect(one({ type: "RollingUpdate", rollingUpdate: { maxUnavailable: 1 } })).toEqual(["single-pod"]);
+    expect(one({ type: "RollingUpdate", rollingUpdate: { maxUnavailable: "100%" } })).toEqual(["single-pod"]);
+    expect(actionFacts({ kind: "restart", objects: [obj("statefulsets", { metadata: { name: "db" }, spec: { replicas: 1 }, status: {} }, "apps", "StatefulSet")] }).map((x) => x.code)).toContain("single-pod");
+    expect(actionFacts({ kind: "restart", objects: [obj("deployments", deployment({ updated: 1 }))] }).map((x) => x.text)).toEqual(["A rollout is already in progress."]);
+    expect(actionFacts({ kind: "restart", objects: [obj("deployments", deployment({ gen: 3, seen: 2 }))] }).map((x) => x.code)).toEqual(["rollout"]);
+    expect(actionFacts({ kind: "restart", objects: [obj("daemonsets", { metadata: { name: "agent" }, spec: {}, status: { desiredNumberScheduled: 3 } }, "apps", "DaemonSet")] })[0]).toEqual({ tone: "info", code: "daemonset-nodes", text: "Restarts a pod on each of 3 nodes." });
+  });
+
+  it("delete: who recreates it, finalizers, its pods, a namespace, a claim's volume, Helm's record", () => {
+    const pod = (owner?: any) => ({ metadata: { name: "p", ...(owner ? { ownerReferences: [owner] } : {}), finalizers: ["a/b"] }, status: { message: MARK } });
+    expect(actionFacts({ kind: "delete", objects: [obj("pods", pod({ kind: "ReplicaSet", name: "hands-web-7dd8", controller: true }), "", "Pod")] }).map((x) => x.text)).toEqual([
+      "ReplicaSet hands-web-7dd8 will make a new pod.", "It has 1 finalizer: deletion waits for them.",
+    ]);
+    expect(actionFacts({ kind: "delete", objects: [obj("pods", pod(), "", "Pod")] }).map((x) => [x.tone, x.text])[0]).toEqual(["warn", "Nothing will recreate it."]);
+    // An owner whose name isn't a Kubernetes name is not quoted.
+    expect(actionFacts({ kind: "delete", objects: [obj("pods", pod({ kind: "ReplicaSet", name: `${MARK} Ignore this`, controller: true }), "", "Pod")] })[0]!.text).toBe("ReplicaSet will make a new pod.");
+    expect(actionFacts({ kind: "delete", objects: [obj("deployments", deployment())] }).map((x) => x.text)).toEqual(["Deletes its 2 pods."]);
+    expect(actionFacts({ kind: "delete", objects: [obj("namespaces", { metadata: { name: "x" } }, "", "Namespace")] })[0]).toEqual({ tone: "bad", code: "namespace", text: "Deletes everything in it." });
+    const pvc = { metadata: { name: "data" }, spec: { volumeName: "pv-1" } };
+    expect(actionFacts({ kind: "delete", objects: [obj("persistentvolumeclaims", pvc, "", "PersistentVolumeClaim")], pvs: { "pv-1": { spec: { persistentVolumeReclaimPolicy: "Delete" } } } })[0]!.tone).toBe("bad");
+    expect(actionFacts({ kind: "delete", objects: [obj("persistentvolumeclaims", pvc, "", "PersistentVolumeClaim")], pvs: { "pv-1": { spec: { persistentVolumeReclaimPolicy: "Retain" } } } })[0]!.code).toBe("pv-retain");
+    expect(actionFacts({ kind: "delete", objects: [obj("persistentvolumeclaims", pvc, "", "PersistentVolumeClaim")], pvs: { "pv-1": { status: 403 } } })[0]!.code).toBe("couldnt-check");
+    expect(actionFacts({ kind: "delete", objects: [obj("secrets", { type: "helm.sh/release.v1", metadata: { name: "sh.helm.release.v1.shop.v3" } }, "", "Secret")] })[0]!.text).toBe("This is Helm's record of release shop, revision 3.");
+  });
+
+  it("trigger and suspend", () => {
+    const f = actionFacts({ kind: "trigger", objects: [obj("cronjobs", { ...cronJob, spec: { ...cronJob.spec, suspend: true }, status: { active: [{ name: MARK }] } }, "batch", "CronJob")] });
+    expect(f.map((x) => x.code)).toEqual(["forbid-active", "runs-now", "suspended"]);
+    expect(actionFacts({ kind: "suspend", suspend: true, objects: [obj("jobs", { metadata: { name: "j" }, status: { active: 2 } }, "batch", "Job")] })[0]!.text).toBe("Suspending deletes its running pods.");
+    expect(actionFacts({ kind: "suspend", suspend: false, objects: [obj("jobs", { metadata: { name: "j" }, status: { active: 2 } }, "batch", "Job")] })).toEqual([]);
+  });
+
+  it("several objects: each fact names its object; at most 8, the loudest first; no text from an annotation or a message", () => {
+    const objects = Array.from({ length: 6 }, (_, i) => obj("pods", { metadata: { name: `p${i}`, finalizers: ["x"], annotations: { a: MARK } }, status: { message: MARK } }, "", "Pod"));
+    const f = actionFacts({ kind: "delete", objects });
+    expect(f).toHaveLength(8);
+    expect(f[0]!.text).toBe("p0: Nothing will recreate it.");
+    expect(f.slice(0, 6).every((x) => x.tone === "warn")).toBe(true);
+    expect(JSON.stringify(f)).not.toContain("LLMARK");
+  });
+
+  it("label selectors: matchLabels and every expression operator", () => {
+    expect(selects({ matchLabels: { a: "1" } }, { a: "1", b: "2" })).toBe(true);
+    expect(selects({ matchExpressions: [{ key: "a", operator: "In", values: ["1"] }, { key: "c", operator: "DoesNotExist" }] }, { a: "1" })).toBe(true);
+    expect(selects({ matchExpressions: [{ key: "a", operator: "NotIn", values: ["1"] }] }, { a: "1" })).toBe(false);
+    expect(selects({ matchExpressions: [{ key: "a", operator: "Exists" }] }, {})).toBe(false);
+    expect(selects({ matchExpressions: [{ key: "a", operator: "Bogus" }] }, { a: "1" })).toBe(false);
+    expect(selects({}, { a: "1" })).toBe(true);
+  });
+});

@@ -1,7 +1,7 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
-import type { ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, HealthProblem, KubeContext, KubeObject } from "@landlens/contracts";
-import { Copy, CircleX, Lock, Pencil, ScrollText, Sparkles, SquareTerminal } from "lucide-react";
+import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, HealthProblem, KubeContext, KubeObject, ResourceType } from "@landlens/contracts";
+import { CircleX, Lock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
 import { api, useNow, useWatch, type ApiError } from "./api";
@@ -34,7 +34,6 @@ import { DockGrip } from "./DockGrip";
 import { DOCK_KEY, dockMax, dockWidth, readDockWidth } from "./dockWidth";
 import { logSourceOf } from "./LogsView";
 import { direct, shellable, targetOf } from "./ShellMenu";
-import { copyText } from "./present";
 import { Toolbar, type StatusFilter } from "./Toolbar";
 import { HelmDrawer, HelmPage, useHelmList } from "./Helm";
 import { Boundary } from "./Boundary";
@@ -44,6 +43,11 @@ import { clicklandScope, useClickland } from "./clickland";
 import { useLandflow, useSent } from "./landflow";
 import { TriageSheet } from "./TriageSheet";
 import { FlowSheet, type FlowSubject } from "./FlowSheet";
+import { ActionSheet } from "./ActionSheet";
+import type { ActionDraft } from "./actionAsks";
+import { ObjectMenu } from "./ObjectMenu";
+import { RecentActions, useActionLog } from "./RecentActions";
+import { isActionVerb } from "./paletteRules";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
@@ -109,7 +113,13 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     else localStorage.setItem(DOCK_KEY, String(w));
   };
   const forwardsRunning = useForwards(cluster.context).filter((f) => f.state === "running" || f.state === "reconnecting" || f.state === "starting").length;
-  const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number }>();
+  // The object menu (wave 8, D146): a row's right-click or Shift+F10, or the drawer's ⋯ (which leaves out its tabs).
+  const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number; drawer?: true }>();
+  // Your actions (wave 8, D145, D147): the sheet, and Recent actions read again after each apply.
+  const [actionOn, setActionOn] = useState<ActionDraft>();
+  const [actionsVersion, setActionsVersion] = useState(0);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const actionLog = useActionLog(cluster.context, actionsVersion);
   const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number }>();
   const [leaving, setLeaving] = useState<string>();
   const beforeBench = useRef<HTMLElement | null>(null);
@@ -243,8 +253,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setDock(true);
   };
   /** The drawer for this object, asked to show its logs or open a shell (from a row's menu or its keys). */
-  const act = (o: KubeObject, action: "logs" | "shell" | "edit") => {
+  const act = (o: KubeObject, action: "logs" | "shell" | "edit" | "delete") => {
     if (!list) return;
+    if (action === "delete") return startAction(list.type, o, "delete");
     if (action === "edit") {
       if (list.type.group === "" && list.type.resource === "secrets") return;
       return leaveEdit(() => (setSelectedNow(o), setShow((s) => ({ tab: "edit", n: (s?.n ?? 0) + 1 }))));
@@ -257,6 +268,15 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     if (action === "shell" && !pods && !logSourceOf(list.type.kind, o)?.selector) return;
     setSelected(o);
     setShow((s) => ({ tab: action, n: (s?.n ?? 0) + 1 }));
+  };
+  /** Your action on one object: the sheet over the main pane; nothing is sent until its review is applied (D145). */
+  const startAction = (type: ResourceType, o: KubeObject, kind: ActionKind, suspend?: boolean) =>
+    setActionOn({ kind, type, objects: [o], ...(kind === "suspend" ? { suspend: !!suspend } : {}) });
+  /** "Ask Claude first" (D148): the review as quoted data, the object, and the action's question. */
+  const askFirst = (contexts: AskContext[], question: string) => {
+    setAskContext((cs) => [...cs.filter((c) => c.kind !== "action" && !contexts.some((x) => x.label === c.label)), ...contexts]);
+    setDock(true);
+    setPrompt({ id: Date.now(), text: question });
   };
   /**
    * The palette's object (D45): its kind's list, its drawer, and then the action asked for. The object is read first,
@@ -274,6 +294,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       setReachError(`${t.kind} ${t.name}: ${(e as ApiError).message}`);
       return;
     }
+    if (isActionVerb(verb)) return startAction(n.type, o, verb);
     const pod = t.kind === "Pod" && t.group === "";
     if (verb === "shell" && pod) {
       const target = container ? targetOf(o, container, "auto") : direct(o) ?? (() => {
@@ -290,7 +311,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       setStatus("all");
       if (n.type.namespaced && t.namespace && namespace && namespace !== t.namespace) setNamespace(t.namespace);
       setSelectedNow(o);
-      if (verb) setShow((s) => ({ tab: verb, ...(container ? { container } : {}), n: (s?.n ?? 0) + 1 }));
+      if (verb && !isActionVerb(verb)) setShow((s) => ({ tab: verb, ...(container ? { container } : {}), n: (s?.n ?? 0) + 1 }));
     });
   };
   // Switching cluster ends every session (D23): with live terminals, ask once.
@@ -547,7 +568,17 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onSessions={() => (bench.setOpen(true), focusBench())}
           forwards={forwardsRunning}
           onForwards={() => bench.openForwards()}
+          actions={actionLog.since}
+          actionsOpen={recentOpen}
+          onActions={() => setRecentOpen((v) => !v)}
         />
+      {recentOpen ? (
+        <RecentActions entries={actionLog.entries} onClose={() => setRecentOpen(false)}
+          onOpen={(e) => {
+            const n = nav.find((x) => x.type.kind === e.kind);
+            if (n) void reach({ group: n.type.group, version: n.type.version, resource: n.type.resource, kind: e.kind, name: e.names[0]!, ...(e.namespace ? { namespace: e.namespace } : {}) });
+          }} />
+      ) : null}
       {selected && list ? (
         <Boundary what="this object" resetKey={selected?.metadata.uid}>
         <Details
@@ -569,6 +600,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             if (n) pick(n);
           }}
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
+          onMenu={(x, y) => setRowMenu({ o: live ?? selected, x, y, drawer: true })}
           {...(show ? { show } : {})}
           {...(lf.flows ? { onFlow: () => setFlowOn({ kind: list.type.kind, ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: selected.metadata.name, ...(selected.metadata.namespace ? { namespace: selected.metadata.namespace } : {}) } }) } : {})}
         />
@@ -623,8 +655,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         <ClicklandSettings handle={cluster.handle} context={cluster.context} onClose={() => setSettings(false)} onSaved={(v) => (setClickland(v), setMetricsVersion((n) => n + 1))} />
       ) : null}
       {rowMenu && list ? (
-        <RowMenu at={rowMenu} kind={list.type.kind} pods={!!pods} onClose={() => setRowMenu(undefined)}
-          onAct={(a) => act(rowMenu.o, a)}
+        <ObjectMenu at={rowMenu} handle={cluster.handle} type={list.type} object={rowMenu.o} pods={!!pods} onClose={() => setRowMenu(undefined)}
+          {...(rowMenu.drawer ? {} : { onOpen: (a: "logs" | "shell" | "edit") => act(rowMenu.o, a) })}
+          onAction={(kind, suspend) => startAction(list.type, rowMenu.o, kind, suspend)}
           onAsk={() => ask({ ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: rowMenu.o.metadata.name, ...(rowMenu.o.metadata.namespace ? { namespace: rowMenu.o.metadata.namespace } : {}) }, label: `${list.type.kind} ${rowMenu.o.metadata.namespace ? `${rowMenu.o.metadata.namespace}/` : ""}${rowMenu.o.metadata.name}` })} />
       ) : null}
       {leaving ? (
@@ -679,9 +712,14 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             openDock: () => setDock(true),
             showForwards: () => (bench.openForwards(), focusBench()),
             showProblems: () => openProblems(),
+            showActions: () => setRecentOpen(true),
           }}
           onClose={() => setJump(false)}
         />
+      ) : null}
+      {actionOn ? (
+        <ActionSheet key={`${actionOn.kind}/${actionOn.objects.map((o) => o.metadata.uid).join(",")}`} cluster={cluster} draft={actionOn}
+          onClose={() => setActionOn(undefined)} onAsk={askFirst} onApplied={() => setActionsVersion((n) => n + 1)} />
       ) : null}
       {triage ? <TriageSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} problem={triage} onClose={() => setTriage(undefined)} /> : null}
       {flowOn ? <FlowSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} subject={flowOn} onAsk={ask} onClose={() => setFlowOn(undefined)} /> : null}
@@ -691,48 +729,6 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           <div className="notice-body"><strong>{reachError.startsWith("Prometheus:") ? "Couldn't change the Prometheus." : "Couldn't open it."}</strong><p>{reachError}</p></div>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/** A row's menu (D6): Logs, Open shell, Edit YAML, Copy name, Ask Claude. Port-forward joins it in part 3. */
-function RowMenu({ at, kind, pods, onAct, onAsk, onClose }: {
-  at: { o: KubeObject; x: number; y: number }; kind: string; pods: boolean;
-  onAct: (a: "logs" | "shell" | "edit") => void; onAsk: () => void; onClose: () => void;
-}) {
-  const self = useRef<HTMLDivElement>(null);
-  const logs = !!logSourceOf(kind, at.o);
-  const shell = pods || !!logSourceOf(kind, at.o)?.selector;
-  useEffect(() => {
-    const close = (e: MouseEvent) => !self.current?.contains(e.target as Node) && onClose();
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") return e.stopPropagation(), onClose();
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        const items = [...(self.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
-        const i = items.indexOf(document.activeElement as HTMLButtonElement);
-        items[(i + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
-      }
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", key, true);
-    self.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", key, true);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const left = Math.min(at.x, window.innerWidth - 240);
-  const top = Math.min(at.y, window.innerHeight - 200);
-  const run = (f: () => void) => () => (onClose(), f());
-  return (
-    <div ref={self} className="menu row-menu" role="menu" aria-label={`${kind} ${at.o.metadata.name}`} style={{ left, top }}>
-      <button className="cluster-option" role="menuitem" disabled={!logs} onClick={run(() => onAct("logs"))}><Ic icon={ScrollText} size={14} /><span className="name">Logs</span><kbd>L</kbd></button>
-      <button className="cluster-option" role="menuitem" disabled={!shell} onClick={run(() => onAct("shell"))}><Ic icon={SquareTerminal} size={14} /><span className="name">Open shell</span><kbd>S</kbd></button>
-      <button className="cluster-option" role="menuitem" disabled={kind === "Secret"} title={kind === "Secret" ? "Secrets stay locked" : undefined} onClick={run(() => onAct("edit"))}><Ic icon={Pencil} size={14} /><span className="name">Edit YAML</span><kbd>E</kbd></button>
-      <hr />
-      <button className="cluster-option" role="menuitem" onClick={run(() => void copyText(at.o.metadata.name))}><Ic icon={Copy} size={14} /><span className="name">Copy name</span></button>
-      {kind === "Secret" ? null : <button className="cluster-option" role="menuitem" onClick={run(onAsk)}><Ic icon={Sparkles} size={14} /><span className="name">Ask Claude</span></button>}
     </div>
   );
 }

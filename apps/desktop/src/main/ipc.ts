@@ -2,7 +2,7 @@
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type ClusterStatusEvent, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
 import { checkAccess, getRelease, KubeError, listContexts, listReleases, mergeCatalog, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
-import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { BrowserWindow, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { DoctorService } from "./doctor";
@@ -19,10 +19,12 @@ import type { GcpService } from "./gcp";
 import type { TelemetryService } from "./telemetry";
 import type { BrainService } from "./brain";
 import { isAppUrl } from "./security";
+import { nativeConfirm as confirmOn } from "./native-confirm";
+import type { ActionService } from "./actions";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -33,12 +35,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
   clusters.onGone((handle) => gkeHandles.delete(handle));
 
   /** Main's own question, in a native dialog on the asking window: the renderer can't answer it (part 5, L3). */
-  const nativeConfirm = (event: IpcMainInvokeEvent) => async ({ message, detail, yes }: { message: string; detail: string; yes: string }) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
-    const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
-    return r.response === 0;
-  };
+  const nativeConfirm = (event: IpcMainInvokeEvent) => confirmOn(event.sender);
 
   const disconnect = async (handle: string) => {
     metrics.service.forget(handle);
@@ -271,6 +268,12 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "edit:create": (r, event) => workbench.reviewCreate(r, event.sender),
     "edit:apply": (r, event) => workbench.applyEdit(r, event.sender),
     "edit:discard": async ({ id }, event) => (workbench.discardEdit(id, event.sender), { ok: true }),
+    // Your actions (docs/workbench.md#your-actions, D143–D147): main builds, dry-runs and keeps every request as you;
+    // Apply names the review and its digest; bulk and wide deletes ask in main's own dialog first.
+    "action:review": (r, event) => actions.review(r, event.sender),
+    "action:apply": (r, event) => actions.apply(r, event.sender, nativeConfirm(event)),
+    "action:discard": async ({ id }, event) => (actions.discard(id, event.sender), { ok: true }),
+    "action:log": async ({ context, limit }) => ({ entries: actions.history(context, limit) }),
     // Port-forwards belong to the app, not a window (docs/workbench.md#port-forward).
     "forward:list": async () => ({ forwards: forwards.list() }),
     "forward:suggest": ({ port }) => forwards.suggest(port),

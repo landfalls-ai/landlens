@@ -66,6 +66,10 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/watch.ts` | `ResourceWatcher`: paginated list, watch with bookmarks, relist on 410, batches |
 | `packages/kube/src/clusters.ts` | `ClusterManager` (connect, discovery, get, events) and `WatchHub` (shared, ref-counted watchers) |
 | `packages/kube/src/access.ts` | SelfSubjectAccessReview |
+| `packages/kube/src/changes.ts`, `edits.ts` | `prepareOp` (read, pin, dry-run, diff, risks), shared by the agent's `ChangeBroker` and your `EditBroker` (YAML edits, Create, and your actions' `reviewOps` and `apply({ each })` with the digest) |
+| `packages/kube/src/actions.ts`, `action-kinds.ts` | Your actions (wave 8): the kind table, the request each action sends, kubectl's triggered Job, and the facts beside the diff |
+| `apps/desktop/src/main/actions.ts`, `action-log.ts`, `as-you.ts`, `native-confirm.ts` | `ActionService` (reviews and applies as you, owned by a window, main's dialog, limits), the kept action log, the shared as-you token helper, main's own dialog |
+| `apps/desktop/src/renderer/src/ObjectMenu.tsx`, `ActionSheet.tsx`, `ReviewCard.tsx`, `RecentActions.tsx`, `actionAsks.ts` | The object menu, the action sheet, the review card shared with the YAML editor, Recent actions, Ask Claude first |
 | `packages/kube/src/policy.ts` | Request parsing and token policies |
 | `packages/kube/src/frontdoor.ts` | The front door |
 | `packages/kube/src/tool-kubeconfig.ts` | The kubeconfig for tools and the agent |

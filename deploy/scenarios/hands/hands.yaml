@@ -1,0 +1,164 @@
+# Wave 8's scenario (docs/workbench.md#your-actions, D169): objects for the person's actions, the drain preview and
+# the Secret reveal, all in landlens-dev and labelled scenario=hands. Applied by up.mjs (which adds the two Secrets);
+# removed by down.mjs. Images are the ones workbench.yaml already uses.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hands-web
+  namespace: landlens-dev
+  labels: { app: hands-web, scenario: hands }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: hands-web } }
+  template:
+    metadata:
+      labels: { app: hands-web, scenario: hands }
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }
+---
+# minAvailable 2 of 2 replicas: no disruption is allowed, so a drain is blocked on hands-web's pods.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: hands-web-pdb
+  namespace: landlens-dev
+  labels: { scenario: hands }
+spec:
+  minAvailable: 2
+  selector: { matchLabels: { app: hands-web } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hands-cache
+  namespace: landlens-dev
+  labels: { app: hands-cache, scenario: hands }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hands-cache } }
+  template:
+    metadata:
+      labels: { app: hands-cache, scenario: hands }
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10
+          volumeMounts: [{ name: cache, mountPath: /cache }]
+          resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }
+      volumes: [{ name: cache, emptyDir: {} }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hands-db
+  namespace: landlens-dev
+  labels: { app: hands-db, scenario: hands }
+spec:
+  serviceName: hands-db
+  replicas: 1
+  selector: { matchLabels: { app: hands-db } }
+  template:
+    metadata:
+      labels: { app: hands-db, scenario: hands }
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: db
+          image: registry.k8s.io/pause:3.10
+          resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hands-agent
+  namespace: landlens-dev
+  labels: { app: hands-agent, scenario: hands }
+spec:
+  selector: { matchLabels: { app: hands-agent } }
+  template:
+    metadata:
+      labels: { app: hands-agent, scenario: hands }
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: agent
+          image: registry.k8s.io/pause:3.10
+          resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }
+---
+# No controller: nothing recreates it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hands-bare
+  namespace: landlens-dev
+  labels: { app: hands-bare, scenario: hands }
+spec:
+  terminationGracePeriodSeconds: 2
+  containers:
+    - name: bare
+      image: registry.k8s.io/pause:3.10
+      resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }
+---
+# 31 February: it never fires by itself; Trigger runs it once.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hands-report
+  namespace: landlens-dev
+  labels: { app: hands-report, scenario: hands }
+spec:
+  schedule: "0 0 31 2 *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    metadata:
+      labels: { app: hands-report, scenario: hands }
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels: { app: hands-report, scenario: hands }
+        spec:
+          restartPolicy: Never
+          terminationGracePeriodSeconds: 2
+          containers:
+            - name: report
+              image: busybox:1.36
+              command: ["sh", "-c", "echo report for $REPORT_DAY; sleep 2"]
+              env: [{ name: REPORT_DAY, value: monday }]
+              resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hands-cm-1, namespace: landlens-dev, labels: { scenario: hands } }
+data: { index: "1" }  # not `n`: YAML 1.1 reads it as false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hands-cm-2, namespace: landlens-dev, labels: { scenario: hands } }
+data: { index: "2" }  # not `n`: YAML 1.1 reads it as false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hands-cm-3, namespace: landlens-dev, labels: { scenario: hands } }
+data: { index: "3" }  # not `n`: YAML 1.1 reads it as false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hands-cm-4, namespace: landlens-dev, labels: { scenario: hands } }
+data: { index: "4" }  # not `n`: YAML 1.1 reads it as false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hands-cm-5, namespace: landlens-dev, labels: { scenario: hands } }
+data: { index: "5" }  # not `n`: YAML 1.1 reads it as false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: hands-cm-6, namespace: landlens-dev, labels: { scenario: hands } }
+data: { index: "6" }  # not `n`: YAML 1.1 reads it as false

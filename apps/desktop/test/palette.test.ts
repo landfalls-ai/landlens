@@ -24,10 +24,25 @@ describe("the ⌘K palette's rules", () => {
   });
 
   it("offers only the actions that fit the kind, and never editing a Secret", () => {
-    expect(verbsFor(kind("Pod"))).toEqual(["logs", "shell", "forward", "edit", "ask"]);
-    expect(verbsFor(kind("Deployment", "apps"))).toEqual(["logs", "shell", "edit", "ask"]);
-    expect(verbsFor(kind("Service"))).toEqual(["forward", "edit", "ask"]);
-    expect(verbsFor(kind("Secret"))).toEqual(["ask"]);
-    expect(verbsFor(kind("ConfigMap"))).toEqual(["edit", "ask"]);
+    expect(verbsFor(kind("Pod"))).toEqual(["logs", "shell", "forward", "edit", "ask", "delete"]);
+    expect(verbsFor(kind("Deployment", "apps"))).toEqual(["logs", "shell", "edit", "scale", "restart", "ask", "delete"]);
+    expect(verbsFor(kind("Service"))).toEqual(["forward", "edit", "ask", "delete"]);
+    expect(verbsFor(kind("Secret"))).toEqual(["ask", "delete"]);
+    expect(verbsFor(kind("ConfigMap"))).toEqual(["edit", "ask", "delete"]);
+  });
+
+  it("offers your actions by kind, after edit, and delete never first (wave 8, D146)", () => {
+    expect(verbsFor(kind("CronJob", "batch"))).toEqual(["edit", "trigger", "ask", "delete"]);
+    expect(verbsFor(kind("DaemonSet", "apps"))).toEqual(["logs", "shell", "edit", "restart", "ask", "delete"]);
+    expect(verbsFor(kind("StatefulSet", "apps"))).toEqual(["logs", "shell", "edit", "scale", "restart", "ask", "delete"]);
+    // A custom kind that shares a name with a built-in one gets no built-in action.
+    expect(verbsFor(kind("Deployment", "example.com"))).not.toContain("scale");
+    for (const k of ["Pod", "Deployment", "Secret", "ConfigMap", "CronJob", "Namespace"]) expect(verbsFor(kind(k, k === "Deployment" ? "apps" : k === "CronJob" ? "batch" : ""))[0]).not.toBe("delete");
+    expect(parseQuery("scale web")).toEqual({ verb: "scale", text: "web", commands: false });
+    expect(parseQuery("Delete hands-cm-1")).toEqual({ verb: "delete", text: "hands-cm-1", commands: false });
+    expect(parseQuery("trigger")).toEqual({ verb: "trigger", text: "", commands: false });
+    // A name that starts with a verb is a name.
+    expect(parseQuery("delete-me")).toEqual({ text: "delete-me", commands: false });
+    expect(parseQuery("restarter")).toEqual({ text: "restarter", commands: false });
   });
 });

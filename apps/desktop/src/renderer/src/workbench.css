@@ -375,3 +375,52 @@
 .pb-pad { padding: 14px 16px; }
 @container main (max-width: 720px) { .pb-since, .pb-row .ov-kind { display: none; } }
 .ov .pb-checks { margin: 0; }
+
+/* Your actions (wave 8, D145–D147): the object menu, the action sheet, main's facts, and Recent actions. */
+.object-menu { width: 240px; min-width: 240px; box-shadow: inset 0 0 0 1px var(--line), var(--shadow-2); }
+.object-menu .menu-group { display: contents; }
+.object-menu .cluster-option.bad, .object-menu .cluster-option.bad > .ic { color: var(--bad-text); }
+.object-menu .cluster-option.with-why { height: auto; min-height: 30px; padding-top: 5px; padding-bottom: 5px; align-items: flex-start; }
+.object-menu .cluster-option.with-why > .ic { margin-top: 1px; }
+.object-menu .name { display: grid; gap: 1px; white-space: normal; }
+.object-menu .why-line { font-size: var(--t-11, 11px); color: var(--ink-3); line-height: 1.3; }
+.dialog.action-sheet { width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 12vh - 32px); display: flex; flex-direction: column; }
+.action-sheet .dialog-body { overflow: auto; min-height: 0; }
+.action-sheet .change.mine { margin: 0; }
+.action-form { display: grid; gap: 12px; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+.stepper input { width: 96px; height: 32px; text-align: center; font-size: var(--t-15); border-radius: var(--r-2); background: var(--bg-1); color: var(--ink-1); border: 1px solid var(--line-2); }
+.stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+.stepper .icon-btn { width: 32px; height: 32px; box-shadow: inset 0 0 0 1px var(--line-2); }
+.action-checking { display: grid; gap: 8px; padding: 4px 0 8px; }
+.action-checking .skel { height: 12px; }
+.action-checking .skel.short { width: 55%; }
+.action-checking .small { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; }
+.change-facts { list-style: none; margin: 0; padding: 8px 12px 0; display: grid; gap: 5px; }
+.change-facts li { display: flex; align-items: flex-start; gap: 7px; font-size: var(--t-12); color: var(--ink-2); line-height: 1.4; }
+.change-facts li > .ic { margin-top: 2px; flex: none; color: var(--ink-3); }
+.change-facts li.fact-warn > .ic { color: var(--warn-text); }
+.change-facts li.fact-bad > .ic, .change-facts li.fact-bad { color: var(--bad-text); }
+.change-facts .first { font-weight: 500; }
+.action-results, .action-problems ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.action-results li { display: flex; align-items: flex-start; gap: 8px; font-size: var(--t-125); color: var(--ink-2); }
+.action-results li > .ic { margin-top: 2px; flex: none; }
+.action-results .result-applied > .ic, .action-results .result-gone > .ic { color: var(--ok-text); }
+.action-results .result-conflict > .ic { color: var(--warn-text); }
+.action-results .result-failed > .ic { color: var(--bad-text); }
+.action-problems { display: grid; gap: 8px; }
+.action-problems li { color: var(--ink-2); overflow-wrap: anywhere; }
+.sb-item.actions .ic { color: var(--ink-3); }
+.pop.recent-actions { position: fixed; right: 12px; bottom: calc(var(--statusbar-h) + 6px); width: min(420px, calc(100vw - 24px)); max-height: min(520px, calc(100vh - 120px)); z-index: 45; padding: 0; gap: 0; display: flex; flex-direction: column; box-shadow: inset 0 0 0 1px var(--line), var(--shadow-2); }
+.recent-head { display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 12px; border-bottom: 1px solid var(--line); font-size: var(--t-125); }
+.recent-list { list-style: none; margin: 0; padding: 4px; overflow: auto; min-height: 0; display: grid; gap: 1px; }
+.recent-row { width: 100%; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 32px; padding: 4px 8px; border-radius: var(--r-2); text-align: left; font-size: var(--t-12); color: var(--ink-1); }
+.recent-row:hover:not(:disabled), .recent-row:focus-visible { background: var(--hover); }
+.recent-row:disabled { cursor: default; opacity: 1; }
+.recent-text { overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.35; }
+.recent-age { color: var(--ink-3); font-size: var(--t-115); }
+.recent-outcome { display: inline-flex; align-items: center; gap: 4px; font-size: var(--t-115); }
+.recent-outcome.tone-dim { color: var(--ink-3); }
+.recent-empty, .recent-foot { margin: 0; padding: 10px 12px; }
+.recent-foot { border-top: 1px solid var(--line); }
+.dialog.action-sheet:focus { outline: none; box-shadow: var(--shadow-2); }

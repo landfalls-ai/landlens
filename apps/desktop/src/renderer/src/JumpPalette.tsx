@@ -30,6 +30,8 @@ export type Commands = {
   openDock: () => void;
   showForwards: () => void;
   showProblems: () => void;
+  /** Recent actions (wave 8, D147). */
+  showActions: () => void;
 };
 
 type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Kinds" | "Clusters" | "Commands" | "Containers";
@@ -206,6 +208,7 @@ export function JumpPalette(props: {
     { key: "c:create", group: "Commands", label: "Create from YAML", icon: FilePlus2, run: () => done(props.commands.createYaml) },
     { key: "c:forwards", group: "Commands", label: "Show port forwards", icon: ArrowRightLeft, run: () => done(props.commands.showForwards) },
     { key: "c:problems", group: "Commands", label: "Show problems", icon: Stethoscope, run: () => done(props.commands.showProblems) },
+    { key: "c:actions", group: "Commands", label: "Recent actions", icon: History, run: () => done(props.commands.showActions) },
     { key: "c:dock", group: "Commands", label: "Ask Claude", hint: `${MOD}J`, icon: Sparkles, run: () => done(props.commands.openDock) },
     { key: "c:sidebar", group: "Commands", label: "Toggle sidebar", hint: `${MOD}B`, icon: PanelLeft, run: () => done(props.commands.toggleSidebar) },
     { key: "c:fold", group: "Commands", label: "Fold all sections", hint: "sidebar", icon: FoldVertical, run: () => done(props.commands.foldSections) },

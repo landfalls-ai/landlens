@@ -307,8 +307,54 @@ Code: `packages/kube/src/search.ts` (the names), `apps/desktop/src/main/ipc.ts` 
 `apps/desktop/src/renderer/src/JumpPalette.tsx` (the palette) and `paletteRules.ts` (verbs, matching, the query's
 first word).
 
+## Your actions
+
+Wave 8 part 1 (D140–D148, [specs/008-hands](specs/008-hands/spec.md)). The everyday writes, by you, through the same
+dry-run card as the YAML editor: **Scale** (Deployments, StatefulSets, ReplicaSets; 0–1000), **Restart** (Deployments,
+StatefulSets, DaemonSets; kubectl's `restartedAt` annotation), **Trigger now** (a CronJob makes the Job
+`kubectl create job --from` makes), **Suspend** and **Resume** (CronJobs and Jobs), and **Delete…** (any kind the
+cluster deletes; Background propagation, pinned to the object's uid and resourceVersion).
+
+- **Where.** The object menu (`ObjectMenu.tsx`, right-click or Shift+F10 on a row, or **⋯** in the drawer's head
+  after Copy name): Open (Logs, Open shell, Edit YAML), Actions, Ask Claude, Copy name, and Delete… last in the bad
+  colour. Arrow keys, Home/End, type-ahead, Esc. Each action asks `cluster:access` first (cached a minute): one your
+  role can't use is disabled and says so ("Your role can't patch deployments in landlens-dev"). ⌘K has the verbs
+  `scale`, `restart`, `trigger` and `delete` (delete is never an object's first row). ⌫ (or Delete) on a focused row
+  opens the delete review; no other key writes. A Secret has Delete only, and no Ask Claude.
+- **The sheet** (`ActionSheet.tsx`). Scale has a form (a number with − and +; arrows step one, Shift+arrows ten);
+  the others open on the review. "Checking with the cluster…" while main reads and dry-runs as you; then the card:
+  "Your action", main's title ("Scale deployment landlens-dev/hands-web to 3 replicas"), risk tags, main's facts,
+  the diff and the cluster's warnings. Apply sends the review's id and digest; the result is one line per object
+  (applied, already gone, changed after your review, failed), with **Review again** on a conflict. Nothing is
+  optimistic: the table changes when the watch does.
+- **Facts** (`actionFacts` in `packages/kube/src/actions.ts`): at most 8 of Landlens's own sentences, the loudest
+  first. An autoscaler that will set the count back; a PodDisruptionBudget a scale goes under; one pod with no
+  surge; a rollout already in progress; what recreates a deleted object (or that nothing will); finalizers; a
+  claim's volume and its reclaim policy; a Namespace's contents; Helm's release record; a CronJob that is suspended
+  or Forbid with a run going. A read that fails says "Landlens couldn't check …" and never blocks the review.
+- **Main's own dialog.** A delete of more than one object, or of a Namespace, CRD, Node, PersistentVolume or
+  APIService, asks again in a native dialog ("Delete 12 ConfigMaps in landlens-dev on orbstack?", Cancel the
+  default) after the card's button. Cancel keeps the review.
+- **Recent actions** (`RecentActions.tsx`, `main/action-log.ts`): one row per apply (and per Cancel in main's
+  dialog), kept in `userData/actions.json` (0600, the newest 500), shown newest first from the status bar's History
+  item (with the count since start) or ⌘K's "Recent actions". A row is its action, kind, names and a closed detail
+  ("2 → 3 replicas"); no diff, no message and no value.
+- **Ask Claude first** puts the review in the dock as quoted data with a fixed question ([agent.md](agent.md#ask-claude-first)).
+
+Code: `packages/kube/src/actions.ts` (builders, the kind table in `action-kinds.ts`, facts), `changes.ts`
+(`prepareOp`, shared with the agent's broker), `edits.ts` (`reviewOps`, `apply({ each })`, the digest),
+`apps/desktop/src/main/actions.ts` (`ActionService`), `as-you.ts`, `native-confirm.ts`, `action-log.ts`, and the
+renderer's `ActionSheet.tsx`, `ReviewCard.tsx`, `ObjectMenu.tsx`, `RecentActions.tsx`, `actionAsks.ts`.
+
 ## Tests
 
+- Your actions (wave 8): `packages/kube` `actions.test.ts` (each body, kubectl's Job, the kind table and refusals,
+  every fact, no copied text), `edits.test.ts` (`reviewOps`, apply each, the digest, a Secret's delete), on OrbStack
+  `actions.integration.test.ts` (scale, restart, suspend and trigger hands-* for real and put back; the triggered Job
+  equal to `kubectl create job --from`'s; a delete pinned to an old version is a 409; a Secret's review has no value);
+  `apps/desktop` `actions-main.test.ts` (as you, owner, digest, main's dialog, discovery, limits), `action-log.test.ts`,
+  `palette.test.ts`, `quotes.test.ts`, and `actions.e2e.test.ts` (menu, drawer ⋯, ⌘K, conflict, Enter on a fresh card,
+  ⌫, a Secret's review, Recent actions).
 - `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
   `workbench.test.ts` (exit statuses, exec and log paths) and, on OrbStack,
   `workbench.integration.test.ts` (a followed log in order; a shell through the front door with the size it was

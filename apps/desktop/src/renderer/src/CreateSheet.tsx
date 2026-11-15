@@ -8,7 +8,7 @@ import type { AskContext } from "./AgentDock";
 import { api, type ApiError } from "./api";
 import { CodeEditor, type CodeEditorHandle, type LineMark } from "./CodeEditor";
 import { Ic, MOD } from "./icons";
-import { ReviewCard } from "./YamlEdit";
+import { ReviewCard } from "./ReviewCard";
 
 const TEMPLATES: Record<string, (ns: string) => string> = {
   Blank: () => "",

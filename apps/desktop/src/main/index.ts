@@ -16,6 +16,8 @@ import { ClicklandHistory } from "./clickland-history";
 import { SiblingText } from "./sibling-text";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
+import { ActionService } from "./actions";
+import { ActionLog } from "./action-log";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
@@ -283,7 +285,14 @@ async function start() {
     // A flow's output is Landflow's text: a question quoting it holds autonomy, decided here (review of part 4, M4).
     served: (rows) => siblingText.served("landflow", rows),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain });
+  // Your actions (wave 8 part 1): Scale, Restart, Delete, Trigger, Suspend and Resume as you, with its own broker,
+  // and one kept row per apply in actions.json (D147); telemetry counts the action and its outcome only.
+  const actions = new ActionService({
+    clusters, frontDoor,
+    log: new ActionLog(join(app.getPath("userData"), "actions.json")),
+    counted: (a) => tel.action(a),
+  });
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();

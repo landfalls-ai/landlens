@@ -14,6 +14,8 @@ const HEADS: [RegExp, Ask][] = [
   [/^Log lines I selected \(/m, "logs"],
   [/^Terminal output I selected \(/m, "terminal"],
   [/^A change I am making \(/m, "edit"],
+  // "Ask Claude first" on one of your actions (wave 8, D148): counted with the edits, a change you are about to make.
+  [/^An action I'm about to take in Landlens \(/m, "edit"],
   [/^A Helm release, as Landlens read it/m, "helm"],
 ];
 

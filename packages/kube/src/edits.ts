@@ -7,12 +7,12 @@
 // (a removed field is a null, a changed list is sent whole). Fields you didn't touch are left to whoever owns them.
 // Requests go through the front door with a token issued for the edit ("you · <context> · edit"), so they are in the
 // audit trail as yours.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { ChangeOperation, EditProblem, EditOwner, EditReview } from "@landlens/contracts";
 import { isMap, isSeq, LineCounter, parseAllDocuments, stringify, visit, type Document } from "yaml";
 export { applyMergePatch, editable, editableYaml, mergePatch, overlaps, patchPaths } from "./edit-yaml.js";
 import { apiPath, toKubeError } from "./client.js";
-import { clean, risks, type ChangeTarget, type Send } from "./changes.js";
+import { clean, prepareOp, risks, type ChangeOp, type ChangeTarget, type Prepared, type Send } from "./changes.js";
 import { editable, isObj, mergePatch, patchPaths } from "./edit-yaml.js";
 import { diffLines } from "./diff.js";
 import { redactObject } from "./redact.js";
@@ -121,7 +121,31 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 type Pending = {
   requests: { method: string; path: string; contentType: string; body: string; describe: string }[];
   expires: number;
+  /** SHA-256 over the requests, as hex (actions): Apply must name it. */
+  digest: string;
 };
+
+/** One kept request's end, when several independent objects are applied (`apply(…, { each: true })`). */
+export type EachResult = { target: string; outcome: "applied" | "conflict" | "failed" | "gone"; message?: string };
+
+/** The SHA-256 of a review's requests, as hex: what an action's Apply must name (D144). */
+export const reviewDigest = (requests: Pending["requests"]) => createHash("sha256").update(JSON.stringify(requests)).digest("hex");
+
+/** Runs `f` over `xs`, at most `n` at a time, answers in the order of `xs`. */
+export async function inOrder<T, R>(xs: T[], n: number, f: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(xs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < xs.length) {
+      const i = next++;
+      out[i] = await f(xs[i]!, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, xs.length) }, worker));
+  return out;
+}
+
+const describeOp = (op: ChangeOp) => `${op.type.kind.toLowerCase()} ${op.namespace ? `${op.namespace}/` : ""}${op.name}`;
 
 /** What the API server's refusal says, cause by cause, with lines where it names a field. */
 export function refusal(status: number, text: string, yaml: string, doc = 0): EditProblem[] {
@@ -283,12 +307,79 @@ export class EditBroker {
     return { id: this.keep(requests), operations: ops, agent: agentParts.join("\n---\n") };
   }
 
-  /** Send what the review dry-ran. A conflict (the object moved on) comes back as status 409. */
-  async apply(send: Send, id: string): Promise<{ results: string[] }> {
+  /**
+   * Your actions (D140): each operation through the same preparation as the agent's changes (read, pin, dry-run, diff,
+   * risks), as you (`landlens`), four at a time, in the list's order. The exact requests are kept under an `ed…` id for
+   * 15 minutes. `agent` is the diff scrubbed as the agent's reads are, unless an operation is on Secrets. A 409 at the
+   * dry run is a conflict; any other refusal is a problem naming the object. With `leaveOut` (bulk, part 3), refused
+   * objects are problems and the rest is kept; without it, any problem means nothing is kept.
+   */
+  async reviewOps(send: Send, ops: ChangeOp[], extra: { leaveOut?: boolean } = {}): Promise<EditReview & { prepared: Prepared[]; digest?: string }> {
+    type Tried = { ok: Prepared } | { op: ChangeOp; err: { status?: number; message?: string } };
+    const tried = await inOrder(ops, 4, async (op): Promise<Tried> => {
+      try {
+        return { ok: await prepareOp(send, op, { fieldManager: EDIT_FIELD_MANAGER, hideSecrets: true }) };
+      } catch (err) {
+        return { op, err: err as { status?: number; message?: string } };
+      }
+    });
+    const prepared: Prepared[] = [];
+    const problems: EditProblem[] = [];
+    let conflict = false;
+    for (const t of tried) {
+      if ("ok" in t) {
+        prepared.push(t.ok);
+        continue;
+      }
+      if (t.err?.status === 409) conflict = true;
+      problems.push({ message: `${describeOp(t.op)}: ${cut(String(t.err?.message ?? "refused"), 500)}` });
+    }
+    if (problems.length && (!extra.leaveOut || !prepared.length)) return { problems, ...(conflict ? { conflict: true } : {}), prepared: [] };
+    const secret = ops.some((op) => op.type.group === "" && op.type.resource === "secrets");
+    const agent = secret ? undefined : prepared.map((x) => {
+      const d = forAgent(diffLines(
+        x.current ? stringify(clean(redactObject(x.current as any)), { lineWidth: 0 }) : "",
+        x.after ? stringify(clean(redactObject(x.after as any)), { lineWidth: 0 }) : "",
+      ));
+      return prepared.length > 1 ? `${x.op.verb} ${describeOp(x.op)}:\n${d}` : d;
+    }).join("\n---\n");
+    const requests = prepared.map((x) => ({ method: x.method, path: x.path, contentType: x.contentType ?? "application/json", body: x.body ?? "", describe: describeOp(x.op) }));
+    const id = this.keep(requests);
+    return {
+      id, digest: this.pending.get(id)!.digest, operations: prepared.map((x) => ({ ...x.shown, warnings: x.shown.warnings.map((w) => cut(w, 300)) })),
+      ...(agent !== undefined ? { agent } : {}), ...(problems.length ? { problems } : {}), prepared,
+    };
+  }
+
+  /**
+   * Send what the review dry-ran. A conflict (the object moved on) comes back as status 409. With `each` (actions on
+   * several independent objects), every kept request is sent and each answers for itself: applied, conflict (409), gone
+   * (a 404 on a delete) or failed with the cluster's message cut. With `digest`, a review whose requests don't hash to
+   * it is refused and dropped.
+   */
+  async apply(send: Send, id: string, o: { each?: boolean; digest?: string } = {}): Promise<{ results: string[]; each?: EachResult[] }> {
     this.sweep();
     const p = this.pending.get(id);
     if (!p) throw new EditError("This review has expired or was applied; review again", 410);
     this.pending.delete(id);
+    if (o.digest !== undefined && o.digest !== p.digest) throw new EditError("This isn't the review that was shown; review again", 409);
+    if (o.each) {
+      const each: EachResult[] = [];
+      for (const q of p.requests) {
+        let res: Awaited<ReturnType<Send>>;
+        try {
+          res = await send(q);
+        } catch {
+          each.push({ target: q.describe, outcome: "failed", message: "Landlens couldn't reach the cluster." });
+          continue;
+        }
+        if (res.status >= 200 && res.status < 300) each.push({ target: q.describe, outcome: "applied" });
+        else if (res.status === 409) each.push({ target: q.describe, outcome: "conflict", message: "It changed after your review." });
+        else if (res.status === 404 && q.method === "DELETE") each.push({ target: q.describe, outcome: "gone", message: "It was already gone." });
+        else each.push({ target: q.describe, outcome: "failed", message: cut(toKubeError(res.status, res.text).message, 500) });
+      }
+      return { results: each.filter((e) => e.outcome === "applied").map((e) => `Applied ${e.target}`), each };
+    }
     const results: string[] = [];
     for (const q of p.requests) {
       const res = await send(q);
@@ -309,7 +400,7 @@ export class EditBroker {
   private keep(requests: Pending["requests"]): string {
     this.sweep();
     const id = `ed${randomBytes(12).toString("base64url")}`;
-    this.pending.set(id, { requests, expires: this.now() + (this.opts.ttlMs ?? EDIT_TTL_MS) });
+    this.pending.set(id, { requests, expires: this.now() + (this.opts.ttlMs ?? EDIT_TTL_MS), digest: reviewDigest(requests) });
     return id;
   }
 

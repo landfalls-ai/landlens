@@ -157,6 +157,25 @@ Edits from the YAML editor and Create from YAML are yours, sent as you ([workben
 | Edit channels are typed and bounded: review ids match `ed` and 8–32 base64url characters; the YAML is at most 512 KB | contracts (zod) |
 | A review is kept 15 minutes, then swept; a window keeps at most 20; a window's reviews are forgotten when it closes, a cluster's when it stops, and an editor's when it closes or its tab changes. An apply for a cluster that's gone is refused and the review kept | kube unit test (expiry); desktop unit tests (window closes, 20 a window, cluster gone) |
 
+## Your actions
+
+Scale, restart, delete, trigger, suspend and resume are yours, sent as you ([workbench.md](workbench.md#your-actions)).
+
+| Rule | How it's checked |
+|---|---|
+| Every review and apply is one series through the front door with its own token: full access as you to that one cluster, labelled `you · <context> · <action> <target>`, revoked when the series ends; your RBAC decides | desktop unit test (`actions-main.test.ts`: label, policy, revoke, a new token for apply); kube integration (audit label) |
+| The window sends only `{ handle, action }`: a closed union of kinds with refs and a count, strict, at most 50 targets. Titles, facts, the dialog and every request body are main's; the kind's path comes from discovery | contracts test (extra fields, a title, a body, 51 targets refused); desktop unit test (a kind the cluster doesn't serve, a kind the action doesn't take, a mix of kinds: refused before any request) |
+| Apply names the review's id and its SHA-256 digest; main sends the kept requests and nothing else, once, only for the window that reviewed, on that cluster, within 15 minutes. A digest that isn't the review's drops it | kube unit test (digest mismatch drops); desktop unit tests (another window, another cluster, a wrong digest, a second apply, expiry); each fails with its check removed |
+| A delete is pinned to the uid and resourceVersion the card showed; a patch to the resourceVersion. A change meanwhile is a conflict, never overwritten | kube unit test (the DeleteOptions body); kube integration and e2e (an annotate between review and Apply → conflict) |
+| A delete of more than one object, or of a Namespace, CRD, Node, PersistentVolume or APIService, asks in main's own native dialog, which the window can't answer; Cancel (the default) sends nothing | desktop unit test (asked, Cancel sends nothing, logged as cancelled; fails with the check removed) |
+| A Secret's review never holds a value: the objects are passed through `withoutSecretValues` before the diff (keys and sizes), no text is made for Claude, and the facts read the scrubbed object | kube unit test (fails without `hideSecrets`); kube integration and e2e (the scenario's marker never in the review or the page) |
+| Facts and the log are Landlens's own sentences from checked names and numbers: nothing of an annotation, a status message or a label value is copied | kube unit test (a marker in annotations and messages never appears) |
+| The action log keeps only checked fields (closed words, Kubernetes names, `N → M replicas`), mode 0600, the newest 500; a row with an unknown field or a bad name is dropped on read; a damaged file is moved aside | desktop unit test (`action-log.test.ts`) |
+| Telemetry counts `landlens.actions` with `{ action, outcome }` from closed lists, nothing else | telemetry unit test (every field's values) |
+| Apply is a deliberate press: no Enter in the first half second, a danger's second click (or main's dialog), a capped diff shown whole first | e2e (Enter on a fresh card sends nothing) |
+| Limits: 8 reviews being prepared per window (more is 429), 20 kept per window, 60 s for a review's requests | desktop unit test |
+| **Ask Claude first** sends main's title, facts and the agent-scrubbed diff as quoted data, never on a Secret; the agent has no tool that presses Apply | quotes test (head, fence, no Secret, no text without `agent`) |
+
 ## Your forwards
 
 Port-forwards are yours, like shells ([workbench.md](workbench.md#port-forward)).

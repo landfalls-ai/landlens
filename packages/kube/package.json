@@ -27,6 +27,8 @@
     "./checks": "./src/checks.ts",
     "./redact": "./src/redact.ts",
     "./diff": "./src/diff.ts",
-    "./edit-yaml": "./src/edit-yaml.ts"
+    "./edit-yaml": "./src/edit-yaml.ts",
+    "./actions": "./src/actions.ts",
+    "./action-kinds": "./src/action-kinds.ts"
   }
 }

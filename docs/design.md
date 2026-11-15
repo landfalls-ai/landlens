@@ -265,6 +265,21 @@ all N) and Recent warnings; Nodes. It reads
   state from `-soft` and `-text`, rings from `--accent`), and resend on a theme change. Landlens's own views follow
   Iris: kind tile, eyebrow, title, pills with icon and word, inset rows, the viz palette for charts.
 
+- **Your actions** (wave 8, `ObjectMenu.tsx`, `ActionSheet.tsx`, `ReviewCard.tsx`, `RecentActions.tsx`). The object
+  menu is a 240px `.menu.object-menu` on `--bg-2` with an inset `--line` ring, kept inside the window: sections Open,
+  Actions, Ask Claude and Copy name, then **Delete…** in `--bad-text` with `⌫`; an item your role can't use is
+  disabled with a second `--ink-3` line ("Your role can't patch deployments in landlens-dev"). The drawer's head has a
+  **⋯** (`Ellipsis`, "More actions") after Copy name. The action sheet is a 720px `.dialog.action-sheet` over the
+  main pane, the `Zap` icon and "Scale hands-web" in its head. Scale's form is a `.stepper` (− field +, 96px mono
+  field); while main reads, three `.skel` bars and "Checking with the cluster…". The review is `ReviewCard` with
+  `eyebrow` "Your action" (no iris ring, as an edit), main's title, risk tags, then `.change-facts`: one line per
+  fact with `Info` in `--ink-3`, `TriangleAlert` in `--warn-text`, `CircleX` and the text in `--bad-text`, the first
+  word medium. A review main will ask about in its own dialog has a danger button "Delete 12…" instead of the card's
+  second click. The result is one line per object (`CircleCheck` ok, `TriangleAlert` conflict, `CircleX` failed) and
+  **Done**, with **Review again** on a conflict. Recent actions is the status bar's `History` item with the count
+  since start, opening a 420px `.pop.recent-actions` above it: a row is the action's icon, its sentence, its age in
+  mono and the outcome word in its tone.
+
 ## Components
 
 Reuse these classes before writing new ones: `button.primary`, `.secondary`, `.ask-btn`, `.icon-btn`, `.link-btn`;
@@ -307,6 +322,10 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
 
 ## Keyboard
 
+On a focused row, ⌫ (or Delete) opens the delete review (wave 8); every other action is in the row's menu (Shift+F10)
+or ⌘K, so a stray letter can't start a write. In the object menu: ↑/↓, Home/End, a letter jumps by name, Esc. In
+Scale's field, ↑/↓ step one and Shift+↑/↓ ten.
+
 ⌘K jump, ⌘J dock, ⌘B sidebar, ⌘1 Overview, ⌘2 Pods, ⌘3 Problems, `/` filter, ↑/↓ or j/k rows, Enter open, Esc closes the drawer
 (never the dock), `[` `]` drawer tabs; in the dock, Enter and Esc answer the newest ask when the composer is empty.
 In the sidebar (D139): ↑/↓ move over the visible rows and headers, Home/End to the ends, → unfolds a header (or steps
@@ -317,7 +336,10 @@ the page.
 
 ## What the tests rely on
 
-The e2e test finds things by role and name, so keep: heading "Pick a cluster"; buttons "Pods", "Deployments",
+The e2e test finds things by role and name, so keep (wave 8 adds menu "<Kind> <name>" with its menuitems "Scale…",
+"Restart", "Delete…"; button "More actions"; dialog with `#action-title`; spinbutton "Replicas"; buttons "Review",
+"Done", "Review again", "Recent actions"; region "Review your action"; list "What happened"; dialog "Recent actions"
+with `.recent-row`): heading "Pick a cluster"; buttons "Pods", "Deployments",
 "Secrets", "Ask Claude", "Stop", "Send"; combobox "Namespace"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's

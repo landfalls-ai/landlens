@@ -10,8 +10,9 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   a change waiting when Landlens quits is gone (nothing was applied). The audit trail and History's count of applied
   changes stay.
 - **The approval card is the renderer's.** A compromised renderer could approve a change it was shown; the renderer
-  is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. A native confirmation
-  for danger changes is not built.
+  is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. Main's own native
+  dialog asks only before your widest actions (a delete of several objects, or of a Namespace, CRD, Node,
+  PersistentVolume or APIService; wave 8); other danger, and the agent's changes, keep the card's second click.
 - **Dry runs trust the API server.** An aggregated API server that ignored `dryRun` would apply at the dry run. The
   agent's commands in the "/" menu are Claude Code's own (with no settings loaded, its built-ins), sent as messages.
 - **Claude Code is the only agent.** Its sandbox fences only Claude Code; another ACP agent (Codex, Gemini CLI) would
@@ -49,7 +50,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
   guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
 - **The sidebar is 232px wide, always** ([design.md](design.md#layout)): its sections fold (D139), but it has no drag
-  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 8) moves both
+  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 13) moves both
   to a settings file.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
@@ -67,13 +68,20 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 person's check reads them), and Ask Claude sends one problem at a time.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
+- **Your actions are one object at a time** (wave 8 part 1): the menu, the drawer and ⌘K act on the object in
+  front of you. Bulk actions on a multi-select come in part 3; cordon, uncordon and drain in part 2; revealing a
+  Secret's value in part 4. A Secret can be deleted (its review shows keys and sizes) but not otherwise acted on.
+  Recent actions keeps no diff and no undo; Rollback, a Helm rollback and an action on several clusters are later
+  waves (10, 12).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
-- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 8).
+- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 13).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
   both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
   front-door requests ([mcp.md](mcp.md)), but the agent's own kubectl requests and the IDE's are still kept in
-  memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls).
+  memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls). Your own
+  actions (wave 8) are kept: Recent actions lists the newest 500 per machine, but not your YAML edits, shells or
+  forwards, and not the agent's applied changes (they stay in its sessions); one audit page for both is a roadmap row.
 - **MCP servers** are remote and streamable HTTP only: no stdio servers, no OAuth (a header you paste), and a session
   gets the servers on for its cluster, with their tool lists, when it starts. MCP App views can't write to the
   conversation (`ui/message`), change the model's context, read resources or go fullscreen; they run without Geist

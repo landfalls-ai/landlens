@@ -344,6 +344,11 @@ export class TelemetryService {
     this.event("adapter.exited", "warn");
   }
 
+  /** One of your actions ended (wave 8, D147): counted by the action and its outcome, both closed words. */
+  action(a: { action: string; outcome: string }) {
+    this.count("landlens.actions", { action: a.action, outcome: a.outcome });
+  }
+
   /** A front-door request, counted by the token's policy and whether it was let through. */
   audit(e: AuditEntry) {
     this.count("landlens.frontdoor.requests", { policy: e.access ?? "unknown", allowed: e.allowed });

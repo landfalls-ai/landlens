@@ -114,3 +114,27 @@ describe("Clickland's history channels", () => {
     expect(channels["clickland:open"].safeParse({ ...base, signal: "logs", scope: { ...scope, container: "Worker" } }).success).toBe(false);
   });
 });
+
+describe("your actions' channels (wave 8, D144)", () => {
+  const ref = { group: "apps", version: "v1", resource: "deployments", namespace: "landlens-dev", name: "hands-web" };
+  const review = channels["action:review"];
+  it("take an action's closed shape and nothing else", () => {
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: ref, replicas: 3 } }).success).toBe(true);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "delete", targets: [ref, { ...ref, name: "b" }] } }).success).toBe(true);
+    // A title, a body, a path, an extra field, a kind that isn't one: refused.
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: ref, replicas: 3, title: "Scale nothing" } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: { ...ref, body: {} }, replicas: 3 } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "patch", target: ref } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: ref, replicas: 1001 } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "delete", targets: Array.from({ length: 51 }, () => ref) } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "delete", targets: [{ ...ref, name: "../x" }] } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "trigger", target: ref }, native: true }).success).toBe(false);
+  });
+  it("apply names a review and its digest only", () => {
+    const apply = channels["action:apply"];
+    expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64) }).success).toBe(true);
+    expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA" }).success).toBe(false);
+    expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64), confirmed: true }).success).toBe(false);
+    expect(channels["action:log"].safeParse({ context: "orbstack", limit: 500 }).success).toBe(false);
+  });
+});

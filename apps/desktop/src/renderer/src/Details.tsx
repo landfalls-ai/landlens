@@ -1,6 +1,6 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, Workflow, X } from "lucide-react";
+import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, Ellipsis, ScrollText, Server, Sparkles, SquareTerminal, Workflow, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
@@ -54,6 +54,8 @@ export function Details(props: {
   onOpenKind?: (group: string, resource: string) => void;
   /** Run a Landflow flow… on this object, while the Landflow key can list and run flows (wave 7 D125). */
   onFlow?: () => void;
+  /** The object's menu at the ⋯ button (wave 8, D146): its actions, Ask Claude, Copy name, Delete…. */
+  onMenu?: (x: number, y: number) => void;
 }) {
   const { object: o, type, now } = props;
   const logs = logSourceOf(type.kind, o);
@@ -158,6 +160,13 @@ export function Details(props: {
               setTimeout(() => setCopied(false), 1200);
             })}
           ><Ic icon={copied ? Check : Copy} size={15} /></button>
+          {props.onMenu ? (
+            <button className="icon-btn" aria-label="More actions" aria-haspopup="menu" title="More actions"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                props.onMenu!(r.right - 232, r.bottom + 4);
+              }}><Ic icon={Ellipsis} size={15} /></button>
+          ) : null}
           <button className="icon-btn" onClick={props.onClose} aria-label="Close details" title="Close (Esc)"><Ic icon={X} size={15} /></button>
         </div>
         <h2 className="drawer-title">{base}{hash ? <span className="hash">{hash}</span> : null}</h2>

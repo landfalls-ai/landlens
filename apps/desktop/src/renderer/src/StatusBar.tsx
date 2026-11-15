@@ -1,8 +1,8 @@
 // The status bar: connection, what is being watched, what Claude is doing, and the problem counts (to Overview).
-import { Activity, ArrowLeftRight, CircleX, Database, PlugZap, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
+import { Activity, ArrowLeftRight, CircleX, Database, History, PlugZap, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import { Ic } from "./icons";
 
-export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void }) {
+export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void; actions?: number; actionsOpen?: boolean; onActions?: () => void }) {
   return (
     <footer className="statusbar">
       <span className="sb-item"><i className="dot tone-ok" aria-hidden="true" />Connected</span>
@@ -14,6 +14,11 @@ export function StatusBar(props: { server: string; watching: string; claude?: st
       ) : null}
       {props.forwards ? (
         <button className="sb-item forwards" onClick={props.onForwards} title="Port forwards"><Ic icon={ArrowLeftRight} size={11} />{props.forwards} forward{props.forwards === 1 ? "" : "s"}</button>
+      ) : null}
+      {props.onActions ? (
+        <button className="sb-item actions" onClick={props.onActions} aria-expanded={!!props.actionsOpen} title="Recent actions" aria-label={`Recent actions${props.actions ? `, ${props.actions} since Landlens started` : ""}`}>
+          <Ic icon={History} size={11} />{props.actions ? props.actions : null}
+        </button>
       ) : null}
       <button className="sb-item metrics" onClick={props.onMetrics} title={props.clickland ? "Metrics from Clickland: settings" : "Connect Clickland for metrics history"}>
         <Ic icon={props.clickland ? Database : PlugZap} size={11} />{props.clickland ? "Clickland" : "Connect Clickland"}

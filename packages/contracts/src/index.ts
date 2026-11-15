@@ -599,7 +599,7 @@ export const TELEMETRY_KEYS = [
   "landlens.mode", "landlens.ask", "landlens.cluster", "landlens.namespace", "landlens.namespaces", "landlens.subject.kind",
   "landlens.subject.namespace", "landlens.subject.name", "landlens.problem.class", "landlens.server", "landlens.status",
   "landlens.gate", "landlens.who", "landlens.verb", "landlens.kind", "landlens.outcome", "landlens.waited_ms",
-  "landlens.event", "landlens.count", "landlens.policy", "landlens.allowed", "landlens.class", "landlens.tone",
+  "landlens.event", "landlens.count", "landlens.policy", "landlens.allowed", "landlens.class", "landlens.tone", "landlens.action",
 ] as const;
 export type TelemetryKey = (typeof TELEMETRY_KEYS)[number];
 export type TelemetryValue = string | number | boolean;
@@ -825,6 +825,50 @@ export type EditOwner = { path: string; manager: string; line?: number };
 /** `agent`: the diff (or created objects) scrubbed as the agent's own reads are: what "Ask Claude to check it" sends. */
 export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean; agent?: string };
 
+/**
+ * Your actions (wave 8, D141–D148): what the person asks main to do to objects. The window names an action's closed
+ * shape and its targets; main resolves each target's type from the cluster's discovery, builds every request, dry-runs
+ * it as you, and keeps it under an `ed…` id. Nothing in a request can carry a body, a path or a title. Cordon and drain
+ * join in part 2.
+ */
+export const ACTION_TARGETS = 50;
+export const Action = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("scale"), target: ResourceRef.strict(), replicas: z.number().int().min(0).max(1000) }).strict(),
+  z.object({ kind: z.literal("restart"), targets: z.array(ResourceRef.strict()).min(1).max(ACTION_TARGETS) }).strict(),
+  z.object({ kind: z.literal("delete"), targets: z.array(ResourceRef.strict()).min(1).max(ACTION_TARGETS) }).strict(),
+  z.object({ kind: z.literal("trigger"), target: ResourceRef.strict() }).strict(),
+  z.object({ kind: z.literal("suspend"), target: ResourceRef.strict(), suspend: z.boolean() }).strict(),
+]);
+export type Action = z.infer<typeof Action>;
+export type ActionKind = Action["kind"];
+/** A review's SHA-256 over the requests main keeps, as hex: Apply names it, so what is sent is what the card showed. */
+export const ActionDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
+/** What the diff doesn't say (D142): a fixed sentence of main's, with checked names only. */
+export type ActionFact = { tone: "info" | "warn" | "bad"; code: string; text: string };
+/**
+ * A dry run of your action: the edit review's fields, with main's title and facts. `native`: Apply asks in main's own
+ * dialog first (bulk and wide deletes). `digest`: what Apply must name.
+ */
+export type ActionReview = EditReview & { title?: string; facts?: ActionFact[]; native?: true; digest?: string };
+export type ActionOutcome = "applied" | "conflict" | "failed" | "gone";
+export type ActionResult = { target: string; outcome: ActionOutcome; message?: string };
+/** One kept row per action the person applied (D147): names and closed words only, never a diff, a message or a value. */
+export type ActionLogEntry = {
+  id: string;
+  at: string;
+  context: string;
+  /** The first 16 hex digits of the SHA-256 of the cluster's API server address, as family-sent.json keeps it. */
+  server: string;
+  who: "you";
+  action: "scale" | "restart" | "delete" | "trigger" | "suspend" | "resume" | "cordon" | "uncordon" | "drain" | "reveal" | "copy";
+  kind: string;
+  namespace?: string;
+  names: string[];
+  key?: string;
+  detail?: string;
+  outcome: "applied" | "partial" | "failed" | "conflict" | "cancelled" | "stopped";
+};
+
 /** Port-forward (wave 4, part 3). A local port is 1024 or above; a remote one any TCP port. */
 export const LocalPort = z.number().int().min(1024).max(65535);
 export const RemotePort = z.number().int().min(1).max(65535);
@@ -951,6 +995,12 @@ export const channels = {
   "edit:create": z.object({ handle: Handle, namespace: NamespaceName.optional(), yaml: z.string().max(512 * 1024) }),
   "edit:apply": z.object({ handle: Handle, id: EditId }),
   "edit:discard": z.object({ id: EditId }),
+  // Your actions (docs/workbench.md#your-actions, D144): the window names an action and its targets; main builds,
+  // dry-runs and keeps every request; Apply names the review's id and digest and nothing else. Strict.
+  "action:review": z.object({ handle: Handle, action: Action }).strict(),
+  "action:apply": z.object({ handle: Handle, id: EditId, digest: ActionDigest }).strict(),
+  "action:discard": z.object({ id: EditId }).strict(),
+  "action:log": z.object({ context: z.string().min(1).max(253), limit: z.number().int().min(1).max(200).optional() }).strict(),
   "forward:list": z.object({}),
   /** The local port to offer for a remote one (free now). */
   "forward:suggest": z.object({ port: RemotePort }),
@@ -1118,6 +1168,10 @@ export type Responses = {
   "edit:create": EditReview;
   "edit:apply": { results: string[] };
   "edit:discard": { ok: true };
+  "action:review": ActionReview;
+  "action:apply": { results: ActionResult[] };
+  "action:discard": { ok: true };
+  "action:log": { entries: ActionLogEntry[] };
   "forward:list": ForwardsPush;
   "forward:suggest": { port: number };
   "forward:check": { free: boolean; next?: number };
@@ -1514,7 +1568,9 @@ export type ChangeVerb = "create" | "update" | "patch" | "delete";
 /** Why a change deserves a second look; the dock shows these as tags, the loud ones first. */
 export type ChangeRisk =
   | "deletes" | "rbac" | "namespace" | "cluster-scoped" | "reads-secret" | "privileged" | "host-access"
-  | "service-account" | "new-workload" | "scales-to-zero" | "changes-image" | "restarts-pods";
+  | "service-account" | "new-workload" | "scales-to-zero" | "changes-image" | "restarts-pods"
+  /** Wave 8 part 2 (drain): pods are evicted; data goes with a pod (emptyDir) or a volume. */
+  | "evicts-pods" | "loses-data";
 /** One line of a unified diff; "…" stands for a run of unchanged lines (its text says how many). */
 export type DiffLine = { t: " " | "+" | "-" | "…"; text: string; oldNo?: number; newNo?: number };
 export type ChangeOperation = {
