@@ -12,6 +12,7 @@ import "./agent.css";
 import "@xterm/xterm/css/xterm.css";
 import "./workbench.css";
 import "./gcp.css";
+import "./landflow.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

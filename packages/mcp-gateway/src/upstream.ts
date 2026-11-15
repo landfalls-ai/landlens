@@ -43,6 +43,13 @@ export async function listAllTools(c: Client): Promise<Tool[]> {
     if (!r.nextCursor) break;
     cursor = r.nextCursor;
   }
+  // A listing that names one tool twice isn't one Landlens can tell apart (review of wave 7 part 2, L4): a permission
+  // rule is by name, and a call would take whichever came first. It is treated as a server that didn't list.
+  const seen = new Set<string>();
+  for (const t of all) {
+    if (seen.has(t.name)) throw new Error("Landlens: the server listed a tool name twice");
+    seen.add(t.name);
+  }
   return all.slice(0, 500);
 }
 
@@ -123,11 +130,14 @@ export type RemoteSpec = {
   pin?: string;
   /** Linear's OAuth sign-in: the transport takes its bearer from here and refreshes it on a 401 (D77). */
   authProvider?: OAuthClientProvider;
-  /** Set for a connection's server (GitHub, Linear) only: which of its tools read, and its level (D78, D79). */
+  /**
+   * Set for a connection's server (GitHub, Linear) or a family sibling's (Clickland, Landflow, Landfall) only: which
+   * of its tools read, and its level (D78, D79, D110).
+   */
   provider?: ProviderRules;
   /** When set, the only origins any request for this server may go to (a connection's token origins). */
   origins?: string[];
-  /** A connection's server: Landlens doesn't offer it MCP App views (M3). Implied by `provider`. */
+  /** A connection's server: Landlens doesn't offer it MCP App views (M3). Implied by `provider`, unless its `views`. */
   noViews?: boolean;
   /**
    * A connection at Ask for writes: its read-only endpoint. The reads of the session go there, so a tool the full
@@ -136,7 +146,16 @@ export type RemoteSpec = {
   readUrl?: string;
   /** The read-only endpoint's half of the accepted listing; its reads run without asking only while it holds. */
   readPin?: string;
+  /**
+   * A family sibling's accepted listing, tool by tool (approval.ts toolDigest): the model is offered only the tools
+   * whose digest is the accepted one, so a new or changed tool reaches it only after the person's Accept (review of
+   * wave 7 part 2, L3).
+   */
+  pinTools?: Record<string, string>;
 };
+
+/** Whether Landlens tells this server it shows MCP App views: not a connection's (M3), except Clickland's (D112). */
+const offersViews = (spec: RemoteSpec) => !spec.noViews && (!spec.provider || !!spec.provider.views);
 
 /** fetch, refusing redirects (a redirect would carry the header elsewhere). */
 const noRedirect: typeof fetch = (input, init) => fetch(input, { ...init, redirect: "error" });
@@ -160,7 +179,7 @@ function pinnedTo(origins: string[]): typeof fetch {
 /** A remote MCP server over streamable HTTP. */
 export class RemoteUpstream extends ClientUpstream {
   constructor(private readonly spec: RemoteSpec) {
-    super(spec.name, !(spec.noViews || spec.provider));
+    super(spec.name, offersViews(spec));
   }
   async connect(client: Client) {
     const transport = new StreamableHTTPClientTransport(new URL(this.spec.url), {
@@ -179,7 +198,7 @@ export async function testRemote(spec: RemoteSpec): Promise<{ ok: boolean; steps
   const up = new RemoteUpstream(spec);
   let server: string | undefined;
   try {
-    const client = newClient(!(spec.noViews || spec.provider));
+    const client = newClient(offersViews(spec));
     const started = Date.now();
     try {
       await up.connect(client);

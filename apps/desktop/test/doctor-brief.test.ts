@@ -19,6 +19,16 @@ const P = (over: Partial<Problem> = {}): Problem => ({
 const ref = { group: "apps", version: "v1", resource: "deployments", name: "ledger-worker", namespace: "shop" };
 
 describe("the problem brief", () => {
+  // Security review of wave 7 part 3, M1: the brief's lines are scrubbed whole before the 4,000-character cut.
+  it("scrubs its log lines before it cuts them: a key across the lines, its head past the cut", () => {
+    const key = ["-----BEGIN RSA PRIVATE KEY-----", ...Array.from({ length: 30 }, (_, i) => `MIIEowIBAAKCAQEA${String(i).padStart(100, "Q")}`), "-----END RSA PRIVATE KEY-----"];
+    const lines = ["x".repeat(500), ...key, "FATAL: done"];
+    const b = problemBrief(P(), { log: { pod: "lw-1", container: "worker", previous: false, lines, cut: false, source: "clickland", newest: "2026-11-15T11:59:00.000Z" } });
+    expect(b).not.toContain("MIIEowIBAAKCAQEA");
+    expect(b).toContain("FATAL: done");
+    expect(b).toContain("from Clickland's history, the newest at 2026-11-15T11:59:00.000Z (written by the workload):");
+  });
+
   it("carries the problem's facts, five pods and eight events, and never Landlens's hint", () => {
     const b = problemBrief(P());
     expect(b).toMatch(/^Problem: ledger-worker is crash-looping\nSeverity: failing \(crashloop, CrashLoopBackOff\)\nSubject: Deployment shop\/ledger-worker/);

@@ -2,19 +2,20 @@
 // cluster, each with its own session on the MCP gateway (main/mcp.ts). Updates and permission requests go to the dock;
 // answers come back. Tool calls in the updates are handed to the gateway too, to pair dock cards with logged calls.
 import { randomBytes } from "node:crypto";
-import type { AgentChange, AgentHistoryEntry, AgentPermissionRequest, AgentSessionInfo, AgentSettingsInfo, AgentStatus, AgentUpdate, AutonomyState, ConnProvider, ResourceRef } from "@landlens/contracts";
+import { BRAIN_NOTES, type AgentChange, type AgentHistoryEntry, type AgentPermissionRequest, type AgentSessionInfo, type AgentSettingsInfo, type AgentStatus, type AgentUpdate, type AnyProvider, type AutonomyState, type ResourceRef } from "@landlens/contracts";
 import { AcpHost, agentEnv, claudeAdapterEntry, listSkills, loginPath, objectUri, resourceBlock, startClusterSession, unreadableObject, which, type ClusterSession, type SessionMcp } from "@landlens/acp-host";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { apiPath, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { getJson, redactObject, redactText } from "@landlens/kube-mcp";
-import type { ContentBlock, NewSessionResponse, RequestPermissionOutcome, RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
-import { delimiter } from "node:path";
+import type { ContentBlock, NewSessionResponse, RequestPermissionOutcome, RequestPermissionRequest, SessionNotification } from "@agentclientprotocol/sdk";
+import { mkdirSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { delimiter, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
 
 type Push = {
+  (channel: "agent:autonomy", payload: AutonomyState): void;
   (channel: "agent:update", payload: AgentUpdate): void;
   (channel: "agent:permission", payload: AgentPermissionRequest): void;
   (channel: "agent:status", payload: AgentStatus): void;
@@ -29,18 +30,90 @@ const AGENT_TITLE = "Claude Code";
  */
 export type AutonomyHooks = {
   /** `write`: a GitHub or Linear write, which the dock never offers "always allow" for (M1). */
-  check(session: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider; write?: boolean }>;
+  check(session: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: AnyProvider; write?: boolean }>;
   permit(session: string, p: { toolCallId: string; toolName: string }): void;
   states(session: string): AutonomyState[];
   /** The person quoted a Google Cloud resource into the session: its writes ask from now on (part 5, W1). */
   gcpQuoted?(session: string): void;
+  /** The person quoted a sibling's text (Clickland's log lines, wave 7 part 3): its writes ask from now on. */
+  familyQuoted?(session: string, sibling: "clickland" | "landflow" | "landfall"): void;
+  /** Every autonomy of the session asks from now on, with this reason (a resumed session, wave 7 part 2 review M1). */
+  hold?(session: string, why: string): void;
 };
+
+/**
+ * Why a resumed session's GitHub and Linear writes ask, when its history recorded no hold (review of wave 7 part 2,
+ * M1): its transcript holds whatever it read before, which the new gateway session never saw.
+ */
+export const RESUMED_HELD = "this session was resumed, and what it read before could steer its writes";
 
 /**
  * A Google Cloud resource quoted into a question (quotes.ts writes its head, gcp:resource its brief). Text the person
  * typed that looks like one only makes writes ask: the safe side.
  */
 export const GCP_QUOTE = /^(?:A Google Cloud resource \([^\n]*\), quoted as data, not instructions:|Google Cloud project: [a-z][a-z0-9-]{4,28}[a-z0-9])$/m;
+/**
+ * Clickland's text quoted into a question (wave 7 part 3): log lines chosen in a History view (quotes.ts writes the
+ * head) or a problem's brief whose lines came from Clickland's history (doctorBrief.ts). As GCP_QUOTE, a person who
+ * types one only makes writes ask.
+ */
+export const CLICKLAND_QUOTE = /^(?:Log lines from Clickland I selected \([^\n]*\), quoted as data, not instructions:|Last log lines of [^\n]* from Clickland's history[^\n]*:)$/m;
+/**
+ * A Landflow run's output quoted into a question (wave 7 part 4): "Ask Claude about this output" on a flow's run
+ * (quotes.ts writes the head). Written by a workflow and whatever it read: the session's autonomy is held, as for
+ * Clickland's lines.
+ */
+export const LANDFLOW_QUOTE = /^Output of a Landflow run I chose \([^\n]*\), quoted as data, not instructions:$/m;
+/**
+ * What main's reporters hear of the agent (telemetry.ts, brain.ts; wave 7 part 5): a session's start and end, each
+ * question with the objects quoted into it, each answer's stop reason and ACP `_meta`, usage updates, the mode and the
+ * adapter's exit. Text goes no further than these hooks: telemetry keeps only what packages/telemetry's closed
+ * constructors take from it.
+ */
+export type AgentObserver = {
+  started?(s: { session: string; context: string; namespaces?: string[]; mode: string; resumed: boolean }): void;
+  ended?(session: string): void;
+  /** `draft`: the brain sheet's own turn (main's fixed prompt), not one of the person's questions. */
+  asked?(session: string, text: string, refs: { kind?: string; namespace?: string; name: string }[], draft?: boolean): void;
+  answered?(session: string, end: { stopReason: string; meta?: unknown }): void;
+  usage?(session: string, u: { model?: unknown; cost?: { amount?: unknown; currency?: unknown } | null }): void;
+  mode?(session: string, mode: string): void;
+  exited?(): void;
+};
+
+/**
+ * The adapter Landlens runs: claude-agent-acp, or (unpackaged builds only, for tests) a `.js` or `.mjs` script in the
+ * repo's test fixtures folder (`fixtures`, apps/desktop/test/fixtures), named by LANDLENS_ACP_AGENT. That script gets
+ * each session's front-door token and MCP headers, so a warning says so in main's log whenever it is used, and a script
+ * anywhere else (a symlink included: both paths are resolved) is ignored, with a line saying why (review of part 5, L9).
+ */
+export function adapterEntry(env: NodeJS.ProcessEnv, packaged: boolean, fixtures: string, log: (l: string) => void = (l) => console.warn(l)): string {
+  const o = env.LANDLENS_ACP_AGENT;
+  if (!o) return claudeAdapterEntry();
+  if (packaged) {
+    log("[agent] LANDLENS_ACP_AGENT is ignored: a packaged Landlens runs only Claude Code.");
+    return claudeAdapterEntry();
+  }
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return undefined;
+    }
+  };
+  const dir = real(fixtures);
+  const file = real(resolve(o));
+  if (!dir || !file || !/\.m?js$/.test(file) || !file.startsWith(dir + sep)) {
+    log(`[agent] LANDLENS_ACP_AGENT is ignored: only a .js or .mjs script in ${fixtures} may stand in for Claude Code.`);
+    return claudeAdapterEntry();
+  }
+  log(`[agent] WARNING: LANDLENS_ACP_AGENT is set: the test agent ${file} runs in place of Claude Code, with each session's front-door token and MCP headers. Unpackaged builds only; unset it to use Claude Code.`);
+  return file;
+}
+
+/** How long the brain's draft waits after the answer for its last message chunks. */
+const DRAFT_SETTLE_MS = 250;
+
 /** The modes the dock offers: Manual and Plan. Never acceptEdits, auto or bypass. */
 const MODES = new Set(["default", "plan"]);
 
@@ -58,6 +131,13 @@ export class AgentService {
     toolName?: string;
     resolve: (o: RequestPermissionOutcome) => void;
   }>();
+  /** Sessions with a question running: one at a time each (the brain's draft waits for none). */
+  private readonly running = new Set<string>();
+  /**
+   * A brain draft's turn per session: its answer, gathered from the session's message chunks while it runs; whether
+   * Claude tried a tool (then the turn is cancelled: the draft runs with none, L4); whether the sheet cancelled it.
+   */
+  private readonly drafting = new Map<string, { chunks: string[]; tool: boolean; cancelled: boolean }>();
   /** Changes the agent proposed that wait for your decision, by change id. */
   private readonly changes = new Map<string, { session: string; resolve: (d: ChangeDecision) => void; reject: (e: Error) => void }>();
 
@@ -74,6 +154,11 @@ export class AgentService {
       onPermit?: (p: { session: string; toolCallId: string; toolName?: string; always: boolean }) => void;
       /** GitHub's and Linear's autonomous mode (D82): main answers a routine write's question only when this passes. */
       autonomy?: AutonomyHooks;
+      /**
+       * Text main served the window from a sibling (Clickland's log lines: sibling-text.ts). A question that quotes
+       * any holds the session's autonomy, whatever its head says (security review of part 3, M2).
+       */
+      siblingText?: { found(text: string): Set<"clickland" | "landflow" | "landfall"> };
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
       certs?: Parameters<typeof startClusterSession>[0]["certs"];
       /** Past sessions and your chosen skills (agent-history.ts). */
@@ -81,6 +166,12 @@ export class AgentService {
       settings?: AgentSettings;
       /** Where your Claude Code skills are; ~/.claude/skills by default. */
       skillsDir?: string;
+      /** Telemetry and the brain's facts (wave 7 part 5). */
+      observers?: AgentObserver[];
+      /** The adapter's script; claude-agent-acp's by default. */
+      adapter?: string;
+      /** A brain draft starts or ends in a session: the gateway refuses the agent's calls meanwhile (L4). */
+      onDraft?: (session: string, on: boolean) => void;
       log?: (l: string) => void;
     },
   ) {
@@ -100,29 +191,20 @@ export class AgentService {
       const node = which("node", this.path);
       if (!node) throw Object.assign(new Error("Landlens needs Node.js to run Claude Code; none was found on your login shell's PATH."), { status: 424 });
       const host = new AcpHost(
-        { title: AGENT_TITLE, command: node, args: [claudeAdapterEntry()], env: { CLAUDE_AGENT_ACP_PROTOCOL: "v1" } },
+        { title: AGENT_TITLE, command: node, args: [this.deps.adapter ?? claudeAdapterEntry()], env: { CLAUDE_AGENT_ACP_PROTOCOL: "v1" } },
         {
           cwd: this.deps.sessionsDir,
           env: agentEnv(process.env, { PATH: this.path }),
           events: {
-            update: (n) => {
-              const u = n.update as { sessionUpdate?: string; toolCallId?: string; title?: string; rawInput?: unknown; _meta?: { claudeCode?: { toolName?: unknown } } };
-              if ((u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update") && typeof u.toolCallId === "string") {
-                const toolName = u._meta?.claudeCode?.toolName;
-                this.deps.onToolCall?.({
-                  session: n.sessionId, toolCallId: u.toolCallId,
-                  ...(typeof toolName === "string" ? { toolName } : {}),
-                  ...(typeof u.title === "string" ? { title: u.title } : {}),
-                  ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
-                });
-              }
-              this.deps.push("agent:update", { session: n.sessionId, update: n.update as AgentUpdate["update"] });
-            },
+            update: (n) => this.update(n),
             permission: (req, signal) => this.ask(req, signal),
             exit: ({ code, stderr }) => {
               // Claude Code has gone: its sessions' tokens must not outlive it.
               for (const s of this.sessions.values()) s.revoke();
+              for (const id of this.sessions.keys()) this.observe((o) => o.ended?.(id));
               this.sessions.clear();
+              this.running.clear();
+              this.observe((o) => o.exited?.());
               for (const [id, p] of this.pending) {
                 p.resolve({ outcome: "cancelled" });
                 this.pending.delete(id);
@@ -143,6 +225,33 @@ export class AgentService {
       return host;
     })().finally(() => (this.starting = undefined));
     return this.starting;
+  }
+
+  /** A session update from Claude Code: tool calls to the gateway, usage and mode to the observers, all to the dock. */
+  private update(n: SessionNotification) {
+    const u = n.update as { sessionUpdate?: string; toolCallId?: string; title?: string; rawInput?: unknown; _meta?: { claudeCode?: { toolName?: unknown } } };
+    if ((u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update") && typeof u.toolCallId === "string") {
+      const toolName = u._meta?.claudeCode?.toolName;
+      this.deps.onToolCall?.({
+        session: n.sessionId, toolCallId: u.toolCallId,
+        ...(typeof toolName === "string" ? { toolName } : {}),
+        ...(typeof u.title === "string" ? { title: u.title } : {}),
+        ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
+      });
+    }
+    const v = n.update as { sessionUpdate?: string; cost?: { amount?: unknown; currency?: unknown } | null; content?: { type?: string; text?: unknown }; currentModeId?: unknown; _meta?: Record<string, unknown> };
+    if (v.sessionUpdate === "usage_update") this.observe((o) => o.usage?.(n.sessionId, { model: v._meta?.["_claude/model"], cost: v.cost ?? null }));
+    if (v.sessionUpdate === "current_mode_update" && typeof v.currentModeId === "string") this.observe((o) => o.mode?.(n.sessionId, v.currentModeId as string));
+    const draft = this.drafting.get(n.sessionId);
+    if (draft && v.sessionUpdate === "agent_message_chunk" && v.content?.type === "text" && typeof v.content.text === "string") draft.chunks.push(v.content.text);
+    // The draft runs with no tool (L4): Claude reaching for one ends the turn. The gateway refuses the call
+    // meanwhile, and a permission request is answered without a card.
+    if (draft && v.sessionUpdate === "tool_call" && !draft.tool) {
+      draft.tool = true;
+      this.deps.log?.(`[agent] ${n.sessionId}: a tool call during the brain's draft; the draft's turn is cancelled`);
+      void this.host?.cancel(n.sessionId).catch(() => undefined);
+    }
+    this.deps.push("agent:update", { session: n.sessionId, update: n.update as AgentUpdate["update"] });
   }
 
   async start(handle: string, namespaces?: string[]): Promise<AgentSessionInfo> {
@@ -167,10 +276,22 @@ export class AgentService {
     if (c.info.context !== e.context || (e.server && c.info.server !== e.server)) {
       throw Object.assign(new Error(`that session was on ${e.context}${e.server ? ` (${e.server})` : ""}; connect to it to resume`), { status: 409 });
     }
-    return this.open({ handle, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), resume: { sessionId: session, cwd: e.cwd } });
+    // A resumed session always starts held (M1 of the wave 7 part 2 review): the hold lived in the gateway session that
+    // ended, the transcript keeps what a sibling or Google Cloud said, and Landlens can't see into the transcript. The
+    // reason is the one the history recorded, if any.
+    return this.open({ handle, ...(e.namespaces?.length ? { namespaces: e.namespaces } : {}), resume: { sessionId: session, cwd: e.cwd } }, e.held ?? RESUMED_HELD);
   }
 
-  private async open(req: Parameters<typeof startClusterSession>[1]): Promise<AgentSessionInfo> {
+  /**
+   * A connection's autonomous mode changed in a session (the gateway's push): the dock hears of it, and a hold is
+   * written to the session's history, so a resume holds with the same reason (M1).
+   */
+  autonomyChanged(st: AutonomyState) {
+    if (st.held) this.deps.history?.held(st.session, st.held);
+    this.deps.push("agent:autonomy", st);
+  }
+
+  private async open(req: Parameters<typeof startClusterSession>[1], held?: string): Promise<AgentSessionInfo> {
     const host = await this.ensure();
     const s = await startClusterSession({
       host, frontDoor: this.deps.frontDoor, clusters: this.deps.clusters, mcp: this.deps.mcp,
@@ -189,10 +310,33 @@ export class AgentService {
       ...(this.deps.log ? { log: this.deps.log } : {}),
     }, req);
     this.sessions.set(s.id, s);
+    this.observe((o) => o.started?.({ session: s.id, context: s.context, ...(s.namespaces ? { namespaces: s.namespaces } : {}), mode: s.response.modes?.currentModeId ?? "default", resumed: !!req.resume }));
     this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, server: this.deps.clusters.get(s.handle).info.server, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
+    if (held) this.deps.autonomy?.hold?.(s.id, held);
     // Each connection's autonomous mode, off: a new or resumed session never starts autonomous (D82).
     const autonomy = this.deps.autonomy?.states(s.id) ?? [];
     return { ...info(s, s.response), ...(autonomy.length ? { autonomy } : {}) };
+  }
+
+  /** Each observer hears, and none can break the agent: a throw is logged and dropped. */
+  private observe(f: (o: AgentObserver) => void) {
+    for (const o of this.deps.observers ?? []) {
+      try {
+        f(o);
+      } catch (err) {
+        this.deps.log?.(`[agent] an observer failed: ${err instanceof Error ? err.name : "error"}`);
+      }
+    }
+  }
+
+  /** Another observer, once made (the brain's facts need the agent to draft). */
+  addObserver(o: AgentObserver) {
+    (this.deps.observers ??= []).push(o);
+  }
+
+  /** Whether the session is open in this launch. */
+  isOpen(session: string): boolean {
+    return this.sessions.has(session);
   }
 
   history(context?: string): AgentHistoryEntry[] {
@@ -241,8 +385,16 @@ export class AgentService {
 
   async prompt(id: string, text: string, context: ResourceRef[] = []): Promise<{ stopReason: string }> {
     const s = this.session(id);
+    // The brain's draft has the session: a question now would mix its answer into the draft's box (L4).
+    if (this.drafting.has(id)) throw Object.assign(new Error(BRAIN_NOTES.drafting), { status: 409 });
     // Google Cloud data enters the session with this question: hold its autonomous writes before it is sent (W1).
     if (GCP_QUOTE.test(text)) this.deps.autonomy?.gcpQuoted?.(id);
+    // So does a sibling's: Clickland's log lines are written by workloads (D113's reasoning, review of part 2 L8). Main
+    // decides from what it served (siblingText), not only from the head the window wrote (review of part 3, M2).
+    const quoted = new Set(this.deps.siblingText?.found(text) ?? []);
+    if (CLICKLAND_QUOTE.test(text)) quoted.add("clickland");
+    if (LANDFLOW_QUOTE.test(text)) quoted.add("landflow");
+    for (const sibling of quoted) this.deps.autonomy?.familyQuoted?.(id, sibling);
     this.deps.history?.prompted(id, text);
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;
@@ -255,8 +407,62 @@ export class AgentService {
       });
       blocks.push(embedded ? resourceBlock(uri, body) : { type: "text", text: `${uri}\n${body}` });
     }
-    const res = await this.host!.prompt(id, blocks);
-    return { stopReason: res.stopReason };
+    const refs = await Promise.all(context.map(async (r) => ({ ...r, kind: await this.deps.clusters.typeOf(s.handle, r).then((t) => t.kind, () => undefined) })));
+    this.observe((o) => o.asked?.(id, text, refs.map((r) => ({ name: r.name, ...(r.namespace ? { namespace: r.namespace } : {}), ...(r.kind ? { kind: r.kind } : {}) }))));
+    this.running.add(id);
+    try {
+      const res = await this.host!.prompt(id, blocks);
+      this.observe((o) => o.answered?.(id, { stopReason: res.stopReason, meta: res._meta }));
+      return { stopReason: res.stopReason };
+    } catch (err) {
+      this.observe((o) => o.answered?.(id, { stopReason: "error" }));
+      throw err;
+    } finally {
+      this.running.delete(id);
+    }
+  }
+
+  /**
+   * The brain sheet's "Ask Claude to draft" (D134): one turn in the session with main's fixed prompt, never the window's
+   * text, and its answer's text. Not counted as one of your questions; refused while another question runs, and a
+   * question is refused while it runs. ACP's session/prompt takes no tool list (claude-agent-acp sets tools only at
+   * session/new), so the turn can't be started without tools; instead none runs (review of part 5, L4): the gateway
+   * refuses the agent's calls (onDraft), a permission request is answered "cancelled" with no card, and the first
+   * tool call cancels the turn, which then fails with `tool`. cancelDraft ends it from the sheet (`cancelled`).
+   */
+  async draft(id: string, prompt: string): Promise<string> {
+    this.session(id);
+    if (this.running.has(id)) throw Object.assign(new Error("busy"), { status: 409, busy: true });
+    const state = { chunks: [] as string[], tool: false, cancelled: false };
+    this.drafting.set(id, state);
+    this.running.add(id);
+    this.deps.onDraft?.(id, true);
+    this.observe((o) => o.asked?.(id, prompt, [], true));
+    try {
+      const res = await this.host!.prompt(id, [{ type: "text", text: prompt }]);
+      this.observe((o) => o.answered?.(id, { stopReason: res.stopReason, meta: res._meta }));
+      if (state.tool) throw Object.assign(new Error("a tool call during the draft"), { status: 409, tool: true });
+      if (state.cancelled || res.stopReason === "cancelled") throw Object.assign(new Error("cancelled"), { status: 409, cancelled: true });
+      // The answer's last chunks can be handed over after the answer itself, though sent before it.
+      await new Promise((r) => setTimeout(r, DRAFT_SETTLE_MS));
+      return state.chunks.join("");
+    } catch (err) {
+      if (!(err as { tool?: boolean; cancelled?: boolean }).tool && !(err as { cancelled?: boolean }).cancelled) this.observe((o) => o.answered?.(id, { stopReason: "error" }));
+      throw err;
+    } finally {
+      this.drafting.delete(id);
+      this.running.delete(id);
+      this.deps.onDraft?.(id, false);
+    }
+  }
+
+  /** The sheet's Cancel: the draft's turn ends. False when no draft runs in the session. */
+  async cancelDraft(id: string): Promise<boolean> {
+    const state = this.drafting.get(id);
+    if (!state) return false;
+    state.cancelled = true;
+    await this.host?.cancel(id);
+    return true;
   }
 
   /**
@@ -325,6 +531,7 @@ export class AgentService {
     const offered = s.response.modes?.availableModes.some((m) => m.id === mode);
     if (!MODES.has(mode) || !offered) throw Object.assign(new Error(`Landlens offers only Manual and Plan, not ${JSON.stringify(mode)}`), { status: 400 });
     await this.host!.setMode(id, mode);
+    this.observe((o) => o.mode?.(id, mode));
   }
 
   async setConfig(id: string, config: string, value: string) {
@@ -354,6 +561,7 @@ export class AgentService {
     if (!s) return;
     this.sessions.delete(id);
     this.withdrawAsks(id);
+    this.observe((o) => o.ended?.(id));
     await s.close();
   }
 
@@ -376,8 +584,10 @@ export class AgentService {
    * answer for it: agent:autonomy only turns the mode on or off.
    */
   private async ask(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionOutcome> {
+    // The brain's draft runs with no tool (L4): no card behind the sheet, the answer is no.
+    if (this.drafting.has(req.sessionId)) return { outcome: "cancelled" };
     const name = (req.toolCall._meta as { claudeCode?: { toolName?: unknown } } | undefined)?.claudeCode?.toolName;
-    let auto: { ok: boolean; why?: string; provider?: ConnProvider; write?: boolean } = { ok: false };
+    let auto: { ok: boolean; why?: string; provider?: AnyProvider; write?: boolean } = { ok: false };
     if (typeof name === "string" && /^mcp__/.test(name) && this.deps.autonomy) {
       auto = await this.deps.autonomy.check(req.sessionId, name, req.toolCall.rawInput ?? {}).catch(() => ({ ok: false }));
       const once = req.options.find((o) => o.kind === "allow_once");
@@ -392,11 +602,12 @@ export class AgentService {
   }
 
   /**
-   * Show the question in the dock. A GitHub or Linear write is offered no "always allow" (M1 of the part 3 review):
+   * Show the question in the dock. A GitHub, Linear or family sibling's write is offered no "always allow" (M1 of the
+   * part 3 review; D113):
    * it would let every later call of that tool run anywhere, uncounted, past the autonomous limits. The option isn't
    * shown, and answer() refuses it as not one of the choices; the gateway takes no "always" for such a write either.
    */
-  private askDock(req: RequestPermissionRequest, signal: AbortSignal, provider?: ConnProvider, reason?: string, write?: boolean): Promise<RequestPermissionOutcome> {
+  private askDock(req: RequestPermissionRequest, signal: AbortSignal, provider?: AnyProvider, reason?: string, write?: boolean): Promise<RequestPermissionOutcome> {
     const request = randomBytes(9).toString("base64url");
     if (provider && write) req = { ...req, options: req.options.filter((o) => o.kind !== "allow_always") };
     return new Promise((resolve) => {

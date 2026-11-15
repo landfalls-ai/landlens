@@ -1,6 +1,6 @@
 // What the dock draws: messages, thinking, tool calls grouped into one list, the plan, the agent's questions, and
 // (wave 6) GitHub's and Linear's autonomous mode: the chips above the composer's foot, the scope sheet, the warn strip.
-import { AUTONOMY_BUDGET, BUILTIN_MCP_SERVER, FAILURE_LINE, type AgentPermissionRequest, type AutonomyState, type ConnProvider } from "@landlens/contracts";
+import { AUTONOMY_BUDGET, BUILTIN_MCP_SERVER, FAILURE_LINE, type AgentPermissionRequest, type AnyProvider, type AutonomyState, type ConnProvider } from "@landlens/contracts";
 import { Activity, AlignLeft, ArrowDown, Check, ChevronRight, CircleAlert, CircleX, Ellipsis, Eye, FileText, Plug, Search, Terminal, Wrench, X, Zap, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AskContext } from "./AgentDock";
@@ -256,9 +256,9 @@ export function answerKeys(ask: AgentPermissionRequest) {
   return { allow: allow?.optionId, reject: reject?.optionId };
 }
 
-// ---- GitHub and Linear writes (wave 6, D84) ----------------------------------------------------------------------
+// ---- GitHub, Linear and the Land family's writes (wave 6, D84; wave 7, D113) ----------------------------------------
 
-export const PROVIDER_NAME: Record<ConnProvider, string> = { github: "GitHub", linear: "Linear" };
+export const PROVIDER_NAME: Record<AnyProvider, string> = { github: "GitHub", linear: "Linear", clickland: "Clickland", landflow: "Landflow", landfall: "Landfall" };
 
 /** "issue write" from mcp__github__issue_write, or the title Claude Code gave. */
 function providerToolWords(ask: AgentPermissionRequest): string {
@@ -267,8 +267,11 @@ function providerToolWords(ask: AgentPermissionRequest): string {
   return (m ? m[1]! : t || "a tool").replace(/_/g, " ");
 }
 
-/** A write to GitHub or Linear that asks: the provider's mark, the tool, why it asked, and its arguments as a table. */
-function ProviderAsk({ ask, provider, onAnswer }: { ask: AgentPermissionRequest; provider: ConnProvider; onAnswer: (option: string) => void }) {
+/**
+ * A write to GitHub, Linear or a family sibling that asks: the provider's mark, the tool, why it asked, and its
+ * arguments as a table. A sibling's write always asks (D113): there is no autonomous mode to say why.
+ */
+function ProviderAsk({ ask, provider, onAnswer }: { ask: AgentPermissionRequest; provider: AnyProvider; onAnswer: (option: string) => void }) {
   const options = [...ask.options].sort((a, b) => Number(!a.kind.startsWith("allow")) - Number(!b.kind.startsWith("allow")));
   const firstAllow = options.find((o) => o.kind.startsWith("allow"));
   const firstReject = options.find((o) => o.kind === "reject_once") ?? options.find((o) => o.kind.startsWith("reject"));

@@ -56,7 +56,16 @@ const stateOf = (e: unknown): DoctorCheckState => {
   return s === 401 || s === 403 ? "forbidden" : "error";
 };
 
-export type DoctorDeps = { clusters: ClusterManager; hub: WatchHub; now?: () => number };
+export type DoctorDeps = {
+  clusters: ClusterManager;
+  hub: WatchHub;
+  now?: () => number;
+  /**
+   * Clickland's last lines of a pod's container (wave 7 D118), for when the kubelet has neither run; undefined when
+   * Clickland isn't connected or has none. Bodies come scrubbed (clickland-history.ts).
+   */
+  history?: (handle: string, q: { namespace: string; pods: string[]; container: string }) => Promise<{ pod: string; lines: string[]; cut: boolean; newest?: string } | undefined>;
+};
 
 export class DoctorService {
   private readonly scopes = new Map<string, Map<string, Scope>>();
@@ -122,7 +131,58 @@ export class DoctorService {
     return run;
   }
 
+  /**
+   * A problem in the scope's current report, as main holds it (wave 7 D126): what a send to triage or a flow is built
+   * from. The window names it by id only; one that isn't in the report is refused.
+   */
+  problem(handle: string, namespace: string | undefined, id: string): Problem {
+    const p = this.scopes.get(handle)?.get(namespace ?? "")?.health?.problems.find((x) => x.id === id);
+    if (!p) throw new KubeError(404, "That problem isn't in the current report.");
+    return p;
+  }
+
+  /**
+   * Whether the scope reports of this cluster name the object (D117): a problem's subject, or one of its pods. Clickland's
+   * history may be asked about such an object even when it is gone from the cluster.
+   */
+  knows(handle: string, o: { kind: "pod" | "deployment" | "statefulset" | "daemonset"; namespace: string; name: string }): boolean {
+    const kind = { pod: "Pod", deployment: "Deployment", statefulset: "StatefulSet", daemonset: "DaemonSet" }[o.kind];
+    for (const s of this.scopes.get(handle)?.values() ?? []) {
+      for (const p of s.health?.problems ?? []) {
+        if (p.namespace !== o.namespace) continue;
+        if (p.kind === kind && p.name === o.name) return true;
+        if (o.kind === "pod" && p.pods.includes(o.name)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Whether the newest reports of this cluster hold a problem about the object (its kind, namespace and name, and the
+   * class when given): telemetry keeps a doctor brief's subject only then (security review of part 5, L1).
+   */
+  reports(handle: string, o: { kind?: string; namespace?: string; name?: string }, cls?: string): boolean {
+    if (!o.kind || !o.name) return false;
+    for (const s of this.scopes.get(handle)?.values() ?? []) {
+      for (const p of s.health?.problems ?? []) {
+        if (p.kind === o.kind && p.name === o.name && (p.namespace ?? undefined) === (o.namespace ?? undefined) && (!cls || p.class === cls)) return true;
+      }
+    }
+    return false;
+  }
+
   private async readEvidence(handle: string, p: Problem, stopped: AbortSignal): Promise<DoctorEvidence> {
+    const ev = await this.readKubelet(handle, p, stopped);
+    const log = ev.log;
+    // The kubelet had neither run (the pods or their containers are gone): Clickland's history, if it has the lines.
+    if (!log || !("error" in log) || !GONE.has(log.error) || !this.deps.history || !p.namespace || !p.container) return ev;
+    const container = p.container.replace(/^init:/, "");
+    const got = await this.deps.history(handle, { namespace: p.namespace, pods: p.pods.slice(0, DOCTOR.log.pods), container }).catch(() => undefined);
+    if (!got || stopped.aborted) return ev;
+    return { log: { pod: got.pod, container, previous: false, lines: got.lines.slice(-DOCTOR.log.tailLines), cut: got.cut || got.lines.length > DOCTOR.log.tailLines, source: "clickland", ...(got.newest ? { newest: got.newest } : {}) } };
+  }
+
+  private async readKubelet(handle: string, p: Problem, stopped: AbortSignal): Promise<DoctorEvidence> {
     const crash = p.class === "crashloop" || p.class === "oom" || p.class === "start" || p.class === "restarts" || (p.class === "probe" && p.facts.probe?.type !== "readiness");
     if (!crash || !p.pods.length || !p.namespace || !p.container) return {};
     const container = p.container.replace(/^init:/, "");
@@ -178,6 +238,31 @@ export class DoctorService {
       out.push(...got.certs.filter((c) => c.namespace === ns));
     }
     return { state, certs: out };
+  }
+
+  /**
+   * The doctor's problems now, counted per cluster, class and tone (Landlens's telemetry gauge, wave 7 D129): from each
+   * cluster's newest report (the whole cluster's when it has one, else its namespaces' added up, each problem once).
+   * Counts only; no problem's name or text.
+   */
+  problemCounts(): { handle: string; class: string; tone: string; n: number }[] {
+    const out: { handle: string; class: string; tone: string; n: number }[] = [];
+    for (const [handle, m] of this.scopes) {
+      const whole = m.get("")?.health;
+      const reports = whole ? [whole] : [...m.values()].flatMap((s) => (s.health ? [s.health] : []));
+      const seen = new Set<string>();
+      const counts = new Map<string, number>();
+      for (const r of reports) for (const p of r.problems) {
+        if (seen.has(p.id)) continue;
+        seen.add(p.id);
+        counts.set(`${p.class} ${p.tone}`, (counts.get(`${p.class} ${p.tone}`) ?? 0) + 1);
+      }
+      for (const [k, n] of counts) {
+        const [cls, tone] = k.split(" ") as [string, string];
+        out.push({ handle, class: cls, tone, n });
+      }
+    }
+    return out;
   }
 
   forget(handle: string) {
@@ -325,6 +410,9 @@ export class DoctorService {
     return (path: string) => client.jsonCapped(path, { maxBytes: 32 * 1048576, timeoutMs: 15_000 });
   }
 }
+
+/** The kubelet's answers that mean neither run is there to read: when Clickland may have the lines (D118). */
+const GONE = new Set(["The pod or its container is gone.", "This container has no log to read yet."]);
 
 /** A log read's failure as a fixed sentence: the API's own text doesn't reach the window (review, finding 6). */
 function logError(e: unknown): string {

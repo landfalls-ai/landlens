@@ -6,10 +6,12 @@
 // annotations and schemas). A server's readOnlyHint is its own claim, so it is never trusted by default.
 // A connection's server (GitHub, Linear) is told apart by the vendor's read-only endpoint instead (providers/): its
 // reads run without asking when you leave "Reads run without asking" on, while its listing is the one you accepted,
-// and readOnlyHint plays no part.
+// and readOnlyHint plays no part. A Land family sibling's (wave 7, D110) is a read only when Landlens's list, the
+// server's readOnlyHint and the pinned listing all agree.
 import { createHash } from "node:crypto";
 import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, type McpToolInfo } from "@landlens/contracts";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { familyIsRead, isSibling } from "./providers/family.js";
 import type { ProviderRules } from "./providers/index.js";
 
 /** The MCP Apps `_meta.ui` of a tool (and the deprecated flat key), read leniently. */
@@ -45,11 +47,20 @@ function canonical(v: unknown): string {
  * and MCP Apps visibility and view. Everything the model reads about a tool is in it, so a server that rewrites a
  * description, flips readOnlyHint or adds a tool gets a new hash.
  */
-export function listingHash(tools: Pick<Tool, "name" | "title" | "description" | "annotations" | "inputSchema" | "outputSchema" | "_meta">[]): string {
-  const rows = tools
-    .map((t) => ({ name: t.name, title: t.title, description: t.description, annotations: t.annotations, inputSchema: t.inputSchema, outputSchema: t.outputSchema, ui: toolUi(t) }))
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+type Listed = Pick<Tool, "name" | "title" | "description" | "annotations" | "inputSchema" | "outputSchema" | "_meta">;
+const row = (t: Listed) => ({ name: t.name, title: t.title, description: t.description, annotations: t.annotations, inputSchema: t.inputSchema, outputSchema: t.outputSchema, ui: toolUi(t) });
+
+export function listingHash(tools: Listed[]): string {
+  const rows = tools.map(row).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return createHash("sha256").update(canonical(rows)).digest("hex");
+}
+
+/** Each tool of a listing by name, with a short hash of what listingHash reads of it: what a review diffs (D111). */
+export function toolDigest(tools: Listed[]): Record<string, string> {
+  // No prototype (review of wave 7 part 2, L4): a tool named __proto__ is kept as any other.
+  const out: Record<string, string> = Object.create(null);
+  for (const t of tools) out[t.name] = createHash("sha256").update(canonical(row(t))).digest("hex").slice(0, 16);
+  return out;
 }
 
 /**
@@ -63,14 +74,18 @@ export type ListedServer = {
 };
 
 /** Whether a server's listing (and, for a connection with a read-only endpoint, that one's too) is the pinned one. */
-function holds(s: ListedServer): boolean {
+export function holds(s: ListedServer): boolean {
   if (!s.pin || listingHash(s.tools) !== s.pin) return false;
   if (s.readPin !== undefined && (!s.readListing || listingHash(s.readListing) !== s.readPin)) return false;
   return true;
 }
 
-/** Whether a tool only reads: by the vendor's read-only listing for a connection's server, else by its own word. */
-export const readsOnly = (t: Pick<Tool, "name" | "annotations">, provider?: ProviderRules) => (provider ? provider.readTools.has(t.name) : isReadOnly(t));
+/**
+ * Whether a tool only reads: by the vendor's read-only listing for a connection's server; for a family sibling's, by
+ * Landlens's list and the hints of the tool as listed now as well (D110); else by its own word.
+ */
+export const readsOnly = (t: Pick<Tool, "name" | "annotations">, provider?: ProviderRules) =>
+  provider ? provider.readTools.has(t.name) && (!isSibling(provider.id) || familyIsRead(provider.id, t)) : isReadOnly(t);
 
 /**
  * Permission rules for one session: the built-in server whole, and, for each proxied server you let run its

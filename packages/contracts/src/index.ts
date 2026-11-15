@@ -145,20 +145,35 @@ export const MetricsRequest = z
   .refine((r) => !["namespace", "deployment", "statefulset", "daemonset", "pod"].includes(r.scope) || !!r.namespace, "this scope needs a namespace");
 export type MetricsRequest = z.infer<typeof MetricsRequest>;
 
+// A Land family sibling's address (docs/family.md, wave 7 D102): one rule for Clickland, Landflow and Landfall. An
+// origin only: scheme://host[:port], a trailing "/" at most; no user info, path, query or fragment (the contracts build
+// has no URL global). https anywhere; plain http only to this machine, so a key never crosses a network in the clear.
+// An unpackaged build may also take plain http to the exact hosts in LANDLENS_FAMILY_HTTP_HOSTS: main decides that
+// (main/family.ts), so the family channels take FamilyOrigin, the shape, and main applies familyUrlAllowed.
+const FAMILY_ORIGIN = /^(https?):\/\/([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:]{2,39}\])(:\d{1,5})?\/?$/;
+/** This machine's names: plain http may go to these. */
+export const LOCAL_HOSTS = ["127.0.0.1", "localhost", "[::1]"] as const;
+/** A host name LANDLENS_FAMILY_HTTP_HOSTS may list. */
+export const FAMILY_HTTP_HOST = /^[a-z0-9.-]{1,253}$/;
+/** https, or http to this machine or to one of `httpHosts` (exact, lowercase). False for anything that isn't an origin. */
+export function familyUrlAllowed(u: string, httpHosts: readonly string[] = []): boolean {
+  const m = FAMILY_ORIGIN.exec(u);
+  if (!m) return false;
+  const port = m[3] ? Number(m[3].slice(1)) : undefined;
+  if (port !== undefined && (port < 1 || port > 65535)) return false;
+  const host = m[2]!.toLowerCase();
+  return m[1] === "https" || (LOCAL_HOSTS as readonly string[]).includes(host) || httpHosts.includes(host);
+}
+/** An origin's shape, for the channels; main applies familyUrlAllowed with its overrides. */
+export const FamilyOrigin = z.string().max(300).regex(FAMILY_ORIGIN, "an address like https://landflow.example or http://127.0.0.1:3000, with no path");
+/** A sibling's address as this build takes it with no overrides. */
+export const FamilyUrl = FamilyOrigin.refine((u) => familyUrlAllowed(u), "https, or http to this machine (127.0.0.1, localhost)");
+
 /**
  * Clickland's address and key. The key travels renderer → main only (when the person types it); main keeps it
- * encrypted with safeStorage and never sends it back. Plain http only to this machine, so a key never crosses a network
- * in the clear.
+ * encrypted with safeStorage and never sends it back. Since wave 7 the address follows the family's rule (FamilyUrl).
  */
-export const ClicklandUrl = z
-  .string()
-  .max(500)
-  .refine((u) => {
-    // scheme://host[:port][/path]: no user info, query or fragment (the contracts build has no URL global).
-    const m = /^(https?):\/\/([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.exec(u);
-    if (!m) return false;
-    return m[1] === "https" || ["127.0.0.1", "localhost", "[::1]"].includes(m[2]!.toLowerCase());
-  }, "https, or http to this machine (127.0.0.1, localhost)");
+export const ClicklandUrl = FamilyUrl;
 export const ClicklandKey = z.string().max(200).regex(/^ck_[A-Za-z0-9_-]{16,128}$/, "not a Clickland API key (ck_…)");
 /** The cluster's name in Clickland's data (`k8s.cluster.name`); a label value. */
 export const ClicklandClusterName = z.string().max(253).regex(/^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/, "not a cluster name");
@@ -169,6 +184,61 @@ export const ClicklandSettingsInput = z.object({
   /** The kubeconfig context this name is for, and the name; absent: the context's own name. */
   cluster: z.object({ context: z.string().min(1).max(253), name: ClicklandClusterName }).optional(),
 });
+
+// Clickland's history in the IDE (docs/metrics.md#logs-and-traces, wave 7 part 3, D115–D118): a pod's or a workload's
+// logs and traces, read in main with Clickland's key. The window names an object and a range; main builds the search
+// from names it validated (each a quoted term), so nothing the window sends is search syntax. Answers are checked,
+// capped and their bodies scrubbed (redactText) before they cross.
+export const ClicklandRange = z.enum(["1h", "6h", "24h", "7d"]);
+export type ClicklandRange = z.infer<typeof ClicklandRange>;
+/** A Kubernetes name as Clickland's collectors record it (a DNS subdomain). */
+export const K8S_NAME = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
+export const ClicklandScope = z.object({
+  kind: z.enum(["pod", "deployment", "statefulset", "daemonset"]),
+  namespace: NamespaceName,
+  name: z.string().min(1).max(253).regex(K8S_NAME, "not a Kubernetes name"),
+  container: z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name").optional(),
+});
+export type ClicklandScope = z.infer<typeof ClicklandScope>;
+/** Clickland's paging cursor (its SearchRequest's `before`). */
+export const ClicklandCursor = z.string().regex(/^\d{1,20}$/, "not a cursor");
+/** A trace id as Clickland takes it: hex. */
+export const ClicklandTraceId = z.string().regex(/^[0-9a-f]{1,64}$/, "not a trace id");
+export const ClicklandLogsRequest = z.object({
+  handle: Handle,
+  scope: ClicklandScope,
+  range: ClicklandRange,
+  /** Words to find, sent as one quoted phrase, never as search syntax. One line. */
+  filter: z.string().max(200).regex(/^[^\u0000-\u001f\u007f]*$/, "one line").optional(),
+  /** "Errors only": the fixed error levels (error, fatal, critical). */
+  errors: z.boolean().optional(),
+  before: ClicklandCursor.optional(),
+});
+/** One log line from Clickland, as Landlens keeps it: the body scrubbed and cut, three attributes, the rest dropped. */
+export type ClRow = {
+  at: string;
+  body: string;
+  severity?: string;
+  service?: string;
+  pod?: string;
+  container?: string;
+  stream?: "stdout" | "stderr";
+  /** The body was longer than 8,192 characters and is cut. */
+  cut?: true;
+};
+export type ClicklandLogs =
+  | { rows: ClRow[]; next?: string; cut: boolean; source: "clickland"; cluster: string }
+  | { unavailable: MetricsReason };
+/** One trace of a service: its top span of that service, when, how long, and whether any of its spans failed. */
+export type ClTrace = { id: string; name: string; service: string; at: string; ms: number; error: boolean };
+/**
+ * `scoped`: every span listed named the window's cluster and namespace (k8s.cluster.name, k8s.namespace.name); spans
+ * that named another were dropped. False: the list is by service name, in any cluster (security review of part 3, M3).
+ */
+export type ClicklandTraces = { traces: ClTrace[]; service: string; scoped: boolean } | { unavailable: MetricsReason };
+/** A span of one trace, for the plain span list (no waterfall): depth, start offset and duration on one scale. */
+export type ClSpan = { id: string; name: string; service: string; kind?: string; depth: number; offsetMs: number; ms: number; error: boolean };
+export type ClicklandTrace = { spans: ClSpan[]; ms: number; cut: boolean } | { unavailable: MetricsReason };
 
 // MCP (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers it serves (the built-in
 // landlens-kube and remote servers you add), the call log, and MCP Apps (tool views in a sandboxed frame).
@@ -181,8 +251,11 @@ export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fat
 
 /** The built-in server's name; no remote server may take it or anything starting with "landlens". */
 export const BUILTIN_MCP_SERVER = "landlens-kube";
-/** Server names Connections serves on the gateway (wave 6): a server you add can't take one. */
-export const RESERVED_MCP_NAMES = ["github", "linear", "landlens-gcp"] as const;
+/**
+ * Server names Connections serves on the gateway (wave 6, and the Land family's in wave 7 D107): a server you add can't
+ * take one.
+ */
+export const RESERVED_MCP_NAMES = ["github", "linear", "landlens-gcp", "clickland", "landflow", "landfall"] as const;
 /** How a remote server is named in Claude Code (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */
 export const McpServerName = z
   .string()
@@ -282,6 +355,356 @@ export const CONN_NOTES = {
   linearNameTaken: "Rename your server named linear first.",
 } as const;
 export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
+
+// The Land family (docs/family.md, wave 7): Landlens's own sign-in to the Clickland, Landflow and Landfall the person
+// runs, held in main. A key or token comes in on family:connect (Landflow's pasted key), family:signin (Landfall's
+// browser sign-in) or family:set (the triage webhook's secret); no channel sends one back.
+export const Sibling = z.enum(["clickland", "landflow", "landfall"]);
+export type Sibling = z.infer<typeof Sibling>;
+/** A sibling as a provider on the gateway (D107): its server's name is the sibling's. */
+export const FamilyProvider = Sibling;
+export type FamilyProvider = Sibling;
+/** Any server the gateway treats as a provider's: a wave 6 connection or a family sibling. */
+export const AnyProvider = z.enum(["github", "linear", "clickland", "landflow", "landfall"]);
+export type AnyProvider = z.infer<typeof AnyProvider>;
+/**
+ * A Landflow personal API key (`lf_` and 32 random bytes, base64url). Not an instance MCP token (`lf_mcp_`, which acts
+ * for nobody), a debug token (`lf_dbg_`) or a Landfall key (`lf_key_`).
+ */
+export const LANDFLOW_KEY_SHAPE = /^lf_(?!mcp_|key_|dbg_)[A-Za-z0-9_-]{20,128}$/;
+export const LandflowKey = z.string().max(200).regex(LANDFLOW_KEY_SHAPE, "not a Landflow API key (lf_…)");
+/** The triage flow's webhook path under /api/webhook/ (D121): no dots, so no dot segments. */
+export const TriagePath = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9/_-]{0,119}$/, "letters, digits, /, _ and -");
+/** The header the webhook's secret goes in: never one HTTP or Landlens owns. */
+export const TriageHeader = z
+  .string()
+  .regex(/^[A-Za-z0-9-]{1,64}$/, "not a header name")
+  .refine(
+    (h) => !/^(host|cookie|authorization|proxy-authorization|connection|keep-alive|upgrade|expect|te|trailer|origin|forwarded|x-forwarded-.*|content-(length|type|encoding)|transfer-encoding|idempotency-key|x-landlens-.*)$/i.test(h),
+    "Landlens sets this header itself, or it can't carry the secret",
+  );
+/** The webhook's secret: one line of printable characters, no space at either end. */
+export const TriageSecret = z.string().max(400).regex(/^[\x21-\x7e](?:[\x20-\x7e]{0,398}[\x21-\x7e])?$/, "one line of printable characters");
+export type FamilyAccount = { name?: string; email?: string; org?: string; role?: string };
+/** What the renderer may know about a sibling: never a key, token or secret. */
+export type FamilyInfo = {
+  sibling: Sibling;
+  state: "off" | "connecting" | "ready" | "expired" | "failed";
+  /** The origin, as stored. */
+  url: string;
+  method?: "key" | "oauth";
+  /** Who the key or sign-in is; each field one line, at most 100 characters. */
+  account?: FamilyAccount;
+  /** As the sibling reported them. */
+  scopes?: string[];
+  /** "Tools for Claude" (D108): its MCP server is given to every agent session. Off when first connected. */
+  toSessions: boolean;
+  /** "Reads run without asking" (D110): on when first connected. */
+  readsAuto: boolean;
+  /** The accepted listing's reads and writes (D110: Landlens's list, the server's hint and the pin together). */
+  tools?: { read: number; write: number };
+  /** Its tools changed since you accepted them (D111): every tool of its server asks until you accept again. */
+  drift?: boolean;
+  /** One of FAMILY_NOTES. */
+  note?: string;
+  /** Landflow: what the key's scopes cover. */
+  can?: { brain: boolean; run: boolean; runs: boolean; flows: boolean };
+  /** Landflow: the triage flow's webhook (D121). */
+  triage?: { path: string; header: string; hasSecret: boolean };
+  /** Clickland: the console's origin, for Open in Clickland (D118). */
+  console?: string;
+  /** Clickland: Landlens's own telemetry to its collector (D127, D133). */
+  telemetry?: TelemetryInfo;
+};
+export type FamilyList = { canStore: boolean; clickland: FamilyInfo; landflow: FamilyInfo; landfall: FamilyInfo };
+/** Every sentence a sibling's note or error can be; the raw error goes to main's log only. */
+export const FAMILY_NOTES = {
+  cantStore: "This machine can't encrypt the token, so Landlens won't store it.",
+  httpOnlyHere: "Use https, or plain http only to this machine (127.0.0.1, localhost).",
+  keyElsewhere: "Paste the key again: a stored key never follows a new address.",
+  unreachable: "Nothing is listening at that address.",
+  clicklandRefused: "Clickland refused the key.",
+  clicklandAnswer: "Clickland's answer wasn't what Landlens expected.",
+  clicklandSlow: "Clickland didn't answer in time.",
+  clicklandWrites: "This key can also write. A key with only read is enough.",
+  landflowRefused: "Landflow refused the key.",
+  landflowAnswer: "Landflow's answer wasn't what Landlens expected.",
+  landflowSlow: "Landflow didn't answer in time.",
+  landflowNotKey: "Landflow didn't take that as a personal API key.",
+  landflowWrites: "This key can also change workflows. Landlens doesn't need that.",
+  connectLandflow: "Connect Landflow first.",
+  landfallOff: "This Landfall doesn't offer its MCP connector (MCP_GATEWAY_ENABLED is off).",
+  landfallAnswer: "Landfall's answer wasn't what Landlens expected.",
+  landfallSlow: "Landfall didn't answer in time.",
+  landfallElsewhere: "Landfall's sign-in named another server, so Landlens stopped.",
+  landfallDenied: "The sign-in was turned down at Landfall.",
+  landfallTimeout: "The sign-in wasn't finished within 5 minutes. Sign in again.",
+  landfallExpired: "Landfall's sign-in ran out. Sign in again.",
+  landfallUnreachable: "Couldn't reach Landfall.",
+  landfallWider: "Landfall gave this sign-in more than read access, so Landlens didn't keep it.",
+  landfallChanged: "Landfall's sign-in changed while it was refreshed. Try again.",
+  drift: "Its tools changed since you accepted them. Review them, then accept.",
+  unaccepted: "Its tools aren't accepted yet. Check them, then accept, so its reads can run without asking.",
+  nameTaken: "A server you added on the MCP page has this name, so its tools stay off. Rename that server first.",
+  badListing: "Its tool listing isn't one Landlens accepts (a tool name over 128 characters, or over 500 tools).",
+  moved: "Moved from the MCP page: Claude sessions on every cluster get its tools now.",
+  siblingAddress: "This is the address of a Land family app you connected: its tools reach Claude through Connections → Land family, not here.",
+  reviewAgain: "Its tools changed since you reviewed them. Review them again, then accept.",
+} as const;
+/** "<Sibling> answered HTTP <n>.": the one note with a number in it. */
+export const familyHttpNote = (name: "Clickland" | "Landflow" | "Landfall", status: number) => `${name} answered HTTP ${Math.trunc(status)}.`;
+
+// Landflow on a resource (docs/family.md#landflow-on-a-resource, wave 7 part 4, D119–D126). Every send is the person's
+// click on a sheet that shows what leaves; main builds every body from the cluster's own report and the person's
+// choices, and the renderer sends only choices and the ids main gave it. A problem goes to Landflow's triage webhook as
+// a Generic alert; a flow tagged `landlens` runs as a manual run of the saved workflow. Landlens never calls Landfall:
+// a war room is opened only by Landflow's triage flow, and its link is read from the run.
+export const TriageSeverity = z.enum(["sev1", "sev2", "sev3", "sev4"]);
+export type TriageSeverity = z.infer<typeof TriageSeverity>;
+/** A sheet main prepared (an alert or a flow's input), owned by the window that asked for it. */
+export const LandflowSheetId = z.string().regex(/^ls[A-Za-z0-9_-]{20,40}$/, "not a sheet");
+/** A send or run main made: landflow:follow and landflow:open take it, never an address. */
+export const LandflowRunId = z.string().regex(/^lr[A-Za-z0-9_-]{20,40}$/, "not a run");
+/**
+ * The one id rule for Landflow's workflow and execution ids (`wf_…`, nanoid execution ids), shared by the channel, the
+ * client and family-sent.json (security review of part 4, L9). A workflow listed with another id is shown as one
+ * Landlens can't run.
+ */
+export const LANDFLOW_ID = /^[A-Za-z0-9_-]{1,128}$/;
+/** A Landflow workflow id, as GET /api/workflows lists it (`wf_…`, or one a person chose). */
+export const LandflowFlowId = z.string().regex(LANDFLOW_ID, "not a workflow id");
+/**
+ * The SHA-256 of the body a sheet shows, as hex (security review of part 4, H1): the send names it, and main refuses a
+ * sheet whose body is no longer that one.
+ */
+export const LandflowDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
+/**
+ * The Generic alert Landlens sends (D120): Normalize Alert reads title, severity, service, id, description, status and
+ * environment with its default paths; the rest rides along.
+ */
+export type TriageAlert = {
+  source: "landlens";
+  title: string;
+  severity: TriageSeverity;
+  service: string;
+  environment: string;
+  status: "firing";
+  id: string;
+  fingerprint: string;
+  description: string;
+  labels: { cluster: string; namespace?: string; kind: string; name: string; class: string; reason: string };
+  entity: { kind: string; id: string };
+};
+/** What the triage sheet shows: the alert exactly as it will be sent, where it goes, and the header's name. */
+export type AlertPreview = {
+  sheet: string;
+  /** SHA-256 of the alert's JSON as main will post it: landflow:triage names it (H1). */
+  digest: string;
+  /** `<Landflow>/api/webhook/<path>`. */
+  to: string;
+  header: string;
+  alert: TriageAlert;
+  /** Log lines asked for: how many went in, or why none did (a fixed sentence). */
+  logs?: { lines: number; note?: string };
+};
+/** The input a flow on a resource gets (D125): names, the problem it started from, the object's YAML if ticked. */
+export type FlowInput = {
+  landlens: 1;
+  cluster: string;
+  namespace?: string;
+  kind: string;
+  apiVersion: string;
+  name: string;
+  problem?: { class: string; reason: string; title: string };
+  /** The object as Ask Claude would attach it: no Secret, no env[].value, at most 32 KiB. */
+  yaml?: string;
+};
+/** `digest`: SHA-256 of the input's JSON as main will send it; landflow:run names it (H1). */
+export type FlowPreview = { sheet: string; digest: string; to: string; input: FlowInput; yaml?: { note: string } };
+/**
+ * A flow tagged `landlens`: its name and description as text, one line each, and whose it is (review of part 4, M2):
+ * the project that owns it and whether it reached the key's user through a share. `runnable: false`: its id isn't one
+ * Landlens runs (LANDFLOW_ID); `id` is then only the row's key.
+ */
+export type LandflowFlow = { id: string; name: string; description?: string; owner?: string; shared: boolean; runnable: boolean };
+/** Landfall's TriggerResult outcomes, read from the triage run's node outputs (D122). */
+export type LandflowOutcome = "opened" | "attached" | "recorded" | "ignored" | "suppressed";
+export type LandflowRunStatus = "running" | "queued" | "waiting" | "success" | "error" | "canceled";
+/**
+ * A send to triage or a flow's run, as the window sees it (D122, D125): fixed sentences, the run's status, Landfall's
+ * outcome and the room's address (as text; opened only through landflow:open), and for a flow its last node's output,
+ * scrubbed and cut. Nothing else of the run crosses.
+ */
+export type LandflowRun = {
+  run?: string;
+  note: string;
+  tone: "ok" | "warn" | "bad" | "info";
+  /** Still worth asking again (landflow:follow). */
+  follow: boolean;
+  status?: LandflowRunStatus;
+  /** The run's address in Landflow, as text. */
+  runLink?: string;
+  outcome?: LandflowOutcome;
+  /** The room's address, as text. */
+  room?: string;
+  /** A flow's last node's output: JSON as text, redacted, at most 4,000 characters. */
+  output?: string;
+};
+/** A problem sent to triage from this cluster (D124): the chip on its row and drawer. */
+export type LandflowSent = { run: string; problem: string; title: string; severity: TriageSeverity; at: string; state: "triage" | "room"; room?: string };
+/** Every sentence a send or a run can show. */
+export const LANDFLOW_NOTES = {
+  sent: "Sent to triage.",
+  following: "Sent to triage. Following the run…",
+  held: "Landflow is holding it with other alerts.",
+  secretRefused: "Landflow refused the webhook secret.",
+  noWebhook: "No published flow listens at that webhook.",
+  opened: "War room opened.",
+  attached: "Attached to the room that is already open.",
+  recorded: "Recorded; no room opened.",
+  waiting: "Triage is waiting for on-call's answer.",
+  failed: "The run failed. Open it in Landflow.",
+  triageDone: "Triage finished without opening a room.",
+  noRuns: "This key can't read runs (executions:read). Open it in Landflow.",
+  gone: "Landflow no longer has this run.",
+  started: "Started in Landflow. Following the run…",
+  startedOnly: "Started in Landflow.",
+  running: "Running in Landflow…",
+  flowWaiting: "The run is waiting in Landflow.",
+  finished: "Finished.",
+  noFlow: "Landflow doesn't have that flow.",
+  cantRun: "This key can't run flows (run).",
+  cantList: "This key can't list workflows (workflows:read).",
+  noTriage: "Set up the triage webhook on Connections → Landflow first.",
+  notReady: "Connect Landflow first.",
+  noSheet: "That sheet is gone. Open it again.",
+  sheetChanged: "What this sheet shows changed. Look again before sending.",
+  flowChanged: "This flow changed in Landflow since it was listed. Look again.",
+  cantKeep: "Landlens can't keep a record of a send from this cluster, so it doesn't send it.",
+  dialogOpen: "A dialog is already open.",
+  stillGoing: "Still going. Check again in a moment.",
+} as const;
+
+// What Landlens reports (docs/family.md#what-landlens-reports, wave 7 part 5, D127–D135). Telemetry is off until the
+// person turns it on and goes only to the collector address they confirmed; every record is built in main by
+// packages/telemetry/src/records.ts from closed sets: an attribute key is one of TELEMETRY_KEYS and its value an enum,
+// a number or a name that passed the Kubernetes-name rule. There is no free-text field. A session's summary goes to
+// Landflow's brain as one private `work.session` event, drafted by rules in main, shown on a sheet and sent only on the
+// person's click.
+export const TELEMETRY_KEYS = [
+  "gen_ai.operation.name", "gen_ai.agent.name", "gen_ai.conversation.id", "gen_ai.request.model",
+  "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens",
+  "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cost", "gen_ai.response.finish_reasons", "gen_ai.tool.name",
+  "gen_ai.token.type",
+  "landlens.mode", "landlens.ask", "landlens.cluster", "landlens.namespace", "landlens.namespaces", "landlens.subject.kind",
+  "landlens.subject.namespace", "landlens.subject.name", "landlens.problem.class", "landlens.server", "landlens.status",
+  "landlens.gate", "landlens.who", "landlens.verb", "landlens.kind", "landlens.outcome", "landlens.waited_ms",
+  "landlens.event", "landlens.count", "landlens.policy", "landlens.allowed", "landlens.class", "landlens.tone",
+] as const;
+export type TelemetryKey = (typeof TELEMETRY_KEYS)[number];
+export type TelemetryValue = string | number | boolean;
+export type TelemetryAttrs = { [K in TelemetryKey]?: TelemetryValue };
+/**
+ * One record exactly as it is queued for the collector (D132's drawer shows these). Times are milliseconds since the
+ * epoch; ids are hex. `name` is a span, metric or event name from Landlens's own closed set.
+ */
+export type TelemetryRecord =
+  | { signal: "span"; name: string; at: number; end: number; traceId: string; spanId: string; parentSpanId?: string; error: boolean; attrs: TelemetryAttrs }
+  | { signal: "metric"; name: string; kind: "sum" | "gauge"; at: number; start: number; value: number; attrs: TelemetryAttrs }
+  | { signal: "log"; name: string; at: number; severity: "info" | "warn" | "error"; attrs: TelemetryAttrs };
+/** Where telemetry stands (D133), on the Clickland card. */
+export type TelemetryInfo = {
+  on: boolean;
+  /** The collector's origin (OTLP/HTTP); records go to <collector>/v1/traces, /v1/metrics and /v1/logs. */
+  collector: string;
+  /** Names of the cluster, namespace and the object a question was about go with the records; off is "counts only". */
+  names: boolean;
+  /** `team.id` on every record, if the person typed one. */
+  team?: string;
+  /** The collector's last answer. */
+  last?: { at: string; ok: boolean };
+  /** Records waiting to go; at most 2,000 are kept, older ones dropped. */
+  waiting: number;
+  /** Records dropped since the app started (the cap, or three failed tries). */
+  dropped: number;
+};
+export const DEFAULT_COLLECTOR = "http://127.0.0.1:4318";
+/**
+ * Whether a kubeconfig context's name may stand for its cluster when the person set no name for it (security review of
+ * wave 7 part 5, L2, L3): one DNS label (lowercase letters, digits and dashes, at most 63) with no run of six or more
+ * digits. So `orbstack`, `kind-dev` or `prod-eu-1` go; `gke_<project>_<zone>_<name>`, an EKS ARN with its account id,
+ * `user@cluster`, `default/api-host:6443/admin` or `acme-123456789012` don't.
+ */
+export const plainContextName = (context: string): boolean => /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(context) && !/\d{6,}/.test(context);
+/**
+ * The cluster's name Landlens sends to a sibling (telemetry's `landlens.cluster`, the brain's draft): the name the
+ * person set for Clickland's graphs, else the context's own name when it is plain, else none.
+ */
+export const clusterLabel = (set: string | undefined, context: string): string | undefined => set ?? (plainContextName(context) ? context : undefined);
+/** A team's name as `team.id`: at most 60 characters, a name (lowercase letters, digits, `-`, `.`, `_`). */
+export const TelemetryTeam = z.string().max(60).regex(/^[a-z0-9](?:[-a-z0-9._]{0,58}[a-z0-9])?$/, "a team name: lowercase letters, digits, - . _");
+export const TELEMETRY_NOTES = {
+  off: "Telemetry is off. Nothing is sent.",
+  declined: "Telemetry stays off: you didn't confirm the collector.",
+  namesDeclined: "Names stay off: you didn't confirm sending them.",
+  dialogOpen: "A dialog is already open.",
+  noConsole: "Set Clickland's console address first.",
+  noSession: "Landlens has no such session.",
+} as const;
+
+/** A brain sheet main prepared for a session (D134), owned by the window that asked. */
+export const BrainSheetId = z.string().regex(/^bs[A-Za-z0-9_-]{20,40}$/, "not a sheet");
+export const BrainDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
+export const WorkVisibility = z.enum(["private", "team", "org"]);
+export type WorkVisibility = z.infer<typeof WorkVisibility>;
+/** Text the person may edit on the sheet, held to Landflow's limits (packages/protocol/src/work-events.ts). */
+export const BrainTitle = z.string().min(1).max(200);
+export const BrainSummary = z.string().max(500);
+export const BrainHint = z.string().max(120);
+/** The `work.session` event as the sheet shows it and main will send it (D134). */
+export type WorkDraft = {
+  kind: "work.session";
+  source: "landlens";
+  sourceId: string;
+  occurredAt: string;
+  endedAt?: string;
+  turns: number;
+  title: string;
+  summary: string;
+  visibility: WorkVisibility;
+  team?: string;
+  initiative?: string;
+};
+/**
+ * The brain sheet (D134): the event as main drafted it from the session's own record, the facts the summary was drafted
+ * from, where it goes, and the digest of the fields main fills (brain:send names it, so what is sent is what was shown).
+ */
+export type BrainDraft = { sheet: string; digest: string; to: string; event: WorkDraft; facts: string[]; open: boolean };
+/** brain:send's answer: saved, or why not (Landflow's reason as text, or Landlens's fixed sentence). */
+export type BrainSend = { saved: boolean; note: string; scrubbed?: { title: string; summary: string; team?: string; initiative?: string } };
+export const BRAIN_NOTES = {
+  saved: "Saved to your brain, private.",
+  savedTeam: "Saved to your brain, shared with your team.",
+  savedOrg: "Saved to your brain, shared with your organisation.",
+  scrubbed: "Landlens hid something that looked like a secret. Check the text, then send again.",
+  noBrain: "This Landflow key can't record work (brain:write).",
+  notReady: "Connect Landflow first.",
+  noSheet: "That sheet is gone. Open it again.",
+  changed: "This session moved on since the sheet was made. Look again before sending.",
+  closed: "Open the session to ask Claude for a draft.",
+  removed: "Removed from your brain.",
+  notThere: "Nothing of this session is in your brain.",
+  brainOff: "The brain is off on this Landflow.",
+  refused: "Landflow refused the key.",
+  busy: "Claude is busy in this session. Ask again when it has answered.",
+  declined: "Not sent: you didn't confirm who sees it.",
+  dialogOpen: "A dialog is already open.",
+  drafting: "Claude is drafting the brain's summary in this session. Ask when it is done, or cancel the draft.",
+  draftCancelled: "The draft was cancelled.",
+  draftTool: "Claude tried to use a tool while drafting, so Landlens stopped the draft. Write the summary, or ask again.",
+} as const;
+/** The one question "Ask Claude to draft" sends (D134): fixed, never the window's. */
+export const BRAIN_PROMPT = "Summarise this session in at most 400 characters: the question, what you found, what was changed. No names of people, no secrets.";
 
 // Google Cloud (docs/gcp.md, wave 6 part 4): browse every resource of the projects you choose, read-only, with
 // gcloud's own sign-in. Landlens stores no Google credential; the token stays in main. Names are held to Google's
@@ -551,6 +974,22 @@ export const channels = {
   "metrics:configure": ClicklandSettingsInput,
   "metrics:test": z.object({ handle: Handle.optional(), url: ClicklandUrl.optional(), key: ClicklandKey.optional(), cluster: ClicklandClusterName.optional() }),
   "metrics:disconnect": z.object({}),
+  // Clickland's history (D117): main checks the object is in the window's cluster or its doctor report first.
+  "clickland:logs": ClicklandLogsRequest,
+  "clickland:traces": z.object({ handle: Handle, scope: ClicklandScope, range: ClicklandRange, errors: z.boolean().optional() }),
+  "clickland:trace": z.object({ handle: Handle, id: ClicklandTraceId }),
+  /**
+   * Open in Clickland (D118): main builds the console's URL from the stored console address and this object (or one
+   * trace), asks in a native dialog that shows the host, then opens it. The window never supplies a URL.
+   */
+  "clickland:open": z.object({
+    handle: Handle,
+    scope: ClicklandScope,
+    signal: z.enum(["logs", "traces"]),
+    range: ClicklandRange,
+    errors: z.boolean().optional(),
+    trace: ClicklandTraceId.optional(),
+  }),
   // MCP (docs/mcp.md). Header values come in with save and test; nothing sends them back.
   "mcp:servers": z.object({ context: z.string().min(1).max(253).optional() }),
   "mcp:save": McpServerInput,
@@ -558,7 +997,6 @@ export const channels = {
   "mcp:enable": z.object({ id: McpServerId, context: z.string().min(1).max(253), enabled: z.boolean() }),
   "mcp:auto-run": z.object({ id: McpServerId, enabled: z.boolean(), context: z.string().min(1).max(253).optional() }),
   "mcp:remove": z.object({ id: McpServerId }),
-  "mcp:preset": z.object({ preset: z.literal("clickland") }),
   "mcp:calls": z.object({}),
   /** Run one read-only tool that needs no arguments, as you, to see what it returns and its app. */
   "mcp:try": z.object({ handle: Handle, server: z.string().min(1).max(32), tool: McpToolName }),
@@ -576,6 +1014,53 @@ export const channels = {
   "conn:test": z.object({ provider: ConnProvider }),
   "conn:repin": z.object({ provider: ConnProvider }),
   "conn:disconnect": z.object({ provider: ConnProvider }),
+  // The Land family (docs/family.md). A Landflow key comes in on family:connect, the triage webhook's secret on
+  // family:set; no channel sends one back. Addresses are FamilyOrigin here; main holds them to familyUrlAllowed with
+  // its overrides (LANDLENS_FAMILY_HTTP_HOSTS, unpackaged only). A Landfall sign-in is a flow, ended by conn:cancel.
+  "family:list": z.object({ context: z.string().min(1).max(253).optional() }),
+  "family:connect": z.object({ sibling: z.literal("landflow"), url: FamilyOrigin, key: LandflowKey.optional() }),
+  "family:signin": z.object({ sibling: z.literal("landfall"), url: FamilyOrigin }),
+  "family:set": z
+    .object({
+      sibling: Sibling,
+      toSessions: z.boolean().optional(),
+      readsAuto: z.boolean().optional(),
+      console: FamilyUrl.nullable().optional(),
+      triage: z.object({ path: TriagePath, header: TriageHeader, secret: TriageSecret.optional() }).nullable().optional(),
+    })
+    .refine((r) => r.console === undefined || r.sibling === "clickland", "only Clickland has a console address")
+    .refine((r) => r.triage === undefined || r.sibling === "landflow", "only Landflow has a triage webhook"),
+  "family:test": z.object({ sibling: Sibling }),
+  /**
+   * Accept the listing a family:test showed (D111), named by the hash that test returned: main refuses unless it is
+   * still the listing its last Check saw (review of part 2, M3).
+   */
+  "family:repin": z.object({ sibling: Sibling, hash: z.string().regex(/^[0-9a-f]{64}$/) }),
+  "family:disconnect": z.object({ sibling: Sibling }),
+  // Landflow on a resource (docs/family.md, D126). Only choices and ids cross: main builds the alert from the problem in
+  // the scope's current report and the flow's input from the object, and sends only what the sheet showed. Strict: a
+  // request that carries anything else (a title, a description, an address) is refused.
+  "landflow:alert": z.object({ handle: Handle, namespace: NamespaceName.optional(), problem: ProblemId, severity: TriageSeverity, logs: z.boolean(), sheet: LandflowSheetId.optional() }).strict(),
+  "landflow:triage": z.object({ sheet: LandflowSheetId, digest: LandflowDigest }).strict(),
+  "landflow:flows": z.object({}).strict(),
+  "landflow:input": z.object({ handle: Handle, ref: ResourceRef.strict(), namespace: NamespaceName.optional(), problem: ProblemId.optional(), yaml: z.boolean(), sheet: LandflowSheetId.optional() }).strict(),
+  "landflow:run": z.object({ sheet: LandflowSheetId, flow: LandflowFlowId, digest: LandflowDigest }).strict(),
+  "landflow:follow": z.object({ run: LandflowRunId }).strict(),
+  "landflow:sent": z.object({ handle: Handle }).strict(),
+  /** The run in Landflow, or the room it opened: main's own record of it, after the native dialog that shows its host. */
+  "landflow:open": z.object({ run: LandflowRunId, what: z.enum(["run", "room"]) }).strict(),
+  // What Landlens reports (docs/family.md#what-landlens-reports, D133, D135). Telemetry: the switch, the collector's
+  // address (main confirms a new one natively), counts only, the team; the drawer's records; a session in Clickland.
+  // The brain: a sheet per session, prepared in main; send names the sheet and the digest of the fields main filled, and
+  // carries only the text the person may edit; main scrubs and checks it again.
+  "telemetry:set": z.object({ on: z.boolean().optional(), collector: FamilyOrigin.optional(), names: z.boolean().optional(), team: TelemetryTeam.nullable().optional() }).strict(),
+  "telemetry:recent": z.object({}).strict(),
+  "telemetry:open": z.object({ session: SessionId }).strict(),
+  "brain:draft": z.object({ session: SessionId }).strict(),
+  "brain:ask": z.object({ sheet: BrainSheetId }).strict(),
+  "brain:cancel": z.object({ sheet: BrainSheetId }).strict(),
+  "brain:send": z.object({ sheet: BrainSheetId, digest: BrainDigest, title: BrainTitle, summary: BrainSummary, visibility: WorkVisibility, team: BrainHint.optional(), initiative: BrainHint.optional() }).strict(),
+  "brain:remove": z.object({ session: SessionId }).strict(),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
   "agent:autonomy": AutonomyRequest,
@@ -650,13 +1135,16 @@ export type Responses = {
   "metrics:configure": ClicklandSettings;
   "metrics:test": ClicklandTest;
   "metrics:disconnect": ClicklandSettings;
+  "clickland:logs": ClicklandLogs;
+  "clickland:traces": ClicklandTraces;
+  "clickland:trace": ClicklandTrace;
+  "clickland:open": { opened: boolean };
   "mcp:servers": McpServers;
   "mcp:save": McpServerInfo;
   "mcp:test": McpTest;
   "mcp:enable": McpServerInfo;
   "mcp:auto-run": McpServerInfo;
   "mcp:remove": { ok: true };
-  "mcp:preset": McpServerInfo;
   "mcp:calls": { calls: McpCall[] };
   "mcp:try": McpCall;
   "mcp:app-open": McpAppView;
@@ -672,6 +1160,29 @@ export type Responses = {
   "conn:test": McpTest;
   "conn:repin": ConnInfo;
   "conn:disconnect": ConnInfo;
+  "family:list": FamilyList;
+  "family:connect": FamilyInfo;
+  "family:signin": { flow: string };
+  "family:set": FamilyInfo;
+  "family:test": McpTest;
+  "family:repin": FamilyInfo;
+  "family:disconnect": FamilyInfo;
+  "landflow:alert": AlertPreview;
+  "landflow:triage": LandflowRun;
+  "landflow:flows": { flows: LandflowFlow[] };
+  "landflow:input": FlowPreview;
+  "landflow:run": LandflowRun;
+  "landflow:follow": LandflowRun;
+  "landflow:sent": { entries: LandflowSent[] };
+  "landflow:open": { opened: boolean };
+  "telemetry:set": TelemetryInfo;
+  "telemetry:recent": { records: TelemetryRecord[]; info: TelemetryInfo };
+  "telemetry:open": { opened: boolean };
+  "brain:draft": BrainDraft;
+  "brain:ask": { summary: string };
+  "brain:cancel": { ok: boolean };
+  "brain:send": BrainSend;
+  "brain:remove": { ok: boolean; note: string };
   "agent:autonomy": AutonomyState;
   "gcp:status": GcpStatus;
   "gcp:projects": { projects: GcpProject[]; cut: boolean };
@@ -708,8 +1219,11 @@ export type McpServerInfo = {
   id: string;
   name: string;
   builtin: boolean;
-  /** Served from Connections (wave 6): managed on the Connections page, not edited or removed here ("gcp": landlens-gcp). */
-  connection?: ConnProvider | "gcp";
+  /**
+   * Served from Connections (wave 6; the Land family from wave 7): managed on the Connections page, not edited or
+   * removed here ("gcp": landlens-gcp).
+   */
+  connection?: ConnProvider | Sibling | "gcp";
   url: string;
   /** The header Landlens adds, and whether a value is stored. The value itself never leaves main. */
   header?: { name: string; stored: boolean };
@@ -734,10 +1248,16 @@ export type McpServers = {
   gateway: string;
   servers: McpServerInfo[];
   canStore: boolean;
-  /** Servers Landlens knows how to add in one step, when they answer. */
-  presets: { id: "clickland"; name: string; url: string; reachable: boolean; hasKey: boolean; added: boolean }[];
 };
-export type McpTest = { ok: boolean; steps: { name: string; ok: boolean; detail: string }[]; tools?: McpToolInfo[] };
+export type McpTest = {
+  ok: boolean;
+  steps: { name: string; ok: boolean; detail: string }[];
+  tools?: McpToolInfo[];
+  /** A family sibling's listing against the accepted one, by tool name (D111): what Review shows. */
+  diff?: { added: string[]; removed: string[]; changed: string[] };
+  /** A family sibling's listing, as a hash: Accept sends it back, so only the listing Review showed is pinned (M3). */
+  listing?: string;
+};
 /** A front-door request behind a landlens-kube call, from the front door's audit. */
 export type McpFrontDoorRequest = { at: string; method: string; path: string; allowed: boolean; status?: number; reason?: string };
 /** One MCP call through the gateway: by an agent session, by an app's view, or by you (Preview). */
@@ -842,6 +1362,8 @@ export type ClicklandSettings = {
   canStore: boolean;
   /** The Clickland cluster name for the asked context (its own name unless set). */
   cluster?: string;
+  /** The console's origin, for Open in Clickland (wave 7 D118); set on the Clickland dialog. */
+  console?: string;
 };
 export type ClicklandTest = {
   ok: boolean;
@@ -922,7 +1444,12 @@ export type HealthProblem = Problem;
 export type DoctorReport = { at: string; problems: Problem[]; cut: boolean; checks: Record<DoctorCheck, DoctorCheckState> };
 /** On-demand evidence for one problem (D60): the previous run's last lines for a crash, an OOM kill or a probe kill. */
 export type DoctorEvidence = {
-  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean } | { error: string };
+  /**
+   * `source: "clickland"`: the kubelet had neither run, so the lines are Clickland's history of that pod and container
+   * (wave 7 D118), oldest first, scrubbed before they crossed; `newest` is the time of the last of them (review of part
+   * 3, L8: a pod name can be another incarnation's, so the note shows when).
+   */
+  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean; source?: "clickland"; newest?: string } | { error: string };
 };
 export type HealthEvent = {
   at: string;
@@ -976,8 +1503,8 @@ export type AgentPermissionRequest = {
   session: string;
   toolCall: { toolCallId: string; title?: string | null; kind?: string | null; rawInput?: unknown };
   options: { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" }[];
-  /** A connection's tool (GitHub, Linear): the dock shows its mark and its arguments as a table. */
-  provider?: ConnProvider;
+  /** A connection's or a family sibling's tool: the dock shows its mark and its arguments as a table. */
+  provider?: AnyProvider;
   /** Autonomous was on, and this write asks anyway: why (D82), e.g. "not one of the routine writes". */
   reason?: string;
 };
@@ -1059,6 +1586,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
+  "family:update",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

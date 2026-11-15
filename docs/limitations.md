@@ -48,6 +48,9 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   count (counting would mean listing every object of the kind). Printer columns read a JSONPath subset; a column
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
   guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
+- **The sidebar is 232px wide, always** ([design.md](design.md#layout)): its sections fold (D139), but it has no drag
+  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 8) moves both
+  to a settings file.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
 - **A failing pod's diagnosis** shows its last output line only when the container left a termination message
@@ -65,7 +68,7 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
-- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 7).
+- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 8).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
   both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
@@ -99,7 +102,9 @@ person's check reads them), and Ask Claude sends one problem at a time.
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
   clusters and sessions; a project granted later is readable only in a new session.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
-  asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
+  asking, and the scope is typed again each time; there is no default scope per connection. A resumed session is also
+  held for good: its routine writes ask even with autonomous on, since Landlens can't see what its transcript read
+  (wave 7 review of part 2, M1). Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones
   ([connections.md](connections.md#autonomous-mode)). Google Cloud data holds it (every write asks after), but
   cluster text (logs, events, annotations) doesn't: a hostile log line read in an autonomous session is the same
@@ -176,5 +181,86 @@ person's check reads them), and Ask Claude sends one problem at a time.
   them shows the new values across the whole chart).
 - **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten
   pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
-- **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
-  Clickland (wave 6).
+- **One Clickland for all clusters**, with a cluster name per context. Landlens's own telemetry goes to one collector
+  you set, off until you turn it on ([family.md](family.md#what-landlens-reports)).
+- **The Land family is connections, session tools, Clickland's logs and traces, Landflow on a resource, telemetry and the brain's session summaries** (wave 7 parts 1–5,
+  [family.md](family.md)). Landlens signs in to Clickland, Landflow and Landfall, gives Claude sessions their own MCP
+  servers (reads by Landlens's list, the server's hint and the accepted listing; every write asks), and shows
+  Clickland's stored lines and traces in the drawer ([metrics.md](metrics.md#logs-and-traces-from-clickland)), and
+  sends a problem to Landflow's triage or runs a flow tagged `landlens` on an object, on your click
+  ([family.md](family.md#landflow-on-a-resource)), and sends its own telemetry and a session's summary to your brain
+  when you turn it on or click Send ([family.md](family.md#what-landlens-reports)). Clickland's reads were checked live (:4730, its development bootstrap key, reads only); no other live
+  link was checked with a real key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
+  listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` was compared by hand with the siblings'
+  code ([family.md](family.md#what-the-lists-were-checked-against-review-of-part-2-m6)), and the three recorded-listing
+  tests show as `todo` until a listing is recorded. Clickland hints a new tool read-only by default: only Landlens's
+  list keeps it asking. A server you add at a connected sibling's address stays out of sessions rather than getting the sibling's
+  rules. A sibling's writes have no autonomous mode, by design (D113), and the family's tools are on for every
+  cluster or none. A Clickland view can call Clickland's writes behind the native dialog, as an added server's view
+  can. The local Landfall's connector is off (`MCP_GATEWAY_ENABLED`), so its sign-in and its MCP server were checked
+  only against the fake. A Landflow key that can change workflows is kept, with a note. Landbright sign-in for
+  Landlens itself is not planned until a sibling accepts Landbright tokens (D104). The Land family cards were checked
+  at 1024×700. Below the page's 640px container width they have a rule, but no test is narrow enough to reach it.
+  Landfall names no account to Landlens, so every new Landfall sign-in starts with Tools for Claude off, even at the
+  same address (wave 7 review, M3).
+- **Landflow on a resource** (wave 7 part 4, [family.md](family.md#landflow-on-a-resource)). Checked only against
+  the fake Landflow, built from Landflow's code: sending to a real triage flow writes to Landflow and can open a room
+  in Landfall, so that live check (D137) waits for the person, behind `LANDLENS_LIVE_WRITES=1`. The room's link needs
+  `executions:read` on the key and a walk of the run's node outputs (Landflow has no `landlens` alert format or
+  template that answers with the `TriggerResult` yet); without it you get "Sent to triage." and a link to the run.
+  Landflow dedups Landlens's alerts by its hash of source, title and service, not by the alert's `fingerprint`.
+  Following a run stops after 60 s until **Check again**, and only against the Landflow connected now. The flows
+  offered are the ones Landflow lists with the tag `landlens`, at most 50; their input has no declared contract on
+  Landflow's side, and a flow's output can say anything (it reaches a prompt only quoted, under the hold). A send Landflow holds (debounced or batched) has no run, so it
+  isn't remembered and leaves no chip. A problem's recovery isn't sent. Run a Landflow flow is a button in the object drawer's header (there is no ⋯ menu there).
+- **Telemetry and the brain** (wave 7 part 5, [family.md](family.md#what-landlens-reports)). Checked against the fake
+  Clickland collector and the fake Landflow, with a fake ACP agent in place of Claude Code; the local Clickland
+  collector took a synthetic session's records, but no test reads them back from Clickland (that needs a key) or runs
+  a live Claude Code turn with telemetry on, and the brain's live check (`LANDLENS_LIVE_WRITES=1`) waits for the
+  person. A turn's model and cost come from ACP's `usage_update`; a turn's span waits 250 ms after the answer for it,
+  and a turn with none has neither. Cost is ACP's running total split by turn, so a turn that overlaps the brain's
+  draft turn counts both. The cluster's name is the one set for graphs; without one, the context's own name goes only
+  when it is plain (one lowercase DNS label with no run of six digits), so a context named plainly after a project
+  (`acme-prod`) still goes: set a name for graphs, or choose counts only. With counts only, neither it nor a change's
+  kind is sent. "Ask Claude to draft" can't run without tools (ACP sets tools per session, not per prompt), so a tool
+  call cancels it rather than being impossible; the agent may still have read the session's folder in that turn. Change verbs are the approval broker's (create, update, patch,
+  delete), not the tool's (scale, restart, undo). The events are the ones main sees (sessions, clusters, the sidecar's
+  and the adapter's exits, a refused gateway call, drops); there is no `clickland.unreachable` or `cluster.unreachable`.
+  The brain's draft counts tool calls, cluster reads and the problem in this launch only, so a session from an earlier
+  launch drafts from its history's questions and changes. "Ask Claude to draft" is a turn in the session, so it shows
+  in the dock (marked) and in Claude Code's transcript; a session that is answering refuses it, and a question waits
+  until the draft is done or cancelled. During a collector outage records wait (up to 2,000) and are tried every 10 s;
+  a quit sends for at most 2 s.
+  After the security review of part 4: a flow shared from another project is listed (marked "Shared from the project
+  …") and can be run; Landlens only shows whose it is and refuses one that changed since the list. A ConfigMap's
+  values are sent when its YAML is ticked, scrubbed (the keyed pattern now sees `DB_PASSWORD: …` in the YAML text),
+  not hidden as a Secret's are; a value under a key the patterns don't know (`DSN`, `conn`) goes as it is, shown on
+  the sheet first. The room's host is shown, and said when it isn't the connected Landfall's, but not checked. Old
+  `family-sent.json` entries without the API server's hash are set aside with the file (part 4 isn't released). A send
+  the file couldn't keep is followed for this launch only. A flow whose id has characters other than letters, digits,
+  `_` and `-` can't be run from Landlens.
+- **Clickland's history in the IDE** (wave 7 part 3, [metrics.md](metrics.md#logs-and-traces-from-clickland)).
+  Traces are searched by service name only (the pod's `app.kubernetes.io/name` or `app` label, which the workload's
+  author writes, else the workload's name). Spans that name another cluster or namespace (`k8s.cluster.name`,
+  `k8s.namespace.name`) are dropped, but spans that name neither, as Clickland's local spans do, are listed from any
+  cluster and namespace with that service name: the tab says "By service name, in any cluster". A workload's History
+  filters on `k8s.deployment.name` (or StatefulSet, DaemonSet),
+  which Clickland's collector sets for pods it owns; a bare ReplicaSet, Job or CronJob has no History. **Errors**
+  is Clickland's severity (error, fatal or critical), so a workload that logs everything at INFO shows no errors, though the
+  failure-line rule still colours its lines. History pages 200 lines and keeps 2,000; the rest is in Clickland's
+  console. A private key logged one line per row is blanked only within one page (a key across **Load older** keeps
+  the rows of the older page before its head), and Live logs aren't blanked that way: a quote is scrubbed again, and a
+  quote that opens or closes a key without its other end is. History needs `get pods/log` in the namespace, though
+  Clickland's own console shows the same lines to whoever holds the key (Clickland's keys have no cluster or
+  namespace limit). A question holds autonomy for a quoted Clickland line found by its time, or by its body from 16
+  characters; a shorter line picked without its time is found only by its quote's head. A trace's span list is a plain list with a duration bar, no waterfall, at most 500 spans. The doctor's
+  fallback reads only when the kubelet has neither run, from the last 7 days (from the pod's creation when it still
+  exists). Open in Clickland needs the console's
+  address typed in **Connect Clickland**; Clickland names no console of its own. The doctor's Clickland fallback is
+  checked in unit tests, not on the built app. The live checks run with Clickland's bootstrap key (`admin`), since a
+  read key can't be made without writing to Clickland; that `read` is enough is checked against the fake.
+- **Clickland's address is an origin now** (wave 7, D102). Before wave 7 a Clickland behind a path prefix
+  (`https://host/clickland`) was taken and stored; now **Connect Clickland** and its **Test** refuse an address with a
+  path, and a stored one keeps working for graphs only until it is saved again, while the family's who-am-I goes to
+  `<origin>/api/auth/me`. Serve Clickland at its own origin (a host name of its own) instead. The dialog shows the
+  rule's sentence, not why a stored address that worked before is now refused.

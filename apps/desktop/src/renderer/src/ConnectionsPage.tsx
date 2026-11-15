@@ -2,13 +2,14 @@
 // may do in Claude sessions. One card per provider: who you are, the level (Read only · Ask for writes), whether reads
 // run without asking, whether sessions get it at all, and its tools as the vendor's read-only listing sorts them.
 // Tokens come in here (a pasted one) and never come back: the page knows ConnInfo only.
-import { CONN_NOTES, GITHUB_TOKEN_SHAPE, LINEAR_KEY_SHAPE, type ConnInfo, type ConnList, type ConnMode, type ConnProvider, type GcpStatus, type McpServerInfo, type McpTest, type McpToolInfo } from "@landlens/contracts";
+import { CONN_NOTES, GITHUB_TOKEN_SHAPE, LINEAR_KEY_SHAPE, type AnyProvider, type ConnInfo, type ConnList, type ConnMode, type ConnProvider, type GcpStatus, type McpServerInfo, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import { CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, ExternalLink, Eye, KeyRound, ShieldCheck, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, type ApiError } from "./api";
-import { Ic } from "./icons";
+import { Ic, SiblingMark } from "./icons";
 import { copyText } from "./present";
 import { GcpCard } from "./GcpPage";
+import { FamilySection } from "./FamilyCards";
 
 type Listed = ConnList & { gcp: GcpStatus };
 
@@ -20,8 +21,9 @@ const TOKEN_PAGE: Record<ConnProvider, string> = {
   linear: "https://linear.app/settings/account/security",
 };
 
-/** The providers' own marks, drawn in the ink colour. */
-export function ProviderMark({ provider, size = 16 }: { provider: ConnProvider; size?: number }) {
+/** The providers' own marks, drawn in the ink colour; a family sibling's is SiblingMark's. */
+export function ProviderMark({ provider, size = 16 }: { provider: AnyProvider; size?: number }) {
+  if (provider !== "github" && provider !== "linear") return <SiblingMark sibling={provider} size={size} />;
   return (
     <svg className="conn-mark" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       {provider === "github" ? (
@@ -54,13 +56,13 @@ function useConnections(): [Listed | undefined, (i: ConnInfo) => void, (s: GcpSt
   return [list, put, putGcp, error];
 }
 
-export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => void; onOpenGcp?: () => void }) {
+export function ConnectionsPage(props: { context?: string; handle?: string; onOpenMcp?: () => void; onOpenGcp?: () => void }) {
   const [list, put, putGcp, error] = useConnections();
   const [tools, setTools] = useState<Partial<Record<ConnProvider, McpToolInfo[]>>>({});
   // The tool lists come with the MCP page's servers: the connections' last listings, read from main's store.
   const loadTools = () => api.invoke("mcp:servers", props.context ? { context: props.context } : {}).then((s) => {
     const by: Partial<Record<ConnProvider, McpToolInfo[]>> = {};
-    for (const srv of s.servers as McpServerInfo[]) if (srv.connection && srv.connection !== "gcp" && srv.tools) by[srv.connection] = srv.tools;
+    for (const srv of s.servers as McpServerInfo[]) if ((srv.connection === "github" || srv.connection === "linear") && srv.tools) by[srv.connection] = srv.tools;
     setTools(by);
   }, () => {});
   const ghState = list?.github.state;
@@ -89,6 +91,7 @@ export function ConnectionsPage(props: { context?: string; onOpenMcp?: () => voi
         <>
           {(["github", "linear"] as const).map((p) => <ConnCard key={p} info={list[p]} canStore={list.canStore} tools={tools[p]} onInfo={put} onTools={loadTools} />)}
           <GcpCard status={list.gcp} onStatus={putGcp} {...(props.onOpenGcp ? { onOpen: props.onOpenGcp } : {})} />
+          <FamilySection {...(props.context ? { context: props.context } : {})} {...(props.handle ? { handle: props.handle } : {})} />
         </>
       ) : (
         <>
@@ -281,7 +284,7 @@ function ConnCard(props: { info: ConnInfo; canStore: boolean; tools?: McpToolInf
   );
 }
 
-function ToolRow({ tool: t, free }: { tool: McpToolInfo; free: boolean }) {
+export function ToolRow({ tool: t, free }: { tool: McpToolInfo; free: boolean }) {
   const [more, setMore] = useState(false);
   return (
     <li className="mcp-tool">

@@ -213,6 +213,11 @@ export class McpServerStore {
     return { id: s.id, name: s.name, url: s.url, ...(s.header && value ? { headers: { [s.header.name]: value } } : {}), ...(s.autoRun ? { pin: s.autoRun.pin } : {}) };
   }
 
+  /** Main only: each server's address, the clusters it is on and the listing it was pinned to (D109's move, M4). */
+  records(): { id: string; name: string; url: string; contexts: string[]; autoRunPin?: string }[] {
+    return this.read().map((s) => ({ id: s.id, name: s.name, url: s.url, contexts: [...(s.contexts ?? [])], ...(s.autoRun ? { autoRunPin: s.autoRun.pin } : {}) }));
+  }
+
   /** The app origins a server's views may connect to (what its resources declare is cut to these). */
   appOriginsOf(name: string): string[] {
     return this.read().find((s) => s.name === name)?.appOrigins ?? [];

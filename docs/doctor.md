@@ -106,7 +106,14 @@ nodes just now, …". The agent's `cluster_overview` ends with the same sentence
 last 200 lines of the first affected pod's container: the previous run when it has restarted, else the current one.
 A previous run that is gone (no such run, or a removed container, which the kubelet answers with its own sentence
 "unable to retrieve container logs for …" rather than an error) falls back to the current run, then to the next pod,
-at most three pods, all within 20 s; the reads stop when the scope does.
+at most three pods, all within 20 s; the reads stop when the scope does. When the kubelet has neither run ("The pod
+or its container is gone.", "This container has no log to read yet.") and Clickland is ready, the evidence is the
+last 200 lines of the same pods and container from Clickland's last 7 days, oldest first and scrubbed, with `source:
+"clickland"` (wave 7 part 3, D118). The Problems page says "From Clickland's history: … The kubelet no longer has its
+runs.", and Ask Claude quotes them as "Last log lines of <pod> in <ns> from Clickland's history (written by the
+workload):", which holds the session's autonomy as a quote from Clickland does
+([metrics.md](metrics.md#logs-and-traces-from-clickland)). A pod named in the scope's report may be asked about in
+Clickland's History after it is gone; an arbitrary name may not.
 Up to 1 MB is read in 10 s and the last 64 KB kept, from a line's start, so a long stack trace keeps its end. Only an
 id in the scope's current report is answered, so the window can't name a pod to read; one read per problem runs at a
 time and four per scope; a failure is a fixed sentence ("You can't read this pod's logs.", "The pod or its container
@@ -128,7 +135,8 @@ open the page with **Failing** or **To watch** chosen. The Overview keeps the wo
   reading. "No problems found" never stands alone when a check was skipped.
 - **The list**: "Failing", then "To watch", worst first. A row is the title, the subject's kind and namespace, the
   detail in mono and how long ago it started; **Ask** and **Open** (the subject's own list and drawer) show on hover,
-  focus or selection. ↑/↓ move, Enter opens the drawer, `a` asks Claude. Past 500 it says "Showing the first 500."
+  focus or selection. ↑/↓ move, Enter opens the drawer, `a` asks Claude. With Landflow's triage webhook set up,
+  **Triage** shows on hover too and `t` sends to triage ([below](#send-to-triage)). Past 500 it says "Showing the first 500."
 - **The drawer**: the reason as a pill, the subject's name, pods and age, **Ask Claude**, **Open <Kind>**. Tabs, `[`
   and `]` step:
   - **Summary**: "Likely cause", the hint, marked "From Landlens's rules, not from Claude"; then the facts the rule
@@ -141,12 +149,28 @@ open the page with **Failing** or **To watch** chosen. The Overview keeps the wo
   - When the problem leaves the report, the drawer stays with "No longer found at 12:03. This is the last evidence
     Landlens saw." until closed; changing the namespace closes it.
 - **⌘K**: problems are a group of their own (title and name match); `problems cart` searches only problems, and
-  `problems` alone lists the worst six. Enter opens the problem's drawer; Tab lists Open, Ask Claude and Open <Kind>.
+  `problems` alone lists the worst six. Enter opens the problem's drawer; Tab lists Open, Ask Claude and Open <Kind>,
+  and with Landflow connected, Send to triage… and Run a Landflow flow….
   **Show problems** is a command.
 
 Workload-written text (event and termination messages, the scheduler's message, log lines) is shown as text only.
-Code: `apps/desktop/src/renderer/src/Problems.tsx` (page and drawer), `problemRules.ts` (filters, chips, sections,
-which problems have logs, the held problem, ⌘K matching).
+Code: `apps/desktop/src/renderer/src/Problems.tsx` (page and drawer, the sent chips), `problemRules.ts` (filters,
+chips, sections, which problems have logs, the held problem, ⌘K matching), `TriageSheet.tsx`.
+
+## Send to triage
+
+Wave 7 part 4 ([family.md](family.md#landflow-on-a-resource)). With the Landflow you connected and its triage
+webhook set up, a problem can go to Landflow's triage flow: **Triage…** in the drawer beside Ask Claude, **Triage**
+on the row, `t` on the page, or Tab in ⌘K. The sheet shows the alert exactly as it will be sent: the problem's facts
+and events (not the hint), a severity you pick (failing starts at sev2, to watch at sev3), the last 40 log lines
+only if you tick the box (the same evidence the Logs tab reads, scrubbed), and every other field folded under
+**Everything that is sent**. **Send** is a click; Enter doesn't send. Send sends only the body on screen: a choice
+changed while main was still reading the log lines never lands late, and a send naming a body the sheet no longer
+holds is refused (security review of part 4, H1).
+Landflow's triage decides whether a war room opens in Landfall; Landlens never opens one, and reads the room's link
+from the run. A problem sent shows **In triage** or **War room** on its row and drawer (the War room chip opens the
+room), and the chips above the list gain **In triage**. The problem is sent by its id in the scope's current report,
+as `doctor:evidence` reads it; one that has left the report can't be sent.
 
 ## Ask Claude on a problem
 

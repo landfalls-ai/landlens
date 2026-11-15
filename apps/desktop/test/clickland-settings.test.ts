@@ -58,6 +58,13 @@ describe("Clickland settings", () => {
     expect(() => s.set({ url: DEFAULT_CLICKLAND_URL, key: KEY })).toThrow(/won't store it/);
   });
 
+  it("refuses to store a key on Linux's basic_text backend, as the family's store does (wave 7 review, L10)", () => {
+    const { s } = store({ ...fake(true), getSelectedStorageBackend: () => "basic_text" });
+    expect(s.view().canStore).toBe(false);
+    expect(() => s.set({ url: DEFAULT_CLICKLAND_URL, key: KEY })).toThrow(/won't store it/);
+    expect(s.view().hasKey).toBe(false);
+  });
+
   it("takes https anywhere, but http only to this machine, and no credentials in the URL", () => {
     const ok = (url: string) => ClicklandSettingsInput.safeParse({ url }).success;
     expect(ok("http://127.0.0.1:4710")).toBe(true);

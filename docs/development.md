@@ -43,6 +43,23 @@ default the dev one), which they use only to make a read-scoped key and revoke i
 read key once and paste it into Connect Clickland ([metrics.md](metrics.md), "Setup"). The e2e test runs the app with
 its own profile (`LANDLENS_USER_DATA`, development only), so it never touches your settings.
 
+Clickland's logs and traces (wave 7 part 3): the same flags also run `clickland-search.integration.test.ts` in
+`packages/metrics` and the live half of `apps/desktop/test/clickland.e2e.test.ts`. These only read (`POST
+/api/search`, `GET /api/traces/:id`) and make no key: they use `LANDLENS_CLICKLAND_URL` (default here
+`http://127.0.0.1:4730`, a Clickland with search and traces) and `LANDLENS_CLICKLAND_KEY` (default Clickland's
+development bootstrap key, which a development Clickland takes for reads), and expect ledger-worker's crash line
+("cannot parse LEDGER_SHARDS", `deploy/scenarios/doctor`) and `landflow-host`'s traces in that Clickland. Without
+`clickland`, `clickland.e2e` runs on OrbStack against the fake Clickland only: `pnpm -s build`, then in
+`apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/clickland.e2e.test.ts`
+(screenshots `w7p3-*` with `LANDLENS_SHOTS`).
+
+Landflow on a resource (wave 7 part 4): `landflow.e2e` runs on OrbStack against the doctor scenario (it runs
+`up.mjs`) and the fake Landflow and Landfall only: `pnpm -s build`, then in `apps/desktop`
+`LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/landflow.e2e.test.ts` (screenshots `w7p4-*`
+with `LANDLENS_SHOTS`). Its unit tests are `packages/kube/test/triage-alert.test.ts`,
+`packages/connections/test/landflow.test.ts` and `apps/desktop/test/landflow-main.test.ts`. A send to a real triage
+flow writes, so it is not written as a live check; that waits for the person (D137, `LANDLENS_LIVE_WRITES=1`).
+
 The doctor ([doctor.md](doctor.md)): `node deploy/scenarios/doctor/up.mjs` starts one broken workload per problem
 class in `landlens-dev` (and `--down` removes them); `LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/kube
 test:integration` starts them itself and waits up to 4 minutes for each problem, since pending and not-ready count
@@ -71,7 +88,11 @@ A packaged app reads none of them, and anything but a loopback address is ignore
 (`packages/connections/test/fixtures/*-tools.json`) are hand-made until recorded: `node
 scripts/record-provider-tools.mjs github` (or `linear`) asks for your token without echo, lists the full and the
 read-only endpoint (two `tools/list` calls, nothing written to the provider) and writes the fixture. Only the person
-runs it, with their own token; no test or agent does.
+runs it, with their own token; no test or agent does. For the Land family (wave 7, [family.md](family.md)): `node
+scripts/record-provider-tools.mjs --family clickland|landflow|landfall <address>` asks for your key (or Landfall
+access token) the same way, makes one `tools/list` call to the sibling's own MCP server (`/api/mcp`, Landfall's
+`/mcp`; https, or plain http only on this machine) and writes `fixtures/<sibling>-tools.json`;
+`packages/mcp-gateway/test/family.test.ts` then checks `FAMILY_READS` against it (skipped while none is recorded).
 
 Google Cloud ([gcp.md](gcp.md)): `pnpm test` runs `@landlens/gcp`'s unit tests against
 `packages/gcp/test/fake-gcp.ts` (a loopback server for Resource Manager, Cloud Asset and Kubernetes Engine that
@@ -92,6 +113,34 @@ native questions (connect a cloud cluster, let Claude read projects) are answere
 throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (read-only, deleted after) and points the fake's
 GKE cluster at OrbStack's API server; it never writes `~/.kube/config`. With `orbstack,claude` it also asks a live
 session one question about the fake Google Cloud, on your own Claude Code subscription.
+
+Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
+`packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
+every request (`/_fake/state`). The fake Landfall records any trigger, timeline or artifact request in `forbidden`.
+`apps/desktop/test/family-main.test.ts` runs `FamilyService` against the same fakes. No test reaches a sibling. An
+unpackaged build reads:
+
+| Variable | What |
+|---|---|
+| `LANDLENS_FAMILY_HTTP_HOSTS` | comma-separated host names (each `^[a-z0-9.-]{1,253}$`, at most 20) a sibling's address may reach over plain http, such as `landflow-host.landflow-dev.svc.cluster.local` for the local Landflow. Without it, plain http goes only to `127.0.0.1`, `localhost` and `[::1]` |
+| `LANDLENS_ACP_AGENT` | an ACP agent's `.js` or `.mjs` script run in place of claude-agent-acp (wave 7 part 5's e2e uses `test/fixtures/fake-acp-agent.mjs`: no Claude Code runs) |
+
+A packaged app reads none: forward the service in Landlens and use `http://127.0.0.1:<port>`. The e2e: `pnpm -s
+build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism
+test/family.e2e.test.ts` (screenshots `w7-*` with `LANDLENS_SHOTS`). It starts the three fakes, plays the browser
+for Landfall's sign-in with a stub of `shell.openExternal` that fetches only loopback addresses, and uses its own
+profile. Of the live checks of the spec's D137, Clickland's logs and traces (`orbstack,clickland`) are written
+(above); the rest (`orbstack,landflow,claude`, `landfall,claude`, and the writing ones behind `LANDLENS_LIVE_WRITES=1`)
+are not written yet. They come with the parts that use each
+link, and the ones that write are run only by the person.
+
+Telemetry and the brain (wave 7 part 5): `pnpm test` runs `@landlens/telemetry` (the record property test, the OTLP
+bodies, the queue); `apps/desktop/test/telemetry-main.test.ts`, `brain-main.test.ts` and `report-hooks.test.ts` run
+main's services against the fakes. The e2e: `pnpm -s build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack
+npx vitest run --no-file-parallelism test/report.e2e.test.ts` (screenshots `w7p5-*`), with the fake ACP agent, the
+fake Clickland's OTLP sink and the fake Landflow's brain. With `orbstack,clickland` it also sends a synthetic
+session's records to your local collector (`LANDLENS_CLICKLAND_COLLECTOR`, default `http://127.0.0.1:4318`, team
+`landlens-live-check`) and checks the collector took them; it reads nothing back.
 
 ## Where things start
 

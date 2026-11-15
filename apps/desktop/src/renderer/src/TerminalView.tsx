@@ -10,26 +10,13 @@ import { api, useWatch, type ApiError } from "./api";
 import { matches, type ShellTarget } from "./benchState";
 import { Ic, MOD } from "./icons";
 import { copyText } from "./present";
+import { capForAsk } from "./quotes";
 import { XTerm, type XTermHandle } from "./XTerm";
 
 type End = { ended: "exit" | "lost" | "refused"; code?: number; status?: number; message?: string; at: number; podGone?: boolean };
 
-const MAX_ASK_LINES = 200;
-const MAX_ASK_BYTES = 16 * 1024;
-
-/** At most 200 lines or 16 KB, as get_logs does; says whether it cut. */
-export function capForAsk(lines: string[]): { text: string; cut: boolean } {
-  let out = lines.slice(-MAX_ASK_LINES);
-  let cut = out.length < lines.length;
-  let text = out.join("\n");
-  while (new TextEncoder().encode(text).length > MAX_ASK_BYTES && out.length > 1) {
-    out = out.slice(1);
-    text = out.join("\n");
-    cut = true;
-  }
-  if (new TextEncoder().encode(text).length > MAX_ASK_BYTES) (text = text.slice(-MAX_ASK_BYTES / 2), cut = true);
-  return { text, cut };
-}
+// capForAsk lives in quotes.ts (pure, so the History view's ask is tested without a window).
+export { capForAsk };
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 

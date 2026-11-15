@@ -12,6 +12,8 @@ autonomous mode, below. **Part 4, built the same day:** browsing Google Cloud, i
 same day:** GKE clusters in the catalog, Claude's read-only Google Cloud tools (the card's **Claude can read these
 projects**) and Ask Claude on a resource, also in [gcp.md](gcp.md).
 The security rules are in [security.md](security.md#connections-and-google-cloud).
+Under Google Cloud, the page's **Land family** section connects Clickland, Landflow and Landfall (wave 7):
+[family.md](family.md).
 
 ## The Connections page
 
@@ -254,6 +256,9 @@ secret: Landlens doesn't use one. A client id is public, so it can sit in the so
 editing the source, an unpackaged build reads `LANDLENS_GITHUB_CLIENT_ID`.
 
 ## Signing in to Linear
+
+Since wave 7, the browser sign-in below is `McpOAuth` (`mcp-oauth.ts`), which Landfall's sign-in also uses; `linear.ts`
+calls it with Linear's target and works as before ([family.md](family.md#how-landlens-signs-in)).
 
 - **In your browser** (method `oauth`): Linear's MCP server is its own authorization server, with dynamic client
   registration, so there is no app to register. Landlens uses the MCP SDK's own client flow (`auth()`) against

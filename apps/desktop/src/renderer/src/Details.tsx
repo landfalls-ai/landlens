@@ -1,6 +1,6 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, X } from "lucide-react";
+import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, Workflow, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
@@ -12,6 +12,8 @@ import { Yaml } from "./Yaml";
 import { MetricsTab, metricsScope } from "./MetricsTab";
 import type { LogSource, ShellTarget } from "./benchState";
 import { logSourceOf, LogsView } from "./LogsView";
+import { clicklandScope, useClickland } from "./clickland";
+import { TracesTab } from "./TracesTab";
 import { direct, shellable, ShellMenu, targetOf, useCanExec } from "./ShellMenu";
 import { leaveEdit } from "./editGuard";
 import { YamlEdit } from "./YamlEdit";
@@ -20,7 +22,7 @@ import type { ClusterInfo } from "@landlens/contracts";
 import { CRD, printerFacts } from "./custom";
 import { printerColumns, type PrinterColumn } from "./printer";
 
-type Tab = "overview" | "events" | "yaml" | "metrics" | "logs";
+type Tab = "overview" | "events" | "yaml" | "metrics" | "logs" | "traces";
 export type NavTarget = { kind: string; name: string; namespace?: string };
 
 /** Waiting reasons that mean a container can't run (kept in step with packages/kube/src/health.ts). */
@@ -50,10 +52,15 @@ export function Details(props: {
   printer?: PrinterColumn[];
   /** A definition's "Open <kind>": the kind's list. */
   onOpenKind?: (group: string, resource: string) => void;
+  /** Run a Landflow flow… on this object, while the Landflow key can list and run flows (wave 7 D125). */
+  onFlow?: () => void;
 }) {
   const { object: o, type, now } = props;
   const logs = logSourceOf(type.kind, o);
-  const TABS: Tab[] = [...(metricsScope(type) ? ["overview", "events", "yaml", "metrics"] as Tab[] : ["overview", "events", "yaml"] as Tab[]), ...(logs ? ["logs" as Tab] : [])];
+  // Traces (wave 7 D118): a pod or a workload, while Clickland is ready.
+  const ck = useClickland();
+  const traces = ck.ready ? clicklandScope(type.kind, o.metadata.namespace, o.metadata.name) : undefined;
+  const TABS: Tab[] = [...(metricsScope(type) ? ["overview", "events", "yaml", "metrics"] as Tab[] : ["overview", "events", "yaml"] as Tab[]), ...(logs ? ["logs" as Tab] : []), ...(traces ? ["traces" as Tab] : [])];
   const [tab, setTab] = useState<Tab>("overview");
   const [logContainer, setLogContainer] = useState<string>();
   const [shellMenu, setShellMenu] = useState(false);
@@ -105,8 +112,8 @@ export function Details(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [TABS.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if ((tab === "metrics" && !metricsScope(type)) || (tab === "logs" && !logs)) setTab("overview");
-  }, [tab, type, logs]);
+    if ((tab === "metrics" && !metricsScope(type)) || (tab === "logs" && !logs) || (tab === "traces" && !traces)) setTab("overview");
+  }, [tab, type, logs, !traces]); // eslint-disable-line react-hooks/exhaustive-deps
   const view = isSecret(type) ? redactSecret(o) : o;
   const status = pod ? podStatus(o) : undefined;
   const tone = status ? statusTone(status.text, status.tone) : props.tone;
@@ -139,6 +146,9 @@ export function Details(props: {
               })}
             ><Ic icon={Sparkles} size={14} />Ask Claude</button>
           )}
+          {props.onFlow ? (
+            <button className="icon-btn" aria-label="Run a Landflow flow…" title="Run a Landflow flow…" onClick={props.onFlow}><Ic icon={Workflow} size={15} /></button>
+          ) : null}
           <button
             className="icon-btn"
             aria-label={copied ? "Name copied" : "Copy name"}
@@ -194,6 +204,7 @@ export function Details(props: {
           </div>
         ) : null}
         {tab === "metrics" && metricsScope(type) && <MetricsTab handle={props.handle} type={type} object={o} version={props.metricsVersion} onSettings={props.onSettings} />}
+        {tab === "traces" && traces ? <TracesTab key={o.metadata.uid} handle={props.handle} scope={traces} /> : null}
       </div>
     </aside>
   );

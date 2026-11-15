@@ -7,22 +7,27 @@ import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { DoctorService } from "./doctor";
 import type { ClicklandSettingsStore } from "./clickland-settings";
+import type { ClicklandHistory } from "./clickland-history";
 import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
 import { flowOwners, type ConnectionsService } from "./connections";
+import type { FamilyService } from "./family";
+import type { LandflowActions } from "./landflow";
 import type { GcpService } from "./gcp";
+import type { TelemetryService } from "./telemetry";
+import type { BrainService } from "./brain";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
   /** Windows that started a sign-in: when one goes, its sign-ins stop. */
-  const flowOwner = flowOwners(connections);
+  const flowOwner = flowOwners({ cancelFor: (owner) => (connections.cancelFor(owner), family.cancelFor(owner)) });
   /** Clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name isn't one). */
   const gkeHandles = new Set<string>();
   clusters.onGone((handle) => gkeHandles.delete(handle));
@@ -37,6 +42,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
 
   const disconnect = async (handle: string) => {
     metrics.service.forget(handle);
+    metrics.history.forget(handle);
     doctor.forget(handle);
     await mcp.forget(handle);
     await hub.stopAll(handle);
@@ -153,10 +159,28 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "agent:autonomy": async ({ session, provider, on, scope }) => mcp.setAutonomy(session, provider, on, scope),
     // Graphs (docs/metrics.md). The Clickland key comes in with configure and test; nothing sends it back.
     "metrics:series": (req) => metrics.service.series(req),
-    "metrics:settings": async ({ context }) => metrics.settings.view(context),
-    "metrics:configure": async (input) => metrics.settings.set(input),
+    "metrics:settings": async ({ context }) => {
+      const console = family.clicklandConsole();
+      return { ...metrics.settings.view(context), ...(console ? { console } : {}) };
+    },
+    // Clickland's key is the family's too (docs/family.md): a change asks who the key is again.
+    "metrics:configure": async (input) => {
+      const out = metrics.settings.set(input);
+      family.clicklandChanged();
+      return out;
+    },
     "metrics:test": (input) => metrics.service.test(input),
-    "metrics:disconnect": async () => metrics.settings.clear(),
+    "metrics:disconnect": async () => {
+      const out = metrics.settings.clear();
+      family.clicklandChanged();
+      return out;
+    },
+    // Clickland's logs and traces (docs/metrics.md#logs-and-traces): an object the window shows or the doctor named;
+    // the search is main's own, the lines scrubbed before they cross. Open in Clickland asks in main's own dialog.
+    "clickland:logs": (req) => metrics.history.logs(req),
+    "clickland:traces": (req) => metrics.history.traces(req),
+    "clickland:trace": (req) => metrics.history.trace(req),
+    "clickland:open": (req, event) => metrics.history.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }),
     // Choosing a Prometheus: only the one Landlens finds now, for this cluster's context (docs/metrics.md#prometheus).
     "metrics:prometheus": async ({ handle, use }) => {
       const context = clusters.get(handle).info.context;
@@ -171,7 +195,6 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:enable": async ({ id, context, enabled }) => mcp.enable(id, context, enabled),
     "mcp:auto-run": async ({ id, enabled, context }) => mcp.autoRun(id, enabled, context),
     "mcp:remove": async ({ id }) => (mcp.remove(id), { ok: true }),
-    "mcp:preset": () => mcp.preset(),
     "mcp:calls": async () => ({ calls: mcp.calls() }),
     "mcp:try": ({ handle, server, tool }) => mcp.try(handle, server, tool),
     "mcp:app-open": ({ call }) => mcp.openView(call),
@@ -184,11 +207,43 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "conn:github-device": async (_r, event) => connections.githubDevice(flowOwner(event.sender)),
     "conn:linear-signin": async ({ mode }, event) => connections.linearSignIn(mode, flowOwner(event.sender)),
     "conn:token": ({ provider, token }) => connections.token(provider, token),
-    "conn:cancel": async ({ flow }, event) => (connections.cancel(flow, event.sender), { ok: true }),
+    // A Landfall sign-in is a flow too (the family's): each service ends only flows it made, owned by this window.
+    "conn:cancel": async ({ flow }, event) => (family.hasFlow(flow) ? family.cancel(flow, event.sender) : connections.cancel(flow, event.sender), { ok: true }),
     "conn:set": async ({ provider, mode, readsAuto, give }) => connections.set(provider, { ...(mode ? { mode } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}), ...(give !== undefined ? { give } : {}) }),
     "conn:test": ({ provider }) => connections.test(provider),
     "conn:repin": async ({ provider }) => connections.repin(provider),
     "conn:disconnect": ({ provider }) => connections.disconnect(provider),
+    // The Land family (docs/family.md). A key or secret comes in on family:connect and family:set; none goes back.
+    "family:list": async () => family.list(),
+    "family:connect": ({ url, key }) => family.connectLandflow(url, key),
+    "family:signin": async ({ url }, event) => family.signinLandfall(url, flowOwner(event.sender)),
+    "family:set": async ({ sibling, toSessions, readsAuto, console, triage }) =>
+      family.set(sibling, { ...(toSessions !== undefined ? { toSessions } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}), ...(console !== undefined ? { console } : {}), ...(triage !== undefined ? { triage } : {}) }),
+    "family:test": ({ sibling }) => family.test(sibling),
+    "family:repin": async ({ sibling, hash }) => family.repin(sibling, hash),
+    "family:disconnect": ({ sibling }) => family.disconnect(sibling),
+    // Landflow on a resource (docs/family.md#landflow-on-a-resource): main builds what is sent and keeps it under a
+    // sheet owned by this window; the window sends only choices and main's ids. Links open after main's own dialog.
+    "landflow:alert": (req, event) => landflow.prepareAlert(req, event.sender),
+    "landflow:triage": (req, event) => landflow.sendAlert(req, event.sender),
+    "landflow:flows": (_req, event) => landflow.flows(event.sender),
+    "landflow:input": (req, event) => landflow.prepareInput(req, event.sender),
+    "landflow:run": (req, event) => landflow.run(req, event.sender),
+    "landflow:follow": (req) => landflow.follow(req),
+    "landflow:sent": async (req) => landflow.sentFor(req),
+    "landflow:open": (req, event) => landflow.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }, event.sender),
+    // Landlens's telemetry (D127–D133): turning it on, or a new collector, asks in main's own dialog.
+    "telemetry:set": (req, event) => report.telemetry.set({ ...req }, nativeConfirm(event)),
+    "telemetry:recent": async () => report.telemetry.recent(),
+    "telemetry:open": ({ session }, event) =>
+      report.telemetry.open(session, (s) => agent.isOpen(s) || agent.history().some((e) => e.session === s), { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }),
+    // A session's summary to the brain (D134–D135): a sheet per window; send names its digest.
+    "brain:draft": async ({ session }, event) => report.brain.draft(session, event.sender),
+    "brain:ask": ({ sheet }, event) => report.brain.ask(sheet, event.sender),
+    "brain:cancel": ({ sheet }, event) => report.brain.cancel(sheet, event.sender),
+    // Team or org: main's own dialog shows the text and who will see it (review of part 5, M4).
+    "brain:send": (req, event) => report.brain.send(req, event.sender, nativeConfirm(event)),
+    "brain:remove": ({ session }) => report.brain.remove(session),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
     "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),

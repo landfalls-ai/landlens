@@ -2,17 +2,18 @@
 // cluster:health, which main works out as you; the drawer's Logs tab asks main for the one problem's evidence
 // (doctor:evidence), by its id only. Text written by workloads (event and termination messages, log lines) is shown
 // as text, never as markup.
-import type { ClusterHealth, DoctorEvidence, Problem } from "@landlens/contracts";
+import type { ClusterHealth, DoctorEvidence, LandflowSent, Problem } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
 import { missingChecks } from "@landlens/kube/checks";
 import {
-  CircleCheck, CircleX, Clock, Info, Lock, ScrollText, Sparkles, SquareArrowOutUpRight, Stethoscope, TriangleAlert, X,
+  CircleCheck, CircleX, Clock, Database, Info, Lock, ScrollText, Siren, Sparkles, SquareArrowOutUpRight, Stethoscope, TriangleAlert, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, type ApiError } from "./api";
 import type { NavTarget } from "./Details";
 import { Ic, iconOfKind } from "./icons";
 import { plural } from "./health";
+import { openInLandflow } from "./landflow";
 import { classCounts, filterProblems, hasLogs, sections, subjectOf, type HeldProblem, type Severity } from "./problemRules";
 import type { ProblemClass } from "@landlens/contracts";
 
@@ -52,12 +53,25 @@ export function ProblemsPage(props: {
   onClearText: () => void;
   /** The last refresh failed (L2). */
   stale?: string;
+  /** The problems of this cluster sent to triage, by id (D124). */
+  sent?: Map<string, LandflowSent>;
+  /** Send to triage…, while Landflow's triage webhook is set up (D122). */
+  onTriage?: (p: Problem) => void;
 }) {
   const { health: h, now } = props;
   const [cls, setCls] = useState<ProblemClass>();
+  const [inTriage, setInTriage] = useState(false);
+  const sent = props.sent;
   const list = useRef<HTMLDivElement>(null);
   const all = h?.problems ?? [];
-  const shown = useMemo(() => filterProblems(all, { severity: props.severity, ...(cls ? { cls } : {}), text: props.text }), [all, props.severity, cls, props.text]);
+  const shown = useMemo(() => {
+    const list = filterProblems(all, { severity: props.severity, ...(cls ? { cls } : {}), text: props.text });
+    return inTriage && sent ? list.filter((p) => sent.has(p.id)) : list;
+  }, [all, props.severity, cls, props.text, inTriage, sent]);
+  const triaged = sent ? all.filter((p) => sent.has(p.id)).length : 0;
+  useEffect(() => {
+    if (inTriage && !triaged) setInTriage(false);
+  }, [inTriage, triaged]);
   const chips = useMemo(() => classCounts(all, props.severity), [all, props.severity]);
   // A chip whose class has gone (or that the severity hides) stops filtering.
   useEffect(() => {
@@ -81,9 +95,9 @@ export function ProblemsPage(props: {
 
   const bad = all.filter((p) => p.tone === "bad").length;
   const counts: Record<Severity, number> = { all: all.length, bad, warn: all.length - bad };
-  const filtered = !!(cls || props.text.trim() || props.severity !== "all");
+  const filtered = !!(cls || inTriage || props.text.trim() || props.severity !== "all");
 
-  /** ↑/↓ move between rows, Enter opens the drawer, `a` asks Claude. */
+  /** ↑/↓ move between rows, Enter opens the drawer, `a` asks Claude, `t` sends to triage. */
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>(".pb-row");
     if (!row || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -97,6 +111,7 @@ export function ProblemsPage(props: {
     if (!p || e.target !== row) return;
     if (e.key === "Enter" || e.key === " ") (e.preventDefault(), props.onSelect(p));
     else if (e.key === "a") (e.preventDefault(), props.onAsk(p));
+    else if (e.key === "t" && props.onTriage) (e.preventDefault(), props.onTriage(p));
   };
 
   return (
@@ -110,13 +125,18 @@ export function ProblemsPage(props: {
             </button>
           ))}
         </div>
-        {chips.length > 1 || cls ? (
+        {chips.length > 1 || cls || triaged ? (
           <div className="chips pb-chips" role="group" aria-label="Kind of problem">
-            {chips.map((c) => (
+            {chips.length > 1 || cls ? chips.map((c) => (
               <button key={c.cls} className={"chip pb-chip" + (cls === c.cls ? " on" : "")} aria-pressed={cls === c.cls} onClick={() => setCls(cls === c.cls ? undefined : c.cls)}>
                 {c.label}<b>{c.n}</b>
               </button>
-            ))}
+            )) : null}
+            {triaged ? (
+              <button className={"chip pb-chip" + (inTriage ? " on" : "")} aria-pressed={inTriage} onClick={() => setInTriage(!inTriage)}>
+                In triage<b>{triaged}</b>
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -132,7 +152,7 @@ export function ProblemsPage(props: {
       ) : !shown.length ? (
         <div className="ov-empty pb-empty">
           <span>No problems match</span>
-          {filtered ? <button className="secondary" onClick={() => (setCls(undefined), props.onSeverity("all"), props.onClearText())}>Clear filters</button> : null}
+          {filtered ? <button className="secondary" onClick={() => (setCls(undefined), setInTriage(false), props.onSeverity("all"), props.onClearText())}>Clear filters</button> : null}
         </div>
       ) : (
         <div className="pb-list" ref={list} onKeyDown={onKey}>
@@ -140,7 +160,7 @@ export function ProblemsPage(props: {
             <section key={s.tone} className="pb-sec" aria-label={s.label}>
               <h3 className="pb-sec-head"><Ic icon={s.tone === "bad" ? CircleX : TriangleAlert} size={13} className={`tone-${s.tone}`} />{s.label}<span className="count-badge">{s.items.length}</span></h3>
               <ul className="ov-list">
-                {s.items.map((p) => <ProblemRow key={p.id} p={p} now={now} on={p.id === props.selected} onSelect={props.onSelect} onAsk={props.onAsk} onOpen={props.onOpen} />)}
+                {s.items.map((p) => <ProblemRow key={p.id} p={p} now={now} on={p.id === props.selected} sent={sent?.get(p.id)} onSelect={props.onSelect} onAsk={props.onAsk} onOpen={props.onOpen} {...(props.onTriage ? { onTriage: props.onTriage } : {})} />)}
               </ul>
             </section>
           ))}
@@ -151,7 +171,23 @@ export function ProblemsPage(props: {
   );
 }
 
-function ProblemRow({ p, now, on, onSelect, onAsk, onOpen }: { p: Problem; now: number; on: boolean; onSelect: (p: Problem) => void; onAsk: (p: Problem) => void; onOpen: (p: Problem) => void }) {
+/** What a send to triage left on a problem (D124): "In triage", or "War room", which opens the room after main's dialog. */
+export function SentChip({ s }: { s: LandflowSent }) {
+  const at = new Date(s.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  if (s.state === "room") {
+    return (
+      <button className="lf-chip room" title={`War room opened by Landflow's triage (${s.severity}, sent ${at}). Open the room`}
+        aria-label="War room: open the room" onClick={(e) => (e.stopPropagation(), void openInLandflow(s.run, "room"))}>
+        <Ic icon={Siren} size={11} />War room
+      </button>
+    );
+  }
+  return <span className="lf-chip triage" title={`Sent to Landflow's triage at ${s.severity}, ${at}`}><Ic icon={Siren} size={11} />In triage</span>;
+}
+
+function ProblemRow({ p, now, on, sent, onSelect, onAsk, onOpen, onTriage }: {
+  p: Problem; now: number; on: boolean; sent: LandflowSent | undefined; onSelect: (p: Problem) => void; onAsk: (p: Problem) => void; onOpen: (p: Problem) => void; onTriage?: (p: Problem) => void;
+}) {
   const since = when(p.since, now);
   return (
     <li className={"ov-row pb-row" + (on ? " on" : "")} tabIndex={0} role="button" data-id={p.id} aria-current={on ? "true" : undefined}
@@ -166,7 +202,9 @@ function ProblemRow({ p, now, on, onSelect, onAsk, onOpen }: { p: Problem; now: 
         </div>
         <div className="ov-detail mono" title={p.detail}>{p.detail}</div>
       </div>
+      {sent ? <SentChip s={sent} /> : null}
       {since ? <span className="ev-meta pb-since" title={p.since}>{since}</span> : null}
+      {onTriage ? <button className="ghost-btn" tabIndex={-1} onClick={(e) => (e.stopPropagation(), onTriage(p))} aria-label={`Send ${p.name} to triage`} title="Send to triage (t)"><Ic icon={Siren} size={13} />Triage</button> : null}
       <button className="ghost-btn" tabIndex={-1} onClick={(e) => (e.stopPropagation(), onAsk(p))} aria-label={`Ask Claude about ${p.name}`} title="Ask Claude (a)"><Ic icon={Sparkles} size={13} />Ask</button>
       <button className="ghost-btn" tabIndex={-1} onClick={(e) => (e.stopPropagation(), onOpen(p))} aria-label={`Open ${subjectOf(p)}`} title={`Open the ${p.kind}`}><Ic icon={SquareArrowOutUpRight} size={13} />Open</button>
     </li>
@@ -191,6 +229,10 @@ export function ProblemDrawer(props: {
   onNavigate: (t: NavTarget) => void;
   /** The pod's Details → Logs. */
   onFullLogs: (pod: string, namespace: string | undefined, container: string) => void;
+  /** What a send to triage left on it (D124). */
+  sent?: LandflowSent;
+  /** Send to triage…, while Landflow's triage webhook is set up (D122). */
+  onTriage?: (p: Problem) => void;
 }) {
   const p = props.held.last;
   const logs = hasLogs(p);
@@ -237,6 +279,7 @@ export function ProblemDrawer(props: {
           <span className={`kind-tile sm ${p.tone}`}><Ic icon={Stethoscope} size={15} /></span>
           <div className="eyebrow">Problem<span className="sep"> / </span>{p.kind}{p.namespace ? <><span className="sep"> / </span>{p.namespace}</> : null}</div>
           <span className="grow" />
+          {props.onTriage && !props.held.goneAt ? <button className="secondary pb-triage" aria-label="Send to triage…" title="Send to triage… (t on the row)" onClick={() => props.onTriage!(p)}><Ic icon={Siren} size={13} />Triage…</button> : null}
           <button className="ask-btn" onClick={() => props.onAsk(p, ev?.id === p.id ? ev.e : undefined)}><Ic icon={Sparkles} size={14} />Ask Claude</button>
           <button className="icon-btn" onClick={props.onClose} aria-label="Close problem" title="Close (Esc)"><Ic icon={X} size={15} /></button>
         </div>
@@ -246,6 +289,7 @@ export function ProblemDrawer(props: {
           <span className="meta mono">{p.name}</span>
           {p.podCount ? <span className="meta"><b className="mono">{p.podCount}</b> {p.podCount === 1 ? "pod" : "pods"}</span> : null}
           {since ? <span className="meta">since <b className="mono">{since.replace(/ ago$/, "")}</b> ago</span> : null}
+          {props.sent ? <SentChip s={props.sent} /> : null}
           <span className="grow" />
           <button className="secondary pb-open" onClick={() => props.onOpen(p)}><Ic icon={iconOfKind(p.kind)} size={13} />Open {p.kind}</button>
         </div>
@@ -374,8 +418,10 @@ function Evidence({ p, state, gone, now, onAgain, onFull }: {
   return (
     <div className="logs-pane">
       <div className="logs-note">
-        <Ic icon={ScrollText} size={13} />
-        <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{state.at ? `, read ${when(new Date(state.at).toISOString(), now)}` : ""}</span>
+        <Ic icon={log.source === "clickland" ? Database : ScrollText} size={13} />
+        {log.source === "clickland"
+          ? <span><b>From Clickland's history</b>: <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{log.newest ? <>, the newest at <b>{new Date(log.newest).toLocaleString([], { dateStyle: "medium", timeStyle: "medium" })}</b></> : null}. The kubelet no longer has its runs.</span>
+          : <span>{log.previous ? "The previous run" : "The current run"} of <b className="mono">{log.container}</b> in <b className="mono">{log.pod}</b>, last {plural(log.lines.length, "line")}{log.cut ? " (cut)" : ""}{state.at ? `, read ${when(new Date(state.at).toISOString(), now)}` : ""}</span>}
         <span className="grow" />
         {again}
         <button className="link-btn" onClick={() => onFull(log.pod, p.namespace, log.container)}>Open full logs</button>

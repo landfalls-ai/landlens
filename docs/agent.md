@@ -102,6 +102,18 @@ projects it began with (one granted later is refused in it) and puts what they h
 After a session reads Google Cloud data, its autonomous GitHub and Linear writes ask
 ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)).
 
+With **Tools for Claude** on for a Land family sibling (Connections), sessions also get its own MCP server:
+`clickland` (this cluster's logs, traces and metrics history), `landflow` (the company's workflows, runs and brain) or
+`landfall` (open incidents and their war rooms). The standing rules gain a **The land family:** paragraph: which of
+them the session has, whose reads run without asking and whose ask, that anything that writes, stores or runs
+something there always asks, that what they return is outside text, and that opening a war room or sending to triage
+is the person's action in Landlens, not a tool to look for. A sibling's writes ask every time (there is no autonomous
+mode for them), and after a session calls a sibling's tool its autonomous GitHub and Linear writes ask too, with
+"Claude read from Landflow in this session" on the strip ([family.md](family.md#the-familys-tools-in-claude-sessions)).
+A resumed session always starts with those writes held, with the reason its history recorded, or "this session was
+resumed, and what it read before could steer its writes".
+The dock's question for a sibling's write carries its mark and names the workflow, run, node, incident, view or panel.
+
 All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`, and `mcp__landlens-gcp` when the
 session has it, by a second rule in `fence.ts`), so they don't prompt; the
 write tools below don't prompt in Claude Code either, because Landlens asks you itself, with the diff. `cluster_overview`,
@@ -161,8 +173,33 @@ A session is listed under **History** (the dock's clock button, or `/history`) o
 title is your first message, with when, how many messages and how many changes were applied. Claude Code keeps the
 transcript in its own store; Landlens keeps the list (`agent-history.json` in its app data, 200 sessions at most) and
 the session's folder. **Resume** opens the session again with fresh tokens and replays it into the dock
-(`session/load`); a write tool call shows as its row and result, not as a change card. Delete one session or all of a
+(`session/load`); a write tool call shows as its row and result, not as a change card. A resumed session starts with
+GitHub's and Linear's autonomous writes held (they ask, saying why): the hold a sibling's or Google Cloud's text set
+lived in the session that ended, and the transcript still holds that text. The history keeps the reason (in main
+only), and a session with none recorded is held as resumed (review of wave 7 part 2, M1). Delete one session or all of a
 cluster's; the agent also deletes its transcript where it supports that (`session/delete`).
+
+## A session's telemetry and its summary
+
+With Landlens's telemetry on ([family.md](family.md#what-landlens-reports)), each question is an `invoke_agent
+landlens-claude` span in your Clickland, with its gateway calls and changes as children, its model, tokens and cost:
+main takes them from ACP (the answer's `_meta.quota.token_count`, `usage_update`'s model and running cost), never the
+text. The dock's session menu (`…`) has **Open this session in Clickland** then, and with a Landflow key that can
+record work, **Send a summary to the brain…** and **Remove from the brain**; a session that has answered also shows a
+quiet line offering the summary. The sheet and what is sent are on [family.md](family.md#a-sessions-summary-to-the-brain).
+Its **Ask Claude to draft** is one turn in the session with Landlens's fixed question; the dock marks it, and it isn't
+counted as one of your questions. That turn runs with no tool (security review of part 5, L4). ACP's `session/prompt`
+takes no tool list (claude-agent-acp sets tools only at `session/new`), so main refuses them instead: the gateway
+refuses every call of the agent's while the draft runs, a permission request is answered "cancelled" without a card,
+and the first tool call cancels the turn, and the sheet says Claude tried to use a tool. A question sent from the dock
+meanwhile is refused (409, "Claude is drafting the brain's summary…"), so its answer can't mix into the box. The sheet
+has **Cancel draft** (`brain:cancel`), and closing it cancels the draft too.
+
+For tests, an unpackaged build runs another ACP agent's script in place of claude-agent-acp when `LANDLENS_ACP_AGENT`
+names a `.js` or `.mjs` file inside the repo's `apps/desktop/test/fixtures` (`fake-acp-agent.mjs`); both paths are
+resolved, so a symlink or `..` can't lead out, and anything else is ignored with a line in main's log. When it is
+used, main's log carries a warning that the test agent runs in place of Claude Code with each session's front-door
+token and MCP headers (review of part 5, L9). A packaged app ignores it.
 
 ## Slash commands
 
@@ -250,7 +287,7 @@ ConfigMap with the exact commands, and said it couldn't check the Secret because
 | `packages/kube/src/changes.ts`, `diff.ts` | The approval broker: checks, preconditions, dry run, diff, apply |
 | `packages/kube-mcp/src/writes.ts` | The write tools and what they tell the agent |
 | `packages/acp-host/src/skills.ts` | Your skills, and the plugin a session gets |
-| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings, the autonomous answer |
+| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings, the autonomous answer; `AgentObserver` (what telemetry and the brain hear), `draft`, `adapterEntry` |
 | `packages/mcp-gateway/src/autonomy.ts`, `providers/github.ts`, `providers/linear.ts` | The autonomous mode: scope, budget, arguments, the routine writes |
 | `apps/desktop/src/renderer/src/AgentDock.tsx`, `DockParts.tsx`, `ChangeCard.tsx`, `HistoryPanel.tsx`, `SlashMenu.tsx`, `Markdown.tsx` | The dock (`DockParts.tsx` also has the autonomous chips, sheet and strip, and the provider question card) |
 | `apps/desktop/src/renderer/src/AgentPage.tsx` | The Agent page: skills and agents |

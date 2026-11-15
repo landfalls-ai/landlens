@@ -2,6 +2,7 @@
 // carry the API server's RFC 3339 timestamp so a workload's pods can be merged in order and the view can show or hide
 // it. Lines are sent in batches, so a busy container doesn't flood the window.
 import { toKubeError, type KubeClient } from "./client.js";
+import { scrubCut } from "./redact.js";
 
 export type LogRequest = {
   namespace: string;
@@ -87,7 +88,9 @@ export async function readLogTail(
   }
   const raw = text.split("\n");
   if (stopped && raw.length > 1) raw.pop(); // its last line was cut
-  return { lines: raw.filter((l) => l.length).map((l) => splitLine(l).text), cut: dropped || stopped };
+  // A line past MAX_LINE is scrubbed before it is cut (security review of wave 7 part 3, M1): these lines go on to a
+  // triage alert and Ask Claude's brief, which scrub again, but can't put back what the cut split.
+  return { lines: raw.filter((l) => l.length).map((l) => splitLine(l, true).text), cut: dropped || stopped };
 }
 
 /**
@@ -99,13 +102,18 @@ export function logsGone(lines: string[]): boolean {
   return lines.length === 1 && /^unable to retrieve container logs for [a-z]+:\/\/[0-9a-f]+$/.test(lines[0]!);
 }
 
-/** "2026-11-15T10:00:00.123456789Z message" → its parts; a line without a timestamp keeps its text. */
-export function splitLine(raw: string): LogLine {
+/**
+ * "2026-11-15T10:00:00.123456789Z message" → its parts; a line without a timestamp keeps its text. `scrub`: a line
+ * past MAX_LINE is scrubbed (redactText, past the cut) before it is cut.
+ */
+export function splitLine(raw: string, scrub = false): LogLine {
   const sp = raw.indexOf(" ");
   const ts = sp > 0 ? raw.slice(0, sp) : "";
   const ok = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/.test(ts);
   const text = ok ? raw.slice(sp + 1) : raw;
-  return { ts: ok ? ts : "", text: text.length > MAX_LINE ? `${text.slice(0, MAX_LINE)}… (${text.length - MAX_LINE} more characters)` : text };
+  if (text.length <= MAX_LINE) return { ts: ok ? ts : "", text };
+  const head = scrub ? scrubCut(text, MAX_LINE).text : text.slice(0, MAX_LINE);
+  return { ts: ok ? ts : "", text: `${head}… (${text.length - MAX_LINE} more characters)` };
 }
 
 /** Follow one container's log until it ends or `stop()`; `lines` gets batches, `end` once. */

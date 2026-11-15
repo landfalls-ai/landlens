@@ -24,7 +24,8 @@ import { holdProblem, type HeldProblem, type Severity } from "./problemRules";
 import { missingChecks } from "@landlens/kube/checks";
 import { splitByShape } from "./present";
 import { ResourceTable, rowTone } from "./ResourceTable";
-import { Sidebar, type Current } from "./Sidebar";
+import { Sidebar, useNavFolds, type Current } from "./Sidebar";
+import { allSections, BADGED } from "./navState";
 import { StatusBar } from "./StatusBar";
 import { Bench } from "./Bench";
 import { useBench } from "./benchState";
@@ -39,6 +40,10 @@ import { HelmDrawer, HelmPage, useHelmList } from "./Helm";
 import { Boundary } from "./Boundary";
 import { CreateSheet } from "./CreateSheet";
 import { leaveEdit } from "./editGuard";
+import { clicklandScope, useClickland } from "./clickland";
+import { useLandflow, useSent } from "./landflow";
+import { TriageSheet } from "./TriageSheet";
+import { FlowSheet, type FlowSubject } from "./FlowSheet";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
@@ -125,6 +130,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [clickland, setClickland] = useState<ClicklandView>();
   const [settings, setSettings] = useState(false);
   const [metricsVersion, setMetricsVersion] = useState(0);
+  const ck = useClickland();
+  // Landflow on a resource (wave 7 part 4): Send to triage… on a problem, Run a Landflow flow… on an object.
+  const lf = useLandflow();
+  const sent = useSent(cluster.handle);
+  const [triage, setTriage] = useState<HealthProblem>();
+  const [flowOn, setFlowOn] = useState<FlowSubject>();
   useEffect(() => void api.invoke("metrics:settings", { context: cluster.context }).then(setClickland, () => undefined), [cluster.context]);
 
   useEffect(() => {
@@ -155,6 +166,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const crd = useCrd(cluster.handle, list);
   const { columns, printer } = useColumns(list, crd, watch.items);
   const [pins, togglePin] = usePins(cluster.context);
+  const navFolds = useNavFolds(cluster.context);
 
   const tones = useMemo(() => new Map(list ? watch.items.map((o) => [o.metadata.uid, rowTone(columns, o, now)]) : []), [watch.items, list, columns, now]);
   const shown = useMemo(() => {
@@ -398,12 +410,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         rail={rail}
         badges={{
           problems: h ? badgeFor(h.problems) : undefined,
-          byResource: h ? {
-            pods: badgeFor(h.problems, "Pod"), deployments: badgeFor(h.problems, "Deployment"), statefulsets: badgeFor(h.problems, "StatefulSet"),
-            daemonsets: badgeFor(h.problems, "DaemonSet"), jobs: badgeFor(h.problems, "Job"), nodes: badgeFor(h.problems, "Node"),
-            secrets: badgeFor(h.problems, "Secret"), persistentvolumeclaims: badgeFor(h.problems, "PersistentVolumeClaim"),
-          } : {},
+          byResource: h ? Object.fromEntries(Object.entries(BADGED).map(([resource, kind]) => [resource, badgeFor(h.problems, kind)])) : {},
+          all: h?.problems ?? [],
         }}
+        nav={navFolds}
         onPick={pick}
         onToggle={() => setUserRail(!rail)}
         onSwitch={switchTo}
@@ -430,12 +440,11 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             {...(mcpCall ? { selected: mcpCall } : {})}
             onSelect={setMcpCall}
             onOpenObject={go}
-            onConnectClickland={() => setSettings(true)}
             onOpenConnections={() => pick("connections")}
             version={metricsVersion}
           />
         ) : connPage ? (
-          <ConnectionsPage context={cluster.context} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} onOpenGcp={() => pick("gcp")} />
+          <ConnectionsPage context={cluster.context} handle={cluster.handle} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} onOpenGcp={() => pick("gcp")} />
         ) : gcpPage ? (
           <Boundary what="Google Cloud" resetKey="gcp">
             <GcpPage nav={gcpNav} onNav={setGcpNav} {...(gcpPick ? { selected: gcpPick.resource.name } : {})} onSelect={setGcpPick} onRows={setGcpRows} width={width.main} />
@@ -466,6 +475,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             onOpen={openSubject}
             onClearText={() => setFilter("")}
             {...(health.error && h ? { stale: health.error.message } : {})}
+            sent={sent}
+            {...(lf.triage ? { onTriage: setTriage } : {})}
           />
         ) : !list ? (
           <Overview
@@ -559,6 +570,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           }}
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
           {...(show ? { show } : {})}
+          {...(lf.flows ? { onFlow: () => setFlowOn({ kind: list.type.kind, ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: selected.metadata.name, ...(selected.metadata.namespace ? { namespace: selected.metadata.namespace } : {}) } }) } : {})}
         />
         </Boundary>
       ) : null}
@@ -581,6 +593,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             onOpen={openSubject}
             onNavigate={go}
             onFullLogs={(pod, ns, container) => void reach({ group: "", version: "v1", resource: "pods", kind: "Pod", name: pod, ...(ns ? { namespace: ns } : {}) }, "logs", container)}
+            {...(sent.get(problemSel.id) ? { sent: sent.get(problemSel.id)! } : {})}
+            {...(lf.triage ? { onTriage: setTriage } : {})}
           />
         </Boundary>
       ) : null}
@@ -648,12 +662,20 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onOpen={(t) => void reach(t)}
           onAct={(t, verb, container) => void reach(t, verb, container)}
           onSwitch={switchTo}
+          {...(ck.console ? { onOpenClickland: (t: Target) => {
+            const scope = clicklandScope(t.kind, t.namespace, t.name);
+            if (scope) void api.invoke("clickland:open", { handle: cluster.handle, scope, signal: "logs", range: "1h" }).catch((e: ApiError) => setReachError(`${t.kind} ${t.name}: ${e.message}`));
+          } } : {})}
           {...(gcpRows ? { gcp: { ...gcpRows, onOpen: openGcp } } : {})}
+          {...(lf.triage ? { onTriage: setTriage } : {})}
+          {...(lf.flows ? { onFlow: (t: Target, p?: HealthProblem) => setFlowOn({ kind: t.kind, ref: { group: t.group, version: t.version, resource: t.resource, name: t.name, ...(t.namespace ? { namespace: t.namespace } : {}) }, ...(p ? { problem: p.id } : {}) }) } : {})}
           commands={{
             togglePanel: () => (bench.open ? bench.setOpen(false) : (bench.setOpen(true), focusBench())),
             newTerminal: () => (bench.openLocal(), focusBench()),
             createYaml: () => setCreating(true),
             toggleSidebar: () => setUserRail(!rail),
+            foldSections: () => navFolds.setSections(allSections(sections.map(([s]) => s)), false),
+            unfoldSections: () => navFolds.setSections(allSections(sections.map(([s]) => s)), true),
             openDock: () => setDock(true),
             showForwards: () => (bench.openForwards(), focusBench()),
             showProblems: () => openProblems(),
@@ -661,6 +683,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onClose={() => setJump(false)}
         />
       ) : null}
+      {triage ? <TriageSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} problem={triage} onClose={() => setTriage(undefined)} /> : null}
+      {flowOn ? <FlowSheet handle={cluster.handle} {...(namespace ? { namespace } : {})} subject={flowOn} onAsk={ask} onClose={() => setFlowOn(undefined)} /> : null}
       {reachError ? (
         <div className="notice reach-error" role="alert">
           <Ic icon={CircleX} size={15} className="tone-bad" />

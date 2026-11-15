@@ -28,7 +28,7 @@ const store = (crypto = fake()) => {
 describe("the MCP server store", () => {
   it("keeps a header value encrypted, out of every view, and gives it only to main's connection", () => {
     const { path, s } = store();
-    const saved = s.save({ name: "clickland", url: "http://127.0.0.1:4730/api/mcp", header: { name: "Authorization", value: SECRET } });
+    const saved = s.save({ name: "my-clickland", url: "http://127.0.0.1:4730/api/mcp", header: { name: "Authorization", value: SECRET } });
     const file = readFileSync(path, "utf8");
     expect(file).not.toContain("k_live_abcdefghijklmnopqrstuvwxyz");
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -36,7 +36,7 @@ describe("the MCP server store", () => {
     expect(s.info(saved.id)).toMatchObject({ header: { name: "Authorization", stored: true }, enabled: false, builtin: false });
     expect(s.remotesFor("orbstack")).toEqual([]);
     s.enable(saved.id, "orbstack", true);
-    expect(s.remotesFor("orbstack")).toEqual([{ id: saved.id, name: "clickland", url: "http://127.0.0.1:4730/api/mcp", headers: { Authorization: SECRET } }]);
+    expect(s.remotesFor("orbstack")).toEqual([{ id: saved.id, name: "my-clickland", url: "http://127.0.0.1:4730/api/mcp", headers: { Authorization: SECRET } }]);
     expect(s.info(saved.id).autoRun).toBe(false); // nothing it says about itself runs without asking by default
     expect(s.remotesFor("other")).toEqual([]);
   });

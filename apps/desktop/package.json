@@ -26,6 +26,7 @@
     "@landlens/kube-mcp": "workspace:*",
     "@landlens/mcp-gateway": "workspace:*",
     "@landlens/metrics": "workspace:*",
+    "@landlens/telemetry": "workspace:*",
     "node-pty": "1.1.0"
   },
   "devDependencies": {

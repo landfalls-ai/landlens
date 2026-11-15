@@ -97,6 +97,27 @@ is selected). When the drawer floats over the table (1024–1279 with the dock),
 that still shows, and Status becomes a 16px icon-only column at the left (a dot when healthy, the tone's icon
 otherwise, the word in its title and for screen readers), so which rows are in trouble stays visible.
 
+**The sidebar's sections** (`Sidebar.tsx`, `navState.ts`, D139). Overview and Problems are always the top two rows;
+below them every labelled block folds: **Workspace** (Connections, MCP, Agent), **Pinned**, **Cloud**, the kind
+sections (Workloads, Network, Config, Storage, Access, Cluster), each extra API group, and **Custom resources**
+(whose API-group sub-headings fold too). A header is a `button.nav-sec` with `aria-expanded` and `aria-controls` (its
+rows), the 11px `--ink-3` label and a chevron on the right that turns −90° with `--dur-2` when folded; rows that
+appear fade in over 120ms (off under `prefers-reduced-motion`). Workspace, Pinned, Cloud and the six kind sections
+start open, the API groups and Custom resources folded, as before. What you choose is kept in `localStorage`:
+`landlens.nav.v1` (`{ closed, opened }`, every cluster, so it survives a reload and a cluster switch) and
+`landlens.nav.groups.<context>` for Custom resources' API groups (they differ by cluster); both choices are recorded
+so a default can change later without overriding you, and a value that doesn't read is treated as no choices.
+**The page you are on never hides:** under a folded header its row stays, alone, without unfolding it (opened from
+⌘K, a link, a pin or a problem). **A folded header carries a roll-up badge** before its chevron (`.nav-sec
+.nav-badge`, 15px): the problems about its rows' kinds, each counted once (a Deployment's crash loop marks Deployments
+and Pods but is one problem), red if any is failing, else amber, in words in the title and for screen readers ("3
+problems"). Open headers show none, since their rows carry them. ⌥-click (Alt on Windows and Linux) on any header
+folds or unfolds every section; on an API group, every API group. In the rail the folds are ignored and left alone:
+Overview, Problems, the Workspace pages, pins and Google Cloud keep their icons (a 1px `.nav-rule` between blocks),
+and each kind section is **one icon** (its first kind's: Workloads `Box`, Network, Config, Storage, Access, Cluster;
+an API group `Shapes`) carrying the roll-up dot and the active ring, opening the `.nav-flyout` that Custom resources
+has had since D38. The sidebar's width stays 232.
+
 **Title bar.** On macOS the window is `hiddenInset` with the traffic lights at 16,16; the sidebar's top 44px, the
 toolbar, `.drawer-top`, `.dock-head` and `.welcome-bar` are drag regions, and their controls are `no-drag`. Preload
 writes `data-platform` on `<html>` (data only), and the CSS keys the inset on `[data-platform="darwin"]`; Windows and
@@ -174,7 +195,7 @@ all N) and Recent warnings; Nodes. It reads
   push Claude's answer out of the dock.
 - **Jump to** (`JumpPalette.tsx`, ⌘K): actions, problems (tone icon, title, kind and namespace), objects, kinds and
   clusters ([workbench.md](workbench.md#k-search)).
-- **MCP** (`McpPage.tsx`, `mcp.css`; sidebar under Overview, `Plug`): `.tabs` Servers and Calls; "Add server" sits
+- **MCP** (`McpPage.tsx`, `mcp.css`; the sidebar's Workspace group, `Plug`): `.tabs` Servers and Calls; "Add server" sits
   at the intro's right edge. A server is a `.panel` (kind tile, mono name, status `.badge`, a `.switch` "On for
   <context>", Test, edit and remove icon buttons; for an added server a second switch, "Run read-only tools without
   asking") with its tools as rows on one grid (`minmax(0,1fr) 62px 96px 112px`: name and a one-line description
@@ -186,7 +207,7 @@ all N) and Recent warnings; Nodes. It reads
   opens the call in the `.drawer` (with **Allowed by**: a read, you, the autonomous mode, or a preview), where the session id is
   middle-truncated with a copy button and a JSON result is indented. The add-server dialog reuses `.dialog`,
   `.form-row`, `.test-steps`.
-- **Connections** (`ConnectionsPage.tsx`, `connections.css`; sidebar above MCP, `Cable`; also "Connections" under
+- **Connections** (`ConnectionsPage.tsx`, `connections.css`; the sidebar's Workspace group, above MCP, `Cable`; also "Connections" under
   Welcome's list, where the page stands alone with a **Clusters** button back): one column of `.panel` cards, at most
   820px. A card's head is the provider's own mark (drawn in ink, in a `.kind-tile`), the name, a state `.badge` with
   its icon (Connected ok, Not connected muted, Connecting… with a spinner, Sign-in ran out warn, Failed bad) and one
@@ -200,6 +221,18 @@ all N) and Recent warnings; Nodes. It reads
   also has a muted **Routine** badge with a `Zap`; the badges sit right-aligned) and **Check tools**.
   A note that needs you is amber with its icon and **Review tools**; a card whose tools changed gets an amber ring.
   On the MCP page a connection's panel carries its mark, a **From Connections** chip and **Manage in Connections**.
+- **Land family** (wave 7, `FamilyCards.tsx`, `.fam*` in `connections.css`): a section under Google Cloud with its
+  heading and one line of intro, then a `.panel` card each for Clickland, Landflow and Landfall. Each card has the
+  sibling's own mark from `icons.tsx` (`SiblingMark`: Clickland's histogram tile, Landflow's nodes and flow,
+  Landfall's beacon, filled in ink in a `.kind-tile`), the name, and a state `.badge` (Ready ok, Off muted, Signing
+  in… with a spinner, Sign-in ran out warn, Failed bad). Then come the address in mono (only when connected), who
+  you are (`Signed in as …`, the role and how, muted, then the scopes as mono `.chip`s) and a note (a fixed sentence,
+  amber, or red when the card is Off or Failed). The uses are `.fam-row`s on hairlines: a label column, a sentence,
+  and a dot with its state word at the right on the same line ("In use", "Can record", "Can list and run", "Secret
+  stored", "Through Landflow"; muted "Not in use", "No scope", "Not set up"). Under 640px of the main pane the sentence drops under
+  the label. The forms are the wave 6 wells: a mono `.field` for the address, a password field for the key, its
+  shape checked as you type, the help in `small`. The triage webhook's form sits inside the Landflow card (path,
+  header name, secret; Remove, Cancel, Save). **Check** lists its steps as `.test-steps`.
 - **Google Cloud** (`GcpPage.tsx`, `gcp.css`; the sidebar's **Cloud** section after Pinned, `Cloud`; also under
   Welcome's list, standing alone with a **Clusters** button back): three columns in the main pane. **Projects**
   (240px, `--bg-0`): two-line items (name, then the id in mono), a filter, **Choose projects…** in the foot. **Types**
@@ -276,6 +309,9 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
 
 ⌘K jump, ⌘J dock, ⌘B sidebar, ⌘1 Overview, ⌘2 Pods, ⌘3 Problems, `/` filter, ↑/↓ or j/k rows, Enter open, Esc closes the drawer
 (never the dock), `[` `]` drawer tabs; in the dock, Enter and Esc answer the newest ask when the composer is empty.
+In the sidebar (D139): ↑/↓ move over the visible rows and headers, Home/End to the ends, → unfolds a header (or steps
+into it), ← folds it or goes from a row to its header, ⌥→/⌥← unfold or fold every section, Enter/Space activate; Tab
+still walks them in order. ⌘K has **Fold all sections** and **Unfold all sections**.
 These work with focus inside an MCP App view too: the view hands Escape and ⌘/Ctrl with K, J, B or a digit back to
 the page.
 
@@ -305,9 +341,18 @@ name", "Header value"; a `switch`; complementary "MCP call" with list "Front-doo
 instead", "Open github.com/login/device", "Read only", "Ask for writes", "Review tools", "Accept these tools",
 "Manage in Connections"; label "Device code"; fields "GitHub token" and "Linear API key"; switches "<Name>: reads run
 without asking" and "Give <Name> to Claude sessions"; lists "<Name> tools"; regions "MCP server github".
+Land family: region "Land family" with heading "Land family"; regions "Clickland connection", "Landflow connection",
+"Landfall connection"; lists "What <Name> is used for" (the `.fam-row`s, each `.fam-label` and `.fam-state`) and
+"<Name> check"; buttons "Connect…", "Settings…", "Connect", "Sign in", "Sign in again", "Sign out", "Set up", "Edit",
+"Check", "Disconnect"; fields "Landflow address", "Landflow API key", "Landfall address"; form "Triage webhook"
+with fields "Webhook path", "Webhook header name", "Webhook secret". Connect Clickland opened from here has no
+"Cluster name in Clickland" field.
 Autonomous: buttons "GitHub · asks", "GitHub · autonomous <n>/20", "Turn on", "Stop GitHub autonomous"; dialog
 "GitHub autonomous" with fields "Repositories", "Default branch" (Linear: "Team key"); status "Autonomous" (the
 strip); region "Claude asks"; classes `.auto-chip`, `section.change`, `.change-done.rejected`. Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
+Sidebar (D139): headers `.nav-sec[data-sec="<section>"]` with `aria-expanded` and `aria-controls`; groups named by
+section ("Workspace", "Pinned", "Cloud", "Workloads", …); in the rail a section is a button and its flyout a menu,
+both named by the section; `localStorage` key `landlens.nav.v1`.
 
 `LANDLENS_SHOTS=<folder>` saves screenshots of every screen in dark, light and at 1024×700 ([development.md](development.md)).

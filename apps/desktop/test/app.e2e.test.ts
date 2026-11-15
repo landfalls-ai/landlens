@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Frame, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FAMILY_NOTES } from "@landlens/contracts";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -526,7 +527,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
   }, 180_000);
 
 
-  it.runIf(clickland)("adds Clickland's MCP server with a read key, tests it, and shows its view from Preview", async () => {
+  it.runIf(clickland)("adds Clickland's MCP server with a read key, tests it, and keeps it out of sessions as the family's address", async () => {
     const made = await fetch(`${CLICKLAND_URL}/api/keys`, {
       method: "POST",
       headers: { authorization: `Bearer ${CLICKLAND_ADMIN}`, "content-type": "application/json" },
@@ -538,7 +539,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await page.getByRole("button", { name: "MCP", exact: true }).click();
       await page.getByRole("button", { name: "Add server" }).click();
       const dialog = page.getByRole("dialog", { name: "Add an MCP server" });
-      await dialog.getByLabel("Server name").fill("clickland");
+      await dialog.getByLabel("Server name").fill("my-clickland"); // "clickland" is the Land family's (wave 7, D107)
       await dialog.getByLabel("Server address").fill(`${CLICKLAND_URL}/api/mcp`);
       await dialog.getByLabel("Header name").fill("Authorization");
       await dialog.getByLabel("Header value").fill(`Bearer ${key}`);
@@ -549,34 +550,17 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await expect(dialog.locator(".test-steps .tone-bad").count()).resolves.toBe(0);
       await shot(page, "35-mcp-add-server");
       await dialog.getByRole("button", { name: "Save" }).click();
-      const panel = page.getByRole("region", { name: "MCP server clickland" });
+      const panel = page.getByRole("region", { name: "MCP server my-clickland" });
       await panel.waitFor();
-      await expect(panel.getByRole("switch", { name: "Use clickland on orbstack" }).isChecked()).resolves.toBe(true);
-      // A remote server's own "read-only" is only its claim: nothing runs without asking until you say so.
-      const auto = panel.getByRole("switch", { name: "Run clickland's read-only tools without asking" });
-      await expect(auto.isChecked()).resolves.toBe(false);
+      await expect(panel.getByRole("switch", { name: "Use my-clickland on orbstack" }).isChecked()).resolves.toBe(true);
+      // Clickland is connected (the test above), so a server you add at its address is that sibling without the
+      // family's rules: it stays out of sessions and Preview, and says why (review of wave 7 part 2, L1). Clickland's
+      // tools and its view reach sessions through Connections → Land family (family.e2e).
+      await panel.getByText(FAMILY_NOTES.siblingAddress).waitFor();
       // The header never comes back to the page.
       expect(JSON.stringify(await page.evaluate(() => (globalThis as any).landlens.invoke("mcp:servers", { context: "orbstack" })))).not.toContain(key);
-      await panel.getByRole("button", { name: "Test" }).click();
-      await panel.getByRole("list", { name: "clickland tools" }).waitFor({ timeout: 20_000 });
-      expect(await panel.locator(".mcp-tool .badge", { hasText: "Read-only" }).count()).toBe(0);
-      await auto.click();
-      await expect.poll(() => auto.isChecked()).toBe(true);
-      expect(await panel.locator(".mcp-tool .badge", { hasText: "Read-only" }).count()).toBeGreaterThan(0);
-      await panel.getByRole("button", { name: "Preview list_services" }).click();
-      const before = viewFrames(page).length;
-      await expect.poll(() => viewFrames(page).length, { timeout: 30_000 }).toBeGreaterThan(before);
-      const frame = viewFrames(page).at(-1)!;
-      await expect.poll(() => frame.evaluate(() => (globalThis as any).document.body.innerText.trim().length).catch(() => 0), { timeout: 30_000 }).toBeGreaterThan(20);
-      await page.waitForTimeout(800);
       await panel.scrollIntoViewIfNeeded();
-      await shot(page, "36-mcp-clickland-view");
-      await page.getByRole("tab", { name: /Calls/ }).click();
-      await page.getByRole("list", { name: "MCP calls" }).locator(".mcp-call", { hasText: "clickland · list_services" }).first().click();
-      await page.getByRole("complementary", { name: "MCP call" }).waitFor();
-      await shot(page, "37-mcp-clickland-call");
-      await page.keyboard.press("Escape");
-      await page.getByRole("tab", { name: /Servers/ }).click();
+      await shot(page, "36-mcp-clickland-sibling-address");
     } finally {
       await fetch(`${CLICKLAND_URL}/api/keys/${id}`, { method: "DELETE", headers: { authorization: `Bearer ${CLICKLAND_ADMIN}` } });
     }
