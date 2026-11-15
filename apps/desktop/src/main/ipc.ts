@@ -1,17 +1,21 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, clusterHealth, KubeError, listContexts, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { checkAccess, clusterHealth, getRelease, KubeError, listContexts, listReleases, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { ClicklandSettingsStore } from "./clickland-settings";
+import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
+import type { ForwardService } from "./forwards";
+import type { WorkbenchService } from "./workbench";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService) {
+  const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -26,7 +30,10 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "cluster:connect": async ({ context }) => {
       // Only contexts from the user's kubeconfig; the name goes to the sidecar as an argument.
       if (!listContexts().some((c) => c.name === context)) throw ipcError(404, `no context named ${context} in your kubeconfig`);
-      return clusters.connect(context);
+      const info = await clusters.connect(context);
+      // Kept forwards for this context start again (D37), without opening anything.
+      forwards.restore(info);
+      return info;
     },
     "cluster:disconnect": async ({ handle }) => {
       metrics.service.forget(handle);
@@ -105,6 +112,13 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "metrics:configure": async (input) => metrics.settings.set(input),
     "metrics:test": (input) => metrics.service.test(input),
     "metrics:disconnect": async () => metrics.settings.clear(),
+    // Choosing a Prometheus: only the one Landlens finds now, for this cluster's context (docs/metrics.md#prometheus).
+    "metrics:prometheus": async ({ handle, use }) => {
+      const context = clusters.get(handle).info.context;
+      if (use !== null && (await metrics.service.foundPrometheus(handle)) !== use) throw ipcError(409, `Landlens doesn't find a Prometheus at ${use} now.`);
+      metrics.prometheus.set(context, use);
+      return { ok: true };
+    },
     // MCP (docs/mcp.md). A server's header value comes in with save and test; nothing sends it back.
     "mcp:servers": ({ context }) => mcp.servers(context),
     "mcp:save": async (input) => mcp.save(input),
@@ -119,7 +133,44 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:app-call": ({ view, name, arguments: args }) => mcp.viewCall(view, name, args ?? {}),
     "mcp:app-close": async ({ view }) => (mcp.views.close(view), { ok: true }),
     "mcp:app-link": async ({ view, url }) => ({ opened: await mcp.viewLink(view, url) }),
+    // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
+    "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
+    "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),
+    "terminal:open": async (req, event) => workbench.openTerminal(req, event.sender),
+    "terminal:local": async ({ handle }, event) => workbench.openLocal({ handle }, event.sender),
+    "terminal:input": async ({ terminal, data }, event) => (workbench.input(terminal, data, event.sender), { ok: true }),
+    "terminal:resize": async ({ terminal, cols, rows }, event) => (workbench.resize(terminal, cols, rows, event.sender), { ok: true }),
+    "terminal:ack": async ({ terminal, chars }, event) => (workbench.ack(terminal, chars, event.sender), { ok: true }),
+    "terminal:close": async ({ terminal }, event) => (workbench.close(terminal, event.sender), { ok: true }),
+    "edit:review": (r, event) => workbench.reviewEdit(r, event.sender),
+    "edit:create": (r, event) => workbench.reviewCreate(r, event.sender),
+    "edit:apply": (r, event) => workbench.applyEdit(r, event.sender),
+    "edit:discard": async ({ id }, event) => (workbench.discardEdit(id, event.sender), { ok: true }),
+    // Port-forwards belong to the app, not a window (docs/workbench.md#port-forward).
+    "forward:list": async () => ({ forwards: forwards.list() }),
+    "forward:suggest": ({ port }) => forwards.suggest(port),
+    "forward:check": ({ port }) => forwards.check(port),
+    "forward:start": (r) => forwards.start(r),
+    "forward:stop": async ({ id }) => (forwards.stop(id), { ok: true }),
+    "forward:resume": ({ id, handle }) => forwards.resume(id, handle),
+    "forward:remove": async ({ id }) => (forwards.remove(id), { ok: true }),
+    "forward:open": async ({ id }) => (forwards.open(id), { ok: true }),
+    // Helm releases, read as you and decoded here; the window gets no secret values (docs/workbench.md#helm-releases).
+    "helm:list": ({ handle, namespace }) => helmCall(() => listReleases(clusters.get(handle).client, namespace)),
+    "helm:get": ({ handle, namespace, name, revision }) => helmCall(() => getRelease(clusters.get(handle).client, namespace, name, revision)),
+    // The palette's names across kinds (D45): one read shared by every window, again after 15 s or on `fresh`.
+    "search:index": async ({ handle, fresh }) => {
+      const c = clusters.get(handle);
+      const held = searches.get(handle);
+      if (held && !fresh && Date.now() - held.at < SEARCH_FRESH_MS) return held.read;
+      const read = clusters.discovery(handle).then((types) => searchIndex(c.client, types, AbortSignal.timeout(15_000))).then((r) => ({ ...r, at: new Date().toISOString() }));
+      searches.set(handle, { at: Date.now(), read });
+      read.catch(() => searches.get(handle)?.read === read && searches.delete(handle));
+      return read;
+    },
   };
+
+  clusters.onGone((handle) => searches.delete(handle));
 
   for (const name of Object.keys(channels) as Channel[]) {
     ipcMain.handle(name, async (event, raw) => {
@@ -138,6 +189,9 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
   }
 }
 
+/** How long one read of the palette's names serves every window (D45). */
+const SEARCH_FRESH_MS = 15_000;
+
 const isSecrets = (t: ResourceType) => t.group === "" && t.resource === "secrets";
 
 /** An https address with no user info, as a string, or undefined. */
@@ -151,3 +205,13 @@ export function httpsLink(raw: string): string | undefined {
 }
 
 const ipcError = (status: number, message: string) => new Error(JSON.stringify({ status, message }));
+
+/** Helm reads its releases from Secrets: say so when your role can't list them. */
+async function helmCall<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof KubeError && e.status === 403) throw ipcError(403, "You can't read Secrets here, and Helm keeps its releases in Secrets.");
+    throw e;
+  }
+}

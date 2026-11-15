@@ -17,8 +17,9 @@ const PATTERNS: [RegExp, string][] = [
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, "<redacted slack token>"],
   [/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g, "<redacted api key>"],
   [/\bglpat-[A-Za-z0-9_-]{20,}/g, "<redacted gitlab token>"],
-  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi, "$1<redacted>@"], // password in a URL
-  [/((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)["']?\s*[:=]\s*["']?)[^\s"',}]{6,}/gi, "$1<redacted>"],
+  // A scheme is at most 32 characters, so a long run of letters and dots isn't tried from every position (quadratic).
+  [/(\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{1,256}:)[^\s@/]{1,256}@/gi, "$1<redacted>@"], // password in a URL
+  [/((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)["']?\s*[:=]\s*["']?)(?!<(?:hidden|redacted))[^\s"',}]{6,}/gi, "$1<redacted>"],
 ];
 
 export function redactText(s: string): string {

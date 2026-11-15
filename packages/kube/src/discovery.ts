@@ -5,14 +5,37 @@ import type { KubeClient } from "./client.js";
 const AGGREGATED = "application/json;g=apidiscovery.k8s.io;v=v2;as=APIGroupDiscoveryList,application/json;q=0.9";
 
 export async function discover(client: KubeClient): Promise<ResourceType[]> {
-  const [core, groups] = await Promise.all([
+  const [core, groups, crds] = await Promise.all([
     client.json("/api", { headers: { Accept: AGGREGATED } }),
     client.json("/apis", { headers: { Accept: AGGREGATED } }),
+    crdNames(client),
   ]);
-  if (core?.kind === "APIGroupDiscoveryList" && groups?.kind === "APIGroupDiscoveryList") {
-    return [...fromAggregated(core), ...fromAggregated(groups)];
+  const types = core?.kind === "APIGroupDiscoveryList" && groups?.kind === "APIGroupDiscoveryList"
+    ? [...fromAggregated(core), ...fromAggregated(groups)]
+    : await legacy(client, groups);
+  return markCustom(types, crds);
+}
+
+/** The CRDs' names (`plural.group`), metadata only; undefined when your role can't list them. */
+async function crdNames(client: KubeClient): Promise<Set<string> | undefined> {
+  try {
+    const list = await client.json("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", {
+      headers: { Accept: "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;q=0.9" },
+    });
+    return new Set(((list?.items ?? []) as { metadata?: { name?: string } }[]).map((i) => i.metadata?.name ?? ""));
+  } catch {
+    return undefined;
   }
-  return legacy(client, groups);
+}
+
+/** Groups Kubernetes itself serves (roughly: a CRD may also use a k8s.io group): used only without the CRD list. */
+const BUILT_IN = /^(|apps|batch|autoscaling|policy)$|\.k8s\.io$/;
+
+export function markCustom(types: ResourceType[], crds: Set<string> | undefined): ResourceType[] {
+  return types.map((t) => {
+    const custom = crds ? crds.has(`${t.resource}.${t.group}`) : !BUILT_IN.test(t.group);
+    return custom ? { ...t, custom: true } : t;
+  });
 }
 
 /** Aggregated discovery: one document per side, preferred version first. */

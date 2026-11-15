@@ -1,5 +1,5 @@
 // The main pane's toolbar: title and count, the status filter (pods), the namespace, the filter, and Ask Claude.
-import { ChevronDown, Folder, RefreshCw, Search, Sparkles } from "lucide-react";
+import { ChevronDown, Folder, Plus, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 import { age } from "@landlens/kube/status";
 import { Ic, MOD } from "./icons";
@@ -16,6 +16,10 @@ export function Toolbar(props: {
   namespaces?: { list: string[]; value: string; onChange: (ns: string) => void };
   filter?: { value: string; onChange: (v: string) => void; ref: RefObject<HTMLInputElement | null>; short: boolean };
   onAsk?: () => void;
+  /** Create from YAML (D32). */
+  onCreate?: () => void;
+  /** Read again now (Helm releases, which are read every 30 seconds rather than watched). */
+  onRefresh?: () => void;
 }) {
   return (
     <header className="toolbar">
@@ -65,6 +69,8 @@ export function Toolbar(props: {
           {props.filter.value ? null : <kbd aria-hidden="true">/</kbd>}
         </label>
       ) : null}
+      {props.onRefresh ? <button className="icon-btn" aria-label="Refresh" title="Refresh" onClick={props.onRefresh}><Ic icon={RefreshCw} size={15} /></button> : null}
+      {props.onCreate ? <button className="icon-btn create-btn" aria-label="Create from YAML" title="Create from YAML" onClick={props.onCreate}><Ic icon={Plus} size={15} /></button> : null}
       {props.onAsk ? <button className="ask-btn" aria-label="Ask Claude" title={`Ask Claude (${MOD}J)`} onClick={props.onAsk}><Ic icon={Sparkles} size={14} /><span className="ask-word">Ask Claude</span><kbd aria-hidden="true">{MOD}J</kbd></button> : null}
     </header>
   );

@@ -138,6 +138,51 @@ describe("FrontDoor", () => {
     expect(audit.at(-1)).toMatchObject({ label: "ide", allowed: true, status: 101 });
   });
 
+  it("closes a token's open upgrades and streams when it is revoked", async () => {
+    // The cluster holds both open: an exec that never ends, and a watch that sends one event and waits.
+    const upgraded: { destroy(): void }[] = [];
+    sidecar.on("upgrade", (_req, socket) => {
+      upgraded.push(socket);
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+    });
+    sidecar.removeAllListeners("request");
+    sidecar.on("request", (_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"type":"ADDED"}\n');
+    });
+    const token = door.issueToken({ label: "you · terminal", policy: { access: "full" }, clusters: [HANDLE] });
+    const other = door.issueToken({ label: "ide", policy: { access: "full" }, clusters: [HANDLE] });
+    // Each resolves to { closed } once open (a bare promise would be adopted, waiting for the close).
+    const opened = (t: string) => new Promise<{ closed: Promise<void> }>((ok) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
+        s.write(`GET /c/${HANDLE}/api/v1/namespaces/a/pods/p1/exec?command=sh HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${t}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      });
+      const closed = new Promise<void>((done) => s.on("close", () => done()));
+      s.once("data", () => ok({ closed }));
+    });
+    const watch = new Promise<{ closed: Promise<void> }>((ok, fail) => {
+      const req = httpsRequest(door.url + `/c/${HANDLE}/api/v1/pods?watch=true`, { ca: tls.ca, agent: false, headers: { Authorization: `Bearer ${token}` } }, (res) => {
+        const closed = new Promise<void>((done) => res.on("close", () => done()).on("error", () => done()));
+        res.once("data", () => ok({ closed }));
+      });
+      req.on("error", fail);
+      req.end();
+    });
+    const exec = await opened(token);
+    const stream = await watch;
+    const kept = await opened(other);
+    let keptClosed = false;
+    void kept.closed.then(() => (keptClosed = true));
+    door.revokeToken(token);
+    await exec.closed;
+    await stream.closed;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(keptClosed).toBe(false);
+    door.revokeToken(other);
+    await kept.closed;
+    for (const u of upgraded) u.destroy();
+  });
+
   it("refuses an upgrade (exec) for a read-only token", async () => {
     const token = door.issueToken({ label: "agent 1", policy: agentReadOnlyPolicy(), clusters: [HANDLE] });
     const res = await new Promise<string>((resolve) => {
@@ -150,6 +195,32 @@ describe("FrontDoor", () => {
     });
     expect(res).toMatch(/^HTTP\/1.1 403/);
     expect(seen).toHaveLength(0);
+  });
+
+  it("lets a forward token open only the v4.channel.k8s.io WebSocket, not SPDY or SPDY over a WebSocket", async () => {
+    sidecar.on("upgrade", (req, socket) => {
+      seen.push(req);
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+      socket.end();
+    });
+    const token = door.issueToken({ label: "you · fwd", policy: { access: "forward", pod: { namespace: "a", name: "p1" }, port: 8080 }, clusters: [HANDLE] });
+    const send = (method: string, headers: string) => new Promise<string>((resolve) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
+        s.write(`${method} /c/${HANDLE}/api/v1/namespaces/a/pods/p1/portforward?ports=8080 HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${token}\r\nConnection: Upgrade\r\n${headers}\r\n`);
+      });
+      let buf = "";
+      s.on("data", (d) => (buf += d));
+      s.on("close", () => resolve(buf));
+    });
+    expect(await send("POST", "Upgrade: SPDY/3.1\r\nX-Stream-Protocol-Version: portforward.k8s.io\r\n")).toMatch(/^HTTP\/1.1 403/);
+    expect(await send("GET", "Upgrade: websocket\r\nSec-WebSocket-Protocol: SPDY/3.1+portforward.k8s.io\r\n")).toMatch(/^HTTP\/1.1 403/);
+    expect(await send("GET", "Upgrade: websocket\r\nSec-WebSocket-Protocol: v4.channel.k8s.io, SPDY/3.1+portforward.k8s.io\r\n")).toMatch(/^HTTP\/1.1 403/);
+    expect(seen).toHaveLength(0);
+    expect(await send("GET", "Upgrade: websocket\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n")).toMatch(/^HTTP\/1.1 101/);
+    expect(seen).toHaveLength(1);
+    // Not as a plain request either.
+    const plain = await call(`/c/${HANDLE}/api/v1/namespaces/a/pods/p1/portforward?ports=8080`, token);
+    expect(plain.status).toBe(403);
   });
 });
 

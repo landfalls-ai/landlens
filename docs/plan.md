@@ -42,7 +42,7 @@ Three rules hold in every wave:
 └────────────────────────────────────────────────────────────────────────┘
 ┌──────────────── renderer (sandboxed React, no Node) ──────────────────┐
 │ catalog · cluster views (workloads, config, network, storage, RBAC,   │
-│ CRDs, events) · logs · terminal (xterm) · YAML editor (Monaco, diff)  │
+│ CRDs, events) · logs · terminal (xterm) · YAML editor (CodeMirror 6, diff)  │
 │ · agent dock: messages, plan, tool-call cards, permission prompts,    │
 │   diffs, "Ask about this" from any object                             │
 └───────────────────────────────────────────────────────────────────────┘
@@ -131,7 +131,7 @@ Each wave ends with the app running against the OrbStack cluster, tests green an
 | 1 | **Shell**: pnpm workspace, Electron security baseline (sandbox, preload bridge, fuses, CSP without `unsafe-eval`, navigation guard), kubeconfig catalog, Go sidecar + token front door, discovery and RBAC, namespaces, list+watch stores, generic list/detail driven by discovery (pods, deployments, services, nodes, events first) | Landlens lists and live-updates `landflow-dev` and `clickland-dev` pods |
 | 2 | **Agent (ACP)**: `acp-host` with `claude-agent-acp`, the agent dock (messages, plan, tool cards, permission prompts, mode/model pickers, cancel), `landlens-kube` read tools with redaction, the kubectl fence, "Ask about this" | "Why is this pod crashlooping?" on a broken test deployment in `landlens-dev` gets a correct answer with the evidence it read shown as tool cards |
 | 3 | **Agent writes**: write tools behind the approval broker, YAML diff review, server-side dry run, apply; session history and resume; slash commands; other ACP agents | The agent proposes a fix as a diff, the person approves, the deployment recovers; a rejected change never reaches the API server, and `kubectl delete` from the agent's Bash is refused, even in bypass mode (tests prove both) |
-| 4 | **Workbench**: all built-in kinds and CRDs (printer columns), logs (followed stream, not Lens's 10 s poll; previous; search), pod shell and local terminal (node-pty), port-forward, YAML editor (server-side apply), metrics (metrics-server, Prometheus if found), Helm releases (read), command palette | Feature parity with the OpenLens views listed in `research/lens-features.md` marked "take" |
+| 4 | **Workbench**: all built-in kinds and CRDs (printer columns), logs (followed stream, not Lens's 10 s poll; previous; search), pod shell and local terminal (node-pty), port-forward, YAML editor (a merge patch after a dry run; server-side apply was the plan), metrics (metrics-server, Prometheus if found), Helm releases (read), command palette | Feature parity with the OpenLens views listed in `research/lens-features.md` marked "take" |
 | 5 | **Cluster doctor**: a problems view (crashloops, pending, OOM, failing probes, warning events, expiring certs) with "Ask the agent" on each | Each broken scenario in `deploy/scenarios/` shows up and gets a sensible suggestion |
 | 6 | **Land family**: Clickland MCP + telemetry, Landfall war room + MCP, Landflow flows on a resource, brain offload; Landbright OIDC for clusters later | Each link checked live on this machine |
 | 7 | **Packaging**: an unsigned local `.dmg`, auto-update off, crash reports to Clickland | Installs and runs from `/Applications` on this Mac |

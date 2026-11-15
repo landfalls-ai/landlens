@@ -1,0 +1,50 @@
+# A Prometheus in landlens-dev for Landlens's Prometheus source (docs/metrics.md#prometheus). It can't scrape the
+# kubelet (that needs a cluster-wide role, and Landlens's tests write only in landlens-dev), so an init container
+# backfills cAdvisor-shaped series from the ConfigMap `landlens-prometheus-data`, which `up.mjs` writes for the
+# landlens-demo chart's pods. Labelled as the Prometheus Helm chart labels its server, so Landlens finds it the same way.
+# node deploy/scenarios/prometheus/up.mjs   ·   kubectl --context orbstack -n landlens-dev delete -f deploy/scenarios/prometheus/prometheus.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: landlens-prometheus
+  namespace: landlens-dev
+  labels: { app.kubernetes.io/part-of: landlens-scenarios }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: landlens-prometheus }
+  template:
+    metadata:
+      labels: { app: landlens-prometheus }
+    spec:
+      initContainers:
+        - name: backfill
+          image: prom/prometheus:v3.5.0
+          command: ["sh", "-c", "promtool tsdb create-blocks-from openmetrics /data/series.om /prometheus"]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tsdb, mountPath: /prometheus }
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.5.0
+          args: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=1d"]
+          ports: [{ name: http, containerPort: 9090 }]
+          readinessProbe: { httpGet: { path: /-/ready, port: 9090 }, periodSeconds: 2 }
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: tsdb, mountPath: /prometheus }
+      volumes:
+        - { name: data, configMap: { name: landlens-prometheus-data } }
+        - { name: tsdb, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: landlens-prometheus
+  namespace: landlens-dev
+  labels: { app: prometheus, component: server, app.kubernetes.io/part-of: landlens-scenarios }
+spec:
+  selector: { app: landlens-prometheus }
+  ports: [{ name: http, port: 80, targetPort: 9090 }]

@@ -28,6 +28,32 @@ export class KubeClient {
     return JSON.parse(text) as T;
   }
 
+  /** As `json`, but refused past `maxBytes` while it streams in, and given up after `timeoutMs`. */
+  async jsonCapped<T = any>(path: string, opts: { maxBytes: number; timeoutMs: number }): Promise<T> {
+    return (await this.jsonText<T>(path, { maxBytes: opts.maxBytes, signal: AbortSignal.timeout(opts.timeoutMs) })).value;
+  }
+
+  /** JSON read with a size cap while it streams in; says how many bytes it was. */
+  async jsonText<T = any>(path: string, opts: { maxBytes: number; signal?: AbortSignal; headers?: Record<string, string> }): Promise<{ value: T; bytes: number }> {
+    const res = await this.request(path, { ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.headers ? { headers: opts.headers } : {}) });
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = res.body?.getReader();
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > opts.maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new KubeError(413, `an answer over ${Math.round(opts.maxBytes / 1048576)} MB`);
+      }
+      chunks.push(value);
+    }
+    const text = Buffer.concat(chunks).toString("utf8");
+    if (!res.ok) throw toKubeError(res.status, text);
+    return { value: JSON.parse(text) as T, bytes: size };
+  }
+
   async post<T = any>(path: string, body: unknown): Promise<T> {
     return this.json<T>(path, {
       method: "POST",

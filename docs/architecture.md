@@ -37,13 +37,15 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 - TLS with a certificate made fresh each run by the sidecar binary (`--loopback-cert`) and kept in memory. kubectl
   and client-go only send credentials over TLS.
 - Every request needs a bearer token Landlens issued. A token names the clusters it may reach and carries a policy
-  (`packages/kube/src/policy.ts`): `full` (whatever your RBAC allows) or `read` (get, list and watch only; no Secrets;
-  no exec, attach, port-forward or proxy; optionally a few namespaces). Paths that could be read two ways (`//`,
+  (`packages/kube/src/policy.ts`): `full` (whatever your RBAC allows), `read` (get, list and watch only; no Secrets;
+  no exec, attach, port-forward or proxy; optionally a few namespaces), `write` (only the approval broker's requests),
+  `exec` (one pod's shell) or `forward` (one pod's port-forward on one port). Paths that could be read two ways (`//`,
   dot segments, percent-encoding) are refused.
 - Allowed requests go to the cluster's sidecar; the caller's token never reaches the cluster. Every decision is
   audited (label, method, path, allowed, status, reason).
 - Tools get a kubeconfig (`toolKubeconfig`) whose clusters point at the front door with the certificate pinned, and
-  whose user is an exec credential plugin that reads the token from `LANDLENS_TOKEN`. No file holds a token. Without
+  whose user is an exec credential plugin that reads the token from `LANDLENS_TOKEN`, or, for a local terminal,
+  from a 0400 file in that terminal's own folder. Without
   the variable, kubectl fails to authenticate.
 
 ## Code map
@@ -54,7 +56,9 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/catalog.ts` | Contexts from your kubeconfig files (names and servers only) |
 | `packages/kube/src/sidecar.ts` | Start and stop `landlens-kube-proxy`; `loopbackCert` |
 | `packages/kube/src/client.ts` | Requests through a sidecar; API paths; `slim`, `withoutSecretValues` |
-| `packages/kube/src/discovery.ts` | API discovery (aggregated v2, else per group) |
+| `packages/kube/src/discovery.ts` | API discovery (aggregated v2, else per group), with each kind a CRD defines marked `custom` |
+| `packages/kube/src/search.ts` | The ⌘K palette's names: metadata-only lists of the common kinds, kind, name and namespace out |
+| `packages/kube/src/helm.ts` | Helm releases, read-only: lists and decodes Helm's release Secrets as you, merges values as Helm does, hides secret values and Secret data before the window sees them |
 | `packages/kube/src/watch.ts` | `ResourceWatcher`: paginated list, watch with bookmarks, relist on 410, batches |
 | `packages/kube/src/clusters.ts` | `ClusterManager` (connect, discovery, get, events) and `WatchHub` (shared, ref-counted watchers) |
 | `packages/kube/src/access.ts` | SelfSubjectAccessReview |
@@ -80,7 +84,7 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/renderer/src/icons.tsx`, `Mark.tsx`, `present.ts`, `styles.css` | Icons per kind, the brand mark, name splitting and tones, the tokens and styles ([design.md](design.md)) |
 | `packages/kube/src/health.ts` | `clusterHealth`: one health computation for the Overview and the agent's `cluster_overview` |
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
-| `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
+| `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the cluster's Prometheus (found, asked through the service proxy), the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
 | `apps/desktop/src/main/clickland-settings.ts` | Clickland's address, cluster names and the key encrypted with safeStorage |
 | `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars` and the pure `scale.ts` helpers |
 | `apps/desktop/src/renderer/src/Usage.tsx`, `MetricsTab.tsx`, `MetricsNotice.tsx`, `ClicklandSettings.tsx`, `metrics.ts` | The Overview's Usage card, the drawer's Metrics tab, source and empty-state notices, Connect Clickland, the polling hook |

@@ -1,6 +1,6 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { Box, Check, ChevronRight, CircleX, Clock, Copy, Server, Sparkles, X } from "lucide-react";
+import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
@@ -10,8 +10,17 @@ import { copyText, duration, splitName, statusTone } from "./present";
 import { Status } from "./ResourceTable";
 import { Yaml } from "./Yaml";
 import { MetricsTab, metricsScope } from "./MetricsTab";
+import type { LogSource, ShellTarget } from "./benchState";
+import { logSourceOf, LogsView } from "./LogsView";
+import { direct, shellable, ShellMenu, targetOf, useCanExec } from "./ShellMenu";
+import { leaveEdit } from "./editGuard";
+import { YamlEdit } from "./YamlEdit";
+import { PortLine, useCanForward } from "./Forwards";
+import type { ClusterInfo } from "@landlens/contracts";
+import { CRD, printerFacts } from "./custom";
+import { printerColumns, type PrinterColumn } from "./printer";
 
-type Tab = "overview" | "events" | "yaml" | "metrics";
+type Tab = "overview" | "events" | "yaml" | "metrics" | "logs";
 export type NavTarget = { kind: string; name: string; namespace?: string };
 
 /** Waiting reasons that mean a container can't run (kept in step with packages/kube/src/health.ts). */
@@ -20,6 +29,7 @@ const BAD_WAITING = new Set(["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePu
 /** The details drawer: what this object is, what is wrong with it, its events, and its YAML. */
 export function Details(props: {
   handle: string;
+  cluster: ClusterInfo;
   type: ResourceType;
   object: KubeObject;
   /** The object's tone from its list row (Ready for workloads), when it has one. */
@@ -31,10 +41,48 @@ export function Details(props: {
   /** Changes when the Clickland settings do. */
   metricsVersion: number;
   onSettings: () => void;
+  /** Open a pod shell, or logs, in the panel. */
+  onShell: (t: ShellTarget) => void;
+  onLogsInPanel: (s: LogSource) => void;
+  /** Asked from outside (a row's menu): show this tab, on this container. Changes `n` to ask again. */
+  show?: { tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number };
+  /** A custom resource's printer columns, shown as facts (D41). */
+  printer?: PrinterColumn[];
+  /** A definition's "Open <kind>": the kind's list. */
+  onOpenKind?: (group: string, resource: string) => void;
 }) {
   const { object: o, type, now } = props;
-  const TABS: Tab[] = metricsScope(type) ? ["overview", "events", "yaml", "metrics"] : ["overview", "events", "yaml"];
+  const logs = logSourceOf(type.kind, o);
+  const TABS: Tab[] = [...(metricsScope(type) ? ["overview", "events", "yaml", "metrics"] as Tab[] : ["overview", "events", "yaml"] as Tab[]), ...(logs ? ["logs" as Tab] : [])];
   const [tab, setTab] = useState<Tab>("overview");
+  const [logContainer, setLogContainer] = useState<string>();
+  const [shellMenu, setShellMenu] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [applied, setApplied] = useState<string>();
+  useEffect(() => (setEditing(false), setApplied(undefined)), [o.metadata.uid]);
+  const canExec = useCanExec(props.handle, o.metadata.namespace);
+  const pod = type.resource === "pods" && type.group === "";
+  const workloadSel = logs?.selector ? { namespace: logs.namespace, selector: logs.selector } : undefined;
+  const openShell = () => {
+    const d = pod ? direct(o) : undefined;
+    if (d) return props.onShell(d);
+    setShellMenu((m) => !m);
+  };
+  const showLogs = (container?: string) => {
+    setLogContainer(container);
+    leaveEdit(() => setTab("logs"));
+  };
+  useEffect(() => {
+    if (!props.show) return;
+    if (props.show.tab === "logs") showLogs(props.show.container);
+    else if (props.show.tab === "edit") {
+      if (!isSecret(type)) (setTab("yaml"), setEditing(true));
+    } else if (props.show.tab === "forward") {
+      // The palette's forward (D44): the Overview, with the first port's Forward focused.
+      leaveEdit(() => setTab("overview"));
+      setTimeout(() => (document.querySelector<HTMLButtonElement>(".drawer button[aria-label^='Forward ']:not(:disabled)"))?.focus(), 150);
+    } else openShell();
+  }, [props.show?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();
   const [copied, setCopied] = useState(false);
 
@@ -51,16 +99,14 @@ export function Details(props: {
       if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== "[" && e.key !== "]")) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.closest("input, textarea, select, [contenteditable]") || t.closest(".dock"))) return;
-      setTab((cur) => TABS[(TABS.indexOf(cur) + (e.key === "]" ? 1 : TABS.length - 1)) % TABS.length]!);
+      leaveEdit(() => setTab((cur) => TABS[(TABS.indexOf(cur) + (e.key === "]" ? 1 : TABS.length - 1)) % TABS.length]!));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [TABS.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (tab === "metrics" && !metricsScope(type)) setTab("overview");
-  }, [tab, type]);
-
-  const pod = type.resource === "pods" && type.group === "";
+    if ((tab === "metrics" && !metricsScope(type)) || (tab === "logs" && !logs)) setTab("overview");
+  }, [tab, type, logs]);
   const view = isSecret(type) ? redactSecret(o) : o;
   const status = pod ? podStatus(o) : undefined;
   const tone = status ? statusTone(status.text, status.tone) : props.tone;
@@ -75,6 +121,15 @@ export function Details(props: {
           <span className={`kind-tile sm${tone === "bad" || tone === "warn" ? ` ${tone}` : ""}`}><Ic icon={kindIcon(type.resource)} size={15} /></span>
           <div className="eyebrow">{type.kind}{o.metadata.namespace ? <><span className="sep"> / </span>{o.metadata.namespace}</> : null}</div>
           <span className="grow" />
+          {pod || workloadSel ? (
+            <button className="icon-btn" aria-label="Open shell" aria-haspopup={pod && direct(o) ? undefined : "menu"} disabled={canExec === false}
+              title={canExec === false ? `Your role can't exec in ${o.metadata.namespace}` : pod && !shellable(o).some((c) => c.running) ? "No container is running" : "Open a shell (runs as you)"}
+              onClick={openShell}><Ic icon={SquareTerminal} size={15} /></button>
+          ) : null}
+          {shellMenu ? (
+            <ShellMenu handle={props.handle} {...(pod ? { pod: o } : workloadSel ? { workload: workloadSel } : {})}
+              onPick={(t) => (setShellMenu(false), props.onShell(t))} onClose={() => setShellMenu(false)} />
+          ) : null}
           {isSecret(type) ? null : (
             <button
               className="ask-btn"
@@ -109,17 +164,35 @@ export function Details(props: {
       </header>
       <nav className="tabs" role="tablist" aria-label="Details">
         {TABS.map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
+          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => (t === tab ? undefined : leaveEdit(() => setTab(t)))}>
             {t === "yaml" ? "YAML" : t[0]!.toUpperCase() + t.slice(1)}
             {t === "events" && Array.isArray(events) && events.length ? <span className={"count" + (warnings ? " warn" : "")} aria-hidden="true">{events.length}</span> : null}
           </button>
         ))}
-        <button role="tab" aria-selected={false} aria-disabled="true" tabIndex={-1} title="Logs arrive in wave 4">Logs</button>
       </nav>
-      <div className="drawer-body">
-        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} />}
+      <div className={"drawer-body" + (tab === "logs" ? " flush" : "")}>
+        {tab === "logs" && logs ? (
+          <LogsView key={`${o.metadata.uid}`} handle={props.handle} source={{ ...logs, ...(logContainer ? { container: logContainer } : {}) }} place="drawer" onAsk={props.onAsk} onOpenInPanel={props.onLogsInPanel} />
+        ) : null}
+        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
+          onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec}
+          {...(props.printer?.length ? { printer: props.printer } : {})} {...(props.onOpenKind ? { onOpenKind: props.onOpenKind } : {})} />}
         {tab === "events" && <Events events={events} now={now} />}
-        {tab === "yaml" && <Yaml text={stringify(view, { lineWidth: 0 })} />}
+        {tab === "yaml" ? (
+          <div className="yaml-tab">
+            {editing ? (
+              <YamlEdit cluster={props.cluster} type={type} object={o} onAsk={props.onAsk} onClose={() => setEditing(false)} onApplied={setApplied} />
+            ) : (
+              <>
+              {applied ? (
+                <div className="change-done" role="status"><Ic icon={Check} size={14} className="tone-ok" /><span>{applied}</span>
+                  <button className="icon-btn" aria-label="Dismiss" onClick={() => setApplied(undefined)}><Ic icon={X} size={12} /></button></div>
+              ) : null}
+              <Yaml text={stringify(view, { lineWidth: 0 })} {...(isSecret(type) ? { editWhy: "Secrets aren't edited in Landlens yet: their values stay hidden" } : { onEdit: () => (setApplied(undefined), setEditing(true)) })} />
+              </>
+            )}
+          </div>
+        ) : null}
         {tab === "metrics" && metricsScope(type) && <MetricsTab handle={props.handle} type={type} object={o} version={props.metricsVersion} onSettings={props.onSettings} />}
       </div>
     </aside>
@@ -136,8 +209,16 @@ function readyOf(o: KubeObject): string | undefined {
   return undefined;
 }
 
-function Overview({ o, type, now, onNavigate }: { o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void }) {
+function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster, printer, onOpenKind }: {
+  o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void;
+  onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined; cluster: ClusterInfo;
+  printer?: PrinterColumn[]; onOpenKind?: (group: string, resource: string) => void;
+}) {
+  const definition = type.group === CRD.group && type.resource === CRD.resource;
+  const facts = printer ? printerFacts(o, printer, now) : [];
   const pod = type.resource === "pods" && type.group === "";
+  const service = type.resource === "services" && type.group === "";
+  const canForward = useCanForward(cluster.handle, pod || service ? o.metadata.namespace : undefined);
   const created = Date.parse(o.metadata.creationTimestamp ?? "");
   // In the order they happened; ties (most of them share the pod's first seconds) in lifecycle order.
   const conditions: any[] = [...(o.status?.conditions ?? [])].sort(
@@ -168,10 +249,19 @@ function Overview({ o, type, now, onNavigate }: { o: KubeObject; type: ResourceT
             <dt>Pod IP</dt><dd className="mono">{o.status?.podIP ?? "—"}</dd>
           </>
         ) : null}
+        {definition ? <DefinitionFacts crd={o} /> : null}
+        {facts.map((f) => (
+          <span key={f.label} style={{ display: "contents" }}>
+            <dt title={f.title}>{f.label}</dt>
+            <dd className={f.num ? "num" : undefined} title={f.title}>{f.text}</dd>
+          </span>
+        ))}
         <dt>Created</dt>
         <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
-      {pod ? <Containers pod={o} now={now} /> : null}
+      {definition ? <Definition crd={o} {...(onOpenKind ? { onOpenKind } : {})} /> : null}
+      {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} cluster={cluster} canForward={canForward} /> : null}
+      {service ? <ServicePorts svc={o} cluster={cluster} canForward={canForward} /> : null}
       {conditions.length ? (
         <section>
           <h3>Conditions</h3>
@@ -262,7 +352,8 @@ function Diagnosis({ pod, now }: { pod: KubeObject; now: number }) {
   );
 }
 
-function Containers({ pod, now }: { pod: KubeObject; now: number }) {
+function Containers({ pod, now, onLogs, onShell, canExec, cluster, canForward }: { pod: KubeObject; now: number; onLogs: (c: string) => void; onShell: (c: string) => void; canExec: boolean | undefined; cluster: ClusterInfo; canForward: boolean | undefined }) {
+  const running = pod.status?.phase === "Running" && !pod.metadata.deletionTimestamp;
   const statuses = new Map<string, any>((pod.status?.containerStatuses ?? []).map((c: any) => [c.name, c]));
   const specs: any[] = pod.spec?.containers ?? [];
   if (!specs.length) return null;
@@ -277,11 +368,26 @@ function Containers({ pod, now }: { pod: KubeObject; now: number }) {
           const last = s?.lastState?.terminated;
           return (
             <li key={c.name}>
-              <div className="row-between">
+              <div className="c-head">
                 <strong className="c-name"><Ic icon={Box} size={13} />{c.name}</strong>
                 <Status text={state} tone={tone} />
+                <span className="c-acts">
+                  <button className="secondary" aria-label={`Logs of ${c.name}`} onClick={() => onLogs(c.name)}><Ic icon={ScrollText} size={12} />Logs</button>
+                  <button className="secondary" aria-label={`Open shell in ${c.name}`} disabled={!s?.state?.running || canExec === false}
+                    title={canExec === false ? `Your role can't exec in ${pod.metadata.namespace}` : s?.state?.running ? "Open a shell (runs as you)" : "The container isn't running"}
+                    onClick={() => onShell(c.name)}><Ic icon={SquareTerminal} size={12} />Shell</button>
+                </span>
               </div>
               <div className="mono c-image">{c.image}</div>
+              {(c.ports ?? []).length ? (
+                <div className="ports">
+                  {(c.ports as { containerPort: number; name?: string; protocol?: string }[]).map((p) => (
+                    <PortLine key={`${p.containerPort}/${p.protocol ?? "TCP"}`} handle={cluster.handle} context={cluster.context}
+                      target={{ namespace: pod.metadata.namespace!, kind: "pod", name: pod.metadata.name, port: p.containerPort }}
+                      {...(p.name ? { label: p.name } : {})} {...(p.protocol ? { protocol: p.protocol } : {})} can={canForward} ready={running} notReady="The pod isn't running" />
+                  ))}
+                </div>
+              ) : null}
               {s?.restartCount || last ? (
                 <div className="c-foot">
                   <span>{s?.restartCount ?? 0} restarts</span>
@@ -297,6 +403,26 @@ function Containers({ pod, now }: { pod: KubeObject; now: number }) {
   );
 }
 
+/** A Service's ports (D33): each forwards through one ready pod behind it. */
+function ServicePorts({ svc, cluster, canForward }: { svc: KubeObject; cluster: ClusterInfo; canForward: boolean | undefined }) {
+  const ports = (svc.spec?.ports ?? []) as { port: number; targetPort?: number | string; name?: string; protocol?: string }[];
+  if (!ports.length) return null;
+  const selector = svc.spec?.selector && Object.keys(svc.spec.selector).length > 0;
+  return (
+    <section>
+      <h3>Ports</h3>
+      <div className="ports flat">
+        {ports.map((p) => (
+          <PortLine key={`${p.port}/${p.protocol ?? "TCP"}`} handle={cluster.handle} context={cluster.context}
+            target={{ namespace: svc.metadata.namespace!, kind: "service", name: svc.metadata.name, port: p.port }}
+            label={`→ ${p.targetPort ?? p.port}${p.name ? ` · ${p.name}` : ""}`} {...(p.protocol ? { protocol: p.protocol } : {})}
+            can={canForward} ready={!!selector} notReady="This Service has no selector, so there is no pod to forward to" />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Labels({ title, map }: { title: string; map?: Record<string, string> }) {
   const entries = Object.entries(map ?? {});
   if (!entries.length) return null;
@@ -305,6 +431,63 @@ function Labels({ title, map }: { title: string; map?: Record<string, string> })
       <h3>{title}</h3>
       <div className="chips">{entries.map(([k, v]) => <span key={k} className="chip mono" title={`${k}=${v}`}><i>{k}</i>{v}</span>)}</div>
     </section>
+  );
+}
+
+/** A CustomResourceDefinition's facts (D41), in the drawer's facts list. */
+function DefinitionFacts({ crd }: { crd: KubeObject }) {
+  const names = crd.spec?.names ?? {};
+  return (
+    <>
+      <dt>Group</dt><dd className="mono">{crd.spec?.group ?? "—"}</dd>
+      <dt>Kind</dt><dd>{names.kind ?? "—"}</dd>
+      <dt>Scope</dt><dd>{crd.spec?.scope ?? "—"}</dd>
+      {names.shortNames?.length ? <><dt>Short names</dt><dd className="mono">{names.shortNames.join(", ")}</dd></> : null}
+    </>
+  );
+}
+
+/** A CustomResourceDefinition (D41): its versions, the served version's columns, and its list. */
+function Definition({ crd, onOpenKind }: { crd: KubeObject; onOpenKind?: (group: string, resource: string) => void }) {
+  const names = crd.spec?.names ?? {};
+  const versions = (crd.spec?.versions ?? []) as { name: string; served?: boolean; storage?: boolean; deprecated?: boolean }[];
+  const served = versions.find((v) => v.storage && v.served) ?? versions.find((v) => v.served);
+  const cols = served ? printerColumns(crd, served.name) : [];
+  const plural: string = names.plural ?? "";
+  return (
+    <>
+      <section>
+        <h3>Versions</h3>
+        <div className="crd-versions">
+          {versions.map((v) => (
+            <div key={v.name} className="crd-version">
+              <span className="mono">{v.name}</span>
+              {v.served ? <span className="badge ok">served</span> : <span className="badge muted">not served</span>}
+              {v.storage ? <span className="badge muted">storage</span> : null}
+              {v.deprecated ? <span className="badge warn">deprecated</span> : null}
+            </div>
+          ))}
+        </div>
+      </section>
+      {cols.length ? (
+        <section>
+          <h3>Columns <span className="dim small">({served!.name})</span></h3>
+          <div className="crd-cols">
+            {cols.map((c) => (
+              <span key={c.name} style={{ display: "contents" }}>
+                <span title={c.description}>{c.name}</span>
+                <span className="mono" title={c.jsonPath}>{c.jsonPath}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {onOpenKind && served && plural ? (
+        <button className="secondary crd-open" onClick={() => onOpenKind(crd.spec.group, plural)}>
+          Open {plural}<Ic icon={ArrowRight} size={13} />
+        </button>
+      ) : null}
+    </>
   );
 }
 

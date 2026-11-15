@@ -93,7 +93,7 @@ SDK, data set as text only):
 | `cluster_overview` | Health card: the verdict, nodes, pods (a segmented bar), deployments, restarts, problems worst first (each opens the object in Landlens) |
 | `describe` | Object card: kind, state, ready, restarts, age, node; containers with last exits; owners one per line, nearest first; conditions as the drawer's ✓/✗ checklist; recent events; **Open in Landlens** |
 | `get_logs` | Log view: numbered lines, failure-looking lines highlighted (`FAILURE_LINE` in contracts, the same rule the dock's log wells use), All or Failures (with a line of context); when the kubelet answers with why it couldn't read the log, **Logs couldn't be read** in the bad tone instead |
-| `metrics` (new) | CPU and memory over 1h, 6h or 24h as two line charts, request dashed, limit or allocatable solid, a pointer readout; from Landlens's metrics source (Clickland, else metrics-server), read with the session's own front-door token (its audit label and namespace limit) |
+| `metrics` (new) | CPU and memory over 1h, 6h or 24h as two line charts, request dashed, limit or allocatable solid, a pointer readout; from Landlens's metrics source (Clickland, else the cluster's Prometheus, else metrics-server), read with the session's own front-door token (its audit label and namespace limit) |
 
 The tools register with `@modelcontextprotocol/ext-apps` 1.7.5's `registerAppTool` and `registerAppResource` (checked
 to work with SDK 1.32's `McpServer`: the listing carries `_meta.ui.resourceUri` and the legacy key, the resource its

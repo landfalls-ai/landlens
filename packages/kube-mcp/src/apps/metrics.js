@@ -102,7 +102,7 @@
     var width = Math.max(220, (app.getBoundingClientRect().width || 360) - 24 - 20);
     app.textContent = "";
     var what = d.scope === "cluster" ? d.context : d.scope === "namespace" ? "namespace " + d.namespace : (d.namespace ? d.namespace + "/" : "") + d.name;
-    var src = d.series.source === "clickland" ? "Clickland" : d.series.source === "metrics-server" ? "metrics-server, live" : "no source";
+    var src = d.series.source === "clickland" ? "Clickland" : d.series.source === "prometheus" ? "Prometheus" : d.series.source === "metrics-server" ? "metrics-server, live" : "no source";
     app.appendChild(h("div", { class: "head" },
       h("span", { class: "tile" }, v.icon("chart", 16)),
       h("div", { class: "head-text" },

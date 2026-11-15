@@ -8,6 +8,8 @@ import "./charts.css";
 import "./mcp.css";
 import "./dock3.css";
 import "./agent.css";
+import "@xterm/xterm/css/xterm.css";
+import "./workbench.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

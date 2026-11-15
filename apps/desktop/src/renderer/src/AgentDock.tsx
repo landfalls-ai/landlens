@@ -10,11 +10,14 @@ import { ChangeCard, ChangeDone, isWaiting, riskWords, type CardKeys } from "./C
 import { answerKeys, AskCard, Plan, Transcript, type Item, type PlanEntry, type Tool } from "./DockParts";
 import { HistoryPanel, whenText } from "./HistoryPanel";
 import type { ObjectTarget } from "./app-host";
-import { Ic, kindIcon } from "./icons";
+import { contextIcon, Ic, kindIcon } from "./icons";
 import { hasView, useMcpCalls } from "./mcpStore";
 import { slashOptions, slashQuery, SlashMenu, type AgentCommand, type SlashOption } from "./SlashMenu";
 
-export type AskContext = { ref: ResourceRef; label: string };
+export type { AskContext } from "./quotes";
+
+import { withQuotes, type AskContext } from "./quotes";
+export { withQuotes };
 
 const SUGGESTIONS = ["What's wrong in this cluster right now?", "Which pods restarted in the last hour, and why?"];
 
@@ -274,7 +277,8 @@ export function AgentDock(props: {
     props.onContextChange([]);
     setBusy(true);
     try {
-      const r = await api.invoke("agent:prompt", { session: s, text, ...(context.length ? { context: context.map((c) => c.ref) } : {}) });
+      const refs = context.flatMap((c) => (c.ref ? [c.ref] : []));
+      const r = await api.invoke("agent:prompt", { session: s, text: withQuotes(text, context), ...(refs.length ? { context: refs } : {}) });
       if (r.stopReason === "cancelled") setItems((xs) => [...xs, { type: "note", text: "Stopped." }]);
       else if (r.stopReason !== "end_turn") setItems((xs) => [...xs, { type: "note", text: `Ended: ${r.stopReason}` }]);
     } catch (e) {
@@ -551,7 +555,7 @@ export function AgentDock(props: {
             <div className="chips">
               {props.context.map((c) => (
                 <span key={c.label} className="chip ctx-chip">
-                  <Ic icon={kindIcon(c.ref.resource)} size={11} />
+                  <Ic icon={contextIcon(c)} size={11} />
                   {c.label}
                   <button type="button" aria-label={`Remove ${c.label}`} onClick={() => props.onContextChange(props.context.filter((x) => x !== c))}><Ic icon={X} size={11} /></button>
                 </span>

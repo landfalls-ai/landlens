@@ -1,0 +1,11 @@
+# Dummy development values. The password and API key below are not secrets: they exist so the Helm page can show
+# that it hides values that look secret.
+replicaCount: 1
+message: hello from landlens-demo
+image:
+  repository: busybox
+  tag: "1.36"
+auth:
+  adminPassword: demo-dev-password
+  apiKey: demo-dev-api-key
+  existingSecret: ""

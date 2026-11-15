@@ -7,7 +7,10 @@ import { join, resolve } from "node:path";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
+import { PrometheusChoices } from "./prometheus-choice";
 import { registerIpc } from "./ipc";
+import { ForwardService } from "./forwards";
+import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
@@ -51,12 +54,15 @@ async function start() {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
   };
   const settings = new ClicklandSettingsStore(join(app.getPath("userData"), "clickland.json"), safeStorage);
+  const prometheus = new PrometheusChoices(join(app.getPath("userData"), "prometheus.json"));
   const metrics = new MetricsService({
     clickland: () => ({ config: settings.config(), clusterName: (context) => settings.clusterName(context) }),
     cluster: (handle) => {
       const c = clusters.get(handle);
-      return { context: c.info.context, get: (path) => c.client.json(path) };
+      // Prometheus answers are capped and timed: a Service anyone made could hold the call or send gigabytes.
+      return { context: c.info.context, get: (path) => c.client.json(path), ask: (path) => c.client.jsonCapped(path, { maxBytes: 8 * 1048576, timeoutMs: 10_000 }) };
     },
+    prometheus: { chosen: (context) => prometheus.chosen(context) },
   });
   // For the metrics tool: `read` is the session's own front-door token (its policy, scrubbing and audit), so what the
   // series reads from the cluster is read as the session. The usage numbers are Clickland's or the shared sampler's.
@@ -95,9 +101,20 @@ async function start() {
     settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp);
+  const workbench = new WorkbenchService({ clusters, frontDoor, dataDir: app.getPath("userData") });
+  liveSessions = () => workbench.terminalCount();
+  const forwards = new ForwardService({
+    clusters, frontDoor,
+    file: join(app.getPath("userData"), "forwards.json"),
+    push: (list) => send("forward:update", { forwards: list }),
+    // Only http(s)://127.0.0.1:<port>/, built by the service from the forward itself.
+    openExternal: (url) => shell.openExternal(url),
+    log: (l) => console.log(l),
+  });
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards);
   const service = mcp;
   shutdown = async () => {
+    forwards.stopAll();
     metrics.stopAll();
     await agent.stop();
     await service.stop();
@@ -138,8 +155,17 @@ app.whenReady().then(start).catch((err) => {
 app.on("window-all-closed", () => app.quit());
 
 let quitting = false;
+/** Shells and terminals that quitting would end (D23): asked about once. */
+let liveSessions = () => 0;
 app.on("before-quit", (event) => {
   if (quitting || !shutdown) return;
+  const n = liveSessions();
+  if (n) {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const opts = { type: "question" as const, buttons: ["Quit", "Cancel"], defaultId: 0, cancelId: 1, message: `${n} session${n === 1 ? "" : "s"} will end`, detail: "Every shell and terminal open in Landlens closes with it." };
+    const choice = win && !win.isDestroyed() ? dialog.showMessageBoxSync(win, opts) : dialog.showMessageBoxSync(opts);
+    if (choice === 1) return event.preventDefault();
+  }
   event.preventDefault();
   quitting = true;
   void shutdown().finally(() => app.quit());

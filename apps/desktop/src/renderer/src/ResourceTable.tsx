@@ -1,6 +1,6 @@
 import type { KubeObject } from "@landlens/contracts";
 import type { Tone } from "@landlens/kube/status";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Minus } from "lucide-react";
 import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Ic, kindIcon, TONE_ICON } from "./icons";
 import type { Cell, Column } from "./kinds";
@@ -36,6 +36,10 @@ export function ResourceTable(props: {
   oneNamespace: boolean;
   empty: { title: string; onClear?: () => void };
   onSelect: (o: KubeObject) => void;
+  /** A row's menu (right-click, Shift+F10), at a point. */
+  onMenu?: (o: KubeObject, x: number, y: number) => void;
+  /** Single-key actions on the focused row (D6): L logs, S shell. */
+  onAction?: (o: KubeObject, action: "logs" | "shell" | "edit") => void;
 }) {
   const { items, now } = props;
   const [sort, setSort] = useState<{ id: string; dir: 1 | -1 }>({ id: "name", dir: 1 });
@@ -123,8 +127,9 @@ export function ResourceTable(props: {
             return (
               <button
                 key={c.id}
-                className={"th" + (NUMERIC.has(c.id) ? " num" : "") + (on ? " sorted" : "")}
+                className={"th" + (NUMERIC.has(c.id) || c.num || c.kind === "age" ? " num" : "") + (on ? " sorted" : "")}
                 role="columnheader"
+                title={c.description}
                 aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
                 onClick={() => setSort((s) => ({ id, dir: s.id === id ? (s.dir === 1 ? -1 : 1) : 1 }))}
               >
@@ -169,7 +174,24 @@ export function ResourceTable(props: {
                       setFocus(idx);
                       props.onSelect(o);
                     }}
-                    onKeyDown={(e) => e.key === "Enter" && props.onSelect(o)}
+                    onContextMenu={(e) => {
+                      if (!props.onMenu) return;
+                      e.preventDefault();
+                      setFocus(idx);
+                      props.onMenu(o, e.clientX, e.clientY);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") return props.onSelect(o);
+                      if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+                        e.preventDefault();
+                        const r = e.currentTarget.getBoundingClientRect();
+                        return props.onMenu?.(o, r.left + 24, r.bottom);
+                      }
+                      if (e.metaKey || e.ctrlKey || e.altKey) return;
+                      if (e.key === "l" || e.key === "L") return props.onAction?.(o, "logs");
+                      if (e.key === "s" || e.key === "S") return props.onAction?.(o, "shell");
+                      if (e.key === "e" || e.key === "E") return props.onAction?.(o, "edit");
+                    }}
                   >
                     {columns.map((c) => <Td key={c.id} col={c} cell={c.cell(o, now)} o={o} rowTone={tone} split={split} />)}
                   </div>
@@ -216,7 +238,14 @@ function Td({ col, cell, o, rowTone, split }: { col: Column; cell: Cell; o: Kube
     case "last":
       return <span role="gridcell" className="td age" title={title}>{cell.text}</span>;
     default:
-      return <span role="gridcell" className={"td plain" + (NUMERIC.has(col.id) ? " num" : "") + (cell.tone ? ` tone-${cell.tone}` : "")} title={title}>{cell.text}</span>;
+      // A custom resource's printer columns (D40): an age, a boolean as an icon and a word, a number in mono.
+      if (col.kind === "age") return <span role="gridcell" className="td age" title={title}>{cell.text}</span>;
+      if (col.kind === "bool") {
+        if (!cell.text) return <span role="gridcell" className="td" />;
+        const on = cell.text === "true";
+        return <span role="gridcell" className={`td bool tone-${on ? "ok" : "muted"}`} title={title}><Ic icon={on ? Check : Minus} size={13} />{cell.text}</span>;
+      }
+      return <span role="gridcell" className={"td plain" + (NUMERIC.has(col.id) || col.num ? " num" : "") + (cell.tone ? ` tone-${cell.tone}` : "")} title={title}>{cell.text}</span>;
   }
 }
 

@@ -34,20 +34,31 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **macOS only for the fence**: it relies on Claude Code's Seatbelt sandbox. On Linux it would need bubblewrap; the
   session fails rather than run unsandboxed (`failIfUnavailable`).
 - **No `explain` tool yet** (OpenAPI schemas); the agent can run `kubectl explain` instead.
-- **Views are lists and details.** No logs, terminals, port-forward, YAML editing or Helm yet (wave 4). Graphs are
-  built ([metrics.md](metrics.md)).
-  Kinds without their own columns get name, namespace and age; CRDs don't use printer columns yet (wave 4).
+- **Helm is read-only** ([workbench.md](workbench.md#helm-releases)): no install, upgrade, rollback or uninstall,
+  and the agent can't read releases (they are Secrets). Only Helm 3's default storage, Secrets, is read: releases
+  kept in ConfigMaps or SQL don't show. Which values are secret is decided by their keys (and credential-shaped
+  text), so a secret under an innocent name shows. Releases are read every 30 seconds, not watched. Logs, terminals,
+  the YAML editor and port-forward are built ([workbench.md](workbench.md)), and graphs ([metrics.md](metrics.md)).
+  Kinds without their own columns get name, namespace and age; custom kinds get their CRD's printer columns.
+- **⌘K search** ([workbench.md](workbench.md#k-search)) finds objects of the common kinds (workloads, Services,
+  Ingresses, ConfigMaps, Secrets, claims, nodes, namespaces) and of the list on screen; other kinds' objects only
+  while their list is open. It reads names, not watches: a read serves 15 seconds, at most 2,000 names a kind.
+  Matching is by name (prefix, substring, letters in order), not by labels.
+- **Custom resources** ([workbench.md](workbench.md#custom-resources)): a definition's "Open certificates" has no
+  count (counting would mean listing every object of the kind). Printer columns read a JSONPath subset; a column
+  using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
+  guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
-- **The Logs tab is a placeholder**: shown disabled on the drawer until wave 4 builds it. For the same reason a failing pod's diagnosis shows its last output line only when the container left a termination message
-  (`terminationMessagePolicy: FallbackToLogsOnError`); otherwise that line waits for the logs call.
+- **A failing pod's diagnosis** shows its last output line only when the container left a termination message
+  (`terminationMessagePolicy: FallbackToLogsOnError`); otherwise open its Logs tab (Previous).
 - **The Overview polls** `cluster:health` every 10s while the window is visible, rather than following the watches.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 7).
-- **Upgraded connections** (exec, attach, port-forward) pass through the front door and the sidecar but have no UI and
-  no live test yet (wave 4).
+- **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
+  both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
   front-door requests ([mcp.md](mcp.md)), but the agent's own kubectl requests and the IDE's are still kept in
   memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls).
@@ -67,10 +78,50 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   cluster returns it. Only what the agent reads is scrubbed.
 - **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its
   connections allows but doesn't defend against a compromised user account ([security.md](security.md)).
-- **Integrated terminals** (wave 4) will put a front-door token in the shell's environment, readable by anything that
-  shell runs; each terminal gets its own revocable token for that reason.
+- **A local terminal's token is in a file** (0400, in a 0700 folder under Landlens's data) that any process of yours
+  outside the agent's sandbox can read, like your kubeconfig, and it is full access to that cluster as you until the
+  terminal ends. Each terminal gets its own, revoked when it closes ([security.md](security.md#terminals)). A startup
+  file that sets `KUBECONFIG` wins over Landlens's. A pod shell's token is narrower: that pod's exec only.
+- **Flow control** covers terminals (paused past 2 MB undrawn) and a log's read rate, not a log view's drawing: a
+  container that logs 2 M characters a second still keeps the window busy. Log search's regex guard is a pattern
+  check plus a time budget, not a separate thread: a regex it doesn't recognise as risky can still stall one search.
+  The transcript shows the chip, not the quoted text that was sent.
+- **Logs and terminals** ([workbench.md](workbench.md)): the drawer and a panel tab each open their own stream (the
+  design shares one, counted in main); Download saves what is shown, not the whole log from the API; the view draws
+  the last 2,000 lines of the 10,000 it keeps, without virtual scrolling; a workload follows its newest ten pods and
+  doesn't add pods that start later until you reopen it; pod colours run out after four (the rest share one).
+  Shells: no debug containers for images without a shell; the
+  shell picker offers a workload's pods, but the palette entry (⌘K "shell …") comes with part 4; "Open shell in the new
+  pod" matches pods by labels, so it can offer a pod of a different rollout. Input typed while a new session starts
+  is dropped. The panel's height is kept for the window, not across restarts.
+- **The YAML editor** ([workbench.md](workbench.md#the-yaml-editor)) sends a JSON merge patch of what you changed,
+  pinned to the version you started from, not a server-side apply: Landlens (field manager `landlens`) owns just the
+  fields it changed, but a field another manager owns is only warned about, so the design's **Take over** (a forced
+  apply) and **Review without line 7** aren't built. A merge patch replaces a list whole, so changing one container
+  sends every container. Where you and someone else both changed a field while you edited, yours is kept (the banner
+  names it) rather than waiting for you. Secrets can't be edited or created. Create sends its documents in order: if
+  one fails at Apply, the ones before it stay created (the error says which). There is no "Show change" on the
+  Applied row and no flash of the row. Templates are fixed.
+  An edit is one object; a leading-zero number like `0600` is refused rather than guessed (YAML 1.1 and 1.2 differ),
+  so such values need `0o600` or quotes. A review lasts 15 minutes and a window keeps at most 20. The Apply guard
+  (no card-wide Enter, key presses ignored for half a second) is renderer behaviour, checked in e2e only by a click.
+- **Port-forward** ([workbench.md](workbench.md#port-forward)) is TCP only. A Service forward goes through one pod,
+  not spread across them as the Service would. The pod is checked every 5 seconds, so a connection in the seconds
+  after its pod goes can fail. A WebSocket can't half-close, so a client that half-closes waits for the pod's answer
+  for up to 30 seconds. Any program of any user on this Mac can reach a forward, and so can pages in your browser (a
+  cross-site request, or DNS rebinding against an app that doesn't check `Host`), as with `kubectl port-forward`;
+  a kept forward is open whenever Landlens is connected. The agent's sandbox can't reach or see one. A bare pod's
+  forward fails when the pod goes; a controller's pod forward follows only that controller's pods. Landlens's own
+  checks on a forward are reads as you that skip the audit trail. A kept forward made before Landlens noted its
+  cluster (before the review fixes) waits for you to start it again. The row menu's F (D6) and the palette's
+  forward action aren't built.
 - **Graphs are CPU and memory only**, for the cluster, nodes, pods and Deployments, StatefulSets and DaemonSets: no
-  network, disk, GPU, or Prometheus. Namespaces are a Top namespaces list, not a chart of their own.
+  network, disk or GPU. Namespaces are a Top namespaces list, not a chart of their own.
+- **Prometheus** ([metrics.md](metrics.md#prometheus)) is used only once you choose the one Landlens found, one
+  per context; it is found only where OpenLens looks (the Helm chart's and the
+  operator's labels, four well-known names), reached only through the API server's service proxy (no direct URL or
+  bearer token), and asked only for cAdvisor's CPU and working-set series, which a Prometheus without the kubelet's
+  cAdvisor job lacks; there is no setting to pick one. The OrbStack scenario's series are backfilled, not scraped.
 - **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is
   refused. Without it, metrics-server gives live samples from when a view first asks, at most an hour, and only while
   Landlens is open. OrbStack ships no metrics-server, so there it is Clickland or nothing.

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: landlens-demo
+description: A small chart for Landlens's Helm page (docs/workbench.md); installs in landlens-dev only.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

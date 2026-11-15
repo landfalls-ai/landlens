@@ -1,0 +1,3 @@
+{{ .Release.Name }} is running in {{ .Release.Namespace }}.
+Its pod prints "{{ .Values.message }}" every five seconds:
+  kubectl --context orbstack -n {{ .Release.Namespace }} logs deploy/{{ .Release.Name }}

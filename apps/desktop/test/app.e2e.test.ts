@@ -84,9 +84,10 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await page.setViewportSize({ width: 1440, height: 880 });
   }, 180_000);
 
+  // Closing under load (other projects' containers share the engine) can take longer than the default 10 s.
   afterAll(async () => {
     await app?.close();
-  });
+  }, 60_000);
 
   it("shows the kubeconfig contexts", async () => {
     await page.getByRole("heading", { name: "Pick a cluster" }).waitFor();
@@ -167,14 +168,14 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
   }, 60_000);
 
   it("shows deployments across namespaces", async () => {
-    await page.getByRole("button", { name: "Deployments" }).click();
+    await page.getByRole("button", { name: "Deployments", exact: true }).click();
     await page.getByRole("combobox", { name: "Namespace" }).selectOption("");
     await page.locator(".tr").first().waitFor({ timeout: 30_000 });
     await shot(page, "05-deployments");
   }, 60_000);
 
   it("never shows Secret values", async () => {
-    await page.getByRole("button", { name: "Secrets" }).click();
+    await page.getByRole("button", { name: "Secrets", exact: true }).click();
     await page.locator(".tr").first().waitFor({ timeout: 30_000 });
     await page.locator(".tr").first().click();
     await page.getByRole("tab", { name: "YAML" }).click();
@@ -479,7 +480,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       expect(await tab.textContent()).toMatch(/its status is (CrashLoopBackOff|Error)/);
       await shot(page, "26-pod-metrics-no-samples");
 
-      await page.getByRole("button", { name: "Deployments" }).click();
+      await page.getByRole("button", { name: "Deployments", exact: true }).click();
       await page.locator(".tr", { hasText: "catalog-api" }).first().click();
       await page.getByRole("tab", { name: "Metrics" }).click();
       await tab.locator(".chart-plot svg path.line").first().waitFor({ timeout: 30_000 });

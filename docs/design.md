@@ -51,7 +51,8 @@ read tokens only: no colours in TSX, no inline style objects for theming.
 | Focus | `--focus`, `--focus-in`, `--focus-gap` | The ring's gap is the surface it sits on: `--bg-1` by default, `--bg-0` in the dock, `--bg-2` in the drawer (each sets `--focus-gap` and redeclares `--focus`) |
 | Space, radii | `--s-1` … `--s-6` (4px grid), `--r-1` 4 … `--r-4` 12 | |
 | Motion | `--ease`, `--dur-1` 90ms, `--dur-2` 160ms, `--dur-3` 240ms | Off (except opacity) under `prefers-reduced-motion` |
-| Layout | `--sidebar-w` 232, `--rail-w` 52, `--drawer-w` 420, `--dock-w` 392, `--toolbar-h` 48, `--row-h` 32, `--statusbar-h` 26 | |
+| Layout | `--sidebar-w` 232, `--rail-w` 52, `--drawer-w` 420, `--dock-w` 392, `--toolbar-h` 48, `--row-h` 32, `--statusbar-h` 26, `--bench-h` 300 (240 under 760 tall), `--bench-min` 160, `--bench-head-h` 34 | |
+| Terminal | `--term-bg`, `--term-fg`, `--term-cursor`, `--term-sel`, eight `--term-<colour>`, `--find`, `--find-cur` | xterm's theme and log ANSI colours, dark and light (`workbench.css`) |
 | Code | `--code-key`, `--code-str`, `--code-num`, `--code-punct` | YAML and tool wells |
 
 Numbers that line up (ready, restarts, age, counts) use `tabular-nums`.
@@ -63,12 +64,17 @@ Numbers that line up (ready, restarts, age, counts) use `tabular-nums`.
 │ cluster     │ toolbar 48                │            │          │
 │ jump        ├───────────────────────────┤            │          │
 │ nav         │ overview or table         │            │          │
-│             ├───────────────────────────┤            │          │
-│             │ status bar 26             │            │          │
-└─────────────┴───────────────────────────┴────────────┴──────────┘
+│             ├───────────────────────────┴────────────┤          │
+│             │ the panel (wave 4), 300, when open      │          │
+│             ├────────────────────────────────────────┤          │
+│             │ status bar 26                           │          │
+└─────────────┴────────────────────────────────────────┴──────────┘
 ```
 
-`.app` is a grid, `var(--sidebar-w) minmax(0,1fr) auto auto`. `Workspace.tsx` sets classes on it from a
+`.app` is a grid, `var(--sidebar-w) minmax(0,1fr) auto auto`, with rows `minmax(0,1fr) auto auto`: the sidebar and
+the dock span all three; the main pane and the drawer sit in the first; the panel ([workbench.md](workbench.md))
+and the status bar span the main pane and the drawer below them. At 1024–1279 with the dock and a drawer, the
+floating drawer ends at the panel's top. `Workspace.tsx` sets classes on it from a
 `ResizeObserver` and what is open, so **the table keeps at least ~600px**:
 
 | State | ≥ 1280 wide | 1024–1279 |

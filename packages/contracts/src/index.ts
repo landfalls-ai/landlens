@@ -50,8 +50,13 @@ export const ResourceType = z.object({
   namespaced: z.boolean(),
   verbs: z.array(z.string()),
   shortNames: z.array(z.string()).optional(),
+  /** Defined by a CustomResourceDefinition (from the CRD list's names; by group when that list can't be read). */
+  custom: z.boolean().optional(),
 });
 export type ResourceType = z.infer<typeof ResourceType>;
+
+/** One object the ⌘K palette can find: its kind and name, nothing of its content. */
+export type SearchEntry = { group: string; version: string; resource: string; kind: string; name: string; namespace?: string };
 
 export const resourceKey = (t: Pick<ResourceType, "group" | "resource">) =>
   t.group ? `${t.resource}.${t.group}` : t.resource;
@@ -107,6 +112,8 @@ export const AccessCheck = z.object({
   group: orAny(GroupName),
   resource: orAny(ResourceName),
   namespace: NamespaceName.optional(),
+  /** "exec" for pods/exec, "log" for pods/log. */
+  subresource: z.string().max(32).regex(/^[a-z]+$/, "not a subresource").optional(),
 });
 export type AccessCheck = z.infer<typeof AccessCheck>;
 
@@ -198,6 +205,92 @@ export const McpServerInput = z.object({
   appOrigins: z.array(McpAppOrigin).max(10).optional(),
 });
 
+/** A container's name (a DNS label). */
+export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
+/** A log stream's or terminal's id, made by main. */
+export const KindName = z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,62}$/, "not a kind");
+export const EditId = z.string().regex(/^ed[A-Za-z0-9_-]{8,32}$/, "not an edit id");
+export const StreamId = z.string().regex(/^[A-Za-z0-9_-]{8,40}$/);
+
+export type LogLine = { ts: string; text: string };
+export type LogsPush = { stream: string; lines: LogLine[] };
+export type LogsEnd = { stream: string; status?: number; message?: string };
+export type TerminalData = { terminal: string; data: string };
+/** A terminal opened, or ended: the shell exited (code), or the connection failed (message). */
+/** A problem with your YAML: a syntax error, or the cluster's reason for refusing it, on a line when it names one. */
+export type EditProblem = { message: string; field?: string; line?: number };
+/** Another manager owns a field you changed (managedFields): it may set it back. */
+export type EditOwner = { path: string; manager: string; line?: number };
+/** A dry run of your edit: the operations to show, kept under `id` for Apply; or the problems; or a conflict. */
+/** `agent`: the diff (or created objects) scrubbed as the agent's own reads are: what "Ask Claude to check it" sends. */
+export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean; agent?: string };
+
+/** Port-forward (wave 4, part 3). A local port is 1024 or above; a remote one any TCP port. */
+export const LocalPort = z.number().int().min(1024).max(65535);
+export const RemotePort = z.number().int().min(1).max(65535);
+export const ForwardId = z.string().regex(/^fw[A-Za-z0-9_-]{8,32}$/, "not a forward id");
+export type ForwardState = "starting" | "running" | "reconnecting" | "failed" | "stopped";
+/**
+ * A forward: 127.0.0.1:localPort → a pod's port, or a Service's port through one ready pod. `pod` and `podPort` are
+ * where it goes now. `keep`: saved, and started again when Landlens reconnects to the cluster.
+ */
+export type ForwardInfo = {
+  id: string;
+  context: string;
+  namespace: string;
+  kind: "pod" | "service";
+  name: string;
+  port: number;
+  localPort: number;
+  keep: boolean;
+  state: ForwardState;
+  pod?: string;
+  podPort?: number;
+  /** Why it failed, or what it is waiting for. */
+  message?: string;
+  /** The last connection's error ("Nothing is listening on port 8080 in the pod"). */
+  lastError?: string;
+  /** When it entered its state (ms). */
+  since: number;
+  connections: number;
+  scheme: "http" | "https";
+};
+export type ForwardsPush = { forwards: ForwardInfo[] };
+
+// Helm releases, read-only (wave 4, part 4; D42–D43). Main decodes Helm's release Secrets; the window gets no
+// secret values: secret-looking values are hidden and Secrets in the manifest keep only their keys.
+export type HelmRelease = {
+  name: string; namespace: string; revision: number; status: string;
+  chart: string; chartVersion: string; appVersion: string; updated?: string;
+};
+export type HelmHistoryEntry = {
+  revision: number; status: string; chart: string; chartVersion: string; appVersion: string; updated?: string; description: string;
+};
+export type HelmObjectRef = { kind: string; name: string; namespace?: string; apiVersion?: string };
+export type HelmReleaseDetail = {
+  release: HelmRelease;
+  /** The latest revision (the one shown may be older). */
+  latest: number;
+  description: string;
+  firstDeployed?: string;
+  notes: string;
+  chartDescription: string;
+  /** YAML: the values you set, and with the chart's defaults. */
+  values: { user: string; all: string };
+  /** How many values were hidden as secrets: of yours, and of all (yours over the chart's). */
+  hidden: { user: number; all: number };
+  manifest: string;
+  manifestCut: boolean;
+  /** How many Secret values the manifest hid. */
+  manifestHidden: number;
+  objects: HelmObjectRef[];
+  history: HelmHistoryEntry[];
+};
+
+/** How a session ended: the shell exited, the connection dropped, or the cluster refused it (status says why). */
+export type TerminalEnd = "exit" | "lost" | "refused";
+export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -229,6 +322,49 @@ export const channels = {
   // Wave 3: which of your Claude Code skills agent sessions get.
   "agent:settings": z.object({}),
   "agent:skills": z.object({ chosen: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).max(50) }),
+  // The workbench (wave 4): followed logs and pod shells, with your own access.
+  "logs:open": z.object({
+    handle: Handle, namespace: NamespaceName, pod: ObjectName, container: ContainerName,
+    previous: z.boolean().optional(), tailLines: z.number().int().min(1).max(10_000).optional(),
+    sinceTime: z.string().regex(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/).optional(),
+  }),
+  "logs:close": z.object({ stream: StreamId }),
+  "terminal:open": z.object({ handle: Handle, namespace: NamespaceName, pod: ObjectName, container: ContainerName, shell: z.enum(["auto", "bash", "sh"]).optional() }),
+  "terminal:local": z.object({ handle: Handle }),
+  "terminal:input": z.object({ terminal: StreamId, data: z.string().max(65_536) }),
+  "terminal:resize": z.object({ terminal: StreamId, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
+  /** The window drew this much of a terminal's output (flow control). */
+  "terminal:ack": z.object({ terminal: StreamId, chars: z.number().int().min(1).max(64 * 1024 * 1024) }),
+  "terminal:close": z.object({ terminal: StreamId }),
+  // Your edits (docs/workbench.md): dry-run first, then apply exactly what was dry-run.
+  "edit:review": z.object({
+    handle: Handle,
+    type: z.object({ group: GroupName, version: VersionName, resource: ResourceName, kind: KindName, namespaced: z.boolean() }),
+    namespace: NamespaceName.optional(), name: ObjectName,
+    base: z.string().regex(/^[0-9A-Za-z._-]{1,64}$/, "not a resourceVersion"),
+    original: z.string().max(512 * 1024), edited: z.string().max(512 * 1024),
+  }),
+  "edit:create": z.object({ handle: Handle, namespace: NamespaceName.optional(), yaml: z.string().max(512 * 1024) }),
+  "edit:apply": z.object({ handle: Handle, id: EditId }),
+  "edit:discard": z.object({ id: EditId }),
+  "forward:list": z.object({}),
+  /** The local port to offer for a remote one (free now). */
+  "forward:suggest": z.object({ port: RemotePort }),
+  "forward:check": z.object({ port: LocalPort }),
+  "forward:start": z.object({ handle: Handle, namespace: NamespaceName, kind: z.enum(["pod", "service"]), name: ObjectName, port: RemotePort, localPort: LocalPort, keep: z.boolean() }),
+  "forward:stop": z.object({ id: ForwardId }),
+  /** Start a stopped or failed forward again, on this cluster. */
+  "forward:resume": z.object({ id: ForwardId, handle: Handle }),
+  "forward:remove": z.object({ id: ForwardId }),
+  /** Open http(s)://127.0.0.1:<its port>/ in your browser. */
+  "forward:open": z.object({ id: ForwardId }),
+  // Helm releases, read-only (wave 4, part 4): decoded in main, as you.
+  "helm:list": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
+  "helm:get": z.object({ handle: Handle, namespace: NamespaceName, name: ObjectName, revision: z.number().int().min(1).max(1_000_000).optional() }),
+  // Use the Prometheus Landlens found for this cluster's context (it must still be the one found), or stop using one.
+  "metrics:prometheus": z.object({ handle: Handle, use: z.string().regex(/^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\/[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/).nullable() }),
+  // The ⌘K palette's names across kinds (D45); `fresh` reads again even if the last read is recent.
+  "search:index": z.object({ handle: Handle, fresh: z.boolean().optional() }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -277,6 +413,30 @@ export type Responses = {
   "agent:forget": { ok: true };
   "agent:settings": AgentSettingsInfo;
   "agent:skills": { ok: true };
+  "logs:open": { stream: string };
+  "logs:close": { ok: true };
+  "terminal:open": { terminal: string; label: string };
+  "terminal:local": { terminal: string; label: string; shell: string };
+  "terminal:input": { ok: true };
+  "terminal:resize": { ok: true };
+  "terminal:ack": { ok: true };
+  "terminal:close": { ok: true };
+  "edit:review": EditReview;
+  "edit:create": EditReview;
+  "edit:apply": { results: string[] };
+  "edit:discard": { ok: true };
+  "forward:list": ForwardsPush;
+  "forward:suggest": { port: number };
+  "forward:check": { free: boolean; next?: number };
+  "forward:start": ForwardInfo;
+  "forward:stop": { ok: true };
+  "forward:resume": ForwardInfo;
+  "forward:remove": { ok: true };
+  "forward:open": { ok: true };
+  "helm:list": { releases: HelmRelease[]; unreadable: number };
+  "helm:get": HelmReleaseDetail;
+  "metrics:prometheus": { ok: true };
+  "search:index": { entries: SearchEntry[]; cut: string[]; unreadable: string[]; at: string };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;
@@ -409,11 +569,13 @@ export type MetricsReasonCode =
   | "clickland-unauthorized"
   | "clickland-failed"
   | "clickland-no-cluster" // answers, but has nothing for this cluster's name
+  | "prometheus-failed" // found in the cluster, but its answer couldn't be read
+  | "prometheus-found" // found, but not chosen yet: anyone who can make a Service could pose as one
   | "no-metrics-server"
   | "live-only"; // metrics-server: samples only since Landlens opened, at most an hour
 export type MetricsReason = { code: MetricsReasonCode; message: string };
 export type MetricsSeries = {
-  source: "clickland" | "metrics-server" | "none";
+  source: "clickland" | "prometheus" | "metrics-server" | "none";
   /** Why a better source wasn't used, and anything the reader should know about this one. */
   reasons: MetricsReason[];
   /** Seconds between points. */
@@ -428,6 +590,10 @@ export type MetricsSeries = {
   namespaces?: { key: string; cpu: number; memory: number }[];
   /** The name the cluster has in Clickland's data. */
   cluster?: string;
+  /** Prometheus: the Service that answered, `namespace/name`. */
+  prometheus?: string;
+  /** A Prometheus Landlens found but you haven't chosen, `namespace/name`: offered, not used. */
+  prometheusFound?: string;
 };
 export type ClicklandSettings = {
   url: string;
@@ -579,7 +745,10 @@ export type AgentStatus =
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */
-export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call"] as const;
+export const pushChannels = [
+  "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
+] as const;
 export type PushChannel = (typeof pushChannels)[number];
 
 /** An error crossing IPC keeps a Kubernetes-like status code so the UI can say "no access" vs "failed". */

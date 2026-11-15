@@ -1,15 +1,17 @@
 # Metrics and graphs
 
 CPU and memory over time, on the Overview and in the drawer. The owner's choice was **"Clickland, then live"**:
-Landlens reads history from Clickland when it is connected and answers; otherwise it samples metrics-server while a
-view is open; otherwise the chart says what is missing and how to fix it.
+Landlens reads history from Clickland when it is connected and answers; otherwise from the cluster's own Prometheus,
+if it has one; otherwise it samples metrics-server while a view is open; otherwise the chart says what is missing and
+how to fix it.
 
 ## Sources, in order
 
 | Source | When | What you get |
 |---|---|---|
 | **Clickland** | A key is stored, Clickland answers, honours metric filters, and has samples for this cluster's name | History for 1h, 6h or 24h: kubelet stats and cluster state every 30s (Clickland `docs/sources.md`), in 30s to 12 min steps |
-| **metrics-server** | Clickland isn't connected or fails, and the cluster serves `metrics.k8s.io` | Live samples every 15s from when a view first asks, kept for an hour in a ring buffer; no history before that |
+| **Prometheus** | Clickland isn't connected or fails, and the cluster has a Prometheus Landlens found and you chose ([below](#prometheus)) | History for 1h, 6h or 24h from its cAdvisor series, about 240 points (15 s to 6 min steps) |
+| **metrics-server** | Clickland and Prometheus aren't there or fail, and the cluster serves `metrics.k8s.io` | Live samples every 15s from when a view first asks, kept for an hour in a ring buffer; no history before that |
 | **none** | Neither | The reasons (one per source) and the fix: "Connect Clickland", or install metrics-server |
 
 Main decides per request (`MetricsService` in `packages/metrics/src/service.ts`) and returns the source and the
@@ -22,6 +24,42 @@ Clickland older than its `specs/001-metrics-filters`: such a build drops the `wh
 answer every pod with the whole cluster's containers. Landlens asks once per five minutes for a cluster name nobody
 has (`landlens-filter-probe.invalid`); any series back means filters are ignored, and Landlens refuses that Clickland
 rather than draw the wrong pod.
+
+## Prometheus
+
+The wave 4 plan's "Prometheus if found". Landlens looks the way OpenLens does, once per five minutes per cluster, as
+you: the Service you chose, if it is still there; else `lens-metrics/prometheus`, `openshift-monitoring/prometheus-k8s`,
+`monitoring/prometheus-k8s` or `stacklight/prometheus-server`; else a Service labelled `operated-prometheus=true` (the
+operator), `app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server` or `app=prometheus,component=server`
+(the Helm chart), in any namespace. Its port is the one named `web`, `http` or `http-web`, else 9090, else the first.
+
+**A found Prometheus is offered, not used, until you choose it**: the source line and the no-metrics notice say "Use
+Prometheus monitoring/prometheus-server", and the choice is kept per context. Anyone who can make a Service with
+those labels could otherwise pose as Prometheus, see the names of what you look at, and draw invented graphs for you
+and the agent (security review, wave 4 part 4). Choosing checks it is still the one found; "Stop using" on the
+Prometheus source line forgets it.
+
+It asks through the API server's service proxy (`/api/v1/namespaces/<ns>/services/http:<name>:<port>/proxy/api/v1/query_range`)
+with fixed cAdvisor queries Landlens builds itself, a 10 s limit and an 8 MB cap on each answer; nothing anyone types
+becomes PromQL:
+
+| Scope | One series per | CPU (cores) | Memory |
+|---|---|---|---|
+| Pod | container | `sum by (container) (rate(container_cpu_usage_seconds_total{namespace,pod,container!="",container!="POD"}[w]))` | `container_memory_working_set_bytes`, same labels |
+| Deployment, StatefulSet, DaemonSet | pod | as above, `pod=~"<its pods>"` (read from its selector first) | as above |
+| Namespace | pod | as above, the whole namespace | as above |
+| Cluster, node | node | the root cgroup, `id="/"`, by `node` (or `kubernetes_io_hostname`, as the Helm chart names it) | same |
+
+The rate window `w` is twice the step, at least five minutes. The cluster scope also asks per namespace for the Top
+namespaces list. Requests, limits and allocatable come from the cluster itself, as for metrics-server, and are read
+first, with the reader listing the scope's pods (a namespace's, or every namespace's for the cluster), so a reader
+who can't see a scope's objects (the agent's namespace-limited token) gets nothing from Prometheus either. A Prometheus that answers badly is passed over with "Prometheus (ns/name) didn't answer: …", and
+metrics-server is next. The source line reads "Prometheus prometheus-server", the Service in its tooltip.
+
+On OrbStack, `deploy/scenarios/prometheus` runs a Prometheus in `landlens-dev` labelled like the Helm chart's server.
+It can't scrape the kubelet (that needs a cluster-wide role, and Landlens's tests write only in `landlens-dev`), so
+`up.mjs` writes the last 50 minutes of cAdvisor-shaped series for the landlens-demo chart's pods and the node, and an
+init container backfills them with `promtool`. The tests start it and remove it again.
 
 ## Setup
 
@@ -106,7 +144,8 @@ agent's `metrics` tool reads with the session's own token and repeats at most 40
 | `packages/metrics/src/clickland.ts` | `ClicklandClient` (key only to the configured URL, no redirects, 8s timeout), `honoursFilters`, `parseSeries` (the zod checks and caps) |
 | `packages/metrics/src/clickland-series.ts` | A scope as Clickland queries, filtered on `k8s.cluster.name` and the scope's attributes |
 | `packages/metrics/src/sampler.ts`, `live-series.ts` | The metrics-server sampler and its ring buffer; a scope's series from samples and the cluster's specs |
-| `packages/metrics/src/service.ts` | `MetricsService`: the source choice, the Settings test |
+| `packages/metrics/src/prometheus.ts` | Finding a Prometheus, the scope's queries, the service-proxy path, `parseMatrix` (a matrix only; keys must be names, values finite, 200 series and 4,000 points) |
+| `packages/metrics/src/service.ts` | `MetricsService`: the source choice (Clickland, Prometheus, metrics-server), the Settings test |
 | `apps/desktop/src/main/clickland-settings.ts` | The settings file and the key in safeStorage |
 | `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars`, the pure helpers in `scale.ts` |
 | `apps/desktop/src/renderer/src/Usage.tsx`, `MetricsTab.tsx`, `MetricsNotice.tsx`, `ClicklandSettings.tsx`, `metrics.ts` | The Usage card, the drawer's tab, the notices, the dialog, the polling hook |
@@ -119,5 +158,10 @@ agent's `metrics` tool reads with the session's own token and repeats at most 40
   stacking, gaps).
 - Live: `LANDLENS_INTEGRATION=orbstack,clickland pnpm --filter @landlens/metrics test:integration` reads real series
   for `landlens-dev/orders-api` and `catalog-api` and the cluster ([development.md](development.md)).
+- Prometheus: `packages/metrics/test/prometheus.test.ts` (finding it by labels or names, the queries and quoting,
+  the matrix checks, a workload, the cluster and a node, its place between Clickland and metrics-server) and, on
+  OrbStack, `prometheus.integration.test.ts` (the scenario found by its labels; the demo deployment per pod with its
+  requests and limits; the pod, namespace and cluster scopes through `MetricsService`) and
+  `apps/desktop/test/prometheus.e2e.test.ts` (the Overview's usage and a deployment's Metrics tab, named Prometheus).
 - e2e: the no-source state on OrbStack always; with `clickland` in `LANDLENS_INTEGRATION`, Connect Clickland through
   the dialog, the Usage card and a pod's Metrics tab in dark and light, a pod with no samples, a deployment.
