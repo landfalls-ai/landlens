@@ -156,6 +156,19 @@ all N) and Recent warnings; Nodes. It reads
   with the toolbar's chevron and a `.seg`; a row opens the call in the `.drawer`, where the session id is
   middle-truncated with a copy button and a JSON result is indented. The add-server dialog reuses `.dialog`,
   `.form-row`, `.test-steps`.
+- **Connections** (`ConnectionsPage.tsx`, `connections.css`; sidebar above MCP, `Cable`; also "Connections" under
+  Welcome's list, where the page stands alone with a **Clusters** button back): one column of `.panel` cards, at most
+  820px. A card's head is the provider's own mark (drawn in ink, in a `.kind-tile`), the name, a state `.badge` with
+  its icon (Connected ok, Not connected muted, Connecting… with a spinner, Sign-in ran out warn, Failed bad) and one
+  action at the right (Connect primary, Disconnect or Cancel secondary). The device code sits in an accent-ringed
+  well on `--bg-1`, the code at `--t-26` in mono with spaced letters, then Copy and **Open github.com/login/device**; a
+  pasted token is one password `.field` in a quiet well, its shape checked as you type, with the advice and **Make
+  one** under it. Connected, the body is rows on one grid (a 210px label column, the control, its sentence), divided
+  by hairlines: **Level** as a `.seg` (Read only · Ask for writes), then the `.switch`es "Reads run without asking" and
+  "Give to Claude sessions"; then the tool count as a link that opens the tools (`.mcp-tool` rows with the name, a
+  one-line description that expands, and **Read-only** or the amber **Asks first**, reads first) and **Check tools**.
+  A note that needs you is amber with its icon and **Review tools**; a card whose tools changed gets an amber ring.
+  On the MCP page a connection's panel carries its mark, a **From Connections** chip and **Manage in Connections**.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in
   the call drawer. A view from a server you added (not `landlens-kube`) sits in `.app-third`: a `--line-2` ring, 8px
   inset, and "View from <server>" above, drawn by the page outside the frame, so it never reads as Landlens's own.
@@ -228,7 +241,11 @@ API key", buttons "Test" and "Save", list "Test result", tab "Metrics"; classes 
 "Preview <tool>", "Test", "Save"; dialog "Add an MCP server" with fields "Server name", "Server address", "Header
 name", "Header value"; a `switch`; complementary "MCP call" with list "Front-door requests"; classes `.mcp-tool`,
 `.mcp-call`, `.tool-app`, `.app-frame`, `.tool-with-app.folded`, `.tool-verdict`; switch "Use clickland on
-<context>". Badges and key hints inside buttons are `aria-hidden`,
+<context>". Connections: button "Connections" (sidebar and Welcome); heading "Connections" (standalone); regions
+"GitHub connection" and "Linear connection"; buttons "Connect", "Disconnect", "Use a token instead", "Use an API key
+instead", "Open github.com/login/device", "Read only", "Ask for writes", "Review tools", "Accept these tools",
+"Manage in Connections"; label "Device code"; fields "GitHub token" and "Linear API key"; switches "<Name>: reads run
+without asking" and "Give <Name> to Claude sessions"; lists "<Name> tools"; regions "MCP server github". Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
 
 `LANDLENS_SHOTS=<folder>` saves screenshots of every screen in dark, light and at 1024×700 ([development.md](development.md)).

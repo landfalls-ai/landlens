@@ -8,7 +8,7 @@ import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview" | "problems" | "mcp" | "agent" | "helm";
+export type Current = NavItem | "overview" | "problems" | "connections" | "mcp" | "agent" | "helm";
 
 /** A kind's key for pins: `group/resource`. */
 export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
@@ -225,6 +225,7 @@ export function Sidebar(props: {
       <nav className="nav">
         {item("overview", "Overview", "overview", props.current === "overview", undefined, () => props.onPick("overview"))}
         {item("problems", "Problems", "problems", props.current === "problems", props.badges.problems, () => props.onPick("problems"))}
+        {item("connections", "Connections", "connections", props.current === "connections", undefined, () => props.onPick("connections"))}
         {item("mcp", "MCP", "mcp", props.current === "mcp", undefined, () => props.onPick("mcp"))}
         {item("agent", "Agent", "agent", props.current === "agent", undefined, () => props.onPick("agent"))}
         {pinned.length ? (

@@ -171,6 +171,8 @@ export const FAILURE_LINE = /\b(FATAL|ERROR|Error:|panic|Exception|Traceback|fat
 
 /** The built-in server's name; no remote server may take it or anything starting with "landlens". */
 export const BUILTIN_MCP_SERVER = "landlens-kube";
+/** Server names Connections serves on the gateway (wave 6): a server you add can't take one. */
+export const RESERVED_MCP_NAMES = ["github", "linear", "landlens-gcp"] as const;
 /** How a remote server is named in Claude Code (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */
 export const McpServerName = z
   .string()
@@ -237,6 +239,8 @@ export type ConnInfo = {
   mode: ConnMode;
   /** Its read tools run without asking (D79). */
   readsAuto: boolean;
+  /** "Give to Claude sessions": a ready connection's tools are served to every agent session (D77). */
+  give: boolean;
   /** From the last listing (conn:test). */
   tools?: { read: number; write: number };
   /** One of CONN_NOTES. */
@@ -262,6 +266,9 @@ export const CONN_NOTES = {
   linearExpired: "Linear's sign-in ran out. Connect again.",
   linearReadScope: "Linear was connected for reading only. Connect again to let Claude ask for writes.",
   drift: "The tools changed since you accepted them. Look at them, then accept.",
+  unaccepted: "Look at its tools, then accept them, so its reads can run without asking.",
+  githubNameTaken: "Rename your server named github first.",
+  linearNameTaken: "Rename your server named linear first.",
 } as const;
 export type ConnList = { canStore: boolean; github: ConnInfo; linear: ConnInfo };
 
@@ -454,7 +461,7 @@ export const channels = {
   "conn:linear-signin": z.object({ mode: ConnMode }),
   "conn:token": ConnTokenInput,
   "conn:cancel": z.object({ flow: FlowId }),
-  "conn:set": z.object({ provider: ConnProvider, mode: ConnMode.optional(), readsAuto: z.boolean().optional() }),
+  "conn:set": z.object({ provider: ConnProvider, mode: ConnMode.optional(), readsAuto: z.boolean().optional(), give: z.boolean().optional() }),
   "conn:test": z.object({ provider: ConnProvider }),
   "conn:repin": z.object({ provider: ConnProvider }),
   "conn:disconnect": z.object({ provider: ConnProvider }),
@@ -556,10 +563,12 @@ export type McpToolInfo = {
   required: string[];
 };
 export type McpServerInfo = {
-  /** "landlens-kube" for the built-in server, else its stored id. */
+  /** "landlens-kube" for the built-in server, the provider for a connection, else its stored id. */
   id: string;
   name: string;
   builtin: boolean;
+  /** Served from Connections (wave 6): managed on the Connections page, not edited or removed here. */
+  connection?: ConnProvider;
   url: string;
   /** The header Landlens adds, and whether a value is stored. The value itself never leaves main. */
   header?: { name: string; stored: boolean };

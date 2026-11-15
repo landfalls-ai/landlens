@@ -37,6 +37,8 @@ export interface SessionMcp {
     servers: { name: string; url: string; headers: { name: string; value: string }[] }[];
     /** Tools that run without asking (`mcp__landlens-kube`, and proxied tools that only read). */
     allow: string[];
+    /** The connections served to the session ("GitHub", "Linear"), for the standing rules. */
+    providers?: string[];
     /** Tell the gateway Claude Code's id for the session, so the call log and the dock agree. */
     bind(sessionId: string): void;
     close(): Promise<void>;
@@ -154,7 +156,7 @@ export async function startClusterSession(deps: {
     mcpServers: mcp.servers.map((m) => ({ type: "http" as const, ...m })),
     systemPrompt: {
       mode: "append",
-      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes }) }],
+      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes, ...(mcp.providers?.length ? { providers: mcp.providers } : {}) }) }],
     },
     _meta: { claudeCode: { options: sessionOptions({
       home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), mcpAllow: mcp.allow,

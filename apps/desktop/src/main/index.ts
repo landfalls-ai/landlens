@@ -71,8 +71,22 @@ async function start() {
   // series reads from the cluster is read as the session. The usage numbers are Clickland's or the shared sampler's.
   const series = (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">, read?: (path: string) => Promise<any>) =>
     metrics.series({ handle, ...r }, read ? { read } : {});
+  const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
+  // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
+  const connections = new ConnectionsService({
+    file: join(app.getPath("userData"), "connections.json"),
+    crypto: safeStorage,
+    overrides: connectionOverrides(process.env, app.isPackaged),
+    // Only GitHub's device page or an address on Linear's own origin reach this (connections.ts checks).
+    openExternal: (url) => shell.openExternal(url),
+    push: (info) => send("conn:update", info),
+    // A server you added under github or linear keeps that name, and the connection stays off.
+    takenNames: () => mcpStore.list().map((s) => s.name),
+    log: (l) => console.log(l),
+  });
   mcp = new McpService({
-    store: new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage),
+    store: mcpStore,
+    connections,
     clickland: settings,
     frontDoor,
     clusters,
@@ -90,16 +104,6 @@ async function start() {
     log: (l) => console.log(l),
   });
   await mcp.start();
-  // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
-  const connections = new ConnectionsService({
-    file: join(app.getPath("userData"), "connections.json"),
-    crypto: safeStorage,
-    overrides: connectionOverrides(process.env, app.isPackaged),
-    // Only GitHub's device page or an address on Linear's own origin reach this (connections.ts checks).
-    openExternal: (url) => shell.openExternal(url),
-    push: (info) => send("conn:update", info),
-    log: (l) => console.log(l),
-  });
   registerAppProtocol(mcp.views);
   const gateway = mcp.gateway;
   const agent = new AgentService({

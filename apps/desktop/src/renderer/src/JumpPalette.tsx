@@ -168,6 +168,7 @@ export function JumpPalette(props: {
     { key: "overview", label: "Overview", resource: "overview", go: () => done(() => props.onPick("overview")) },
     { key: "problems", label: "Problems", resource: "problems", go: () => done(() => props.onPick("problems")) },
     { key: "helm", label: "Helm releases", resource: "helm", go: () => done(() => props.onPick("helm")) },
+    { key: "connections", label: "Connections", resource: "connections", go: () => done(() => props.onPick("connections")) },
     { key: "mcp", label: "MCP", resource: "mcp", go: () => done(() => props.onPick("mcp")) },
     { key: "agent", label: "Agent", resource: "agent", go: () => done(() => props.onPick("agent")) },
   ];

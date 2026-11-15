@@ -38,6 +38,8 @@ export type FakeOptions = {
   redirectUser?: string;
   /** /graphql refuses OAuth tokens (only pasted keys get a viewer). */
   graphqlKeysOnly?: boolean;
+  /** The MCP endpoints answer 503 (a listing that fails). */
+  mcpDown?: boolean;
 };
 
 export class FakeProvider {
@@ -116,6 +118,7 @@ export class FakeProvider {
       case "/mcp":
       case "/mcp/":
       case "/mcp/readonly": {
+        if (this.opts.mcpDown) return json(503, { error: "unavailable" });
         if (!bearer || !this.valid.has(bearer)) {
           return json(401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${this.origin}/.well-known/oauth-protected-resource/mcp"` });
         }

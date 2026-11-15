@@ -6,6 +6,7 @@ import { App } from "./App";
 import "./styles.css";
 import "./charts.css";
 import "./mcp.css";
+import "./connections.css";
 import "./dock3.css";
 import "./agent.css";
 import "@xterm/xterm/css/xterm.css";

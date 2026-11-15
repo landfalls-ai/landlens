@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { AppViews, viewCsp, VIEW_HEADERS } from "../src/main/app-views";
 import { ClicklandSettingsStore, type Crypto } from "../src/main/clickland-settings";
 import { CSP_PROD } from "../src/main/csp";
+import type { RemoteSpec } from "@landlens/mcp-gateway";
 import { McpService } from "../src/main/mcp";
 import { DRIFT_NOTE, McpServerStore } from "../src/main/mcp-store";
 
@@ -86,6 +87,24 @@ describe("the MCP server store", () => {
     s.save({ id: a.id, name: "a", url: "https://mcp.example.com/other", header: { name: "Authorization" } });
     expect(s.info(a.id).autoRun).toBe(false);
     expect(() => s.setAutoRun(a.id, true)).toThrow(/Test it first/);
+  });
+
+  it("refuses the names Connections serves; a server already saved under one keeps it", async () => {
+    const { path, s } = store();
+    for (const name of ["github", "linear", "landlens-gcp"]) {
+      expect(() => s.save({ name, url: "https://mcp.example.com/mcp" })).toThrow("That name is used by Connections.");
+      try {
+        s.save({ name, url: "https://mcp.example.com/mcp" });
+      } catch (e) {
+        expect((e as { status?: number }).status).toBe(409);
+      }
+    }
+    const a = s.save({ name: "mine", url: "https://mcp.example.com/mcp" });
+    expect(() => s.save({ id: a.id, name: "github", url: "https://mcp.example.com/mcp" })).toThrow("That name is used by Connections.");
+    // One saved before wave 6 keeps its name when it is edited.
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(path, JSON.stringify({ servers: [{ id: "s_old", name: "github", url: "https://mcp.example.com/mcp", appOrigins: [], contexts: [] }] }));
+    expect(s.save({ id: "s_old", name: "github", url: "https://mcp.example.com/v2" }).name).toBe("github");
   });
 
   it("won't store a header it can't encrypt", () => {
@@ -204,6 +223,45 @@ describe("McpService", () => {
       expect(st.info(a.id).status).toBe("unknown");
     } finally {
       srv.close();
+    }
+  });
+
+  it("gives sessions the connections after your servers, names them for the prompt, and sends their drift back", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
+    const mine = st.save({ name: "mine", url: "http://127.0.0.1:1/mcp" });
+    st.enable(mine.id, "orbstack", true);
+    const drifted: string[] = [];
+    const conn: RemoteSpec = { name: "github", url: "http://127.0.0.1:1/mcp/", pin: "0".repeat(64), provider: { id: "github", readTools: new Set(), mode: "ask", readsAuto: true } };
+    const svc = new McpService({
+      store: st,
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      connections: {
+        remotes: async () => [conn],
+        servers: () => [{ id: "github", name: "github", builtin: false, connection: "github", url: conn.url, enabled: true, autoRun: true, appOrigins: [], status: "ready" }],
+        drifted: (p) => drifted.push(p),
+      },
+    });
+    await svc.start();
+    try {
+      const listed = await svc.servers("orbstack");
+      expect(listed.servers.map((x) => x.name)).toEqual(["landlens-kube", "github", "mine"]);
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const s = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(s.servers.map((x) => x.name)).toEqual(["landlens-kube", "mine", "github"]);
+      expect(s.providers).toEqual(["GitHub"]);
+      // Nothing answers at the connection's address, so its listing isn't said to have changed.
+      expect(drifted).toEqual([]);
+      await s.close();
+      (svc.gateway as unknown as { opts: { onDrift: (s: RemoteSpec) => void } }).opts.onDrift(conn);
+      expect(drifted).toEqual(["github"]);
+    } finally {
+      await svc.stop();
     }
   });
 

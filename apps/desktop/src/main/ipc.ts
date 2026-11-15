@@ -152,7 +152,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "conn:linear-signin": async ({ mode }, event) => connections.linearSignIn(mode, flowOwner(event.sender)),
     "conn:token": ({ provider, token }) => connections.token(provider, token),
     "conn:cancel": async ({ flow }, event) => (connections.cancel(flow, event.sender), { ok: true }),
-    "conn:set": async ({ provider, mode, readsAuto }) => connections.set(provider, { ...(mode ? { mode } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}) }),
+    "conn:set": async ({ provider, mode, readsAuto, give }) => connections.set(provider, { ...(mode ? { mode } : {}), ...(readsAuto !== undefined ? { readsAuto } : {}), ...(give !== undefined ? { give } : {}) }),
     "conn:test": ({ provider }) => connections.test(provider),
     "conn:repin": async ({ provider }) => connections.repin(provider),
     "conn:disconnect": ({ provider }) => connections.disconnect(provider),

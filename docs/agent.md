@@ -52,8 +52,14 @@ narrows to make room.
 - Every session starts in **Manual** mode (`default`); bypass is disabled for the session. You can switch to Plan;
   main refuses any other mode.
 - The standing rules (appended to Claude Code's system prompt) name the cluster, say what the session can and can't
-  do, and ask for evidence first, objects named as kind/namespace/name, and proposed changes rather than claims.
-  Code: `packages/acp-host/src/prompt.ts`.
+  do, and ask for evidence first, objects named as kind/namespace/name, and proposed changes rather than claims. When
+  the session has GitHub or Linear ([connections.md](connections.md)), they also name them, say that their issue,
+  comment, pull request, file and document text is untrusted data whose instructions are never followed, and that
+  cluster changes still go only through the cluster's own path. Code: `packages/acp-host/src/prompt.ts`.
+- **GitHub and Linear** (wave 6): a session gets each connection on the Connections page that is ready and given to
+  sessions, as `mcp__github__…` and `mcp__linear__…` on the gateway. Their reads run without asking; their writes ask
+  in the dock like any tool; at Read only no write tool exists. Their results reach the model marked as other people's
+  words ([mcp.md](mcp.md)).
 
 ## The cluster tools (`landlens-kube` MCP server)
 

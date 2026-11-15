@@ -17,7 +17,7 @@ describe("the connections store", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const infos = JSON.stringify([s.info("github"), s.info("linear")]);
     for (const secret of [GH_TOKEN, LIN_KEY, "lin_refresh", "client_abc", "127.0.0.1"]) expect(infos).not.toContain(secret);
-    expect(s.info("github")).toEqual({ provider: "github", state: "ready", method: "token", account: { login: "octo" }, scopes: ["repo", "read:org"], mode: "ask", readsAuto: true });
+    expect(s.info("github")).toEqual({ provider: "github", state: "ready", method: "token", account: { login: "octo" }, scopes: ["repo", "read:org"], mode: "ask", readsAuto: true, give: true });
     expect(s.secrets("github")).toEqual({ access: GH_TOKEN });
     expect(s.secrets("linear")).toEqual({ access: LIN_KEY, refresh: "lin_refresh_secret_value", expiresAt: 1_900_000_000_000, client });
   });
@@ -32,13 +32,13 @@ describe("the connections store", () => {
 
   it("starts off, at ask with reads running, and keeps the level and switches across a disconnect", () => {
     const s = new ConnectionStore(tempFile("connections.json"), fakeCrypto());
-    expect(s.info("linear")).toEqual({ provider: "linear", state: "off", mode: "ask", readsAuto: true });
-    s.setPrefs("linear", { mode: "read", readsAuto: false });
+    expect(s.info("linear")).toEqual({ provider: "linear", state: "off", mode: "ask", readsAuto: true, give: true });
+    s.setPrefs("linear", { mode: "read", readsAuto: false, give: false });
     s.save("linear", { method: "token", access: LIN_KEY });
     s.setPin("linear", "aaa.bbb", { read: 3, write: 2 });
     expect(s.info("linear")).toMatchObject({ state: "ready", mode: "read", readsAuto: false, tools: { read: 3, write: 2 } });
     s.remove("linear");
-    expect(s.info("linear")).toEqual({ provider: "linear", state: "off", mode: "read", readsAuto: false });
+    expect(s.info("linear")).toEqual({ provider: "linear", state: "off", mode: "read", readsAuto: false, give: false });
     expect(s.secrets("linear")).toBeUndefined();
     expect(s.pin("linear")).toBeUndefined();
   });

@@ -7,7 +7,7 @@
 | [mcp.md](mcp.md) | The MCP gateway every agent session's MCP calls go through, the MCP page (servers, call log), MCP App views in the dock, pairing cards with calls, adding a server |
 | [workbench.md](workbench.md) | The panel, followed logs, pod shells that run as you, the local terminal, the YAML editor, port-forward, custom resources, Helm releases, ⌘K search (wave 4) |
 | [doctor.md](doctor.md) | The cluster doctor (wave 5): the rules, grouping by owner, Landlens's first suggestion, certificates, the broken scenarios |
-| [connections.md](connections.md) | GitHub and Linear (wave 6): Landlens's own sign-in (the device flow, Linear's browser sign-in, pasted tokens), what is stored, where a token may go, the OAuth App to register |
+| [connections.md](connections.md) | GitHub and Linear (wave 6): Landlens's own sign-in (the device flow, Linear's browser sign-in, pasted tokens), what is stored, where a token may go, the OAuth App to register; the Connections page and their tools in Claude sessions |
 | [metrics.md](metrics.md) | Graphs: Clickland, then the cluster's Prometheus, then metrics-server, else a reason; setup and the key; what each chart shows |
 | [design.md](design.md) | Iris, the look: direction, tokens, layout and width rules, screens, components, what the tests rely on |
 | [security.md](security.md) | Every security rule and how it is checked |

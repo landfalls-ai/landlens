@@ -3,7 +3,7 @@
 // encrypted with Electron's safeStorage (the access token, a refresh token, Linear's registered client). Nothing
 // here is returned to the renderer but ConnInfo; secrets() is for main alone.
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { CONN_NOTES, type ConnAccount, type ConnInfo, type ConnMethod, type ConnMode } from "@landlens/contracts";
+import { CONN_NOTES, type ConnAccount, type ConnInfo, type ConnMethod, type ConnMode, type McpToolInfo } from "@landlens/contracts";
 import { oneLine, cleanScopes, PROVIDERS, type Provider } from "./providers.js";
 
 /** The part of Electron's safeStorage the store needs (a fake in tests). */
@@ -20,12 +20,16 @@ export type Secrets = { access: string; refresh?: string; expiresAt?: number; cl
 type Entry = {
   mode: ConnMode;
   readsAuto: boolean;
+  /** "Give to Claude sessions" (D77). */
+  give: boolean;
   method?: ConnMethod;
   account?: ConnAccount;
   scopes?: string[];
   /** listingHash(full) + "." + listingHash(readonly), accepted by the person (D80). */
   pin?: string;
   tools?: { read: number; write: number };
+  /** The last listing's tools as the pages show them (names, descriptions, read or write), in clear. */
+  list?: McpToolInfo[];
   /** base64 of safeStorage's ciphertext. */
   access?: string;
   refresh?: string;
@@ -37,7 +41,7 @@ type Entry = {
 };
 type File = Partial<Record<Provider, Entry>>;
 
-const DEFAULTS: Pick<Entry, "mode" | "readsAuto"> = { mode: "ask", readsAuto: true };
+const DEFAULTS: Pick<Entry, "mode" | "readsAuto" | "give"> = { mode: "ask", readsAuto: true, give: true };
 
 export class StoreError extends Error {
   constructor(readonly status: number, message: string) {
@@ -115,6 +119,7 @@ export class ConnectionStore {
       ...(connected && e.scopes ? { scopes: e.scopes } : {}),
       mode: e.mode,
       readsAuto: e.readsAuto,
+      give: e.give,
       ...(connected && e.tools ? { tools: e.tools } : {}),
       ...(connected && e.expired && p === "linear" ? { note: CONN_NOTES.linearExpired } : {}),
     };
@@ -127,7 +132,7 @@ export class ConnectionStore {
     const refresh = c.refresh ? this.enc(c.refresh) : undefined;
     const client = c.client ? this.enc(JSON.stringify(c.client)) : undefined;
     this.update(p, (e) => {
-      for (const k of ["account", "scopes", "pin", "tools", "refresh", "client", "expiresAt", "expired"] as const) delete e[k];
+      for (const k of ["account", "scopes", "pin", "tools", "list", "refresh", "client", "expiresAt", "expired"] as const) delete e[k];
       e.method = c.method;
       e.access = access;
       if (refresh) e.refresh = refresh;
@@ -178,11 +183,27 @@ export class ConnectionStore {
     });
   }
 
-  setPrefs(p: Provider, prefs: { mode?: ConnMode; readsAuto?: boolean }) {
+  setPrefs(p: Provider, prefs: { mode?: ConnMode; readsAuto?: boolean; give?: boolean }) {
     this.update(p, (e) => {
       if (prefs.mode) e.mode = prefs.mode;
       if (prefs.readsAuto !== undefined) e.readsAuto = prefs.readsAuto;
+      if (prefs.give !== undefined) e.give = prefs.give;
     });
+  }
+
+  /** The last listing's tools and counts, for the Connections and MCP pages (what the next accept would pin). */
+  setListing(p: Provider, list: McpToolInfo[], tools: { read: number; write: number }) {
+    this.update(p, (e) => {
+      if (!e.access) return;
+      e.list = list.slice(0, 500);
+      e.tools = tools;
+    });
+  }
+
+  /** The last listing's tools, if any. */
+  list(p: Provider): McpToolInfo[] | undefined {
+    const e = this.read()[p];
+    return e?.access ? e.list : undefined;
   }
 
   /** The listing the person accepted, and its counts. */
@@ -202,7 +223,7 @@ export class ConnectionStore {
   remove(p: Provider) {
     const all = this.read();
     if (!all[p]) return;
-    all[p] = { mode: all[p]!.mode ?? DEFAULTS.mode, readsAuto: all[p]!.readsAuto ?? DEFAULTS.readsAuto };
+    all[p] = { mode: all[p]!.mode ?? DEFAULTS.mode, readsAuto: all[p]!.readsAuto ?? DEFAULTS.readsAuto, give: all[p]!.give ?? DEFAULTS.give };
     this.write(all);
   }
 }

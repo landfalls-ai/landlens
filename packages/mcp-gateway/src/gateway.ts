@@ -15,9 +15,10 @@ import { APP_HTML, CALL_META, type AgentCluster } from "@landlens/kube-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { appMayCall, drifted, isReadOnly, modelMayCall, preAllowed, toolUi, type ListedServer } from "./approval.js";
+import { appMayCall, drifted, modelMayCall, preAllowed, readsOnly, toolUi, type ListedServer } from "./approval.js";
 import { CallLog, newCallId } from "./calls.js";
 import { Pairing, TOOL_USE_META } from "./pairing.js";
+import { providerResult, providerTool, type ProviderRules } from "./providers/index.js";
 import { BuiltinUpstream, describeError, rawError, RemoteUpstream, type RemoteSpec, type Upstream } from "./upstream.js";
 
 const MAX_BODY = 1_000_000;
@@ -189,9 +190,9 @@ export class McpGateway {
     const session = new GatewaySession(this, token, init);
     this.sessions.set(hash(token).toString("hex"), session);
     const listed = await Promise.all([...session.upstreams.values()].map(async (u): Promise<ListedServer | undefined> => {
-      const pin = init.remotes.find((r) => r.name === u.name)?.pin;
+      const spec = init.remotes.find((r) => r.name === u.name);
       try {
-        return { name: u.name, tools: await this.listTools(u), ...(pin ? { pin } : {}) };
+        return { name: u.name, tools: await this.listTools(u), ...(spec?.pin ? { pin: spec.pin } : {}), ...(spec?.provider ? { provider: spec.provider } : {}) };
       } catch (err) {
         this.opts.log?.(`[mcp] ${init.label}: ${u.name} didn't list its tools: ${rawError(err)}`);
         return undefined; // nothing runs without asking, and nothing is said to have changed
@@ -281,6 +282,9 @@ export class McpGateway {
       return { content: [{ type: "text", text: `Landlens: ${server} didn't answer: ${describeError(err)}` }], isError: true };
     }
     if (!t) return refuse(`${server} has no tool named ${tool}.`);
+    // A connection's server: reads are what its vendor's read-only listing says, not what a tool says of itself.
+    const provider = s.init.remotes.find((r) => r.name === server)?.provider;
+    const readOnly = readsOnly(t, provider);
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
       const rule = `mcp__${server}__${tool}`;
@@ -290,11 +294,11 @@ export class McpGateway {
       this.pairing.call({ id, session: s.id, server, tool, args, ...(toolUseId ? { toolUseId } : {}) });
     } else if (origin === "app") {
       if (!appMayCall(t)) return refuse(`${tool} isn't offered to app views.`);
-      if (!isReadOnly(t)) {
+      if (!readOnly) {
         const yes = this.opts.approve ? await this.opts.approve({ label: s.label, server, tool, args, origin }).catch(() => false) : false;
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
       }
-    } else if (!isReadOnly(t)) {
+    } else if (!readOnly) {
       return refuse(`${tool} doesn't say it only reads, so Landlens won't run it from the MCP page.`);
     }
 
@@ -308,7 +312,7 @@ export class McpGateway {
         void this.appResource(s, server, app).catch(() => {}); // warm the view's HTML
       }
       this.log.finish(id, { status, result: result as McpToolResult, ...(app && !result.isError ? { app } : {}) });
-      return origin === "agent" ? forModel(result, t) : result;
+      return origin === "agent" ? forModel(result, t, provider) : result;
     } catch (err) {
       const why = describeError(err);
       this.log.finish(id, { status: "error", error: why });
@@ -396,7 +400,9 @@ export class McpGateway {
     const mcp = new Server({ name, version: "0.2.0" }, { capabilities: { tools: { listChanged: false } } });
     mcp.setRequestHandler(ListToolsRequestSchema, async () => {
       try {
-        return { tools: (await this.listTools(up)).filter(modelMayCall) };
+        const provider = session.init.remotes.find((r) => r.name === name)?.provider;
+        const tools = (await this.listTools(up)).filter(modelMayCall);
+        return { tools: provider ? tools.map(providerTool) : tools };
       } catch (err) {
         this.opts.log?.(`[mcp] ${session.label}: ${name} didn't list its tools: ${rawError(err)}`);
         return { tools: [] };
@@ -418,9 +424,11 @@ export class McpGateway {
 
 /**
  * What the model gets back: the text, as the server wrote it. A view's structured data (MCP Apps: "for the UI, not
- * the model") is dropped when there's text beside it and the tool doesn't promise an output schema.
+ * the model") is dropped when there's text beside it and the tool doesn't promise an output schema. A connection's
+ * tool (GitHub, Linear) gives text only, under a line that says it is other people's words, capped (D81).
  */
-export function forModel(r: CallToolResult, t: Tool): CallToolResult {
+export function forModel(r: CallToolResult, t: Tool, provider?: Pick<ProviderRules, "id">): CallToolResult {
+  if (provider) return providerResult(r, provider.id);
   if (!toolUi(t).resourceUri || t.outputSchema || !r.structuredContent || !r.content?.length) return r;
   const { structuredContent: _drop, ...rest } = r;
   return rest;

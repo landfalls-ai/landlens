@@ -4,9 +4,13 @@
 // that say they only read (annotations.readOnlyHint === true) and that the model may call run without asking, but
 // only while its tool listing is the one you saw when you turned it on (pinned by a hash of names, descriptions,
 // annotations and schemas). A server's readOnlyHint is its own claim, so it is never trusted by default.
+// A connection's server (GitHub, Linear) is told apart by the vendor's read-only endpoint instead (providers/): its
+// reads run without asking when you leave "Reads run without asking" on, while its listing is the one you accepted,
+// and readOnlyHint plays no part.
 import { createHash } from "node:crypto";
 import { BUILTIN_MCP_SERVER, type McpToolInfo } from "@landlens/contracts";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { ProviderRules } from "./providers/index.js";
 
 /** The MCP Apps `_meta.ui` of a tool (and the deprecated flat key), read leniently. */
 export function toolUi(t: Pick<Tool, "_meta">): { resourceUri?: string; visibility: ("model" | "app")[] } {
@@ -48,8 +52,14 @@ export function listingHash(tools: Pick<Tool, "name" | "title" | "description" |
   return createHash("sha256").update(canonical(rows)).digest("hex");
 }
 
-/** A server in a session: its listing now, and the listing you allowed its read-only tools for, if you did. */
-export type ListedServer = { name: string; tools: Tool[]; pin?: string };
+/**
+ * A server in a session: its listing now, the listing you allowed its read-only tools for, if you did, and for a
+ * connection's server, its rules.
+ */
+export type ListedServer = { name: string; tools: Tool[]; pin?: string; provider?: ProviderRules };
+
+/** Whether a tool only reads: by the vendor's read-only listing for a connection's server, else by its own word. */
+export const readsOnly = (t: Pick<Tool, "name" | "annotations">, provider?: ProviderRules) => (provider ? provider.readTools.has(t.name) : isReadOnly(t));
 
 /**
  * Permission rules for one session: the built-in server whole, and, for each proxied server you let run its
@@ -61,7 +71,8 @@ export function preAllowed(servers: ListedServer[]): string[] {
   const allow = [`mcp__${BUILTIN_MCP_SERVER}`];
   for (const s of servers) {
     if (s.name === BUILTIN_MCP_SERVER || !s.pin || listingHash(s.tools) !== s.pin) continue;
-    for (const t of s.tools) if (isReadOnly(t) && modelMayCall(t) && RULE_TOOL.test(t.name)) allow.push(`mcp__${s.name}__${t.name}`);
+    if (s.provider && !s.provider.readsAuto) continue;
+    for (const t of s.tools) if (readsOnly(t, s.provider) && modelMayCall(t) && RULE_TOOL.test(t.name)) allow.push(`mcp__${s.name}__${t.name}`);
   }
   return allow;
 }
@@ -71,15 +82,15 @@ export function drifted(servers: ListedServer[]): string[] {
   return servers.filter((s) => s.name !== BUILTIN_MCP_SERVER && s.pin && listingHash(s.tools) !== s.pin).map((s) => s.name);
 }
 
-/** A tool as the MCP page shows it. */
-export function toolInfo(t: Tool): McpToolInfo {
+/** A tool as the MCP page shows it; for a connection's server, readOnly is the vendor's read-only listing's answer. */
+export function toolInfo(t: Tool, provider?: Pick<ProviderRules, "readTools">): McpToolInfo {
   const ui = toolUi(t);
   const required = Array.isArray((t.inputSchema as { required?: unknown })?.required) ? ((t.inputSchema as { required: unknown[] }).required.filter((r) => typeof r === "string") as string[]) : [];
   return {
     name: t.name,
     ...(t.title ?? t.annotations?.title ? { title: (t.title ?? t.annotations?.title)! } : {}),
     ...(t.description ? { description: t.description.slice(0, 600) } : {}),
-    readOnly: isReadOnly(t),
+    readOnly: provider ? provider.readTools.has(t.name) : isReadOnly(t),
     ...(ui.resourceUri ? { app: ui.resourceUri } : {}),
     visibility: ui.visibility,
     required,

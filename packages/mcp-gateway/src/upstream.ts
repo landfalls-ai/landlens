@@ -6,10 +6,12 @@ import type { AgentCluster } from "@landlens/kube-mcp";
 import { kubeMcpServer, WRITE_CALL_TIMEOUT_MS, WRITE_TOOLS } from "@landlens/kube-mcp";
 import { BUILTIN_MCP_SERVER } from "@landlens/contracts";
 import { redactText } from "@landlens/kube-mcp";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult, ReadResourceResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { ProviderRules } from "./providers/index.js";
 
 export const UI_EXTENSION = "io.modelcontextprotocol/ui";
 const CLIENT_INFO = { name: "landlens-gateway", version: "0.1.0" };
@@ -105,10 +107,32 @@ export type RemoteSpec = {
    * (approval.ts listingHash). Absent: every tool asks.
    */
   pin?: string;
+  /** Linear's OAuth sign-in: the transport takes its bearer from here and refreshes it on a 401 (D77). */
+  authProvider?: OAuthClientProvider;
+  /** Set for a connection's server (GitHub, Linear) only: which of its tools read, and its level (D78, D79). */
+  provider?: ProviderRules;
+  /** When set, the only origins any request for this server may go to (a connection's token origins). */
+  origins?: string[];
 };
 
 /** fetch, refusing redirects (a redirect would carry the header elsewhere). */
 const noRedirect: typeof fetch = (input, init) => fetch(input, { ...init, redirect: "error" });
+
+/** noRedirect, and only to these origins: anything else is refused before it is asked. */
+function pinnedTo(origins: string[]): typeof fetch {
+  const allowed = new Set(origins);
+  return (input, init) => {
+    const url = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+    let origin = "";
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      // not an address: refused below
+    }
+    if (!allowed.has(origin)) return Promise.reject(new Error("Landlens: refused a request to an origin that isn't this server's"));
+    return noRedirect(input, init);
+  };
+}
 
 /** A remote MCP server over streamable HTTP. */
 export class RemoteUpstream extends ClientUpstream {
@@ -118,7 +142,8 @@ export class RemoteUpstream extends ClientUpstream {
   async connect(client: Client) {
     const transport = new StreamableHTTPClientTransport(new URL(this.spec.url), {
       requestInit: { headers: { ...(this.spec.headers ?? {}) } },
-      fetch: noRedirect,
+      fetch: this.spec.origins ? pinnedTo(this.spec.origins) : noRedirect,
+      ...(this.spec.authProvider ? { authProvider: this.spec.authProvider } : {}),
       reconnectionOptions: { maxReconnectionDelay: 30_000, initialReconnectionDelay: 1_000, reconnectionDelayGrowFactor: 1.5, maxRetries: 0 },
     });
     await client.connect(transport, { timeout: LIST_TIMEOUT });

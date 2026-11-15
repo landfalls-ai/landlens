@@ -1,6 +1,6 @@
 // The first screen: your kubeconfig's contexts as one centred list. ↑/↓ move, Enter or the number connects.
 import type { KubeContext } from "@landlens/contracts";
-import { ArrowRight, CircleX, FileText, ShieldCheck } from "lucide-react";
+import { ArrowRight, Cable, CircleX, FileText, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Ic } from "./icons";
 import { Mark } from "./Mark";
@@ -12,6 +12,8 @@ export function Welcome(props: {
   connecting?: string;
   error?: { context: string; message: string };
   onConnect: (c: string) => void;
+  /** Open the Connections page (GitHub, Linear), which needs no cluster. */
+  onConnections?: () => void;
 }) {
   // The current context first: it has the focus, so Enter connects to it.
   const list = props.contexts && [...props.contexts].sort((a, b) => Number(b.current) - Number(a.current));
@@ -103,6 +105,9 @@ export function Welcome(props: {
           </div>
         ) : null}
         {props.catalogError && list?.length ? <p className="small tone-bad">{props.catalogError}</p> : null}
+        {props.onConnections ? (
+          <button className="link-btn welcome-link" onClick={props.onConnections}><Ic icon={Cable} size={13} />Connections<span className="dim">GitHub and Linear for Claude sessions</span></button>
+        ) : null}
       </div>
       <div className="trust"><Ic icon={ShieldCheck} size={13} />Credentials stay in an isolated process · Claude Code sessions are read-only</div>
     </main>

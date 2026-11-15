@@ -79,6 +79,9 @@ person's check reads them), and Ask Claude sends one problem at a time.
   server's own `readOnlyHint` for the listing you tested: it can't tell a tool that changes behaviour without
   changing its listing. Its tool descriptions and results reach the model verbatim ([security.md](security.md)). If a
   server's listing changes, auto-run turns off and you Test and turn it on again; there is no diff of what changed.
+- **GitHub and Linear go to every cluster's sessions** (one "Give to Claude sessions" switch, no per-cluster choice),
+  and a read's arguments reach the vendor without a question ([connections.md](connections.md)). Writes always ask
+  until part 3's autonomous mode; Google Cloud is parts 4 and 5.
 - **Folded views reopen from scratch**: an earlier view in the dock is closed when it folds and opened again (from
   the kept result, the last 50) when you show it, so its own state (a filter, a scroll) is lost.
 - **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit); other shortcuts stay in the

@@ -11,6 +11,7 @@ import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
 import { JumpPalette, type Target, type Verb } from "./JumpPalette";
 import { PROMETHEUS_EVENT } from "./MetricsNotice";
+import { ConnectionsPage } from "./ConnectionsPage";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
@@ -126,6 +127,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const list = typeof current === "object" ? current : undefined;
   const problemsPage = current === "problems";
   const mcp = current === "mcp";
+  const connPage = current === "connections";
   const helmPage = current === "helm";
   const helm = useHelmList(cluster.handle, namespace, helmPage);
   const helmSel = helmPage && helmPick ? helm.releases?.find((r) => r.namespace === helmPick.namespace && r.name === helmPick.name) : undefined;
@@ -338,7 +340,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
-  const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
+  const label = list?.label ?? (mcp ? "MCP" : connPage ? "Connections" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
 
   return (
     <div ref={app}
@@ -373,12 +375,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); setProblemSel(undefined); }) } } : {})}
+          {...(!mcp && !agentPage && !connPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); setProblemSel(undefined); }) } } : {})}
           {...(list || helmPage || problemsPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
           {...(dock ? {} : { onAsk: () => setDock(true) })}
-          {...(!mcp && !agentPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
+          {...(!mcp && !agentPage && !connPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
         />
         {mcp ? (
           <McpPage
@@ -390,8 +392,11 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             onSelect={setMcpCall}
             onOpenObject={go}
             onConnectClickland={() => setSettings(true)}
+            onOpenConnections={() => pick("connections")}
             version={metricsVersion}
           />
+        ) : connPage ? (
+          <ConnectionsPage context={cluster.context} onOpenMcp={() => (setMcpTab("calls"), pick("mcp"))} />
         ) : agentPage ? (
           <AgentPage tab={agentTab} onTab={setAgentTab} />
         ) : helmPage ? (
@@ -474,7 +479,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       </main>
       <StatusBar
           server={cluster.server}
-          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : helmPage ? (helm.error ? "Not reading" : "Reading Helm releases every 30s") : agentPage ? "Agent settings" : "Checking health every 10s"}
+          watching={list ? (watch.error ? "Not watching" : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : connPage ? "Connections" : helmPage ? (helm.error ? "Not reading" : "Reading Helm releases every 30s") : agentPage ? "Agent settings" : "Checking health every 10s"}
           {...(claude ? { claude } : {})}
           bad={bad}
           warn={warn}

@@ -1,15 +1,22 @@
 // MCP in main (docs/mcp.md): the gateway every agent session's MCP calls go through, the servers you added, the call
 // log the MCP page and the dock read, Preview (you running a read-only tool from the MCP page), and MCP App views.
-import { BUILTIN_MCP_SERVER, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, type ConnProvider, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
-import { BuiltinUpstream, listingHash, McpGateway, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { BuiltinUpstream, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import type { SessionMcp } from "@landlens/acp-host";
 import { AppViews, viewCsp } from "./app-views";
 import type { ClicklandSettingsStore } from "./clickland-settings";
 import { originOf, type McpServerStore } from "./mcp-store";
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+/** Connections as the MCP side needs them (main's ConnectionsService): their upstreams, their panels, drift. */
+export type ConnectionServers = {
+  remotes(): Promise<RemoteSpec[]>;
+  servers(): McpServerInfo[];
+  drifted(p: ConnProvider): void;
+};
 
 export type Ask = {
   /** A yes/no question in a native dialog. */
@@ -35,6 +42,8 @@ export class McpService {
     certs?: (handle: string, namespaces?: string[]) => Awaited<ReturnType<NonNullable<AgentCluster["certs"]>>>;
     push: (call: McpCall) => void;
     ask: Ask;
+    /** GitHub and Linear, served to every session after the servers you added (docs/connections.md). */
+    connections?: ConnectionServers;
     log?: (l: string) => void;
   }) {
     this.gateway = new McpGateway({
@@ -44,8 +53,8 @@ export class McpService {
         yes: "Run it once",
       }),
       ...(deps.log ? { log: deps.log } : {}),
-      // Every RemoteSpec the gateway gets comes from the store, with its id.
-      onDrift: (spec) => deps.store.drifted((spec as RemoteSpec & { id: string }).id),
+      // Every RemoteSpec the gateway gets comes from the store, with its id, or from Connections, with its provider.
+      onDrift: (spec) => (spec.provider ? deps.connections?.drifted(spec.provider.id) : deps.store.drifted((spec as RemoteSpec & { id: string }).id)),
     });
     this.gateway.log.subscribe(deps.push);
     deps.clusters.onGone((handle) => void this.closeConsole(handle));
@@ -64,10 +73,25 @@ export class McpService {
   forSessions(): SessionMcp {
     return {
       open: async ({ label, context, cluster }) => {
-        const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes: this.deps.store.remotesFor(context) });
-        return { servers: s.servers(), allow: s.allow, bind: (id) => s.bind(id), close: () => s.close() };
+        const remotes = await this.remotesFor(context);
+        const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes });
+        const providers = remotes.flatMap((r) => (r.provider ? [PROVIDER_LABEL[r.provider.id]] : []));
+        return { servers: s.servers(), allow: s.allow, ...(providers.length ? { providers } : {}), bind: (id) => s.bind(id), close: () => s.close() };
       },
     };
+  }
+
+  /**
+   * A session's remote servers: the ones you added and turned on for the cluster, then the connections (whose names
+   * a server of yours can't take; one that already has such a name keeps it, and that connection stays off).
+   */
+  private async remotesFor(context: string): Promise<RemoteSpec[]> {
+    const mine = this.deps.store.remotesFor(context);
+    const conns = await this.deps.connections?.remotes().catch((err) => {
+      this.deps.log?.(`[mcp] connections: ${rawError(err)}`);
+      return [];
+    }) ?? [];
+    return [...mine, ...conns.filter((c) => !mine.some((m) => m.name === c.name))];
   }
 
   /** The front door's audit trail, for the requests behind each landlens-kube call. */
@@ -76,7 +100,7 @@ export class McpService {
   // ---- servers -------------------------------------------------------------------------------------------------
 
   async servers(context?: string): Promise<McpServers> {
-    this.builtinTools ??= new BuiltinUpstream(BUILTIN_MCP_SERVER, stubCluster()).tools().then((t) => t.map(toolInfo));
+    this.builtinTools ??= new BuiltinUpstream(BUILTIN_MCP_SERVER, stubCluster()).tools().then((t) => t.map((t) => toolInfo(t)));
     const builtin: McpServerInfo = {
       id: BUILTIN_MCP_SERVER, name: BUILTIN_MCP_SERVER, builtin: true, url: this.gateway.url, enabled: true, autoRun: true, appOrigins: [],
       tools: (await this.builtinTools) ?? [], status: "ready",
@@ -86,7 +110,7 @@ export class McpService {
     const url = clicklandMcpUrl(c.url);
     return {
       gateway: this.gateway.url,
-      servers: [builtin, ...remotes],
+      servers: [builtin, ...(this.deps.connections?.servers() ?? []), ...remotes],
       canStore: this.deps.store.canStore,
       // Only a Clickland you connected is probed: Landlens doesn't knock on addresses you haven't given it a key for.
       presets: [{ id: "clickland", name: "Clickland", url, reachable: c.hasKey ? await reachable(url) : false, hasKey: c.hasKey, added: remotes.some((s) => s.url === url) }],
@@ -125,7 +149,7 @@ export class McpService {
       spec = { name: "test", url: req.url, ...(req.header?.value ? { headers: { [req.header.name]: req.header.value } } : {}) };
     }
     const r = await testRemote(spec);
-    const tools = r.tools?.map(toolInfo);
+    const tools = r.tools?.map((t) => toolInfo(t));
     if (req.id && asSaved) {
       this.deps.store.status(req.id, {
         status: r.ok ? "ready" : "failed", ...(r.ok ? {} : { detail: r.steps.at(-1)?.detail ?? "failed" }),
@@ -194,7 +218,7 @@ export class McpService {
           types: async () => types, metrics: (r, read) => this.deps.metrics(handle, r, read),
           ...(this.deps.certs ? { certs: async (ns: string[] | undefined) => this.deps.certs!(handle, ns) } : {}),
         });
-        const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: this.deps.store.remotesFor(info.context) });
+        const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: await this.remotesFor(info.context) });
         return { session, revoke: () => this.deps.frontDoor.revokeToken(token) };
       })();
       this.consoles.set(handle, c);

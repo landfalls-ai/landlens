@@ -4,12 +4,13 @@
 // filters; a row opens the call in the drawer.
 import { BUILTIN_MCP_SERVER, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import {
-  Ban, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X,
+  Ban, Cable, Check, ChevronDown, CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, Eye, LayoutPanelTop, Pencil, Play, Plug, PlugZap, Plus, Server, Trash2, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { age } from "@landlens/kube/status";
 import { api, useNow, type ApiError } from "./api";
 import { AppFrame } from "./AppFrame";
+import { ProviderMark } from "./ConnectionsPage";
 import type { ObjectTarget } from "./app-host";
 import { inputText, Well } from "./DockParts";
 import { Ic } from "./icons";
@@ -27,6 +28,8 @@ export function McpPage(props: {
   onSelect: (call: string) => void;
   onOpenObject: (t: ObjectTarget) => void;
   onConnectClickland: () => void;
+  /** GitHub and Linear are managed on the Connections page. */
+  onOpenConnections?: () => void;
   /** Bumped when Clickland's settings change, so the preset re-checks. */
   version: number;
 }) {
@@ -85,6 +88,7 @@ function Servers(props: {
   onError: (m?: string) => void;
   onOpenObject: (t: ObjectTarget) => void;
   onConnectClickland: () => void;
+  onOpenConnections?: () => void;
 }) {
   const s = props.servers;
   const preset = s?.presets.find((p) => p.id === "clickland");
@@ -104,6 +108,7 @@ function Servers(props: {
         <p className="dim">
           Every MCP call an agent session makes goes through Landlens's gateway on <span className="mono">{new URL(s.gateway).host}</span> and is logged
           under Calls. landlens-kube's tools run without asking; a remote server's tools ask you in the dock unless you let its read-only tools run.
+          GitHub and Linear come from Connections.
           Remote servers' keys stay encrypted in the main process.
         </p>
         <button className="secondary mcp-add" onClick={props.onAdd}><Ic icon={Plus} size={14} />Add server</button>
@@ -145,8 +150,10 @@ function ServerPanel(props: {
   onChanged: () => void;
   onError: (m?: string) => void;
   onOpenObject: (t: ObjectTarget) => void;
+  onOpenConnections?: () => void;
 }) {
   const srv = props.server;
+  const conn = srv.connection;
   const st = STATUS[srv.status];
   const [test, setTest] = useState<McpTest | "running">();
   const [busy, setBusy] = useState(false);
@@ -171,13 +178,19 @@ function ServerPanel(props: {
   return (
     <section className="panel mcp-server" aria-label={`MCP server ${srv.name}`}>
       <header className="panel-head">
-        <span className="kind-tile sm"><Ic icon={srv.builtin ? Server : Plug} size={15} /></span>
+        <span className={"kind-tile sm" + (conn ? " conn-tile" : "")}>{conn ? <ProviderMark provider={conn} size={15} /> : <Ic icon={srv.builtin ? Server : Plug} size={15} />}</span>
         <h3 className="mono">{srv.name}</h3>
         {srv.builtin ? <span className="badge muted">Built in</span> : null}
+        {conn ? <span className="chip from-conn"><Ic icon={Cable} size={11} />From Connections</span> : null}
         <span className={`badge ${st.tone}`}><Ic icon={st.icon} size={13} />{st.word}</span>
         <span className="grow" />
         {srv.builtin ? (
           <span className="dim small">On for every cluster</span>
+        ) : conn ? (
+          <>
+            <span className="dim small">{srv.enabled ? "On for every cluster" : "Off for sessions"}</span>
+            {props.onOpenConnections ? <button className="secondary" onClick={props.onOpenConnections}>Manage in Connections</button> : null}
+          </>
         ) : (
           <>
             <label className="switch">
@@ -197,7 +210,14 @@ function ServerPanel(props: {
         {tools.length ? <span className="dim small">{tools.length} tools, {ro} read-only</span> : null}
         {srv.detail ? <span className="tone-bad small">{srv.detail}</span> : null}
       </div>
-      {!srv.builtin ? (
+      {conn ? (
+        <div className="mcp-auto">
+          <span className="dim small">
+            {srv.autoRun ? "Its reads (the tools its read-only endpoint lists) run without asking; its writes ask you in the dock." : "Every tool asks you in the dock."} Change it on the Connections page.
+          </span>
+          {srv.autoRunNote ? <span className="tone-warn small" role="status"><Ic icon={CircleAlert} size={13} /> {srv.autoRunNote}</span> : null}
+        </div>
+      ) : !srv.builtin ? (
         <div className="mcp-auto">
           <label className="switch">
             <input type="checkbox" role="switch" checked={srv.autoRun} disabled={busy || (!srv.autoRun && !tools.length)} onChange={toggleAuto} aria-label={`Run ${srv.name}'s read-only tools without asking`} />
@@ -216,7 +236,7 @@ function ServerPanel(props: {
         <ul className="ov-list mcp-tools" aria-label={`${srv.name} tools`}>
           {tools.map((t) => <ToolRow key={t.name} {...props} tool={t} server={srv} />)}
         </ul>
-      ) : !srv.builtin ? <p className="dim small mcp-none">Test it to list its tools.</p> : null}
+      ) : conn ? <p className="dim small mcp-none">Its tools are listed when you connect or check them on the Connections page.</p> : !srv.builtin ? <p className="dim small mcp-none">Test it to list its tools.</p> : null}
     </section>
   );
 }
