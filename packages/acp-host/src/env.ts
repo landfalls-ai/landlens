@@ -1,7 +1,7 @@
 // Where the agent's tools come from. A Mac app started from the Dock gets a bare PATH (/usr/bin:/bin:…), so Landlens
 // asks your login shell once for the PATH you use in a terminal: that is where kubectl and node live.
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 
@@ -24,11 +24,18 @@ export function loginPath(env: NodeJS.ProcessEnv = process.env): Promise<string>
   return cached;
 }
 
-/** The first executable called `name` on `path`. */
+/** The first executable file called `name` on `path` (not a folder, not a file that can't run: review of part 4, L3). */
 export function which(name: string, path: string): string | undefined {
   for (const dir of path.split(delimiter)) {
+    if (!dir) continue;
     const p = join(dir, name);
-    if (dir && existsSync(p)) return p;
+    try {
+      if (!statSync(p).isFile()) continue;
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch {
+      // not there, or not runnable: the next folder
+    }
   }
   return undefined;
 }

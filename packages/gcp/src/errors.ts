@@ -49,7 +49,9 @@ export function reasonsOf(body: unknown): string[] {
   const e = (body as { error?: { status?: unknown; details?: unknown; errors?: unknown } } | undefined)?.error;
   if (!e || typeof e !== "object") return [];
   const out: string[] = [];
-  if (typeof e.status === "string") out.push(e.status);
+  // Held to its shape (UNAUTHENTICATED, PERMISSION_DENIED, …): the body is Google's, or whatever answered, and a status
+  // that echoes the request's token would otherwise reach main's log (review of part 4, L1).
+  if (typeof e.status === "string" && /^[A-Z_]{1,64}$/.test(e.status)) out.push(e.status);
   for (const list of [e.details, e.errors]) {
     if (!Array.isArray(list)) continue;
     for (const d of list) {

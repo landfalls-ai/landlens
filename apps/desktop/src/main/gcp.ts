@@ -42,6 +42,8 @@ const ACCOUNT_TTL = 60_000;
 const READS_AT_ONCE = 2;
 /** Cached queries (beyond each project's full list). */
 const MAX_QUERIES = 10;
+/** Resources held in all the cached lists together; the oldest lists go first (review of part 4, L7). */
+export const MAX_CACHED = 50_000;
 
 type Kept = { projects: string[]; agentRead: boolean; confirmed: string[] };
 /** GKE clusters listed, kept as long as a project's resources. */
@@ -60,6 +62,8 @@ export class GcpService {
   private readonly reading = new Map<string, Promise<Listed>>();
   private running = 0;
   private readonly waiting: (() => void)[] = [];
+  /** Bumped by forget(): a read that started before is not cached after (review of part 4, L2). */
+  private gen = 0;
   private clustersCache?: { at: number; read: Promise<{ clusters: GkeClusterFull[]; errors: { project: string; message: string }[] }> };
   /** The GKE contexts in Landlens's kubeconfig now, by name. */
   private gke = new Map<string, GkeClusterFull>();
@@ -108,9 +112,13 @@ export class GcpService {
     if (!this.o.mode.on) return undefined;
     if (!fresh && this.gcloud && this.now() - this.gcloud.at < ACCOUNT_TTL) return this.gcloud.path;
     const named = this.o.mode.gcloud;
-    const path = named ? (existsSync(named) ? named : undefined) : await this.o.findGcloud();
+    // With the development fake, only the gcloud named for it runs: never the real one, whose token would go to the
+    // fake over plain HTTP (review of part 4, M1). Without one, gcloud is missing.
+    const path = named ? (existsSync(named) ? named : undefined) : this.o.mode.endpoint ? undefined : await this.o.findGcloud();
     const usable = path && isAbsolute(path) ? path : undefined;
     if (usable !== this.gcloud?.path) {
+      // Another gcloud may be signed in as someone else: nothing read with the last one is kept (L2).
+      if (this.gcloud) this.forget();
       this.auth = usable ? new GcloudAuth({ gcloud: usable, env: gcloudEnv(this.o.env, await this.o.loginPath()), ...(this.o.run ? { run: this.o.run } : {}), ...(this.o.now ? { now: this.o.now } : {}) }) : undefined;
       this.acct = undefined;
     }
@@ -129,6 +137,7 @@ export class GcpService {
 
   /** Every cache and the held token: another account signed in, or gcloud went. */
   private forget() {
+    this.gen++;
     this.auth?.drop();
     this.projectsCache = undefined;
     this.clustersCache = undefined;
@@ -228,36 +237,58 @@ export class GcpService {
     if (!this.kept.projects.includes(project)) throw fail(404, `Choose ${project} on the Google Cloud page first.`);
   }
 
-  /** Two project reads at once across the app; the rest wait their turn. */
+  /**
+   * Two project reads at once across the app; the rest wait their turn. A read that ends hands its place straight to
+   * the next in line, so one arriving meanwhile can't take it too (review of part 4, L5).
+   */
   private async slot<T>(f: () => Promise<T>): Promise<T> {
     if (this.running >= READS_AT_ONCE) await new Promise<void>((r) => this.waiting.push(r));
-    this.running++;
+    else this.running++;
     try {
       return await f();
     } finally {
-      this.running--;
-      this.waiting.shift()?.();
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.running--;
+    }
+  }
+
+  /** Lists older than their 60 s go; then the oldest, until at most MAX_CACHED resources are held (L7). */
+  private sweep() {
+    const t = this.now();
+    for (const [k, l] of this.lists) if (t - l.at >= RESOURCES_TTL) this.lists.delete(k);
+    let total = 0;
+    for (const l of this.lists.values()) total += l.items.length;
+    for (const [k, l] of [...this.lists].sort((a, b) => a[1].at - b[1].at)) {
+      if (total <= MAX_CACHED) break;
+      this.lists.delete(k);
+      total -= l.items.length;
     }
   }
 
   /** A project's resources (all, or for one query), cached 60 s; one read per project at a time. */
   private async list(project: string, query: string | undefined, fresh: boolean): Promise<Listed> {
     const key = `${project}\n${query ?? ""}`;
+    this.sweep();
     const held = this.lists.get(key);
     if (held && !fresh && this.now() - held.at < RESOURCES_TTL) return held;
-    const busy = this.reading.get(project);
-    if (busy) {
+    // Wait while the project is being read, and look again each time: several waiters on one read don't all start
+    // their own after it (review of part 4, L5); the first starts one and the others wait for that.
+    for (let busy = this.reading.get(project); busy; busy = this.reading.get(project)) {
       await busy.catch(() => undefined);
       const again = this.lists.get(key);
       if (again && this.now() - again.at < RESOURCES_TTL) return again;
     }
+    const gen = this.gen;
     // Marked as reading before anything is awaited, so a second ask for this project waits for this one.
     const read = this.client().then((client) => this.slot(() => searchResources(client, project, query ? { query } : {}))).then((r) => {
       const listed = { at: this.now(), items: r.items, cut: r.cut };
-      if (this.kept.projects.includes(project)) {
+      // Kept only if nothing was forgotten meanwhile (another account, another gcloud: L2) and it is still chosen.
+      if (gen === this.gen && this.kept.projects.includes(project)) {
         this.lists.set(key, listed);
         const queries = [...this.lists.keys()].filter((k) => !k.endsWith("\n"));
         if (queries.length > MAX_QUERIES) this.lists.delete(queries[0]!);
+        this.sweep();
       }
       return listed;
     });

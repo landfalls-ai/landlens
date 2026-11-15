@@ -35,8 +35,24 @@ const SearchPage = z.object({ results: z.array(SearchResult).optional(), nextPag
 export function clean(s: string, max = 300): string {
   // eslint-disable-next-line no-control-regex
   const out = s.replace(/[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g, "");
-  return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+  if (out.length <= max) return out;
+  // Cut by code point, so a pair (an emoji) is never split into a lone surrogate (review of part 4, L4).
+  const points = Array.from(out);
+  return points.length > max ? `${points.slice(0, max - 1).join("")}…` : out;
 }
+
+/** Control and format characters (bidi overrides, zero-width, line separators) a JSON text may carry in its strings. */
+// eslint-disable-next-line no-control-regex
+const INVISIBLE = /[\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]/g;
+/**
+ * A resource's JSON with every invisible character written as its `\uXXXX` escape: the same data, but a bidi override
+ * can't reorder what the drawer shows (review of part 4, L4). They can only be inside strings, where the escape is
+ * valid JSON.
+ */
+export const escapeInvisible = (json: string) => json.replace(INVISIBLE, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+/** All of a resource's labels, keys and values together, at most this many characters (review of part 4, L7). */
+export const LABELS_MAX = 2_000;
 
 const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
   const r = schema.safeParse(body);
@@ -70,7 +86,14 @@ export async function searchProjects(client: GcpClient): Promise<{ projects: Gcp
 
 /** A search result as the page gets it. */
 export function toResource(r: z.infer<typeof SearchResult>): GcpResource {
-  const labels = r.labels ? Object.entries(r.labels).slice(0, 20).map(([k, v]) => [clean(k, 63), clean(v, 300)] as const) : [];
+  const labels: (readonly [string, string])[] = [];
+  let room = LABELS_MAX;
+  for (const [k, v] of Object.entries(r.labels ?? {}).slice(0, 20)) {
+    const pair = [clean(k, 63), clean(v, 300)] as const;
+    room -= pair[0].length + pair[1].length;
+    if (room < 0) break;
+    labels.push(pair);
+  }
   return {
     name: clean(r.name, 1000),
     assetType: clean(r.assetType, 161),
@@ -120,7 +143,7 @@ export async function getResource(client: GcpClient, project: string, name: stri
   if (!r) return undefined;
   const own = r.versionedResources?.[0]?.resource;
   if (own === undefined || own === null) return { resource: toResource(r), cut: false };
-  const json = JSON.stringify(own, null, 2);
+  const json = escapeInvisible(JSON.stringify(own, null, 2));
   return json.length > MAX_JSON ? { resource: toResource(r), json: json.slice(0, MAX_JSON), cut: true } : { resource: toResource(r), json, cut: false };
 }
 

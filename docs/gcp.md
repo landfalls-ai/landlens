@@ -10,19 +10,25 @@ gives Claude read-only Google Cloud tools when you turn them on (D93, `landlens-
 ## Signing in: gcloud's, not Landlens's
 
 Landlens finds `gcloud` on your login shell's PATH (`which("gcloud", await loginPath())`, the helpers the agent host
-uses to find Claude Code) and runs two commands, with `execFile` at that absolute path, a 10 s limit, and only `HOME`,
-`PATH` (the login PATH) and `CLOUDSDK_*` in its environment, so none of Landlens's own variables reach it:
+uses to find Claude Code: the first executable file of that name, not a folder or a file that can't run) and runs two
+commands, with `execFile` at that absolute path, a 10 s limit, no input (its stdin is closed, so a prompt fails at
+once), and only `HOME`, `PATH` (the login PATH), `CLOUDSDK_*` and `CLOUDSDK_CORE_DISABLE_PROMPTS=1` in its
+environment, so none of Landlens's own variables reach it:
 
 - `gcloud config get-value account`: the account, which must look like an email (at most 254 characters). None means
   signed out.
 - `gcloud auth print-access-token --account=<account>`: an access token for your user account (not Application
   Default Credentials, which need a quota project and a second sign-in), accepted only if it matches
   `^[A-Za-z0-9._-]{20,4096}$`. Main keeps it in memory for 5 minutes, asks once when several reads want it at the same
-  moment, and drops it on any 401 (then asks gcloud again once for that request).
+  moment, and drops it on any 401 (then asks gcloud again once for that request). When gcloud can't give one (it
+  needs you to sign in again, which it can't ask here), the page says "Google didn't accept gcloud's sign-in. Run
+  `gcloud auth login`."
 
 Landlens never runs `gcloud auth login` itself: the page tells you to. The token never reaches the renderer, the
-agent, a file or a log line: it is added to requests in main, the log's raw errors cut every bearer and `ya29.` token
-(and the exact token held), and the page gets only the account, the chosen ids and sentences.
+agent, a file or a log line: it is added to requests in main; the log's raw errors carry only the HTTP status and
+Google's `status` and `reason` words in their own shape (`PERMISSION_DENIED`, never free text), cut every bearer and
+`ya29.` token, and cut the exact token held, or the last one gcloud gave after a 401 dropped it; and the page gets
+only the account, the chosen ids and sentences.
 
 The states (`GcpStatus.state`), each a `.notice` with its one next step on the page and on the card:
 
@@ -55,7 +61,7 @@ most APIs off; the project search carries none.
 | What | Call | Limits |
 |---|---|---|
 | Projects | `cloudresourcemanager.googleapis.com/v3/projects:search`, `pageSize=500` | only `ACTIVE`; at most 2,000; cached 5 minutes |
-| A project's resources | `cloudasset.googleapis.com/v1/projects/<id>:searchAllResources`, `pageSize=500`, `readMask=name,assetType,displayName,location,state,createTime,updateTime,parentFullResourceName,labels` | at most 10 pages (5,000 resources), then cut; cached 60 s; one read of a project at a time, two projects at once |
+| A project's resources | `cloudasset.googleapis.com/v1/projects/<id>:searchAllResources`, `pageSize=500`, `readMask=name,assetType,displayName,location,state,createTime,updateTime,parentFullResourceName,labels` | at most 10 pages (5,000 resources), then cut; cached 60 s, and at most 50,000 resources in all the cached lists (the oldest go first); one read of a project at a time, two projects at once (a read that ends hands its place to the next waiting) |
 | A query | the same call with your text as `query` | the same limits; at most 10 queries kept, 60 s each |
 | One resource | the same call with `query=name="<name>"`, `pageSize=1`, `readMask` plus `versionedResources` | the JSON shown is cut at 256 KB |
 | GKE clusters | `container.googleapis.com/v1/projects/<id>/locations/-/clusters` | at most 200 a project; the chosen projects only; cached 60 s; for the catalog and `gke_clusters` |
@@ -67,8 +73,11 @@ other is refused before a request leaves ("Choose <project> on the Google Cloud 
 Names are checked before they go into a path or a query (`packages/contracts`): a project id
 `^[a-z][a-z0-9-]{4,28}[a-z0-9]$`; an asset type `<host>/<Kind>`; a resource name starting `//`, at most 1,000
 characters, with no `"`, `\` or control character; a query one line of at most 500 characters, sent as it is (it is
-a read, as you). What comes back is cut too: every string to 300 characters with control and format characters
-removed, at most 20 labels a resource.
+a read, as you). What comes back is cut too, by character (never half an emoji): a resource's name to 1,000
+characters, its other fields to 300, control and format characters removed; at most 20 labels and 2,000 characters
+of them a resource. The drawer's JSON is the resource's own as Google gave it (at most 256 KB), with every control and
+format character (a bidi override, a zero-width space) written as its `\uXXXX` escape, so it can't reorder what you
+read; the editor also shows any such character as a mark. What Claude sees of it is scrubbed further, below.
 
 The search fields and `versionedResources` were checked against Google's documentation and the fake only.
 `versionedResources` holds the resource's own JSON for the common types; where Google returns none, the JSON tab says
@@ -194,7 +203,7 @@ An unpackaged build has Google Cloud off unless one of these is set (a packaged 
 | Variable | What |
 |---|---|
 | `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: all three Google origins become this loopback fake; anything else is ignored |
-| `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the tests' fake); otherwise gcloud is looked up on the login PATH |
+| `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the tests' fake). With `LANDLENS_GCP_ENDPOINT` it is required: without it gcloud is "missing", and the login PATH's gcloud is never run against the fake. Otherwise gcloud is looked up on the login PATH |
 | `LANDLENS_GCP_REAL=1` | lets an unpackaged build reach the real Google Cloud with your gcloud. Only the person sets this, to try their own project; no test, script or agent does |
 
 The fakes, in `packages/gcp/test`:

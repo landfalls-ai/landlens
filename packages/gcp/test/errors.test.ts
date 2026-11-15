@@ -72,3 +72,12 @@ describe("each failure's sentence", () => {
     expect(httpError(500, undefined, "cloudasset", "demo-shop").message).toBe("Google answered HTTP 500.");
   });
 });
+
+describe("Fable's security review of part 4, fixed", () => {
+  it("L1: an error's status reaches the log only in Google's shape, so one that echoes a token is dropped", () => {
+    expect(reasonsOf({ error: { status: "PERMISSION_DENIED" } })).toEqual(["PERMISSION_DENIED"]);
+    const token = "eyJhbGciOiJSUzI1NiJ9.federatedTokenShape_0123456789abcdef";
+    expect(reasonsOf({ error: { status: `UNAUTHENTICATED ${token}` } })).toEqual([]);
+    expect(rawGcpError(httpError(401, { error: { status: `UNAUTHENTICATED ${token}` } }, "cloudasset", "demo-shop"))).not.toContain(token);
+  });
+});

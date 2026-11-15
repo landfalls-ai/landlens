@@ -19,10 +19,13 @@ export type Runner = (file: string, args: string[], opts: { env: Record<string, 
 
 export const execRunner: Runner = (file, args, opts) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, { env: opts.env, timeout: opts.timeout, maxBuffer: 64 * 1024, windowsHide: true }, (err, stdout) => {
+    const child = execFile(file, args, { env: opts.env, timeout: opts.timeout, maxBuffer: 64 * 1024, windowsHide: true }, (err, stdout) => {
       if (err) reject(Object.assign(new Error(`gcloud ${args.slice(0, 2).join(" ")} failed`), { code: (err as { code?: unknown }).code }));
       else resolve(String(stdout));
     });
+    // Nothing is typed into gcloud: a prompt (a reauth) reads end of input and fails at once instead of waiting out the
+    // limit while the Connections page waits on it (review of part 4, L3).
+    child.stdin?.end();
   });
 
 /** The environment gcloud gets: HOME, PATH (the login PATH, so it finds its Python) and its own CLOUDSDK_* settings. */
@@ -32,11 +35,15 @@ export function gcloudEnv(source: NodeJS.ProcessEnv, path?: string): Record<stri
   const p = path ?? source.PATH;
   if (p) out.PATH = p;
   for (const [k, v] of Object.entries(source)) if (k.startsWith("CLOUDSDK_") && v !== undefined) out[k] = v;
+  // gcloud never asks: a question fails instead of waiting for an answer nobody will type (L3).
+  out.CLOUDSDK_CORE_DISABLE_PROMPTS = "1";
   return out;
 }
 
 export class GcloudAuth {
   private cached?: { account: string; token: string; at: number };
+  /** The last token gcloud gave, kept after a drop only to cut it out of log lines (review of part 4, L1). */
+  private last?: string;
   private inflight?: Promise<string>;
 
   constructor(private readonly o: { gcloud: string; env: Record<string, string>; run?: Runner; now?: () => number }) {
@@ -73,6 +80,7 @@ export class GcloudAuth {
         const out = (await this.run(["auth", "print-access-token", `--account=${account}`])).trim();
         if (!TOKEN_SHAPE.test(out)) throw new Error("gcloud printed something that isn't an access token");
         this.cached = { account, token: out, at: this.now() };
+        this.last = out;
         return out;
       } finally {
         this.inflight = undefined;
@@ -86,8 +94,8 @@ export class GcloudAuth {
     this.cached = undefined;
   }
 
-  /** The token held now, if any: for cutting it out of log lines exactly. */
+  /** The token held now, or the last one gcloud gave if it was dropped: for cutting it out of log lines exactly. */
   held(): string | undefined {
-    return this.cached?.token;
+    return this.cached?.token ?? this.last;
   }
 }

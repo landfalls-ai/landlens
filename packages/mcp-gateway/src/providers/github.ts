@@ -119,9 +119,24 @@ const commentReview: RoutineRule = (args) => {
   return undefined;
 };
 
+/**
+ * A pull request runs on its own only into the repository's default branch: the one typed in the scope, or main or
+ * master when none was typed (Fable's check of part 3). Any other base (a release branch, gh-pages, another Landlens
+ * branch) asks, so a pull request can't be aimed where a merge would deploy or publish.
+ */
+const intoDefault: RoutineRule = (args, scope) => {
+  const raw = str(args.base);
+  if (!raw?.trim()) return "a pull request must name its base";
+  const want = scope.branch ? [branchName(scope.branch)] : ["main", "master"];
+  return want.includes(branchName(raw)) ? undefined : `its base ${quote(raw)} isn't the default branch (${want.join(" or ")})`;
+};
+
 const REPO = ["owner", "repo"] as const;
 
-/** The arguments each routine tool may take on its own (M4). Labels, assignees, state, base, reviewers, … ask. */
+/**
+ * The arguments each routine tool may take on its own (M4). Labels, assignees, state, reviewers, … ask; a new pull
+ * request names its base, which must be the default branch (`intoDefault`), and an update can't change it.
+ */
 export const GITHUB_ARGS: Readonly<Record<string, readonly string[]>> = {
   issue_write: [...REPO, "method", "issue_number", "title", "body"],
   add_issue_comment: [...REPO, "issue_number", "body"],
@@ -146,7 +161,7 @@ export const GITHUB_ROUTINE: Readonly<Record<string, RoutineRule>> = {
   create_branch: tool("create_branch", onOwnBranch("branch")),
   create_or_update_file: tool("create_or_update_file", onOwnBranch("branch"), filePath),
   push_files: tool("push_files", onOwnBranch("branch"), files),
-  create_pull_request: tool("create_pull_request"),
+  create_pull_request: tool("create_pull_request", intoDefault),
   update_pull_request: tool("update_pull_request"),
   pull_request_review_write: tool("pull_request_review_write", commentReview),
   add_comment_to_pending_review: tool("add_comment_to_pending_review"),

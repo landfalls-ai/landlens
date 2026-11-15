@@ -1,7 +1,7 @@
 // Projects and resources against the fake (D87): paging, the caps, the drawer's JSON, the names checked before they
 // reach a path or a query, and where the token went.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { clean, countTypes, getResource, MAX_JSON, READ_MASK, searchProjects, searchResources, serviceOf, toResource } from "../src/assets.js";
+import { clean, countTypes, getResource, LABELS_MAX, MAX_JSON, READ_MASK, searchProjects, searchResources, serviceOf, toResource } from "../src/assets.js";
 import { GcpClient, endpointsFor, GOOGLE_ENDPOINTS } from "../src/client.js";
 import { GcpError, SENTENCES } from "../src/errors.js";
 import { listClusters } from "../src/gke.js";
@@ -149,5 +149,41 @@ describe("GKE clusters", () => {
     expect(cs.map((c) => c.context)).toEqual(["gke_demo-shop_us-central1_shop-prod", "gke_demo-shop_europe-west1-b_shop-staging", "gke_demo-shop_us-east1_batch-jobs"]);
     expect(cs[2]!.endpoint).toBe("gke-0a1b2c3d4e-batch.us-east1.gke.goog");
     expect(fake.requests[0]!.userProject).toBe("demo-shop");
+  });
+});
+
+describe("Fable's security review of part 4, fixed", () => {
+  const one = (resource: unknown) =>
+    new GcpClient({
+      auth: { token: async () => "t".repeat(30), drop() {} },
+      fetch: (async () => Response.json({ results: [{ name: "//compute.googleapis.com/projects/demo-shop/zones/a/instances/x", assetType: "compute.googleapis.com/Instance", versionedResources: [{ resource }] }] })) as typeof fetch,
+    });
+
+  it("L4: the JSON shows a bidi override or a zero-width character as its escape, never the character", async () => {
+    const r = (await getResource(one({ description: "safe\u202egnp.exe", note: "a\u200bb\u2066c" }), "demo-shop", "//compute.googleapis.com/projects/demo-shop/zones/a/instances/x"))!;
+    for (const c of ["\u202e", "\u200b", "\u2066"]) expect(r.json!.includes(c)).toBe(false);
+    expect(r.json).toContain("safe\\u202egnp.exe");
+    expect(JSON.parse(r.json!)).toEqual({ description: "safe\u202egnp.exe", note: "a\u200bb\u2066c" });
+  });
+
+  it("L4: a cut never splits a character in two", () => {
+    const out = clean("a".repeat(298) + "😀😀", 300);
+    expect(out).toBe(`${"a".repeat(298)}😀😀`);
+    const cut = clean("a".repeat(298) + "😀😀😀", 300);
+    expect(cut).toBe(`${"a".repeat(298)}😀…`);
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(cut)).toBe(false);
+  });
+
+  it("L7: a resource's labels together are cut at 2,000 characters", () => {
+    const labels = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, "v".repeat(300)]));
+    const r = toResource({ name: "//x/y", assetType: "a.googleapis.com/B", labels });
+    const size = Object.entries(r.labels ?? {}).reduce((n, [k, v]) => n + k.length + v.length, 0);
+    expect(size).toBeLessThanOrEqual(LABELS_MAX);
+    expect(Object.keys(r.labels ?? {}).length).toBe(6);
+  });
+
+  it("L3: when gcloud gives no token (a reauth it can't ask for), the sign-in sentence", async () => {
+    const client = new GcpClient({ auth: { token: async () => { throw new Error("gcloud auth print-access-token failed"); }, drop() {} }, fetch: (async () => Response.json({})) as typeof fetch });
+    await expect(searchProjects(client)).rejects.toMatchObject({ status: 401, message: SENTENCES.signIn });
   });
 });

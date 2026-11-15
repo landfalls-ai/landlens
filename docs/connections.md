@@ -142,13 +142,16 @@ which the transcript also notes.
    repositories, workflows, secrets, releases, and any tool a vendor adds until a release of Landlens names it. A
    tool whose annotations say it may destroy something asks even if named.
 2. **Only the arguments each tool names** (`GITHUB_ARGS`, `LINEAR_ARGS`). An issue write takes its title and body,
-   never labels, assignees, a milestone or a state; a pull request update its title and body, never a state, base,
-   draft flag or reviewers; a Linear update its title and description, never a state. Any other argument asks,
+   never labels, assignees, a milestone or a state; a new pull request its title, head, base, body and draft flag, and
+   only into the default branch (the one you typed in the scope, or main or master when you typed none: any other
+   base asks); a pull request update its title and body, never a state, base, draft flag or reviewers; a Linear update
+   its title and description, never a state. Any other argument asks,
    including one a vendor adds later (an auto-merge flag would ask, even after you accept the new listing).
 3. **The scope.** A GitHub write must name `owner` and `repo`, and together they must be one of the scope's
    repositories (case aside). Branches are an allowlist: a branch is created and files are written only on a branch
    under `landlens/` (well formed, never main, master or the default branch you typed, with or without
-   `refs/heads/`), so gh-pages, `release/*`, environment branches a GitOps tool deploys from, and a mistyped default
+   `refs/heads/`; branch names are compared without case, as the repository names are, so `Landlens/Fix-1` is a
+   Landlens branch too and `MAIN` is main), so gh-pages, `release/*`, environment branches a GitOps tool deploys from, and a mistyped default
    branch all ask. No file goes under `.github/` (workflows, actions, CODEOWNERS), in `path` or any of `push_files`'
    files, and no path climbs with `..`. A Linear create names the scope's team; an update or a comment must name one
    of its issues by identifier (`ENG-123` for team ENG): an issue named by its UUID can't be placed in a team without a

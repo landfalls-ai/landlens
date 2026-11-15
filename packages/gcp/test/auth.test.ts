@@ -1,8 +1,9 @@
 // gcloud's sign-in (D85): the fake gcloud only; Landlens stores nothing and hands gcloud a small environment.
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ACCOUNT_SHAPE, GcloudAuth, gcloudEnv, TOKEN_TTL, type Runner } from "../src/auth.js";
+import { ACCOUNT_SHAPE, execRunner, GcloudAuth, gcloudEnv, TOKEN_TTL, type Runner } from "../src/auth.js";
 import { GCP_ACCOUNT, GCP_TOKEN } from "./fake-gcp.js";
 import { FAKE_GCLOUD, sdkDir } from "./helpers.js";
 
@@ -15,7 +16,7 @@ describe("GcloudAuth with the fake gcloud", () => {
     expect(await auth.account()).toBe(GCP_ACCOUNT);
     expect(await auth.token(GCP_ACCOUNT)).toBe(GCP_TOKEN);
     const seen = readFileSync(join(dir, "env"), "utf8").split("\n").map((l) => l.split("=")[0]).filter((k) => k && !["PWD", "SHLVL", "_", "OLDPWD"].includes(k!));
-    expect(new Set(seen)).toEqual(new Set(["HOME", "PATH", "CLOUDSDK_CONFIG"]));
+    expect(new Set(seen)).toEqual(new Set(["HOME", "PATH", "CLOUDSDK_CONFIG", "CLOUDSDK_CORE_DISABLE_PROMPTS"]));
     expect(readFileSync(join(dir, "calls"), "utf8").trim().split("\n")).toEqual(["config get-value account", `auth print-access-token --account=${GCP_ACCOUNT}`]);
   });
 
@@ -51,7 +52,7 @@ describe("GcloudAuth with the fake gcloud", () => {
     t = TOKEN_TTL;
     expect(await auth.token(GCP_ACCOUNT)).not.toBe(a);
     auth.drop();
-    expect(auth.held()).toBeUndefined();
+    // Dropped: the next read asks gcloud again (held() still names the last token, only for cutting it from logs).
     await auth.token(GCP_ACCOUNT);
     expect(runs).toBe(3);
   });
@@ -64,5 +65,24 @@ describe("GcloudAuth with the fake gcloud", () => {
     await expect(auth.token("x; rm -rf ~")).rejects.toThrow(/not an account/);
     await auth.token(GCP_ACCOUNT);
     expect(calls).toEqual([["/opt/gcloud/bin/gcloud", "auth", "print-access-token", `--account=${GCP_ACCOUNT}`]]);
+  });
+});
+
+describe("Fable's security review of part 4, fixed", () => {
+  it("L1: the last token gcloud gave is still known after a drop, to cut it out of log lines", async () => {
+    const auth = new GcloudAuth({ gcloud: FAKE_GCLOUD, env: env(sdkDir()) });
+    await auth.token(GCP_ACCOUNT);
+    auth.drop();
+    expect(auth.held()).toBe(GCP_TOKEN);
+  });
+
+  it("L3: gcloud is told never to ask, and gets no input: a prompt fails at once instead of waiting out the limit", async () => {
+    expect(gcloudEnv({}).CLOUDSDK_CORE_DISABLE_PROMPTS).toBe("1");
+    const dir = mkdtempSync(join(tmpdir(), "landlens-prompt-"));
+    const script = join(dir, "asks.sh");
+    writeFileSync(script, "#!/bin/sh\nread answer\necho \"read: [$answer]\"\n", { mode: 0o755 });
+    const started = Date.now();
+    expect(await execRunner(script, [], { env: {}, timeout: 3_000 })).toBe("read: []\n");
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

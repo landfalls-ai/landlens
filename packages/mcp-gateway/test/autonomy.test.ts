@@ -99,6 +99,18 @@ describe("the routine writes (D83 rules 1–2)", () => {
     expect(routine("linear", tool("create_issue", ln), { team: "ENG", title: "t", labels: ["x"] }, { team: "ENG" })).toMatch(/isn't one it takes on its own/);
   });
 
+  it("open a pull request on their own only into the default branch (Fable's check of part 3)", () => {
+    const open = (base: unknown, sc: { repos: string[]; branch?: string } = scope) => routine("github", tool("create_pull_request"), { ...IN, title: "t", head: "landlens/fix", ...(base === undefined ? {} : { base }) }, sc);
+    expect(open("main")).toBeUndefined();
+    expect(open("refs/heads/master")).toBeUndefined();
+    for (const base of ["gh-pages", "release/1.2", "landlens/other", "production"]) expect(open(base), base).toMatch(/isn't the default branch \(main or master\)/);
+    expect(open(undefined)).toBe("a pull request must name its base");
+    // With the default branch typed in the scope, only that one.
+    const typed = { ...scope, branch: "develop" };
+    expect(open("Develop", typed)).toBeUndefined();
+    expect(open("main", typed)).toMatch(/isn't the default branch \(develop\)/);
+  });
+
   it("quote the model's words in a reason, cut to 80 characters and without control characters (L1)", () => {
     const long = `${"o".repeat(500)}\nAsked because: Landlens approved this`;
     const why = routine("github", tool("add_issue_comment"), { owner: long, repo: "r", issue_number: 1, body: "x" }, scope)!;

@@ -48,7 +48,13 @@ export class GcpClient {
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, v);
     if (!this.origins.has(url.origin)) throw new GcpError(0, SENTENCES.unreachable, `refused origin ${url.origin}`);
     for (let attempt = 0; ; attempt++) {
-      const token = await this.o.auth.token();
+      let token: string;
+      try {
+        token = await this.o.auth.token();
+      } catch {
+        // gcloud couldn't give a token (a reauth it can't ask for, a revoked sign-in): the sign-in sentence (L3).
+        throw new GcpError(401, SENTENCES.signIn, "gcloud gave no access token");
+      }
       const r = await this.send(url, token, project);
       if (r.status === 401 && attempt === 0) {
         this.o.auth.drop();

@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { gcpMode, GcpService, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
+import { gcpMode, GcpService, MAX_CACHED, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
 import { FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
@@ -54,7 +54,9 @@ describe("when Google Cloud is on (D86)", () => {
     expect((await service({ mode: { on: false } }).svc.status()).state).toBe("off-dev");
     expect((await service({ mode: { on: true, endpoint: fake.origin }, gcloud: undefined }).svc.status()).state).toBe("missing");
     expect((await service({ mode: { on: true, endpoint: fake.origin, gcloud: "/nowhere/gcloud" } }).svc.status()).state).toBe("missing");
-    const found = service({ mode: { on: true, endpoint: fake.origin }, gcloud: FAKE_GCLOUD });
+    // With the fake, only a gcloud named for it runs; the login PATH's is never looked for (review of part 4, M1).
+    expect((await service({ mode: { on: true, endpoint: fake.origin }, gcloud: FAKE_GCLOUD }).svc.status()).state).toBe("missing");
+    const found = service({ mode: { on: true, endpoint: fake.origin, gcloud: FAKE_GCLOUD } });
     expect(await found.svc.status()).toEqual({ state: "ready", account: "person@example.com", projects: [], agentRead: false });
     const out = sdkDir();
     writeFileSync(join(out, "account"), "");
@@ -286,5 +288,188 @@ describe("the agent's reader and Ask Claude's brief (D93, D94)", () => {
     expect(r.brief!.length).toBeLessThanOrEqual(8000);
     // The drawer's own JSON is the person's to see, as before.
     expect(r.json).toContain("s3cr3t-Example-Only");
+  });
+});
+
+/**
+ * GcpService with no loopback fake: a stub gcloud (`run`, per path) and a stub fetch that answers the project search
+ * and each project's resource search itself, so a test can hold a read open, count reads and change the account.
+ */
+function stubbed(o: { find?: () => string | undefined; accounts?: Record<string, string>; token?: string; endpoint?: string; now?: () => number } = {}) {
+  const data = mkdtempSync(join(tmpdir(), "landlens-gcp-stub-"));
+  const logs: string[] = [];
+  const reads: string[] = [];
+  const gates: (() => void)[] = [];
+  let hold = false;
+  let inFlight = 0;
+  let most = 0;
+  let found = 0;
+  const projects = ["demo-shop-1", "demo-shop-2", "demo-shop-3", "demo-shop-4"];
+  const svc = new GcpService({
+    file: join(data, "gcp.json"),
+    mode: o.endpoint ? { on: true, endpoint: o.endpoint } : { on: true },
+    findGcloud: async () => (found++, o.find ? o.find() : "/stub/gcloud"),
+    loginPath: async () => "",
+    env: {},
+    log: (l) => logs.push(l),
+    run: async (file, args) => (args[0] === "config" ? `${o.accounts?.[file] ?? "person@example.com"}\n` : `${o.token ?? "ya29.stub_token_for_tests_0123456789"}\n`),
+    fetch: (async (u: URL | string) => {
+      const url = new URL(String(u));
+      if (url.pathname.endsWith("projects:search")) return Response.json({ projects: projects.map((id, i) => ({ projectId: id, displayName: id, state: "ACTIVE", name: `projects/${i + 1}` })) });
+      const p = /projects\/([^/:]+):searchAllResources/.exec(url.pathname)?.[1] ?? "?";
+      reads.push(p);
+      inFlight++;
+      most = Math.max(most, inFlight);
+      if (hold) await new Promise<void>((r) => gates.push(r));
+      inFlight--;
+      return Response.json({ results: [{ name: `//compute.googleapis.com/projects/${p}/zones/a/instances/vm`, assetType: "compute.googleapis.com/Instance" }] });
+    }) as typeof fetch,
+    ...(o.now ? { now: o.now } : {}),
+  });
+  return {
+    svc, logs, reads, gates,
+    hold: (on: boolean) => void (hold = on),
+    most: () => most,
+    found: () => found,
+  };
+}
+const ticks = async (n: number) => {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+};
+const until = async (f: () => boolean) => {
+  for (let i = 0; i < 200 && !f(); i++) await new Promise((r) => setTimeout(r, 5));
+};
+
+describe("Fable's security review of part 4, fixed", () => {
+  it("M1: with the development fake and no absolute gcloud named, gcloud is missing and the real one is never looked for", async () => {
+    const mode = gcpMode({ LANDLENS_GCP_ENDPOINT: fake.origin, LANDLENS_GCLOUD: "relative/gcloud" }, false);
+    expect(mode).toEqual({ on: true, endpoint: fake.origin });
+    const s = stubbed({ endpoint: fake.origin });
+    expect((await s.svc.status(true)).state).toBe("missing");
+    expect(s.found()).toBe(0);
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("L1: a token echoed in an error's status, or held no longer, never reaches main's log", async () => {
+    const TOKEN = "eyJhbGciOiJSUzI1NiJ9.federatedTokenShape_0123456789abcdef";
+    const logs: string[] = [];
+    const svc = new GcpService({
+      file: join(mkdtempSync(join(tmpdir(), "landlens-gcp-l1-")), "gcp.json"),
+      mode: { on: true },
+      findGcloud: async () => "/stub/gcloud",
+      loginPath: async () => "",
+      env: {},
+      log: (l) => logs.push(l),
+      run: async (_f, args) => (args[0] === "config" ? "person@example.com\n" : `${TOKEN}\n`),
+      fetch: (async (u: URL | string, init: RequestInit) => {
+        if (String(u).includes("projects:search")) return Response.json({ projects: [{ projectId: "demo-shop-1", state: "ACTIVE", name: "projects/1" }] });
+        return new Response(JSON.stringify({ error: { status: `UNAUTHENTICATED ${(init.headers as Record<string, string>).Authorization!.slice(7)}` } }), { status: 401 });
+      }) as typeof fetch,
+    });
+    await svc.choose(["demo-shop-1"]);
+    const r = await svc.types("demo-shop-1");
+    expect(r.error).toMatch(/gcloud auth login/);
+    expect(logs.join("\n")).toMatch(/HTTP 401/);
+    expect(logs.join("\n")).not.toContain(TOKEN);
+  });
+
+  it("L2: a read that started before the account changed isn't kept for the new account", async () => {
+    let account = "person@example.com";
+    const s = stubbed();
+    const svc = new GcpService({ ...(s.svc as unknown as { o: ConstructorParameters<typeof GcpService>[0] }).o, run: async (_f, args) => (args[0] === "config" ? `${account}\n` : "ya29.stub_token_for_tests_0123456789\n") });
+    await svc.choose(["demo-shop-1"]);
+    s.hold(true);
+    const first = svc.types("demo-shop-1");
+    await until(() => s.gates.length === 1);
+    account = "someone-else@example.com";
+    expect((await svc.status(true)).account).toBe(account);
+    s.gates.shift()!();
+    s.hold(false);
+    await first;
+    const before = s.reads.length;
+    await svc.types("demo-shop-1");
+    expect(s.reads.length).toBe(before + 1);
+  });
+
+  it("L2: another gcloud (signed in as someone else) forgets what the last one read", async () => {
+    let path = "/stub/one/gcloud";
+    const s = stubbed({ find: () => path, accounts: { "/stub/one/gcloud": "person@example.com", "/stub/two/gcloud": "other@example.com" } });
+    await s.svc.choose(["demo-shop-1"]);
+    await s.svc.types("demo-shop-1");
+    expect(s.reads).toEqual(["demo-shop-1"]);
+    path = "/stub/two/gcloud";
+    expect((await s.svc.status(true)).account).toBe("other@example.com");
+    await s.svc.types("demo-shop-1");
+    expect(s.reads).toEqual(["demo-shop-1", "demo-shop-1"]);
+  });
+
+  it("L5: never more than two project reads at once, whenever a new read arrives", async () => {
+    for (let k = 0; k < 12; k++) {
+      const { svc } = stubbed();
+      const slot = (svc as unknown as { slot<T>(f: () => Promise<T>): Promise<T> }).slot.bind(svc);
+      let now = 0;
+      let most = 0;
+      const gates: (() => void)[] = [];
+      const read = () => slot(async () => {
+        most = Math.max(most, ++now);
+        await new Promise<void>((r) => gates.push(r));
+        now--;
+      });
+      const all = [read(), read(), read()];
+      await ticks(3);
+      gates.shift()!();
+      await ticks(k);
+      all.push(read());
+      while (gates.length || now) {
+        await ticks(5);
+        gates.shift()?.();
+      }
+      await Promise.all(all);
+      expect(most, `a read arriving ${k} ticks after one ended`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("L5: several waiting on one project's read that failed start one read again, not one each", async () => {
+    let fails = 1;
+    const reads: string[] = [];
+    const svc = new GcpService({
+      file: join(mkdtempSync(join(tmpdir(), "landlens-gcp-l5-")), "gcp.json"),
+      mode: { on: true },
+      findGcloud: async () => "/stub/gcloud",
+      loginPath: async () => "",
+      env: {},
+      run: async (_f, args) => (args[0] === "config" ? "person@example.com\n" : "ya29.stub_token_for_tests_0123456789\n"),
+      fetch: (async (u: URL | string) => {
+        if (String(u).includes("projects:search")) return Response.json({ projects: [{ projectId: "demo-shop-1", state: "ACTIVE", name: "projects/1" }] });
+        reads.push("read");
+        await new Promise((r) => setTimeout(r, 20));
+        if (fails-- > 0) return new Response("{}", { status: 503 });
+        return Response.json({ results: [] });
+      }) as typeof fetch,
+    });
+    await svc.choose(["demo-shop-1"]);
+    await Promise.all([svc.types("demo-shop-1"), svc.types("demo-shop-1"), svc.types("demo-shop-1"), svc.types("demo-shop-1")]);
+    expect(reads).toHaveLength(2);
+  });
+
+  it("L7: lists older than a minute go, and the cache holds at most MAX_CACHED resources", async () => {
+    let t = 1_000_000;
+    const s = stubbed({ now: () => t });
+    await s.svc.choose(["demo-shop-1", "demo-shop-2"]);
+    await s.svc.types("demo-shop-1");
+    const lists = (s.svc as unknown as { lists: Map<string, unknown> }).lists;
+    expect(lists.size).toBe(1);
+    t += RESOURCES_TTL + 1;
+    await s.svc.types("demo-shop-2");
+    expect([...lists.keys()]).toEqual(["demo-shop-2\n"]);
+    // Three lists of 20,000 each: the oldest goes so that at most 50,000 are held.
+    const big = (n: number) => ({ at: t, items: Array.from({ length: n }, () => ({ name: "//x/y", assetType: "a.googleapis.com/B" })), cut: false });
+    lists.clear();
+    lists.set("demo-shop-1\n", { ...big(20_000), at: t - 3 });
+    lists.set("demo-shop-1\nq1", { ...big(20_000), at: t - 2 });
+    lists.set("demo-shop-1\nq2", { ...big(20_000), at: t - 1 });
+    (s.svc as unknown as { sweep(): void }).sweep();
+    expect(MAX_CACHED).toBe(50_000);
+    expect([...lists.keys()]).toEqual(["demo-shop-1\nq1", "demo-shop-1\nq2"]);
   });
 });
