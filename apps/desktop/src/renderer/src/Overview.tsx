@@ -1,5 +1,5 @@
-// The landing page: is this cluster healthy? One verdict, four tiles, the problems worst first, the recent warnings,
-// and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
+// The landing page: is this cluster healthy? One verdict, four tiles, the worst five problems (the Problems page has
+// them all), the recent warnings, and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
 import type { ClusterHealth, HealthEvent, HealthProblem, MetricsRange, MetricsSeries } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
@@ -12,6 +12,9 @@ import { Sparkline } from "./charts/Sparkline";
 import { useMetrics } from "./metrics";
 import { Usage } from "./Usage";
 
+/** The Overview shows the worst few; the Problems page has them all. */
+const OV_PROBLEMS = 5;
+
 export function Overview(props: {
   handle: string;
   /** Changes when the Clickland settings do. */
@@ -21,8 +24,10 @@ export function Overview(props: {
   error?: ApiError;
   now: number;
   onOpenList: (resource: "nodes" | "pods" | "deployments", failing?: boolean) => void;
+  /** A row opens the problem's drawer on the Problems page (D57). */
   onOpenProblem: (p: HealthProblem) => void;
   onAskProblem: (p: HealthProblem) => void;
+  onSeeAll: () => void;
   onAskAll: () => void;
 }) {
   const { health: h, now } = props;
@@ -95,9 +100,12 @@ export function Overview(props: {
       </div>
       <div className="ov-cols">
         <section className="panel" aria-label="Problems">
-          <header className="panel-head"><h3>Problems</h3><span className="count-badge">{h.problems.length}</span><span className="grow" /><span className="dim small">worst first</span></header>
+          <header className="panel-head"><h3>Problems</h3><span className="count-badge">{h.problems.length}</span><span className="grow" /><button className="link-btn small" onClick={props.onSeeAll}>Open Problems</button></header>
           {h.problems.length ? (
-            <ul className="ov-list">{h.problems.map((x) => <ProblemRow key={`${x.kind}/${x.namespace}/${x.name}/${x.reason}`} p={x} onOpen={props.onOpenProblem} onAsk={props.onAskProblem} />)}</ul>
+            <>
+              <ul className="ov-list">{h.problems.slice(0, OV_PROBLEMS).map((x) => <ProblemRow key={x.id} p={x} onOpen={props.onOpenProblem} onAsk={props.onAskProblem} />)}</ul>
+              {h.problems.length > OV_PROBLEMS ? <button className="show-all" onClick={props.onSeeAll}>See all {h.problems.length}{h.cut ? "+" : ""}</button> : null}
+            </>
           ) : (
             <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>No problems found</span></div>
           )}
@@ -156,7 +164,7 @@ function describe(p: HealthProblem, before?: HealthProblem): ReactNode {
 function ProblemRow({ p, onOpen, onAsk }: { p: HealthProblem; onOpen: (p: HealthProblem) => void; onAsk: (p: HealthProblem) => void }) {
   const { base, hash } = p.kind === "Pod" ? splitByShape(p.name) : { base: p.name, hash: "" };
   return (
-    <li className="ov-row" tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(p)} aria-label={`${p.kind} ${p.namespace ? `${p.namespace}/` : ""}${p.name}: ${p.reason}`}>
+    <li className="ov-row" tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(p)} aria-label={`${p.title}. ${p.kind} ${p.namespace ? `${p.namespace}/` : ""}${p.name}: ${p.reason}`}>
       <span className={`kind-tile sm ${p.tone}`}><Ic icon={iconOfKind(p.kind)} size={14} /></span>
       <div className="ov-main">
         <div className="ov-name">

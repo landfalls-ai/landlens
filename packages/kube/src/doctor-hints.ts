@@ -16,6 +16,8 @@ export type HintInput = {
   limit?: string;
   available?: string;
   restarts?: number;
+  /** Label-shaped `key=value` pairs only (doctor.ts checks them). */
+  nodeSelector?: string[];
 };
 export type Hint = { cause: string; next: string[] };
 
@@ -47,7 +49,10 @@ export function hintFor(i: HintInput): Hint {
       return { cause: "The runtime couldn't create or start the container: often a command that doesn't exist, a bad mount or a security setting.", next: ["Read the waiting message on the pod", "Check the command, mounts and securityContext"] };
     case "pending":
       if (i.reason === "Unschedulable") {
-        if (/affinity|selector|didn't match/i.test(m)) return { cause: "No node has the labels this pod asks for (its node selector or affinity).", next: ["Compare the pod's nodeSelector and affinity with the nodes' labels", "Remove the selector, or label a node that should run it"] };
+        if (/affinity|selector|didn't match/i.test(m)) {
+          const sel = i.nodeSelector?.length ? i.nodeSelector.join(", ") : "";
+          return { cause: `No node has the labels this pod asks for (its node selector or affinity)${sel ? `: it asks for ${sel}` : ""}.`, next: [`Compare the pod's nodeSelector${sel ? ` (${sel})` : ""} and affinity with the nodes' labels`, "Remove the selector, or label a node that should run it"] };
+        }
         if (/insufficient/i.test(m)) return { cause: "No node has room for its CPU or memory requests.", next: ["Lower the requests, or free or add capacity", "Check what the nodes have allocated"] };
         if (/taint/i.test(m)) return { cause: "The nodes have taints this pod doesn't tolerate.", next: ["Add a toleration, or schedule it on an untainted node"] };
         if (/persistentvolumeclaim|unbound|volume/i.test(m)) return { cause: "A volume claim it needs isn't bound.", next: ["Check the claim's status and storage class"] };

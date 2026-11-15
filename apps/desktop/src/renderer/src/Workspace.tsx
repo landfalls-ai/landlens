@@ -16,6 +16,8 @@ import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
+import { ProblemDrawer, ProblemsPage } from "./Problems";
+import { holdProblem, type HeldProblem, type Severity } from "./problemRules";
 import { splitByShape } from "./present";
 import { ResourceTable, rowTone } from "./ResourceTable";
 import { Sidebar, type Current } from "./Sidebar";
@@ -59,6 +61,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [agentTab, setAgentTab] = useState<AgentTab>("skills");
   const [mcpCall, setMcpCall] = useState<string>();
   const [helmPick, setHelmPick] = useState<{ namespace: string; name: string }>();
+  // The Problems page (D58): its severity filter (preset from the status bar) and the problem in its drawer, held when
+  // it leaves the report (D59).
+  const [severity, setSeverity] = useState<Severity>("all");
+  const [problemSel, setProblemSel] = useState<HeldProblem>();
   const [reachError, setReachError] = useState<string>();
   // Choosing or dropping a found Prometheus (MetricsNotice): main checks it is still the one found, then every chart asks again.
   useEffect(() => {
@@ -106,7 +112,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     return () => ro.disconnect();
   }, []);
 
-  const list = current !== "overview" && current !== "mcp" && current !== "agent" && current !== "helm" ? current : undefined;
+  const list = typeof current === "object" ? current : undefined;
+  const problemsPage = current === "problems";
   const mcp = current === "mcp";
   const helmPage = current === "helm";
   const helm = useHelmList(cluster.handle, namespace, helmPage);
@@ -156,8 +163,21 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     setSelectedNow(undefined);
     setMcpCall(undefined);
     setHelmPick(undefined);
+    setProblemSel(undefined);
     setStatus("all");
   });
+  /** The Problems page, with a severity preset (the status bar) and a problem's drawer open (a row, ⌘K). */
+  const openProblems = (opts: { severity?: Severity; problem?: HealthProblem } = {}) => leaveEdit(() => {
+    setCurrent("problems");
+    setSelectedNow(undefined);
+    setMcpCall(undefined);
+    setHelmPick(undefined);
+    setStatus("all");
+    if (opts.severity) setSeverity(opts.severity);
+    if (opts.problem) setSeverity((s) => (s === "all" || s === opts.problem!.tone ? s : "all"));
+    setProblemSel(opts.problem ? { id: opts.problem.id, last: opts.problem } : undefined);
+  });
+  const openSubject = (p: HealthProblem) => go({ kind: p.kind, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) });
   const navItem = (resource: string) => nav.find((n) => n.type.resource === resource && (n.type.group === "" || n.type.group === "apps"));
   const go = (t: NavTarget) => {
     const n = navItem(RESOURCE_OF_KIND[t.kind] ?? "");
@@ -215,6 +235,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       setCurrent(n);
       setMcpCall(undefined);
       setHelmPick(undefined);
+      setProblemSel(undefined);
       setStatus("all");
       if (n.type.namespaced && t.namespace && namespace && namespace !== t.namespace) setNamespace(t.namespace);
       setSelectedNow(o);
@@ -231,7 +252,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
 
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
   // the dock alone does, and the drawer floats over the table.
-  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel;
+  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && problemSel);
   const narrow = width.app < 1280;
   const autoRail = dock && (drawer || narrow);
   const rail = userRail ?? autoRail;
@@ -271,6 +292,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
         if (k === "j") return e.preventDefault(), setDock((d) => !d);
         if (k === "b") return e.preventDefault(), setUserRail(!rail);
         if (k === "1") return e.preventDefault(), pick("overview");
+        if (k === "3") return e.preventDefault(), pick("problems");
         if (k === "2") {
           const p = navItem("pods");
           if (p) (e.preventDefault(), pick(p));
@@ -282,18 +304,21 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       if (e.key === "Escape" && !jump && !creating && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine") && selected) setSelected(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && mcpCall) setMcpCall(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && helmPick) setHelmPick(undefined);
+      if (e.key === "Escape" && !jump && !t?.closest(".dock, .drawer .logs, input") && problemSel) setProblemSel(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
 
   const h = health.health;
+  // Keep the drawer's problem current; when its id leaves the report, keep the last one with the time it went.
+  useEffect(() => setProblemSel((held) => holdProblem(held, h?.problems, Date.now())), [h]);
   const bad = h?.problems.filter((p) => p.tone === "bad").length ?? 0;
   const warn = (h?.problems.length ?? 0) - bad;
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => namespaces.items.map((n) => n.metadata.name).sort(), [namespaces.items]);
-  const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : helmPage ? "Helm releases" : "Overview");
+  const label = list?.label ?? (mcp ? "MCP" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
 
   return (
     <div ref={app}
@@ -307,7 +332,14 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
         current={current}
         navError={navError}
         rail={rail}
-        badges={{ overview: h ? badgeFor(h.problems) : undefined, byResource: h ? { pods: badgeFor(h.problems, "Pod"), deployments: badgeFor(h.problems, "Deployment"), nodes: badgeFor(h.problems, "Node") } : {} }}
+        badges={{
+          problems: h ? badgeFor(h.problems) : undefined,
+          byResource: h ? {
+            pods: badgeFor(h.problems, "Pod"), deployments: badgeFor(h.problems, "Deployment"), statefulsets: badgeFor(h.problems, "StatefulSet"),
+            daemonsets: badgeFor(h.problems, "DaemonSet"), jobs: badgeFor(h.problems, "Job"), nodes: badgeFor(h.problems, "Node"),
+            secrets: badgeFor(h.problems, "Secret"), persistentvolumeclaims: badgeFor(h.problems, "PersistentVolumeClaim"),
+          } : {},
+        }}
         onPick={pick}
         onToggle={() => setUserRail(!rail)}
         onSwitch={switchTo}
@@ -318,12 +350,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage ? { hideCount: true } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); }) } } : {})}
-          {...(list || helmPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
+          {...(!mcp && !agentPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespace, onChange: (ns: string) => leaveEdit(() => { setNamespace(ns); setSelectedNow(undefined); setProblemSel(undefined); }) } } : {})}
+          {...(list || helmPage || problemsPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
           {...(dock ? {} : { onAsk: () => setDock(true) })}
-          {...(!mcp && !agentPage && !helmPage ? { onCreate: () => setCreating(true) } : {})}
+          {...(!mcp && !agentPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
         />
         {mcp ? (
           <McpPage
@@ -349,6 +381,20 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             {...(helmSel ? { selected: `${helmSel.namespace}/${helmSel.name}` } : {})}
             onSelect={(r) => setHelmPick(r ? { namespace: r.namespace, name: r.name } : undefined)}
           />
+        ) : problemsPage ? (
+          <ProblemsPage
+            health={h}
+            error={health.error}
+            now={now}
+            text={filter}
+            severity={severity}
+            onSeverity={setSeverity}
+            {...(problemSel ? { selected: problemSel.id } : {})}
+            onSelect={(p) => setProblemSel({ id: p.id, last: p })}
+            onAsk={askProblem}
+            onOpen={openSubject}
+            onClearText={() => setFilter("")}
+          />
         ) : !list ? (
           <Overview
             handle={cluster.handle}
@@ -363,8 +409,9 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
               pick(n);
               if (failing) setStatus("bad");
             }}
-            onOpenProblem={(p) => go({ kind: p.kind, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) })}
+            onOpenProblem={(p) => openProblems({ problem: p })}
             onAskProblem={askProblem}
+            onSeeAll={() => openProblems()}
             onAskAll={() => {
               setDock(true);
               setPrompt({ id: Date.now(), text: FIRST_QUESTION });
@@ -407,7 +454,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           {...(claude ? { claude } : {})}
           bad={bad}
           warn={warn}
-          onProblems={() => pick("overview")}
+          onProblems={(tone) => openProblems({ severity: tone })}
           clickland={!!clickland?.hasKey}
           onMetrics={() => setSettings(true)}
           sessions={bench.sessions}
@@ -444,6 +491,21 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       {helmSel ? (
         <Boundary what="this release" resetKey={`${helmSel.namespace}/${helmSel.name}`}>
           <HelmDrawer handle={cluster.handle} release={helmSel} now={now} onClose={() => setHelmPick(undefined)} onAsk={ask} onNavigate={go} />
+        </Boundary>
+      ) : null}
+      {problemsPage && problemSel ? (
+        <Boundary what="this problem" resetKey={problemSel.id}>
+          <ProblemDrawer
+            handle={cluster.handle}
+            namespace={namespace}
+            held={problemSel}
+            now={now}
+            onClose={() => setProblemSel(undefined)}
+            onAsk={askProblem}
+            onOpen={openSubject}
+            onNavigate={go}
+            onFullLogs={(pod, ns, container) => void reach({ group: "", version: "v1", resource: "pods", kind: "Pod", name: pod, ...(ns ? { namespace: ns } : {}) }, "logs", container)}
+          />
         </Boundary>
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
@@ -494,6 +556,10 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           nav={nav}
           current={current}
           items={watch.items}
+          problems={h?.problems ?? []}
+          onProblem={(p) => openProblems({ problem: p })}
+          onAskProblem={askProblem}
+          onOpenSubject={openSubject}
           {...(selected && list ? { open: { group: list.type.group, version: list.type.version, resource: list.type.resource, kind: list.type.kind, name: selected.metadata.name, ...(selected.metadata.namespace ? { namespace: selected.metadata.namespace } : {}) } } : {})}
           onPick={pick}
           onOpen={(t) => void reach(t)}
@@ -506,6 +572,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             toggleSidebar: () => setUserRail(!rail),
             openDock: () => setDock(true),
             showForwards: () => (bench.openForwards(), focusBench()),
+            showProblems: () => openProblems(),
           }}
           onClose={() => setJump(false)}
         />

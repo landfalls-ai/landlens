@@ -103,10 +103,18 @@ Linux keep the native frame. The window's background follows the theme so it doe
   and number keys. Connecting dims the others; an error rings the row and offers "Try again".
 - **Overview** (`Overview.tsx`, the landing page): a verdict sentence ("2 problems need attention", "Nothing is
   broken; n things to watch", "All clear") with "Ask Claude what's wrong"; tiles for nodes, pods (a segmented bar),
-  deployments and restarts, which open those lists; Problems worst first and Recent warnings; Nodes. It reads
+  deployments and restarts, which open those lists; the worst five problems (a row opens it on the Problems page; See
+all N) and Recent warnings; Nodes. It reads
   `cluster:health` every 10s through `useHealth`, which also feeds the sidebar badges and the status bar counts. Below
   the problems, **Usage** (CPU and memory against allocatable, top namespaces, a 1h/6h/24h switch), and a CPU and
   memory sparkline on each node row ([metrics.md](metrics.md)).
+- **Problems** (`Problems.tsx`, `problemRules.ts`; CSS `.pb-*` in `workbench.css`; [doctor.md](doctor.md#the-problems-page)):
+  a `.seg` for severity and `.chip` buttons per kind of problem (the chosen one in accent), the skipped-checks
+  `.notice`, then "Failing" and "To watch" sections of `.ov-row`s: tone-tinted kind tile, title in medium weight, the
+  kind as `.ov-kind`, namespace dimmed, the detail in mono, age at the right; Ask and Open as `.ghost-btn`s on hover,
+  focus or selection; the selected row has the accent wash and a 2px left edge. The drawer is the `.drawer` shell of
+  Helm's: a stethoscope tile, the reason as a `.badge`, "Open <Kind>" as a small `.secondary`, the hint in a `--bg-2`
+  card above the facts, and the Logs tab's `.logs-pane` with a `.logs-note` head.
 - **Lists** (`ResourceTable.tsx`, columns in `kinds.ts`): 32px inset rows; healthy status is a quiet dot and word,
   failing and pending are pills with a left edge; generated name suffixes dimmed (`splitName` in `present.ts`);
   restarts toned at 5 and 10; sortable headers; ↑/↓ or j/k; a row flashes when its status changes. The toolbar's
@@ -129,7 +137,8 @@ Linux keep the native frame. The window's background follows the theme so it doe
   reopen on a click ("Hide view" folds them back). A view shows at most 320px; past that a fade to `--bg-2` with
   **Show all**. The frame is `overflow: clip`, so scrolling something inside into view can't shift the clipped view. The point is that a few tool calls never
   push Claude's answer out of the dock.
-- **Jump to** (`JumpPalette.tsx`, ⌘K): kinds, and objects in the list already loaded.
+- **Jump to** (`JumpPalette.tsx`, ⌘K): actions, problems (tone icon, title, kind and namespace), objects, kinds and
+  clusters ([workbench.md](workbench.md#k-search)).
 - **MCP** (`McpPage.tsx`, `mcp.css`; sidebar under Overview, `Plug`): `.tabs` Servers and Calls; "Add server" sits
   at the intro's right edge. A server is a `.panel` (kind tile, mono name, status `.badge`, a `.switch` "On for
   <context>", Test, edit and remove icon buttons; for an added server a second switch, "Run read-only tools without
@@ -195,7 +204,7 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
 
 ## Keyboard
 
-⌘K jump, ⌘J dock, ⌘B sidebar, ⌘1 Overview, ⌘2 Pods, `/` filter, ↑/↓ or j/k rows, Enter open, Esc closes the drawer
+⌘K jump, ⌘J dock, ⌘B sidebar, ⌘1 Overview, ⌘2 Pods, ⌘3 Problems, `/` filter, ↑/↓ or j/k rows, Enter open, Esc closes the drawer
 (never the dock), `[` `]` drawer tabs; in the dock, Enter and Esc answer the newest ask when the composer is empty.
 These work with focus inside an MCP App view too: the view hands Escape and ⌘/Ctrl with K, J, B or a digit back to
 the page.

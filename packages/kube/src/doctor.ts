@@ -98,6 +98,18 @@ export function subjectOf(pod: KubeObject): Subject {
 }
 
 type Ev = ProblemEvent & { kind: string; namespace?: string; name: string; apiVersion?: string; container?: string; first: number; last: number };
+// Label keys (an optional DNS prefix, then a name) and values, as Kubernetes allows them.
+const LABEL_KEY = /^(?:[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?\/)?[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+const LABEL_VALUE = /^(?:[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$/;
+/** A pod's nodeSelector as `key=value` pairs, label-shaped ones only: the scheduler's message doesn't name them. */
+function selectorFact(sel: unknown): { nodeSelector?: string[] } {
+  if (!sel || typeof sel !== "object" || Array.isArray(sel)) return {};
+  const pairs = Object.entries(sel as Record<string, unknown>)
+    .filter(([k, v]) => LABEL_KEY.test(k) && typeof v === "string" && LABEL_VALUE.test(v))
+    .slice(0, 10).map(([k, v]) => `${k}=${v}`);
+  return pairs.length ? { nodeSelector: pairs } : {};
+}
+
 /** Warning events as the rules read them: the last hour, checked shapes, newest first (also "Recent warnings"). */
 export function warningRows(events: KubeObject[] | undefined, now: number): Ev[] {
   const out: Ev[] = [];
@@ -300,7 +312,10 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
       // Between back-offs the kubelet often reports the exited run (terminated: Error) rather than waiting:
       // CrashLoopBackOff; a container that has restarted and will be restarted again is the same crash loop.
       const policy = pod.spec?.restartPolicy ?? "Always";
-      const looping = waiting === "CrashLoopBackOff" || (!waiting && !!term && !init && (c.restartCount ?? 0) >= 1 && policy !== "Never" && !(policy === "OnFailure" && term.exitCode === 0));
+      // A run that started under 2 minutes ago after a failed one, 3 restarts in, is the same loop between its crashes:
+      // without this a replica flips to "restarts" for the second it runs, and the problem's id with it.
+      const justRestarted = running && !init && (c.restartCount ?? 0) >= 3 && !!last && last.exitCode !== 0 && now - time(c.state.running.startedAt) < 2 * MIN;
+      const looping = waiting === "CrashLoopBackOff" || justRestarted || (!waiting && !!term && !init && (c.restartCount ?? 0) >= 1 && policy !== "Never" && !(policy === "OnFailure" && term.exitCode === 0));
       if (!waiting && !looping) continue;
       const cls: ProblemClass | undefined = looping ? "crashloop" : !waiting ? undefined : IMAGE.has(waiting) ? "image" : waiting === "CreateContainerConfigError" ? "config" : START.has(waiting) ? "start" : undefined;
       if (!cls) continue;
@@ -319,7 +334,7 @@ export function diagnose(input: DoctorInput, now: number = Date.now()): DoctorRe
       add({
         ...base, class: "pending", reason, tone: now - created > 15 * MIN ? "bad" : "warn", since: iso(created),
         ...(unsched?.message ? { message: String(unsched.message).slice(0, 2000) } : {}),
-        facts: { ...(unsched?.message ? { scheduling: cleanText(unsched.message) } : {}), events: podEvents },
+        facts: { ...(unsched?.message ? { scheduling: cleanText(unsched.message) } : {}), ...selectorFact(pod.spec?.nodeSelector), events: podEvents },
       });
       return;
     }
@@ -516,6 +531,7 @@ function finish(p: Problem & { message?: string; exitCode?: number; signal?: num
     ...(message ? { message } : {}), ...(isImageRef(f.image) ? { image: f.image } : {}),
     ...(f.probe ? { probe: { type: f.probe.type, how: f.probe.how } } : {}), ...(f.limit ? { limit: f.limit } : {}),
     ...(f.available ? { available: f.available } : {}), ...(p.restarts !== undefined ? { restarts: p.restarts } : {}),
+    ...(f.nodeSelector ? { nodeSelector: f.nodeSelector } : {}),
   });
   return { ...rest, title, detail, hint };
 }

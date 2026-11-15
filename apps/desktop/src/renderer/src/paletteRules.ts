@@ -28,10 +28,12 @@ export function score(name: string, q: string): number | undefined {
   return i === q.length ? 2 : undefined;
 }
 
-/** Splits a query into a verb (its first word) and the rest. */
-export function parseQuery(raw: string): { verb?: Verb; text: string; commands: boolean } {
+/** Splits a query into a verb (its first word) and the rest; a first word of `problems` searches only problems (D61). */
+export function parseQuery(raw: string): { verb?: Verb; text: string; commands: boolean; problems?: true } {
   const q = raw.trimStart();
   if (q.startsWith(">")) return { text: q.slice(1).trim().toLowerCase(), commands: true };
+  const pm = /^problems(?:\s+|$)(.*)$/i.exec(q);
+  if (pm) return { text: pm[1]!.trim().toLowerCase(), commands: false, problems: true };
   const m = /^(logs|shell|forward|edit|ask)(?:\s+|$)(.*)$/i.exec(q);
   if (m) return { verb: m[1]!.toLowerCase() as Verb, text: m[2]!.trim().toLowerCase(), commands: false };
   return { text: q.trim().toLowerCase(), commands: false };

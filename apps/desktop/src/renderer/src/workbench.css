@@ -337,3 +337,39 @@
 .reach-error { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); z-index: 60; width: min(480px, calc(100vw - 48px)); box-shadow: var(--shadow-2); }
 .prom-offer { margin-left: 8px; }
 .prom-offer .mono { font-size: 11.5px; }
+
+/* The Problems page and drawer (wave 5, D58–D59). */
+.pb { flex: 1; min-height: 0; overflow: auto; padding-bottom: 24px; }
+.pb-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px 4px; }
+.pb-chips { gap: 6px; }
+.pb-chip { cursor: pointer; gap: 6px; height: 26px; padding: 0 9px; font-size: var(--t-12); color: var(--ink-2); transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
+.pb-chip b { font: 500 10.5px var(--mono); color: var(--ink-3); }
+.pb-chip:hover { background: var(--bg-4); color: var(--ink); }
+.pb-chip.on { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-line); }
+.pb-chip.on b { color: var(--accent); }
+.pb-checks { margin: 10px 16px 0; }
+.pb-checks p { margin: 2px 0 0; }
+.pb-list { padding: 4px 10px 0; }
+.pb-sec + .pb-sec { margin-top: 10px; }
+.pb-sec-head { display: flex; align-items: center; gap: 7px; margin: 10px 6px 2px; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); text-transform: none; }
+.pb-row { gap: 10px; }
+.pb-row.on { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.pb-row .pb-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.pb-row .ov-name > span:last-child { flex: none; }
+.pb-row .ov-detail { font-size: var(--t-115); }
+.pb-row .ghost-btn { opacity: 0; }
+.pb-row:hover .ghost-btn, .pb-row:focus-visible .ghost-btn, .pb-row.on .ghost-btn { opacity: 1; }
+.pb-since { flex: none; }
+.pb-empty { margin: 24px 16px; }
+.pb-cut { margin: 10px 16px; }
+.pb-drawer .drawer-meta .pb-open { height: 26px; padding: 0 8px; font-size: var(--t-12); }
+.pb-gone { margin: 8px 16px 0; }
+.pb-hint { padding: 12px 14px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); display: grid; gap: 6px; }
+.pb-hint h3 { margin: 0; font-size: var(--t-12); color: var(--ink-2); }
+.pb-hint p { margin: 0; }
+.pb-hint ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; color: var(--ink-2); }
+.pb-detail { white-space: normal; overflow-wrap: anywhere; }
+.pb-facts { grid-template-columns: 104px minmax(0, 1fr); }
+.pb-msg { color: var(--ink-2); overflow-wrap: anywhere; }
+.pb-pad { padding: 14px 16px; }
+@container main (max-width: 720px) { .pb-since, .pb-row .ov-kind { display: none; } }

@@ -2,7 +2,7 @@
 // drawn: lucide-react, inline SVG, stroke 1.75, aria-hidden, currentColor.
 import {
   Bot, Box, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
-  KeyRound, Layers, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, User, Waypoints,
+  KeyRound, Layers, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints,
   type LucideIcon,
 } from "lucide-react";
 import type { Tone } from "@landlens/kube/status";
@@ -11,6 +11,7 @@ export type { LucideIcon };
 
 const BY_RESOURCE: Record<string, LucideIcon> = {
   overview: LayoutGrid,
+  problems: Stethoscope,
   mcp: Plug,
   agent: Bot,
   helm: Package,

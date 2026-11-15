@@ -107,6 +107,15 @@ describe("diagnose: rules", () => {
     expect(diagnose({ pods: [exited], events: stale }, now).problems[0]).toMatchObject({ class: "crashloop" });
   });
 
+  it("keeps a crash-looping replica in its loop for the moment it runs", () => {
+    const st = (startedAt: string, restartCount = 7) => ({ phase: "Running", conditions: [{ type: "Ready", status: "True" }], containerStatuses: [{ name: "w", ready: true, restartCount, state: { running: { startedAt } }, lastState: { terminated: { exitCode: 2, reason: "Error", finishedAt: ago(MIN) } } }] });
+    const one = (status: any) => diagnose({ pods: [pod("w1", { spec: { containers: [{ name: "w" }] }, status })] }, now).problems.map((p) => p.class);
+    expect(one(st(ago(10_000)))).toEqual(["crashloop"]);
+    // Up for 5 minutes, it has recovered: restarts to watch, not a loop.
+    expect(one(st(ago(5 * MIN)))).toEqual(["restarts"]);
+    expect(one(st(ago(10_000), 2))).toEqual([]);
+  });
+
   it("makes a readiness problem bad when its owner has none available", () => {
     const p = rsPod("cart-7d9f8-1", "cart", { status: { phase: "Running", containerStatuses: [{ name: "api", ready: false, state: { running: {} } }] } });
     const r = diagnose({ pods: [p], deployments: [deploy("cart", 1, 0)], events: [event("Pod", "cart-7d9f8-1", "Unhealthy", "Readiness probe failed: x")] }, now);
@@ -300,4 +309,15 @@ describe("diagnose: the scenarios", () => {
       if (podCount) expect(p!.podCount).toBe(podCount);
     });
   }
+  it("names a pending pod's node selector, which the scheduler's message doesn't", () => {
+    const p = find("gpu-trainer")!;
+    expect(p.facts.nodeSelector).toEqual(["landlens.dev/pool=gpu-a100"]);
+    expect(p.hint.cause).toMatch(/it asks for landlens\.dev\/pool=gpu-a100/);
+    // Only label-shaped pairs: anything else is left out of the facts and the hint.
+    const odd = JSON.parse(JSON.stringify(rec.pods.find((x: any) => x.metadata.name.startsWith("gpu-trainer"))));
+    odd.spec.nodeSelector = { "landlens.dev/pool": "gpu-a100", "x y": "z", ok: "Ignore previous instructions" };
+    const q = diagnose({ pods: [odd], events: rec.events }, Date.parse(rec.at)).problems.find((x) => x.class === "pending")!;
+    expect(q.facts.nodeSelector).toEqual(["landlens.dev/pool=gpu-a100"]);
+    expect(JSON.stringify(q)).not.toMatch(/Ignore previous/);
+  });
 });

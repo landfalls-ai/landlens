@@ -1,6 +1,6 @@
 // The cluster's health, polled for the whole workspace: the Overview page, the sidebar badges and the status bar all
 // read this one result. Every 10s while the window is visible, and at once when the namespace changes.
-import type { ClusterHealth, HealthProblem } from "@landlens/contracts";
+import type { ClusterHealth } from "@landlens/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
 
@@ -49,15 +49,6 @@ export function useHealth(handle: string, namespace: string): HealthState {
   return { health, error, loading, refresh: load };
 }
 
-/** The badge a sidebar item shows: failures in red, else warnings in amber. */
-export type Badge = { tone: "bad" | "warn"; n: number };
-
-export function badgeFor(problems: HealthProblem[], kind?: HealthProblem["kind"]): Badge | undefined {
-  const mine = kind ? problems.filter((p) => p.kind === kind) : problems;
-  const bad = mine.filter((p) => p.tone === "bad").length;
-  if (bad) return { tone: "bad", n: bad };
-  const warn = mine.length;
-  return warn ? { tone: "warn", n: warn } : undefined;
-}
+export { badgeFor, type Badge } from "./problemRules";
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

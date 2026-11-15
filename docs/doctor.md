@@ -2,7 +2,7 @@
 
 Wave 5 of the plan: what is wrong in a cluster right now, each problem with Landlens's own first suggestion and
 "Ask Claude" on it. This page grows with the wave's parts: part 1 is the engine and the scenarios, part 2 the service
-in main.
+in main, part 3 the Problems page.
 
 ## The rules
 
@@ -107,6 +107,43 @@ Up to 1 MB is read in 10 s and the last 64 KB kept, from a line's start, so a lo
 id in the scope's current report is answered, so the window can't name a pod to read; one read per problem runs at a
 time and four per scope; a failure is a fixed sentence ("You can't read this pod's logs.", "The pod or its container
 is gone."), not the API's text.
+
+## The Problems page
+
+**Problems** sits under Overview in the sidebar (⌘3, a stethoscope) with the count of failing problems, or of things
+to watch when nothing fails. The Pods badge counts every problem that has pods, so a Deployment's crash loop marks
+Pods too; Deployments, StatefulSets, DaemonSets, Jobs, Secrets and claims count their own. The status bar's two counts
+open the page with **Failing** or **To watch** chosen. The Overview keeps the worst five, with **See all N** and
+**Open Problems**; a row there opens its problem on this page.
+
+- **Filters**: All, Failing, To watch; a chip per kind of problem that is present (Crash loops, Images, Out of
+  memory, Pending, Probes, Certificates, …) with its count; the toolbar's filter over title, kind, namespace and name
+  (several words must all match); the toolbar's namespace, which is the doctor's scope. The refresh button reads
+  again now.
+- **What wasn't checked**: a strip above the list with one sentence per source the doctor couldn't read, or is still
+  reading. "No problems found" never stands alone when a check was skipped.
+- **The list**: "Failing", then "To watch", worst first. A row is the title, the subject's kind and namespace, the
+  detail in mono and how long ago it started; **Ask** and **Open** (the subject's own list and drawer) show on hover,
+  focus or selection. ↑/↓ move, Enter opens the drawer, `a` asks Claude. Past 500 it says "Showing the first 500."
+- **The drawer**: the reason as a pill, the subject's name, pods and age, **Ask Claude**, **Open <Kind>**. Tabs, `[`
+  and `]` step:
+  - **Summary**: "Likely cause", the hint, marked "From Landlens's rules, not from Claude"; then the facts the rule
+    used (last run with exit code and signal, restarts, image, memory limit, the scheduler's message and the pod's
+    node selector, the probe and its last failure, available replicas, a certificate's subject, issuer, names, dates
+    and which certificate ends first, the Ingresses that use it); then the pods, each opening its drawer.
+  - **Events**: the problem's own events, merged and newest first.
+  - **Logs** (crash loops, OOM kills, start failures, restarts, liveness and startup probes): the evidence from
+    `doctor:evidence`, read when the tab is first opened; **Open full logs** opens the pod's Logs tab.
+  - When the problem leaves the report, the drawer stays with "No longer found at 12:03. This is the last evidence
+    Landlens saw." until closed; changing the namespace closes it.
+- **⌘K**: problems are a group of their own (title and name match); `problems cart` searches only problems, and
+  `problems` alone lists the worst six. Enter opens the problem's drawer; Tab lists Open, Ask Claude and Open <Kind>.
+  **Show problems** is a command.
+
+Ask Claude starts a conversation with the subject attached, as before; part 4 gives it the problem's brief.
+Workload-written text (event and termination messages, the scheduler's message, log lines) is shown as text only.
+Code: `apps/desktop/src/renderer/src/Problems.tsx` (page and drawer), `problemRules.ts` (filters, chips, sections,
+which problems have logs, the held problem, ⌘K matching).
 
 ## What the agent reads
 

@@ -647,6 +647,8 @@ export type ProblemFacts = {
   lastState?: { reason?: string; exitCode?: number; signal?: number; finishedAt?: string; message?: string };
   image?: string;
   scheduling?: string;
+  /** A pending pod's nodeSelector as `key=value`, only pairs shaped like labels, at most 10. */
+  nodeSelector?: string[];
   probe?: { type: "readiness" | "liveness" | "startup"; how: string; period?: number; timeout?: number; failureThreshold?: number; lastMessage?: string };
   available?: string;
   limit?: string;

@@ -8,7 +8,7 @@ import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview" | "mcp" | "agent" | "helm";
+export type Current = NavItem | "overview" | "problems" | "mcp" | "agent" | "helm";
 
 /** A kind's key for pins: `group/resource`. */
 export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
@@ -23,7 +23,7 @@ export function Sidebar(props: {
   current?: Current;
   navError?: string;
   rail: boolean;
-  badges: { overview?: Badge; byResource: Record<string, Badge | undefined> };
+  badges: { problems?: Badge; byResource: Record<string, Badge | undefined> };
   onPick: (c: Current) => void;
   onToggle: () => void;
   onSwitch: (context: string) => void;
@@ -223,7 +223,8 @@ export function Sidebar(props: {
         <kbd aria-hidden="true">{MOD}K</kbd>
       </button>
       <nav className="nav">
-        {item("overview", "Overview", "overview", props.current === "overview", props.badges.overview, () => props.onPick("overview"))}
+        {item("overview", "Overview", "overview", props.current === "overview", undefined, () => props.onPick("overview"))}
+        {item("problems", "Problems", "problems", props.current === "problems", props.badges.problems, () => props.onPick("problems"))}
         {item("mcp", "MCP", "mcp", props.current === "mcp", undefined, () => props.onPick("mcp"))}
         {item("agent", "Agent", "agent", props.current === "agent", undefined, () => props.onPick("agent"))}
         {pinned.length ? (
