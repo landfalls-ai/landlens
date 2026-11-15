@@ -43,8 +43,9 @@ session, on every cluster, gets each connection that is ready, has **Give to Cla
 yours under its name, after the servers you added: `github` and `linear` on the gateway, as `mcp__github__<tool>` and
 `mcp__linear__<tool>`. The token is added in main: GitHub gets `Authorization: Bearer <token>`, `X-MCP-Toolsets:
 repos,issues,pull_requests,actions` and `X-MCP-Lockdown: true`; Linear a pasted key as the bearer, or, for a browser
-sign-in, the stored OAuth sign-in as the transport's `authProvider`, which refreshes the token on a 401 and never opens
-a browser (a refused refresh marks the connection expired). Every request for a connection's server goes only to the
+sign-in, the stored OAuth sign-in as the transport's `authProvider`, which reads the stored tokens before each use,
+refreshes on a 401 and never opens a browser (a refresh Linear refuses marks the connection expired; one that doesn't
+get through fails that call and leaves the connection as it is). Every request for a connection's server goes only to the
 provider's token origins, never through a redirect (`RemoteSpec.origins`). At **Read only** the upstream's address is
 the read-only endpoint itself (`api.githubcopilot.com/mcp/readonly`, `mcp.linear.app/mcp/readonly`), so the server
 can't write whatever the model asks. Claude Code gets the gateway's address and the session's own token, nothing of
@@ -103,7 +104,9 @@ stored, and the card says "GitHub didn't accept the token."
 
 **Disconnect** deletes the stored token. Revoking an OAuth app's grant at GitHub needs the app's client secret,
 which Landlens doesn't have, so the page points you to GitHub: Settings → Applications → Authorized OAuth Apps
-(`https://github.com/settings/applications`).
+(`https://github.com/settings/applications`). The same goes for a device sign-in that ends after GitHub gave the
+token but before Landlens kept it (you cancelled, its window closed, or you disconnected while it finished): the
+token is dropped, never stored, and the grant stays on that GitHub page until you remove it.
 
 ### The OAuth App to register
 
@@ -133,17 +136,28 @@ Linear's API takes a token issued by its MCP server isn't documented, so Landlen
 refused the card says "Connected" without a name, and the tools still work.
 
 Linear's OAuth tokens expire. Landlens refreshes them with the stored client and refresh token (the SDK's `auth()`
-again); in a session it never opens a browser, so a refused refresh marks the connection **expired** ("Linear's
-sign-in ran out. Connect again."). Switching a sign-in made at Read only to Ask for writes says it needs signing in
-again, since its token can't write.
+again); in a session it never opens a browser. Only a refresh Linear refuses (`invalid_grant`, or it refuses the
+client) marks the connection **expired** ("Linear's sign-in ran out. Connect again."). A refresh that doesn't get
+through (offline, a 5xx) fails that call with "Couldn't reach Linear." and leaves the connection ready; the
+next call tries again with the same refresh token. Linear's refresh token rotates, so one refresh runs at a time
+(`bearer()` shares it), each session reads the stored tokens before each use (a refresh another session made is
+picked up, not spent again), and a refusal of tokens that are no longer the stored ones expires nothing. Switching a
+sign-in made at Read only to Ask for writes says it needs signing in again, since its token can't write.
 
-**Disconnect** revokes the grant at the revocation endpoint Linear's metadata names (on `mcp.linear.app` only, best
-effort, 5 seconds), then deletes what is stored. A pasted key can't be revoked from Landlens: delete it in Linear's
-settings.
+**Disconnect** revokes both tokens at the revocation endpoint Linear's metadata names (on `mcp.linear.app` only, best
+effort, 5 seconds each): the access token, then the refresh token. Then it deletes what is stored. A sign-in that
+ends after Linear gave the tokens but isn't kept (you cancelled, its window closed, you disconnected while it
+finished, or storing it failed) is revoked the same way at once. A pasted key can't be revoked from Landlens: delete
+it in Linear's settings.
 
 ## What is stored
 
-`userData/connections.json`, mode 0600, written through a temp file and a rename. Per provider:
+`userData/connections.json`, mode 0600, written through a new temp file (a random name, created only if it doesn't
+exist) and a rename. Each entry is checked against what the store writes when it is read. A file that doesn't parse,
+or holds an entry that isn't sound, is moved aside as `connections.json.damaged-<time>` and never written over; the
+sound entries are kept, so one damaged provider doesn't take the other's sign-in or accepted listing with it. A
+connection with no accepted listing (its pin lost, or its listing failed at connect) runs no read without asking
+until you review and accept its tools. Per provider:
 
 | Field | Kept as |
 |---|---|
@@ -152,8 +166,9 @@ settings.
 | `access`, `refresh`, `client` (Linear's `client_id`, `issuer`, `redirect_uri`) | encrypted with Electron's `safeStorage` |
 | `expiresAt` | clear |
 
-If `safeStorage` can't encrypt on this machine, connecting is refused: "This machine can't encrypt the token, so
-Landlens won't store it." Disconnecting forgets the tokens, account, scopes and pin; the level and switches stay.
+If `safeStorage` can't encrypt on this machine, or on Linux uses its `basic_text` backend (a key fixed in the app, so
+no real encryption), connecting is refused: "This machine can't encrypt the token, so Landlens won't store it."
+Disconnecting forgets the tokens, account, scopes and pin; the level and switches stay.
 
 ## Where a token goes
 
@@ -164,10 +179,15 @@ Only to its provider's own origins, which are constants in `providers.ts`; no ch
 - Linear: `mcp.linear.app` (the MCP server, token, registration, revocation) and `api.linear.app/graphql` (`viewer`
   only).
 
-Every request goes through `pinnedFetch`: another origin is refused before it is asked, a redirect is an error, and
-each has a time limit. A token never reaches the renderer, Claude Code's environment, `session/new`, a session's
-folder, a log line or an error message: main's log lines go through `rawError`, which cuts bearers and every token
-shape in `packages/kube/src/redact.ts` (`gh?_…`, `github_pat_…`, `lin_api_…`, `lin_oauth_…`).
+Sign-in, who-you-are, refresh and revocation requests go through `pinnedFetch`; every request to a connection's MCP
+server (a session's, a test's, the listing at connect) goes through the gateway's fetch pinned to the provider's
+token origins (`RemoteSpec.origins`). Either way another origin is refused before it is asked and a redirect is an
+error; `pinnedFetch` also sets a time limit. A token never reaches the renderer, Claude Code's environment,
+`session/new`, a session's folder, a log line or an error message. The connections service cuts every token it holds
+(stored, being checked or being saved) out of its own log lines exactly, whatever its shape, since Linear's OAuth
+tokens promise none; main's error lines also go through `rawError`, which cuts bearers and the token shapes in
+`packages/kube/src/redact.ts` (`gh?_…`, also with text glued on, `github_pat_…`, `lin_api_…`, `lin_oauth_…`,
+`lin_refresh_…`).
 
 ## The channels
 
@@ -187,7 +207,8 @@ shape in `packages/kube/src/redact.ts` (`gh?_…`, `github_pat_…`, `lin_api_�
 `ConnInfo` is everything the page may know: state (`off`, `connecting`, `ready`, `expired`, `failed`), method,
 account, scopes, level, whether reads run without asking, whether sessions get it (`give`), tool counts, a note from a fixed set of sentences
 (`CONN_NOTES`), and for GitHub whether the device flow is offered. A flow id is `fl` and 16 base64url characters; one
-flow per provider at a time; a flow belongs to the window that started it and stops when that window goes.
+flow per provider at a time; a flow belongs to the window that started it and stops when that window goes
+(`flowOwners` in `connections.ts`, which `ipc.ts` uses: the window's `destroyed` cancels its flows).
 
 A test lists both endpoints with the connection's headers (GitHub also gets `X-MCP-Toolsets:
 repos,issues,pull_requests,actions` and `X-MCP-Lockdown: true`). A read is a tool the read-only endpoint lists with

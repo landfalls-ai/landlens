@@ -1,7 +1,10 @@
 import { CONN_NOTES } from "@landlens/contracts";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { connectionOverrides, ConnectionsService, readTools } from "../src/main/connections";
+import { EventEmitter } from "node:events";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { Clock, Crypto } from "@landlens/connections";
+import { connectionOverrides, ConnectionsService, flowOwners, readTools } from "../src/main/connections";
 import { FakeProvider, listing, type FakeOptions } from "../../../packages/connections/test/fake-provider";
 import { fakeCrypto, GH_TOKEN, LIN_KEY, tempFile } from "../../../packages/connections/test/helpers";
 
@@ -18,10 +21,11 @@ afterEach(async () => {
 
 const instantClock = { now: () => 0, sleep: async () => {} };
 
-function service(o: { github?: FakeProvider; linear?: FakeProvider; clientId?: string; canStore?: boolean; taken?: string[] } = {}) {
+function service(o: { github?: FakeProvider; linear?: FakeProvider; clientId?: string; canStore?: boolean; taken?: string[]; fetch?: typeof fetch; crypto?: Crypto; clock?: Clock } = {}) {
   const file = tempFile("connections.json");
   const opened: string[] = [];
   const pushed: unknown[] = [];
+  const logs: string[] = [];
   const browser = async (url: string) => {
     opened.push(url);
     const r = await fetch(url, { redirect: "manual" });
@@ -30,14 +34,16 @@ function service(o: { github?: FakeProvider; linear?: FakeProvider; clientId?: s
   };
   const s = new ConnectionsService({
     file,
-    crypto: fakeCrypto(o.canStore ?? true),
+    crypto: o.crypto ?? fakeCrypto(o.canStore ?? true),
     overrides: { ...(o.github ? { github: o.github.origin } : {}), ...(o.linear ? { linear: o.linear.origin } : {}), ...(o.clientId ? { githubClientId: o.clientId } : {}) },
     openExternal: browser,
     push: (i) => pushed.push(i),
-    clock: instantClock,
+    log: (l) => logs.push(l),
+    clock: o.clock ?? instantClock,
     ...(o.taken ? { takenNames: () => o.taken! } : {}),
+    ...(o.fetch ? { fetch: o.fetch } : {}),
   });
-  return { s, file, opened, pushed };
+  return { s, file, opened, pushed, logs };
 }
 
 const until = async (f: () => boolean) => {
@@ -152,9 +158,10 @@ describe("the connections service", () => {
     const { s } = service({ linear: lin });
     await s.linearSignIn("ask", {});
     await until(() => s.info("linear").state === "ready");
-    const refresh = s.store.secrets("linear")!.refresh!;
+    const { access, refresh } = s.store.secrets("linear")!;
     expect(await s.disconnect("linear")).toMatchObject({ state: "off", mode: "ask" });
-    expect(lin.revoked).toEqual([refresh]);
+    // Both tokens, the access token first (Fable's L3).
+    expect(lin.revoked).toEqual([access, refresh]);
     expect(s.store.secrets("linear")).toBeUndefined();
   });
 
@@ -288,5 +295,144 @@ describe("connections on the gateway (part 2, D76–D80)", () => {
     expect(r!.authProvider).toBeDefined();
     const t = await r!.authProvider!.tokens();
     expect(t?.access_token).toBe(s.store.secrets("linear")!.access);
+  });
+});
+
+describe("Fable's security review of part 1, fixed", () => {
+  const url = (i: Parameters<typeof fetch>[0]) => String(i instanceof Request ? i.url : i);
+  /** Signed in to Linear's OAuth with an access token that is about to run out, so bearer() refreshes. */
+  const linearDue = async (o: { fetch?: typeof fetch } = {}) => {
+    const lin = await fake("linear", { expiresIn: 30 });
+    const svc = service({ linear: lin, ...o });
+    await svc.s.linearSignIn("ask", {});
+    await until(() => svc.s.info("linear").state === "ready" && !!svc.s.store.pin("linear"));
+    return { lin, ...svc };
+  };
+
+  it("M1: a refresh that doesn't get through leaves the connection ready, and the next one works", async () => {
+    let down: (() => Promise<Response>) | undefined;
+    const { s, lin, logs } = await linearDue({ fetch: (i, init) => (down && url(i).endsWith("/token") ? down() : fetch(i, init)) });
+    for (const d of [() => Promise.reject(new TypeError("fetch failed")), () => Promise.resolve(new Response("bad gateway", { status: 502 }))]) {
+      down = d;
+      expect(await s.bearer("linear")).toBeUndefined();
+      expect(s.info("linear").state).toBe("ready");
+    }
+    expect(logs.some((l) => l.includes(CONN_NOTES.linearUnreachable))).toBe(true);
+    down = undefined;
+    const before = s.store.secrets("linear")!.access;
+    const after = await s.bearer("linear");
+    expect(after).toBeDefined();
+    expect(after).not.toBe(before);
+    expect(lin.carrying(after!).length).toBe(0);
+    expect(s.info("linear").state).toBe("ready");
+  });
+
+  it("M1: a refresh Linear refuses still marks it expired", async () => {
+    let refuse = false;
+    const { s } = await linearDue({ fetch: (i, init) => (refuse && url(i).endsWith("/token") ? Promise.resolve(Response.json({ error: "invalid_grant" }, { status: 400 })) : fetch(i, init)) });
+    refuse = true;
+    expect(await s.bearer("linear")).toBeUndefined();
+    expect(s.info("linear")).toMatchObject({ state: "expired", note: CONN_NOTES.linearExpired });
+  });
+
+  it("M2: two bearer() calls at once refresh once, and the connection stays ready", async () => {
+    const { s, lin } = await linearDue();
+    const refreshes = () => lin.requests.filter((q) => q.path === "/token" && q.body.includes("grant_type=refresh_token")).length;
+    const before = refreshes();
+    const [a, b] = await Promise.all([s.bearer("linear"), s.bearer("linear")]);
+    expect(a).toBeDefined();
+    expect(b).toBe(a);
+    expect(refreshes() - before).toBe(1);
+    expect(s.info("linear").state).toBe("ready");
+  });
+
+  it("M2: a session's refusal of tokens that are no longer the stored ones doesn't expire the connection", async () => {
+    const { s, lin } = await linearDue();
+    const [r] = await s.remotes();
+    const session = r!.authProvider!;
+    const stale = (await session.tokens())!;
+    // bearer() rotates the refresh token while the session still holds the old one, and Linear refuses the old one.
+    await s.bearer("linear");
+    expect(s.store.secrets("linear")!.refresh).not.toBe(stale.refresh_token);
+    session.invalidateCredentials!("tokens");
+    await expect(Promise.resolve().then(() => session.redirectToAuthorization(new URL(`${lin.origin}/authorize`)))).rejects.toThrow(CONN_NOTES.linearExpired);
+    expect(s.info("linear").state).toBe("ready");
+    // A session picks up the stored tokens rather than spending a rotated refresh token again.
+    const fresh = await (await s.remotes())[0]!.authProvider!;
+    await s.bearer("linear");
+    expect((await fresh.tokens())!.access_token).toBe(s.store.secrets("linear")!.access);
+    expect(await auth(fresh, { serverUrl: `${lin.origin}/mcp` })).toBe("AUTHORIZED");
+    expect(s.info("linear").state).toBe("ready");
+  });
+
+  it("L2: a Linear sign-in that isn't kept is revoked: the window went after the code exchange, or the save failed", async () => {
+    const lin = await fake("linear");
+    const owner = {};
+    let svc!: ReturnType<typeof service>;
+    // The window goes while the account is looked up, after Linear gave the tokens.
+    svc = service({ linear: lin, fetch: (i, init) => (url(i).endsWith("/graphql") ? (svc.s.cancelFor(owner), fetch(i, init)) : fetch(i, init)) });
+    await svc.s.linearSignIn("ask", owner);
+    await until(() => lin.revoked.length === 2);
+    const issued = lin.requests.filter((q) => q.path === "/token").length;
+    expect(issued).toBe(1);
+    expect(svc.s.store.secrets("linear")).toBeUndefined();
+    expect(lin.revoked[0]).toMatch(/^lin_oauth_/);
+    expect(lin.revoked[1]).toMatch(/^lin_refresh_/);
+
+    // The save fails (the keychain refuses): the tokens are revoked, and the card says it failed.
+    const lin2 = await fake("linear");
+    let refuse = false;
+    const crypto = fakeCrypto(true);
+    const flaky: Crypto = { ...crypto, encryptString: (t) => { if (refuse) throw new Error("keychain locked"); return crypto.encryptString(t); } };
+    const { s } = service({ linear: lin2, crypto: flaky });
+    refuse = true;
+    await s.linearSignIn("ask", {});
+    await until(() => lin2.revoked.length === 2);
+    expect(s.info("linear").state).toBe("failed");
+  });
+
+  it("L5: the log never carries a token the service holds, whatever its shape", async () => {
+    const lin = await fake("linear");
+    const opaque = `4f9c2d7e-aaaa-bbbb-cccc-1234567890ab:${"Z".repeat(40)}`;
+    lin.valid.add(opaque);
+    const crypto = fakeCrypto(true);
+    // A keychain whose error echoes what it was given.
+    const echo: Crypto = { ...crypto, encryptString: (t) => { throw new Error(`could not encrypt ${t}`); } };
+    const { s, logs } = service({ linear: lin, crypto: echo });
+    expect((await s.token("linear", opaque)).state).toBe("failed");
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs.join("\n")).not.toContain(opaque);
+    expect(logs.join("\n")).toContain("<redacted token>");
+  });
+
+  it("L6: a new sign-in forgets the last test, so repin can't accept another account's listing", async () => {
+    const gh = await fake("github");
+    gh.valid.add(GH_TOKEN);
+    const other = `ghp_${"O".repeat(36)}`;
+    gh.valid.add(other);
+    const { s } = service({ github: gh });
+    await s.token("github", GH_TOKEN);
+    expect((await s.test("github")).ok).toBe(true);
+    await s.token("github", other);
+    expect(() => s.repin("github")).toThrow("Test it first");
+  });
+
+  it("a window that goes stops its sign-ins: the destroyed wiring of ipc.ts", async () => {
+    const gh = await fake("github", { device: ["authorization_pending"] });
+    // A poll that waits until it is cancelled.
+    const waiting: Clock = { now: () => 0, sleep: (_ms, signal) => new Promise((_r, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })) };
+    const { s } = service({ github: gh, clientId: "Ov23liTestClient0001", clock: waiting });
+    const owner = flowOwners(s);
+    const wc = new EventEmitter();
+    const other = new EventEmitter();
+    expect(owner(wc)).toBe(owner(wc));
+    expect(wc.listenerCount("destroyed")).toBe(1);
+    await s.githubDevice(owner(wc));
+    expect(s.info("github").state).toBe("connecting");
+    other.emit("destroyed");
+    expect(s.info("github").state).toBe("connecting");
+    wc.emit("destroyed");
+    expect(s.info("github").state).toBe("off");
+    await expect(s.githubDevice(owner(other))).resolves.toMatchObject({ userCode: "WDJB-MJHT" });
   });
 });

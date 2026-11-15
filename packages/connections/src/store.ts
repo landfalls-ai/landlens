@@ -1,9 +1,14 @@
-// Connections as stored: userData/connections.json, mode 0600, written through a temp file and a rename. Per
+// Connections as stored: userData/connections.json, mode 0600, written through a new temp file and a rename. Per
 // provider: how it signed in, who as, its scopes, its level and switches, the pinned listing, and three blobs
 // encrypted with Electron's safeStorage (the access token, a refresh token, Linear's registered client). Nothing
 // here is returned to the renderer but ConnInfo; secrets() is for main alone.
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { CONN_NOTES, type ConnAccount, type ConnInfo, type ConnMethod, type ConnMode, type McpToolInfo } from "@landlens/contracts";
+//
+// A file that doesn't parse, or an entry that isn't what this store writes, is moved aside (connections.json.damaged-…)
+// and never written over, so one bad byte can't lose the other provider's sign-in or its accepted listing.
+import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { CONN_NOTES, ConnMode, type ConnAccount, type ConnInfo, type ConnMethod, type McpToolInfo } from "@landlens/contracts";
+import { z } from "zod";
 import { oneLine, cleanScopes, PROVIDERS, type Provider } from "./providers.js";
 
 /** The part of Electron's safeStorage the store needs (a fake in tests). */
@@ -11,6 +16,8 @@ export type Crypto = {
   isEncryptionAvailable(): boolean;
   encryptString(plain: string): Buffer;
   decryptString(encrypted: Buffer): string;
+  /** Linux: which keyring safeStorage uses. "basic_text" is a fixed key in the app: no real encryption. */
+  getSelectedStorageBackend?(): string;
 };
 
 /** Linear's client, registered at sign-in with that sign-in's loopback redirect. */
@@ -41,6 +48,25 @@ type Entry = {
 };
 type File = Partial<Record<Provider, Entry>>;
 
+const line = z.string().max(4096);
+/** An entry as this store writes it; anything else in the file is damage. */
+const ENTRY = z.object({
+  mode: ConnMode.optional(),
+  readsAuto: z.boolean().optional(),
+  give: z.boolean().optional(),
+  method: z.enum(["device", "token", "oauth"]).optional(),
+  account: z.object({ login: line, name: line.optional(), org: line.optional() }).optional(),
+  scopes: z.array(line).optional(),
+  pin: z.string().regex(/^[0-9a-f]{64}\.[0-9a-f]{64}$/).optional(),
+  tools: z.object({ read: z.number().int().min(0), write: z.number().int().min(0) }).optional(),
+  list: z.array(z.object({ name: z.string(), readOnly: z.boolean() }).passthrough()).optional(),
+  access: z.string().max(65_536).optional(),
+  refresh: z.string().max(65_536).optional(),
+  client: z.string().max(65_536).optional(),
+  expiresAt: z.number().optional(),
+  expired: z.boolean().optional(),
+}).strict();
+
 const DEFAULTS: Pick<Entry, "mode" | "readsAuto" | "give"> = { mode: "ask", readsAuto: true, give: true };
 
 export class StoreError extends Error {
@@ -61,27 +87,69 @@ export function cleanAccount(a: { login?: unknown; name?: unknown; org?: unknown
 export class ConnectionStore {
   constructor(private readonly path: string, private readonly crypto: Crypto) {}
 
+  /** Encryption that is real: not on Linux's basic_text backend, a key fixed in the app (L1). */
   get canStore(): boolean {
-    return this.crypto.isEncryptionAvailable();
+    if (!this.crypto.isEncryptionAvailable()) return false;
+    try {
+      return this.crypto.getSelectedStorageBackend?.() !== "basic_text";
+    } catch {
+      return true; // not Linux: there is no backend to choose
+    }
+  }
+
+  /** Where a damaged file was moved, if one was. */
+  damaged: string | undefined;
+
+  /** Keep a damaged file, and start from what in it is still sound. */
+  private aside(): void {
+    const to = `${this.path}.damaged-${Date.now()}`;
+    try {
+      renameSync(this.path, to);
+      this.damaged = to;
+    } catch {
+      // gone already
+    }
   }
 
   private read(): File {
     if (!existsSync(this.path)) return {};
+    let s: unknown;
     try {
-      const s = JSON.parse(readFileSync(this.path, "utf8"));
-      if (!s || typeof s !== "object") return {};
-      const out: File = {};
-      for (const p of PROVIDERS) if (s[p] && typeof s[p] === "object") out[p] = s[p];
-      return out;
+      s = JSON.parse(readFileSync(this.path, "utf8"));
     } catch {
+      this.aside();
       return {};
     }
+    if (!s || typeof s !== "object" || Array.isArray(s)) {
+      this.aside();
+      return {};
+    }
+    const out: File = {};
+    let bad = false;
+    for (const [k, v] of Object.entries(s)) {
+      if (!(PROVIDERS as readonly string[]).includes(k)) continue;
+      const e = ENTRY.safeParse(v);
+      if (e.success) out[k as Provider] = e.data as Entry;
+      else bad = true;
+    }
+    // A damaged entry: the file is kept aside as it was, and the sound entries are written back at once.
+    if (bad) {
+      this.aside();
+      this.write(out);
+    }
+    return out;
   }
 
   private write(f: File) {
-    const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(f, null, 2), { mode: 0o600 });
-    renameSync(tmp, this.path);
+    // A temp name nobody can have made in advance, created only if it doesn't exist (O_EXCL), then renamed over.
+    const tmp = `${this.path}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      writeFileSync(tmp, JSON.stringify(f, null, 2), { mode: 0o600, flag: "wx" });
+      renameSync(tmp, this.path);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      throw err;
+    }
     chmodSync(this.path, 0o600);
   }
 

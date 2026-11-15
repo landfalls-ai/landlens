@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ConnectionStore } from "../src/store.js";
 import { fakeCrypto, GH_TOKEN, LIN_KEY, tempFile } from "./helpers.js";
 
+const PIN = `${"a".repeat(64)}.${"b".repeat(64)}`;
 const client = { client_id: "client_abc", issuer: "https://mcp.linear.app", redirect_uri: "http://127.0.0.1:5555/callback" };
 
 describe("the connections store", () => {
@@ -35,7 +36,7 @@ describe("the connections store", () => {
     expect(s.info("linear")).toEqual({ provider: "linear", state: "off", mode: "ask", readsAuto: true, give: true });
     s.setPrefs("linear", { mode: "read", readsAuto: false, give: false });
     s.save("linear", { method: "token", access: LIN_KEY });
-    s.setPin("linear", "aaa.bbb", { read: 3, write: 2 });
+    s.setPin("linear", PIN, { read: 3, write: 2 });
     expect(s.info("linear")).toMatchObject({ state: "ready", mode: "read", readsAuto: false, tools: { read: 3, write: 2 } });
     s.remove("linear");
     expect(s.info("linear")).toEqual({ provider: "linear", state: "off", mode: "read", readsAuto: false, give: false });
@@ -46,7 +47,7 @@ describe("the connections store", () => {
   it("a new sign-in replaces the old one's account, pin and refresh token", () => {
     const s = new ConnectionStore(tempFile("connections.json"), fakeCrypto());
     s.save("linear", { method: "oauth", access: LIN_KEY, refresh: "r1", client, account: { login: "a@example.com" } });
-    s.setPin("linear", "x.y", { read: 1, write: 1 });
+    s.setPin("linear", PIN, { read: 1, write: 1 });
     s.save("linear", { method: "token", access: LIN_KEY });
     expect(s.secrets("linear")).toEqual({ access: LIN_KEY });
     expect(s.pin("linear")).toBeUndefined();
@@ -69,6 +70,53 @@ describe("the connections store", () => {
     const name = s.info("github").account!.name!;
     expect(name.length).toBe(100);
     expect(name).not.toMatch(/[\n‮]/);
+  });
+
+  it("refuses to store anything on Linux's basic_text backend, a key fixed in the app (Fable's L1)", () => {
+    const crypto = { ...fakeCrypto(true), getSelectedStorageBackend: () => "basic_text" };
+    const s = new ConnectionStore(tempFile("connections.json"), crypto);
+    expect(s.canStore).toBe(false);
+    expect(() => s.save("github", { method: "token", access: GH_TOKEN })).toThrow(CONN_NOTES.cantStore);
+    expect(new ConnectionStore(tempFile("c.json"), { ...fakeCrypto(true), getSelectedStorageBackend: () => "gnome_libsecret" }).canStore).toBe(true);
+    expect(new ConnectionStore(tempFile("c.json"), { ...fakeCrypto(true), getSelectedStorageBackend: () => { throw new Error("not linux"); } }).canStore).toBe(true);
+  });
+
+  it("moves a damaged file aside instead of writing over it, keeping the sound provider and its pin (Fable's L4)", () => {
+    const path = tempFile("connections.json");
+    const s = new ConnectionStore(path, fakeCrypto());
+    s.save("github", { method: "token", access: GH_TOKEN });
+    s.setPin("github", `${"a".repeat(64)}.${"b".repeat(64)}`, { read: 1, write: 1 });
+    s.save("linear", { method: "token", access: LIN_KEY });
+    const good = readFileSync(path, "utf8");
+    // A file that doesn't parse: kept aside whole, and the next change doesn't lose it.
+    writeFileSync(path, good.slice(0, -5));
+    expect(s.info("github").state).toBe("off");
+    expect(s.damaged).toMatch(/connections\.json\.damaged-\d+$/);
+    expect(readFileSync(s.damaged!, "utf8")).toBe(good.slice(0, -5));
+    s.setPrefs("linear", { mode: "read" });
+    expect(readFileSync(s.damaged!, "utf8")).toBe(good.slice(0, -5));
+    // One entry that isn't what the store writes: the other provider and its pin stay.
+    const t = new ConnectionStore(tempFile("connections.json"), fakeCrypto());
+    const j = JSON.parse(good);
+    j.linear.tools = "many";
+    writeFileSync((t as unknown as { path: string }).path, JSON.stringify(j));
+    expect(t.info("github").state).toBe("ready");
+    expect(t.pin("github")).toBe(`${"a".repeat(64)}.${"b".repeat(64)}`);
+    expect(t.info("linear").state).toBe("off");
+    expect(t.damaged).toBeDefined();
+    t.setPrefs("linear", { mode: "read" });
+    expect(t.pin("github")).toBe(`${"a".repeat(64)}.${"b".repeat(64)}`);
+    expect(t.secrets("github")?.access).toBe(GH_TOKEN);
+  });
+
+  it("writes through a temp file of its own: a file planted at the old fixed temp name isn't followed (Fable's L4)", () => {
+    const path = tempFile("connections.json");
+    const planted = `${path}.tmp`;
+    writeFileSync(planted, "planted");
+    const s = new ConnectionStore(path, fakeCrypto());
+    s.save("github", { method: "token", access: GH_TOKEN });
+    expect(readFileSync(planted, "utf8")).toBe("planted");
+    expect(s.secrets("github")?.access).toBe(GH_TOKEN);
   });
 
   it("reads a damaged or foreign file as nothing stored", () => {

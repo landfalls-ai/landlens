@@ -80,6 +80,13 @@ describe("redactText", () => {
     expect(redactText(input)).toContain(want);
   });
 
+  it("cuts a GitHub token with text glued to its end, and Linear's refresh tokens (Fable's L5)", () => {
+    const gh = "ghp_" + "a".repeat(36);
+    expect(redactText(`${gh}_tail`)).not.toContain(gh);
+    const refresh = "lin_refresh_" + "f".repeat(32);
+    expect(redactText(`refresh ${refresh}`)).toBe("refresh <redacted linear key>");
+  });
+
   it("leaves ordinary log lines alone", () => {
     const line = "2026-11-14T10:00:00Z ERROR connection refused to db:5432 (attempt 3)";
     expect(redactText(line)).toBe(line);

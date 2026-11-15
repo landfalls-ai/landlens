@@ -116,12 +116,44 @@ describe("Linear's sign-in", () => {
     expect(g.requests.filter((q) => q.path === "/authorize").length).toBe(opened);
   });
 
+  it("leaves the connection alone when a refresh doesn't get through: offline or a 5xx is unreachable, not expired (Fable's M1)", async () => {
+    const f = await start({ expiresIn: 60 });
+    const ep = linearEndpoints(f.origin);
+    const s = await linearSignIn({ endpoints: ep, mode: "ask", open: browser([]), signal: new AbortController().signal });
+    let expired = 0;
+    for (const down of [
+      (() => Promise.reject(new TypeError("fetch failed"))) as () => Promise<Response>,
+      () => Promise.resolve(new Response("<html>bad gateway</html>", { status: 502 })),
+    ]) {
+      const flaky: typeof fetch = (i, init) => (String(i instanceof Request ? i.url : i).endsWith("/token") ? down() : fetch(i, init));
+      await expect(linearRefresh({ endpoints: ep, mode: "ask", client: s.client, tokens: { access: s.access, refresh: s.refresh! }, onTokens: () => {}, onExpired: () => expired++, fetch: flaky })).rejects.toThrow(CONN_NOTES.linearUnreachable);
+    }
+    expect(expired).toBe(0);
+    // The refresh token wasn't spent: once Linear is back it refreshes.
+    const t = await linearRefresh({ endpoints: ep, mode: "ask", client: s.client, tokens: { access: s.access, refresh: s.refresh! }, onTokens: () => {}, onExpired: () => expired++ });
+    expect(t.access).not.toBe(s.access);
+    expect(expired).toBe(0);
+  });
+
+  it("names the refused tokens when it expires, so main can tell a stale refusal from a real one (Fable's M2)", async () => {
+    const g = await start({ refuseRefresh: true });
+    const s = await linearSignIn({ endpoints: linearEndpoints(g.origin), mode: "ask", open: browser([]), signal: new AbortController().signal });
+    const used: unknown[] = [];
+    await expect(linearRefresh({ endpoints: linearEndpoints(g.origin), mode: "ask", client: s.client, tokens: { access: s.access, refresh: s.refresh! }, onTokens: () => {}, onExpired: (u) => used.push(u) })).rejects.toThrow(CONN_NOTES.linearExpired);
+    expect(used).toEqual([{ access: s.access, refresh: s.refresh }]);
+    // Nothing was registered again after the refusal.
+    expect(g.requests.filter((q) => q.path === "/register").length).toBe(1);
+  });
+
   it("revokes at the metadata's revocation endpoint, on Linear's origin only", async () => {
     const f = await start();
     const ep = linearEndpoints(f.origin);
     const s = await linearSignIn({ endpoints: ep, mode: "ask", open: browser([]), signal: new AbortController().signal });
     expect(await linearRevoke(ep, s.refresh!, s.client)).toBe(true);
     expect(f.revoked).toEqual([s.refresh]);
+    // Both tokens, the access token first (Fable's L3).
+    expect(await linearRevoke(ep, [s.access, s.refresh!], s.client)).toBe(true);
+    expect(f.revoked).toEqual([s.refresh, s.access, s.refresh]);
     const other = await start();
     const g = await start({ metadata: { revocation_endpoint: `${other.origin}/revoke` } });
     expect(await linearRevoke(linearEndpoints(g.origin), "lin_oauth_x", s.client)).toBe(false);

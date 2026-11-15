@@ -35,15 +35,21 @@ export function checkDiscovery(ep: LinearEndpoints, s: OAuthDiscoveryState): voi
 
 export type LinearTokens = { access: string; refresh?: string; expiresAt?: number; scopes: string[] };
 
+/** The tokens a refresh was tried with, so main marks expired only the sign-in that was refused. */
+export type LinearUsed = { access: string; refresh?: string };
+
 /**
  * Landlens's OAuthClientProvider for Linear. In a sign-in (`interactive`) it registers a client for the loopback
  * redirect and opens the browser; in a session it holds the stored client and tokens, saves refreshed tokens, and never
- * opens a browser: a refresh that fails marks the connection expired.
+ * opens a browser. Only a refresh Linear refused (invalid_grant, or the client refused) marks the connection expired;
+ * a refresh that didn't get through (offline, a 5xx) fails the call as unreachable and leaves the connection as it is.
  */
 export class LinearAuth implements OAuthClientProvider {
   private verifier = "";
   private client: OAuthClientInformationMixed | undefined;
   private saved: OAuthTokens | undefined;
+  /** The SDK threw the tokens away because Linear refused them (invalidateCredentials "tokens" or "all"). */
+  private refused: LinearUsed | undefined;
 
   constructor(private readonly o: {
     endpoints: LinearEndpoints;
@@ -53,10 +59,12 @@ export class LinearAuth implements OAuthClientProvider {
     state?: string;
     client?: LinearClient;
     tokens?: { access: string; refresh?: string };
+    /** In a session: the stored tokens now, read before each use, so a refresh another session made is picked up. */
+    load?: () => { access: string; refresh?: string } | undefined;
     /** Interactive: open the authorization address (already checked). Absent in a session. */
     open?: (url: string) => Promise<void>;
     onTokens?: (t: LinearTokens) => void;
-    onExpired?: () => void;
+    onExpired?: (used: LinearUsed) => void;
   }) {
     this.client = o.client;
     if (o.tokens) this.saved = { access_token: o.tokens.access, token_type: "Bearer", ...(o.tokens.refresh ? { refresh_token: o.tokens.refresh } : {}), ...(o.client ? { issuer: o.client.issuer } : {}) };
@@ -83,6 +91,8 @@ export class LinearAuth implements OAuthClientProvider {
   }
 
   clientInformation() {
+    // The SDK asks for the client first when it starts over after a refused refresh: in a session that is the end.
+    if (this.refused && !this.o.open) this.expire(this.refused);
     return this.client;
   }
 
@@ -98,6 +108,10 @@ export class LinearAuth implements OAuthClientProvider {
   }
 
   tokens() {
+    const now = !this.refused ? this.o.load?.() : undefined;
+    if (now && now.access !== this.saved?.access_token) {
+      this.saved = { access_token: now.access, token_type: "Bearer", ...(now.refresh ? { refresh_token: now.refresh } : {}), ...(this.o.client ? { issuer: this.o.client.issuer } : {}) };
+    }
     return this.saved;
   }
 
@@ -119,11 +133,19 @@ export class LinearAuth implements OAuthClientProvider {
     };
   }
 
+  /** In a session nobody is there to sign in: the connection is expired, and the call fails with that sentence. */
+  private expire(used: LinearUsed): never {
+    this.o.onExpired?.(used);
+    throw new ConnError(CONN_NOTES.linearExpired, 401);
+  }
+
   async redirectToAuthorization(url: URL) {
     if (!this.o.open) {
-      // In a session nobody is there to sign in: the connection is expired, and the call fails with that sentence.
-      this.o.onExpired?.();
-      throw new ConnError(CONN_NOTES.linearExpired, 401);
+      // Refused by Linear, or there was no refresh token to try: expired. Otherwise the SDK swallowed a refresh that
+      // didn't get through (offline, a 5xx) and fell through to here: the connection stays as it is (M1).
+      if (this.refused) this.expire(this.refused);
+      if (!this.saved?.refresh_token) this.expire({ access: this.saved?.access_token ?? "" });
+      throw new ConnError(CONN_NOTES.linearUnreachable, 503);
     }
     if (url.origin !== this.o.endpoints.authOrigin || url.username || url.password) throw new ConnError(CONN_NOTES.linearElsewhere, 502);
     await this.o.open(url.href);
@@ -144,7 +166,10 @@ export class LinearAuth implements OAuthClientProvider {
 
   invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery") {
     if (scope === "all" || scope === "client") this.client = undefined;
-    if (scope === "all" || scope === "tokens") this.saved = undefined;
+    if (scope === "all" || scope === "tokens") {
+      if (this.saved && !this.refused) this.refused = { access: this.saved.access_token, ...(this.saved.refresh_token ? { refresh: this.saved.refresh_token } : {}) };
+      this.saved = undefined;
+    }
     if (scope === "all" || scope === "verifier") this.verifier = "";
   }
 }
@@ -193,10 +218,10 @@ export async function linearSignIn(o: { endpoints: LinearEndpoints; mode: ConnMo
 const LINEAR_TOKEN = /^[\x21-\x7e]{16,2048}$/;
 
 /**
- * Refresh a stored OAuth sign-in if it can be: the SDK's auth() with the stored client and refresh token. A refused
- * refresh ends in redirectToAuthorization, which in a session marks the connection expired.
+ * Refresh a stored OAuth sign-in if it can be: the SDK's auth() with the stored client and refresh token. A refresh
+ * Linear refuses calls onExpired with the tokens it was tried with; one that doesn't get through throws unreachable.
  */
-export async function linearRefresh(o: { endpoints: LinearEndpoints; mode: ConnMode; client: LinearClient; tokens: { access: string; refresh?: string }; onTokens: (t: LinearTokens) => void; onExpired: () => void; fetch?: typeof fetch }): Promise<LinearTokens> {
+export async function linearRefresh(o: { endpoints: LinearEndpoints; mode: ConnMode; client: LinearClient; tokens: { access: string; refresh?: string }; onTokens: (t: LinearTokens) => void; onExpired: (used: LinearUsed) => void; fetch?: typeof fetch }): Promise<LinearTokens> {
   const provider = new LinearAuth({ endpoints: o.endpoints, mode: o.mode, redirectUri: o.client.redirect_uri, client: o.client, tokens: o.tokens, onTokens: o.onTokens, onExpired: o.onExpired });
   try {
     await auth(provider, { serverUrl: o.endpoints.mcp, scope: LINEAR_SCOPE[o.mode], fetchFn: pinnedFetch([o.endpoints.authOrigin], o.fetch ?? fetch) });
@@ -242,19 +267,24 @@ export async function linearViewer(ep: LinearEndpoints, token: string, base: typ
 
 /**
  * Best effort: revoke an OAuth sign-in at the revocation endpoint Linear's metadata names (on its own origin only),
- * within 5 seconds. A pasted key can't be revoked from here.
+ * each request within 5 seconds. Every token given is revoked, in order (the access token, then the refresh token):
+ * true only if all were. A pasted key can't be revoked from here.
  */
-export async function linearRevoke(ep: LinearEndpoints, token: string, client: LinearClient, base: typeof fetch = fetch): Promise<boolean> {
+export async function linearRevoke(ep: LinearEndpoints, tokens: string | string[], client: LinearClient, base: typeof fetch = fetch): Promise<boolean> {
   const f = pinnedFetch([ep.authOrigin], base, 5_000);
   try {
     const m = (await (await f(`${ep.authOrigin}/.well-known/oauth-authorization-server`, { headers: { Accept: "application/json" } })).json()) as { revocation_endpoint?: unknown };
     if (typeof m.revocation_endpoint !== "string" || new URL(m.revocation_endpoint).origin !== ep.authOrigin) return false;
-    const r = await f(m.revocation_endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token, client_id: client.client_id }).toString(),
-    });
-    return r.ok;
+    let ok = true;
+    for (const token of [...new Set(Array.isArray(tokens) ? tokens : [tokens])]) {
+      const r = await f(m.revocation_endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token, client_id: client.client_id }).toString(),
+      }).catch(() => undefined);
+      ok = ok && !!r?.ok;
+    }
+    return ok;
   } catch {
     return false;
   }

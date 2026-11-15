@@ -11,7 +11,7 @@ import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
-import type { ConnectionsService } from "./connections";
+import { flowOwners, type ConnectionsService } from "./connections";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
@@ -21,14 +21,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
   /** Windows that started a sign-in: when one goes, its sign-ins stop. */
-  const signingIn = new WeakSet<WebContents>();
-  const flowOwner = (wc: WebContents) => {
-    if (!signingIn.has(wc)) {
-      signingIn.add(wc);
-      wc.once("destroyed", () => connections.cancelFor(wc));
-    }
-    return wc;
-  };
+  const flowOwner = flowOwners(connections);
 
   const handlers: Handlers = {
     "catalog:list": async () => {

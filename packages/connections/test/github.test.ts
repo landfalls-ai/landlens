@@ -69,6 +69,19 @@ describe("GitHub's device flow", () => {
     expect(clock.now()).toBe(15 * 60_000);
   });
 
+  it("tries a dropped poll again, and gives up after three in a row", async () => {
+    const f = await start();
+    const ep = githubEndpoints(f.origin);
+    const code = await startDeviceFlow(ep, CLIENT);
+    let drops = 2;
+    const flaky: typeof fetch = (i, init) => (String(i).endsWith("/login/oauth/access_token") && drops-- > 0 ? Promise.reject(new TypeError("fetch failed")) : fetch(i, init));
+    expect((await pollDeviceFlow(ep, CLIENT, code, new AbortController().signal, { clock: virtualClock(), fetch: flaky })).access).toBe(f.deviceToken);
+    drops = 3;
+    await expect(pollDeviceFlow(ep, CLIENT, code, new AbortController().signal, { clock: virtualClock(), fetch: flaky })).rejects.toThrow(CONN_NOTES.githubUnreachable);
+    const bad: typeof fetch = (i, init) => (String(i).endsWith("/login/oauth/access_token") ? Promise.resolve(new Response("", { status: 502 })) : fetch(i, init));
+    await expect(pollDeviceFlow(ep, CLIENT, code, new AbortController().signal, { clock: virtualClock(), fetch: bad })).rejects.toThrow(CONN_NOTES.githubAnswer);
+  });
+
   it("stops when cancelled", async () => {
     const f = await start({ device: ["authorization_pending"] });
     const ac = new AbortController();

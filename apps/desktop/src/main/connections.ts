@@ -12,7 +12,7 @@ import { randomBytes } from "node:crypto";
 import { CONN_NOTES, type ConnInfo, type ConnList, type ConnMode, type McpServerInfo, type McpTest, type McpToolInfo } from "@landlens/contracts";
 import {
   ConnError, ConnectionStore, endpoints, githubWhoAmI, GITHUB_CLIENT_ID, GITHUB_DEVICE_PAGE, LinearAuth, linearRefresh, linearRevoke, linearSignIn,
-  linearViewer, LOOPBACK_ORIGIN, pollDeviceFlow, PROVIDER_NAME, PROVIDERS, startDeviceFlow, StoreError, type Clock, type Crypto, type Endpoints, type Provider,
+  linearViewer, LOOPBACK_ORIGIN, pollDeviceFlow, PROVIDER_NAME, PROVIDERS, startDeviceFlow, StoreError, type Clock, type Crypto, type Endpoints, type LinearUsed, type Provider,
 } from "@landlens/connections";
 import { listingHash, rawError, readTools, testRemote, toolInfo, type RemoteSpec } from "@landlens/mcp-gateway";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
@@ -36,6 +36,21 @@ export function connectionOverrides(env: NodeJS.ProcessEnv, packaged: boolean): 
 
 /** A window, as far as flows care: something that can go away. */
 export type FlowOwner = object;
+
+/**
+ * The window a sign-in belongs to (ipc.ts): the first time a window starts one, its "destroyed" stops every sign-in
+ * it owns, so a closed window leaves no poll or loopback listener running.
+ */
+export function flowOwners(c: Pick<ConnectionsService, "cancelFor">) {
+  const seen = new WeakSet<object>();
+  return <W extends { once(event: "destroyed", f: () => void): unknown }>(wc: W): W => {
+    if (!seen.has(wc)) {
+      seen.add(wc);
+      wc.once("destroyed", () => c.cancelFor(wc));
+    }
+    return wc;
+  };
+}
 
 type Flow = { id: string; provider: Provider; owner: FlowOwner; abort: AbortController };
 type Transient = { state?: "connecting" | "failed"; note?: string };
@@ -75,6 +90,10 @@ export class ConnectionsService {
   private readonly lastTest: Partial<Record<Provider, { pin: string; tools: { read: number; write: number } }>> = {};
   /** Both endpoints' listings, for sessions (10 minutes) and the pages. */
   private readonly listings: Partial<Record<Provider, Listing>> = {};
+  /** The one refresh of a provider's OAuth token in flight: a rotating refresh token can be spent only once. */
+  private readonly refreshing: Partial<Record<Provider, Promise<string | undefined>>> = {};
+  /** Tokens main holds that aren't stored (yet): a pasted token being checked, a sign-in being saved. */
+  private readonly held = new Set<string>();
 
   constructor(private readonly o: {
     file: string;
@@ -96,6 +115,28 @@ export class ConnectionsService {
 
   private get fetch(): typeof fetch {
     return this.o.fetch ?? fetch;
+  }
+
+  /**
+   * A line for the log, with every token this service holds cut out exactly, whatever its shape: Linear's MCP tokens
+   * promise none, so rawError's patterns can't be relied on for them.
+   */
+  private say(line: string) {
+    if (!this.o.log) return;
+    const known = [...this.held];
+    for (const p of PROVIDERS) {
+      const s = this.store.secrets(p);
+      if (s) known.push(s.access, ...(s.refresh ? [s.refresh] : []));
+    }
+    let out = line;
+    for (const t of known.filter((t) => t.length >= 8).sort((a, b) => b.length - a.length)) out = out.replaceAll(t, "<redacted token>");
+    this.o.log(out);
+  }
+
+  /** A new sign-in is stored: what the last test showed and the listing kept are another sign-in's (L6). */
+  private saved(p: Provider) {
+    delete this.lastTest[p];
+    delete this.listings[p];
   }
 
   /** A server you added already has this connection's name: the connection stays off until it is renamed. */
@@ -154,7 +195,7 @@ export class ConnectionsService {
   private settle(p: Provider, flow: Flow | undefined, err: unknown) {
     if (flow?.abort.signal.aborted) return this.changed(p, undefined); // cancelled: nothing to say
     const note = err instanceof ConnError || err instanceof StoreError ? err.message : p === "github" ? CONN_NOTES.githubAnswer : CONN_NOTES.linearAnswer;
-    if (!(err instanceof ConnError)) this.o.log?.(`[connections] ${p}: ${rawError(err)}`);
+    if (!(err instanceof ConnError)) this.say(`[connections] ${p}: ${rawError(err)}`);
     this.changed(p, { state: "failed", note });
   }
 
@@ -173,18 +214,26 @@ export class ConnectionsService {
       throw fail(err instanceof ConnError ? err.status : 502, err instanceof ConnError ? err.message : CONN_NOTES.githubAnswer);
     }
     this.changed("github", undefined);
+    let held: string | undefined;
     void (async () => {
       try {
         const { access } = await pollDeviceFlow(this.ep.github, this.clientId, code, flow.abort.signal, { fetch: this.fetch, ...(this.o.clock ? { clock: this.o.clock } : {}) });
+        held = access;
+        this.held.add(access);
         const who = await githubWhoAmI(this.ep.github, access, this.fetch);
+        // Cancelled after GitHub gave the token: it is dropped. GitHub can't revoke a device token without the app's
+        // secret, so the grant stays on the person's GitHub grants page (docs/connections.md says where).
         if (flow.abort.signal.aborted) return;
         this.store.save("github", { method: "device", access, account: who.account, scopes: who.scopes });
+        this.saved("github");
         this.endFlow(flow);
         await this.accept("github");
         this.changed("github", undefined);
       } catch (err) {
         this.endFlow(flow);
         this.settle("github", flow, err);
+      } finally {
+        if (held) this.held.delete(held);
       }
     })();
     return { flow: flow.id, userCode: code.userCode, verificationUri: GITHUB_DEVICE_PAGE, expiresIn: code.expiresIn };
@@ -205,13 +254,20 @@ export class ConnectionsService {
     this.changed("linear", undefined);
     let opened!: () => void;
     const browserAsked = new Promise<void>((r) => (opened = r));
+    let got: Awaited<ReturnType<typeof linearSignIn>> | undefined;
+    let stored = false;
     const done = (async () => {
       try {
         const r = await linearSignIn({ endpoints: this.ep.linear, mode, open: async (url) => (await this.openLinear(url), opened()), signal: flow.abort.signal, fetch: this.fetch });
+        got = r;
+        this.held.add(r.access);
+        if (r.refresh) this.held.add(r.refresh);
         // Whether Linear's API takes an MCP-issued token isn't documented: try once, else leave the account out.
         const account = await linearViewer(this.ep.linear, r.access, this.fetch).catch(() => undefined);
-        if (flow.abort.signal.aborted) return;
+        if (flow.abort.signal.aborted) return; // dropped: revoked in finally
         this.store.save("linear", { method: "oauth", access: r.access, ...(r.refresh ? { refresh: r.refresh } : {}), ...(r.expiresAt ? { expiresAt: r.expiresAt } : {}), client: r.client, ...(account ? { account } : {}), scopes: r.scopes });
+        stored = true;
+        this.saved("linear");
         this.store.setPrefs("linear", { mode });
         this.endFlow(flow);
         await this.accept("linear");
@@ -220,6 +276,21 @@ export class ConnectionsService {
         this.endFlow(flow);
         this.settle("linear", flow, err);
         throw err;
+      } finally {
+        // Tokens Linear gave that weren't stored (cancelled, the window went, a disconnect, or the save failed) are
+        // revoked at once, best effort, so no grant is left that Landlens can't show or end (L2).
+        if (got && !stored) {
+          const t = got;
+          void linearRevoke(this.ep.linear, [t.access, ...(t.refresh ? [t.refresh] : [])], t.client, this.fetch).then((ok) => {
+            if (!ok) this.say("[connections] linear: a sign-in that wasn't kept couldn't be revoked");
+          }).finally(() => {
+            this.held.delete(t.access);
+            if (t.refresh) this.held.delete(t.refresh);
+          });
+        } else if (got) {
+          this.held.delete(got.access);
+          if (got.refresh) this.held.delete(got.refresh);
+        }
       }
     })();
     // The answer waits for the browser to be asked, or for the flow to fail before that.
@@ -248,6 +319,7 @@ export class ConnectionsService {
     this.refuseIfCantStore();
     this.refuseIfTaken(p);
     if ([...this.flows.values()].some((f) => f.provider === p)) throw fail(409, `A sign-in to ${PROVIDER_NAME[p]} is already running. Cancel it first.`);
+    this.held.add(token);
     try {
       if (p === "github") {
         const who = await githubWhoAmI(this.ep.github, token, this.fetch);
@@ -256,10 +328,13 @@ export class ConnectionsService {
         const account = await linearViewer(this.ep.linear, token, this.fetch);
         this.store.save("linear", { method: "token", access: token, account });
       }
+      this.saved(p);
       delete this.transient[p];
     } catch (err) {
       this.settle(p, undefined, err);
       return this.info(p);
+    } finally {
+      this.held.delete(token);
     }
     await this.accept(p);
     this.o.push(this.info(p));
@@ -287,24 +362,49 @@ export class ConnectionsService {
     return out;
   }
 
-  /** Main only: a ready connection's bearer, refreshing Linear's OAuth token first if it ran out. */
+  /**
+   * A refresh Linear refused marks the connection expired, unless the tokens it was tried with aren't the stored ones
+   * any more: another refresh rotated them first, and the connection is fine (M2).
+   */
+  private expiredIfStill(used: LinearUsed) {
+    const s = this.store.secrets("linear");
+    if (!s) return;
+    if (used.refresh ? s.refresh !== used.refresh : s.access !== used.access) return;
+    this.store.markExpired("linear");
+  }
+
+  /**
+   * Main only: a ready connection's bearer, refreshing Linear's OAuth token first if it ran out. One refresh at a time:
+   * Linear's refresh token rotates, so a second refresh with the same one would be refused.
+   */
   async bearer(p: Provider): Promise<string | undefined> {
     const s = this.store.secrets(p);
     const info = this.store.info(p);
     if (!s || info.state !== "ready") return undefined;
     if (p === "linear" && info.method === "oauth" && s.client && s.refresh && s.expiresAt && s.expiresAt - 60_000 < Date.now()) {
-      try {
-        const t = await linearRefresh({
-          endpoints: this.ep.linear, mode: info.mode, client: s.client, tokens: { access: s.access, refresh: s.refresh }, fetch: this.fetch,
-          onTokens: (t) => this.store.setTokens("linear", t),
-          onExpired: () => this.store.markExpired("linear"),
-        });
-        return t.access;
-      } catch (err) {
-        this.o.log?.(`[connections] linear refresh: ${rawError(err)}`);
-        this.o.push(this.info("linear"));
-        return undefined;
-      }
+      const running = this.refreshing.linear;
+      if (running) return running;
+      const client = s.client;
+      const refresh = s.refresh;
+      const run = (async () => {
+        try {
+          const t = await linearRefresh({
+            endpoints: this.ep.linear, mode: info.mode, client, tokens: { access: s.access, refresh }, fetch: this.fetch,
+            onTokens: (t) => this.store.setTokens("linear", t),
+            onExpired: (used) => this.expiredIfStill(used),
+          });
+          return t.access;
+        } catch (err) {
+          // Refused: expired (above). Unreachable: the connection stays ready, and this call has no bearer.
+          this.say(`[connections] linear refresh: ${rawError(err)}`);
+          this.o.push(this.info("linear"));
+          return undefined;
+        } finally {
+          delete this.refreshing.linear;
+        }
+      })();
+      this.refreshing.linear = run;
+      return run;
     }
     return s.access;
   }
@@ -404,7 +504,8 @@ export class ConnectionsService {
 
   /**
    * Linear's OAuth sign-in in a session: the transport takes the bearer from it and refreshes on a 401; it never
-   * opens a browser, and a refused refresh marks the connection expired (D74).
+   * opens a browser. A refresh Linear refused marks the connection expired (D74); one that didn't get through fails
+   * the call and leaves the connection as it is.
    */
   private async sessionAuth(p: Provider, mode: ConnMode): Promise<LinearAuth | undefined> {
     if (p !== "linear" || this.store.info(p).method !== "oauth") return undefined;
@@ -413,9 +514,14 @@ export class ConnectionsService {
     return new LinearAuth({
       endpoints: this.ep.linear, mode, redirectUri: s.client.redirect_uri, client: s.client,
       tokens: { access: s.access, ...(s.refresh ? { refresh: s.refresh } : {}) },
+      // Each use reads the stored tokens, so a refresh another session or bearer() made is picked up, not spent again.
+      load: () => {
+        const now = this.store.secrets("linear");
+        return now ? { access: now.access, ...(now.refresh ? { refresh: now.refresh } : {}) } : undefined;
+      },
       onTokens: (t) => this.store.setTokens("linear", t),
-      onExpired: () => {
-        this.store.markExpired("linear");
+      onExpired: (used) => {
+        this.expiredIfStill(used);
         this.o.push(this.info("linear"));
       },
     });
@@ -425,7 +531,7 @@ export class ConnectionsService {
   drifted(p: Provider) {
     delete this.listings[p];
     if (this.transient[p]?.note === CONN_NOTES.drift) return;
-    this.o.log?.(`[connections] ${p}: its tools changed since you accepted them; its reads ask again`);
+    this.say(`[connections] ${p}: its tools changed since you accepted them; its reads ask again`);
     this.changed(p, { note: CONN_NOTES.drift });
   }
 
@@ -460,13 +566,16 @@ export class ConnectionsService {
     return out;
   }
 
-  /** Forget the sign-in. Linear's OAuth grant is revoked first, best effort, within 5 seconds. */
+  /**
+   * Forget the sign-in. Linear's OAuth grant is revoked first, best effort, each request within 5 seconds: the access
+   * token, then the refresh token (L3).
+   */
   async disconnect(p: Provider): Promise<ConnInfo> {
     for (const f of [...this.flows.values()]) if (f.provider === p) this.cancel(f.id, f.owner);
     const s = this.store.secrets(p);
     if (p === "linear" && this.store.info(p).method === "oauth" && s?.client) {
-      const ok = await linearRevoke(this.ep.linear, s.refresh ?? s.access, s.client, this.fetch);
-      if (!ok) this.o.log?.("[connections] linear: the revocation wasn't confirmed; the stored sign-in is deleted anyway");
+      const ok = await linearRevoke(this.ep.linear, [s.access, ...(s.refresh ? [s.refresh] : [])], s.client, this.fetch);
+      if (!ok) this.say("[connections] linear: the revocation wasn't confirmed; the stored sign-in is deleted anyway");
     }
     this.store.remove(p);
     delete this.lastTest[p];

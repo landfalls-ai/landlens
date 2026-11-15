@@ -82,6 +82,10 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **GitHub and Linear go to every cluster's sessions** (one "Give to Claude sessions" switch, no per-cluster choice),
   and a read's arguments reach the vendor without a question ([connections.md](connections.md)). Writes always ask
   until part 3's autonomous mode; Google Cloud is parts 4 and 5.
+- **GitHub grants can't be revoked from Landlens**: GitHub needs the OAuth App's secret, which Landlens doesn't have,
+  so Disconnect only forgets the token, and a device sign-in cancelled after GitHub gave the token leaves a grant
+  that you remove at GitHub's Settings → Applications ([connections.md](connections.md#signing-in-to-github)).
+  Linear's are revoked, best effort.
 - **Folded views reopen from scratch**: an earlier view in the dock is closed when it folds and opened again (from
   the kept result, the last 50) when you show it, so its own state (a filter, a scroll) is lost.
 - **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit); other shortcuts stay in the

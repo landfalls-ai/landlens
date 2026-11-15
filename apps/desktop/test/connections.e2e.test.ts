@@ -124,7 +124,7 @@ describe.runIf(run)("Connections against the fake providers", { timeout: 90_000 
 
     await card("Linear").getByRole("button", { name: "Disconnect" }).click();
     await card("Linear").getByText("Not connected").waitFor();
-    expect(linear.revoked.length).toBe(1);
+    expect(linear.revoked.length).toBe(2); // the access token, then the refresh token
     await card("Linear").getByRole("button", { name: "Use an API key instead" }).click();
     await card("Linear").getByLabel("Linear API key").fill(LIN_KEY);
     await card("Linear").getByRole("button", { name: "Connect", exact: true }).click();
