@@ -113,6 +113,17 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     });
     page = await app.firstWindow();
     await page.setViewportSize({ width: 1440, height: 880 });
+    // Main's own questions (a cloud cluster's first connect, Claude's reading) are native dialogs: answered here, in
+    // main, by `answer` (0 = yes, 1 = Cancel), each message kept in `asked`. The page can't answer them.
+    await app.evaluate(({ dialog }) => {
+      const g = globalThis as unknown as { asked: string[]; answer: number };
+      g.asked = [];
+      g.answer = 1;
+      dialog.showMessageBox = (async (...a: unknown[]) => {
+        g.asked.push((a.at(-1) as { message: string }).message);
+        return { response: g.answer, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -140,18 +151,19 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     // The cluster without an endpoint (still being made) isn't offered.
     await expect(page.getByRole("button", { name: /^batch-jobs/ }).count()).resolves.toBe(0);
     await both(page, "g5-01-welcome-gke");
-    const refused = await invoke("cluster:connect", { context: CONTEXT });
-    expect(refused).toEqual({ error: expect.stringMatching(/cloud cluster: say yes to connecting it first/) });
+    // The page can't say yes: main asks in its own dialog, and a Cancel there refuses (review of part 5, L3).
+    const refused = await invoke("cluster:connect", { context: CONTEXT, cloud: true });
+    expect(refused).toEqual({ error: expect.stringContaining("You didn't connect the cloud cluster.") });
+    expect(await app.evaluate(() => (globalThis as unknown as { asked: string[] }).asked)).toEqual(["Connect shop-prod?"]);
     expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).confirmed).toEqual([]);
   });
 
-  it("asks once, then connects as the ServiceAccount through Landlens's own kubeconfig", async () => {
+  it("asks once, in main, then connects as the ServiceAccount through Landlens's own kubeconfig", async () => {
+    await app.evaluate(() => void ((globalThis as unknown as { answer: number }).answer = 0));
     await card().click();
-    const ask = page.getByRole("alertdialog", { name: "Connect shop-prod?" });
-    await ask.waitFor();
-    await ask.getByText("This is a cloud cluster. Claude will read it").waitFor();
-    await both(page, "g5-02-cloud-question");
-    await ask.getByRole("button", { name: "Connect" }).click();
+    await expect.poll(() => app.evaluate(() => (globalThis as unknown as { asked: string[] }).asked.length)).toBe(2);
+    // No React dialog: the question was main's.
+    await expect(page.getByRole("alertdialog").count()).resolves.toBe(0);
     await page.getByRole("heading", { name: "Overview" }).waitFor({ timeout: 60_000 });
     // The ServiceAccount can't list pods across namespaces: the Overview says so and opens one it can read.
     const needed = page.getByRole("alert").filter({ hasText: "Your account can't read the whole cluster." });
@@ -161,9 +173,11 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     await needed.getByRole("button", { name: "Open" }).click();
     await page.getByRole("region", { name: "Verdict" }).waitFor({ timeout: 30_000 });
     await expect(page.getByRole("combobox", { name: "Namespace" }).inputValue()).resolves.toBe(NS);
-    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).confirmed).toEqual([CONTEXT]);
+    // Kept with its address, a hash of its CA and the account: a cluster recreated under the name asks again.
+    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).confirmed).toEqual([{ context: CONTEXT, endpoint: expect.stringMatching(/^127\.0\.0\.1:\d+$/), ca: expect.stringMatching(/^[0-9a-f]{64}$/), account: "person@example.com" }]);
     // Connected as the ServiceAccount: what its Role allows, and nothing it doesn't.
     const info = (await invoke("cluster:connect", { context: CONTEXT })) as { ok: { handle: string; server: string } };
+    expect(await app.evaluate(() => (globalThis as unknown as { asked: string[] }).asked.length)).toBe(2); // not asked again
     expect(info.ok.server).toMatch(/^https:\/\/127\.0\.0\.1:\d+$/);
     const access = (await invoke("cluster:access", {
       handle: info.ok.handle,
@@ -225,14 +239,10 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
   });
 
   it("turns on Claude's read of the projects only after main asks, and lists landlens-gcp on the MCP page", async () => {
-    await app.evaluate(({ dialog }) => {
+    await app.evaluate(() => {
       const g = globalThis as unknown as { asked: string[]; answer: number };
       g.asked = [];
       g.answer = 1; // Cancel first
-      dialog.showMessageBox = (async (...a: unknown[]) => {
-        g.asked.push((a.at(-1) as { message: string }).message);
-        return { response: g.answer, checkboxChecked: false };
-      }) as typeof dialog.showMessageBox;
     });
     await page.getByRole("button", { name: "Connections", exact: true }).click();
     const gcp = page.getByRole("region", { name: "Google Cloud connection" });
@@ -252,6 +262,19 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     expect(asked[1]).toMatch(/Google Cloud/);
     expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).agentRead).toBe(true);
     await both(page, "g5-05-claude-can-read");
+    // A project the page adds afterwards isn't Claude's until main asks again (review of part 5, M3).
+    const chose = (await invoke("gcp:choose", { projects: ["demo-shop", "orbit-analytics"] })) as { ok: { agentProjects: string[] } };
+    expect(chose.ok.agentProjects).toEqual(["demo-shop"]);
+    await page.getByRole("button", { name: "MCP", exact: true }).click();
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    const pending = gcp.getByRole("status").filter({ hasText: "Claude can't read orbit-analytics yet" });
+    await pending.waitFor();
+    if (shots) await both(page, "f5-01-pending-project");
+    await pending.getByRole("button", { name: /Let Claude read it too/ }).click();
+    await expect.poll(() => app.evaluate(() => (globalThis as unknown as { asked: string[] }).asked.length)).toBe(3);
+    await pending.waitFor({ state: "detached" });
+    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).grant).toEqual({ account: "person@example.com", projects: ["demo-shop", "orbit-analytics"] });
+    await invoke("gcp:choose", { projects: ["demo-shop"] });
     await page.getByRole("button", { name: "MCP", exact: true }).click();
     const tile = page.getByRole("region", { name: "MCP server landlens-gcp" });
     await tile.waitFor();
@@ -301,5 +324,16 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
       // No card asked: every landlens-gcp tool is a read.
       await expect(dock().getByRole("region", { name: "Claude asks" }).count()).resolves.toBe(0);
     }, 330_000);
+  });
+
+  it("disconnects the GKE cluster when its project is taken out, and Welcome says why (review of part 5, L7)", async () => {
+    const connected = (await invoke("cluster:connect", { context: CONTEXT })) as { ok: { handle: string } };
+    expect(connected.ok.handle).toBeTruthy();
+    await invoke("gcp:choose", { projects: [] });
+    await page.getByRole("heading", { name: "Pick a cluster" }).waitFor({ timeout: 30_000 });
+    await page.getByText("Disconnected, because its Google Cloud project is no longer chosen").waitFor();
+    if (shots) await both(page, "f5-02-gke-disconnected");
+    const access = await invoke("cluster:access", { handle: connected.ok.handle, checks: [{ verb: "list", group: "", resource: "pods", namespace: NS }] });
+    expect(access).toEqual({ error: expect.stringMatching(/not connected/) });
   });
 });

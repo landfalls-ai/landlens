@@ -61,6 +61,9 @@ export function Welcome(props: {
           These are the contexts in your kubeconfig. Landlens connects with your own credentials, kept in a separate process;
           nothing else on this machine can use them.
         </p>
+        {props.error && list && !list.some((c) => c.name === props.error!.context) ? (
+          <p className="card-error" role="alert">{props.error.context.startsWith("gke_") ? props.error.context.split("_").at(-1) : props.error.context}: {props.error.message}</p>
+        ) : null}
         {list === undefined ? (
           <div className="cards" aria-busy="true" aria-label="Loading contexts">
             {[0, 1].map((i) => (

@@ -1,6 +1,6 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
-import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
+import { channels, type Channel, type ClusterStatusEvent, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
 import { checkAccess, getRelease, KubeError, listContexts, listReleases, mergeCatalog, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
@@ -23,6 +23,37 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
   const owned = new Map<WebContents, Set<string>>();
   /** Windows that started a sign-in: when one goes, its sign-ins stop. */
   const flowOwner = flowOwners(connections);
+  /** Clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name isn't one). */
+  const gkeHandles = new Set<string>();
+  clusters.onGone((handle) => gkeHandles.delete(handle));
+
+  /** Main's own question, in a native dialog on the asking window: the renderer can't answer it (part 5, L3). */
+  const nativeConfirm = (event: IpcMainInvokeEvent) => async ({ message, detail, yes }: { message: string; detail: string; yes: string }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
+    const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+    return r.response === 0;
+  };
+
+  const disconnect = async (handle: string) => {
+    metrics.service.forget(handle);
+    doctor.forget(handle);
+    await mcp.forget(handle);
+    await hub.stopAll(handle);
+    await clusters.disconnect(handle);
+  };
+
+  // A GKE cluster whose project you took out, or that left the listing (Google Cloud off, gcloud signed out, another
+  // account, a new address), is disconnected at once, and every window is told (review of part 5, L7).
+  gcp.onGkeGone((contexts) => {
+    for (const info of clusters.list()) {
+      if (!gkeHandles.has(info.handle) || !contexts.includes(info.context)) continue;
+      const event: ClusterStatusEvent = { handle: info.handle, context: info.context, state: "disconnected", reason: "its Google Cloud project is no longer chosen, or gcloud's sign-in changed." };
+      void disconnect(info.handle).finally(() => {
+        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send("cluster:status", event);
+      });
+    }
+  });
 
   const handlers: Handlers = {
     "catalog:list": async () => {
@@ -37,23 +68,21 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       const gke = await gcp.gkeContexts().catch((err: Error) => ({ contexts: [], errors: [{ project: "", message: err.message }] }));
       return { contexts: mergeCatalog(own, gke.contexts), ...(error ? { error } : {}), ...(gke.errors.length ? { gke: { errors: gke.errors } } : {}) };
     },
-    "cluster:connect": async ({ context, cloud }) => {
+    "cluster:connect": async ({ context }, event) => {
       // Only contexts from the user's kubeconfig, or a GKE cluster Landlens listed (its own kubeconfig, D91); the name
-      // goes to the sidecar as an argument. Yours wins when both have the name.
+      // goes to the sidecar as an argument. Yours wins when both have the name. A GKE cluster's first connect asks in
+      // main's own dialog (L3).
       const own = listContexts().some((c) => c.name === context);
-      const gke = own ? undefined : await gcp.gkeConnect(context, !!cloud);
+      const gke = own ? undefined : await gcp.gkeConnect(context, nativeConfirm(event));
       if (!own && !gke) throw ipcError(404, `no context named ${context} in your kubeconfig`);
       const info = await clusters.connect(context, gke ?? {});
+      if (gke) gkeHandles.add(info.handle);
       // Kept forwards for this context start again (D37), without opening anything.
       forwards.restore(info);
       return info;
     },
     "cluster:disconnect": async ({ handle }) => {
-      metrics.service.forget(handle);
-      doctor.forget(handle);
-      await mcp.forget(handle);
-      await hub.stopAll(handle);
-      await clusters.disconnect(handle);
+      await disconnect(handle);
       return { ok: true };
     },
     "cluster:discovery": async ({ handle }) => ({ types: await clusters.discovery(handle) }),
@@ -166,12 +195,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "gcp:choose": ({ projects }) => gcp.choose(projects),
     // A grant to the agent: main asks in a native dialog before turning it on; off leaves open sessions at once.
     "gcp:agent-read": async ({ on }, event) => {
-      const s = await gcp.setAgentRead(on, async ({ message, detail, yes }) => {
-        const win = BrowserWindow.fromWebContents(event.sender);
-        const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
-        const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
-        return r.response === 0;
-      });
+      const s = await gcp.setAgentRead(on, nativeConfirm(event));
       if (!s.agentRead) mcp.gcpOff();
       return s;
     },

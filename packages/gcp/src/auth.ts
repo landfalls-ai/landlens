@@ -28,10 +28,18 @@ export const execRunner: Runner = (file, args, opts) =>
     child.stdin?.end();
   });
 
-/** The environment gcloud gets: HOME, PATH (the login PATH, so it finds its Python) and its own CLOUDSDK_* settings. */
+/** Proxy settings gcloud (and a GKE sidecar) keep, so a network that needs a proxy still reaches Google. */
+const PROXY_VARS = new Set(["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"]);
+
+/**
+ * The environment gcloud gets, and a GKE cluster's sidecar with the exec plugin it runs (review of part 5, L6): HOME,
+ * PATH (the login PATH, so it finds its Python), its own CLOUDSDK_* settings and the proxy variables. Nothing else
+ * of Landlens's environment.
+ */
 export function gcloudEnv(source: NodeJS.ProcessEnv, path?: string): Record<string, string> {
   const out: Record<string, string> = {};
   if (source.HOME) out.HOME = source.HOME;
+  for (const [k, v] of Object.entries(source)) if (PROXY_VARS.has(k) && v) out[k] = v;
   const p = path ?? source.PATH;
   if (p) out.PATH = p;
   for (const [k, v] of Object.entries(source)) if (k.startsWith("CLOUDSDK_") && v !== undefined) out[k] = v;

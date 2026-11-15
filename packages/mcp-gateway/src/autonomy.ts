@@ -24,6 +24,7 @@ export const WHY = {
   budget: `it has used its ${AUTONOMY_BUDGET} writes for this session`,
   rate: `${AUTONOMY_PER_MINUTE} writes ran in the last minute`,
   off: "autonomous is off",
+  gcp: "Google Cloud data was read in this session",
 } as const;
 
 /** Every string in the arguments, keys and values, depth-first. */
@@ -73,6 +74,8 @@ export class Autonomy {
   scope: AutonomyScope | undefined;
   used = 0;
   offBecause: AutonomyOff | undefined;
+  /** Why every write asks from now on in this session, whether it is on or not (W1); never cleared. */
+  held: string | undefined;
   private recent: number[] = [];
   private refusedInRow = 0;
 
@@ -103,7 +106,18 @@ export class Autonomy {
       ...(this.scope ? { scope: this.scope } : {}),
       ...(this.offBecause ? { offBecause: this.offBecause } : {}),
       ...(this.blocked ? { blocked: this.blocked } : {}),
+      ...(this.held ? { held: this.held } : {}),
     };
+  }
+
+  /**
+   * From now on in this session every write asks, with `why` (review of wave 6 part 5, W1): text the session read
+   * (Google Cloud names, labels, configuration) could steer a routine write, and anything read can be written out.
+   */
+  hold(why: string) {
+    if (this.held) return;
+    this.held = why;
+    this.emit();
   }
 
   private emit() {
@@ -137,6 +151,7 @@ export class Autonomy {
    */
   check(tool: Pick<Tool, "name" | "annotations">, args: Record<string, unknown>): { why: string; rules: boolean } | undefined {
     if (!this.on || !this.scope) return { why: WHY.off, rules: false };
+    if (this.held) return { why: this.held, rules: false };
     const r = routine(this.provider, tool, args, this.scope) ?? argsProblem(args);
     if (r) return { why: r, rules: true };
     if (this.used >= AUTONOMY_BUDGET) return { why: WHY.budget, rules: false };

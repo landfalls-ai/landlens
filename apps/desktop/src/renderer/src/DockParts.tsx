@@ -346,7 +346,9 @@ export function AutonomyStrip({ states, onStop }: { states: AutonomyState[]; onS
       {on.map((s) => (
         <div key={s.provider} className="auto-strip-row">
           <Ic icon={Zap} size={13} />
-          <span className="auto-strip-text"><b>Autonomous:</b> {PROVIDER_NAME[s.provider]} writes to {scopeWords(s)} run without asking. <span className="dim">{s.used}/{s.budget}</span></span>
+          <span className="auto-strip-text">{s.held
+            ? <><b>Autonomous, held:</b> {PROVIDER_NAME[s.provider]} writes ask, because {s.held.charAt(0).toLowerCase()}{s.held.slice(1)}. <span className="dim">{s.used}/{s.budget}</span></>
+            : <><b>Autonomous:</b> {PROVIDER_NAME[s.provider]} writes to {scopeWords(s)} run without asking. <span className="dim">{s.used}/{s.budget}</span></>}</span>
           <button type="button" className="secondary sm auto-stop" onClick={() => onStop(s)} aria-label={`Stop ${PROVIDER_NAME[s.provider]} autonomous`}>Stop</button>
         </div>
       ))}
@@ -422,7 +424,8 @@ export function AutonomySheet({ state, error, onTurnOn, onStop, onClose }: {
       {state.on ? (
         <>
           <p className="auto-level"><Ic icon={Zap} size={12} />Autonomous: routine writes to <b>{scopeWords(state)}</b> run without asking. {state.used} of {state.budget} used.</p>
-          <p className="dim small">Merges, deletes, anything outside the scope and anything not routine still ask. Cluster changes always wait for you on their change card.</p>
+          {state.held ? <p className="auto-blocked" role="status"><Ic icon={CircleAlert} size={12} />Every write asks now: {state.held.charAt(0).toLowerCase()}{state.held.slice(1)}.</p> : null}
+          <p className="dim small">Merges, deletes, anything outside the scope and anything not routine still ask. Once Google Cloud data is read in this session, every write asks. Cluster changes always wait for you on their change card.</p>
           <div className="auto-acts"><button type="button" className="secondary" onClick={onStop}>Stop</button></div>
         </>
       ) : (
@@ -448,6 +451,7 @@ export function AutonomySheet({ state, error, onTurnOn, onStop, onClose }: {
                 </label>
               )}
               <p className="auto-sentence">{autonomySentence(state.provider, where)}</p>
+              <p className="dim small">{state.held ? `Every write asks in this session anyway: ${state.held.charAt(0).toLowerCase()}${state.held.slice(1)}.` : "Once Google Cloud data is read in this session (a landlens-gcp tool, or a resource you quote), every write asks."}</p>
               {problem && (github ? repos : team) ? <p className="tone-warn small">{problem}</p> : null}
               {error ? <p className="tone-bad small" role="alert">{error}</p> : null}
               <div className="auto-acts">

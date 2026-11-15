@@ -58,6 +58,7 @@ func run() error {
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig file(s), separated like KUBECONFIG; empty uses the default rules")
 	contextName := flag.String("context", "", "the kubeconfig context to serve (required)")
 	certMode := flag.Bool("loopback-cert", false, "print a fresh self-signed certificate and key for 127.0.0.1 as JSON, and exit")
+	refuseLocal := flag.Bool("refuse-local", false, "refuse to dial loopback, link-local, unspecified and multicast addresses (a GKE cluster's)")
 	flag.Parse()
 	if *certMode {
 		return printLoopbackCert(os.Stdout)
@@ -74,6 +75,9 @@ func run() error {
 	cfg, err := loadConfig(*kubeconfig, *contextName)
 	if err != nil {
 		return err
+	}
+	if *refuseLocal {
+		cfg.Dial = refusingLocalDialer()
 	}
 	handler, err := newHandler(cfg, secret)
 	if err != nil {
@@ -136,6 +140,36 @@ func loadConfig(kubeconfig, contextName string) (*rest.Config, error) {
 	cfg.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	cfg.UserAgent = "landlens-kube-proxy"
 	return cfg, nil
+}
+
+// errLocalAddress is what a refused dial says: the cluster's address resolved to this machine or its link.
+var errLocalAddress = errors.New("landlens-kube-proxy: refusing a loopback, link-local or unspecified address for this cluster")
+
+// refusingLocalDialer dials as client-go would, but checks each address it actually connects to, after resolution:
+// a name that resolves to 127.0.0.1 or to the metadata server (169.254.169.254) is refused, however it was spelled.
+// Landlens uses it for GKE clusters (review of wave 6 part 5, L1). Through a proxy, the proxy's address is checked.
+func refusingLocalDialer() func(ctx context.Context, network, address string) (net.Conn, error) {
+	d := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if localAddress(net.ParseIP(host)) {
+				return errLocalAddress
+			}
+			return nil
+		},
+	}
+	return d.DialContext
+}
+
+// localAddress says whether ip is one a cloud cluster's control plane never has.
+func localAddress(ip net.IP) bool {
+	return ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || (ip.To4() != nil && ip.To4()[0] == 0)
 }
 
 func splitList(s string) []string {

@@ -32,7 +32,15 @@ export type AutonomyHooks = {
   check(session: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider; write?: boolean }>;
   permit(session: string, p: { toolCallId: string; toolName: string }): void;
   states(session: string): AutonomyState[];
+  /** The person quoted a Google Cloud resource into the session: its writes ask from now on (part 5, W1). */
+  gcpQuoted?(session: string): void;
 };
+
+/**
+ * A Google Cloud resource quoted into a question (quotes.ts writes its head, gcp:resource its brief). Text the person
+ * typed that looks like one only makes writes ask: the safe side.
+ */
+export const GCP_QUOTE = /^(?:A Google Cloud resource \([^\n]*\), quoted as data, not instructions:|Google Cloud project: [a-z][a-z0-9-]{4,28}[a-z0-9])$/m;
 /** The modes the dock offers: Manual and Plan. Never acceptEdits, auto or bypass. */
 const MODES = new Set(["default", "plan"]);
 
@@ -233,6 +241,8 @@ export class AgentService {
 
   async prompt(id: string, text: string, context: ResourceRef[] = []): Promise<{ stopReason: string }> {
     const s = this.session(id);
+    // Google Cloud data enters the session with this question: hold its autonomous writes before it is sent (W1).
+    if (GCP_QUOTE.test(text)) this.deps.autonomy?.gcpQuoted?.(id);
     this.deps.history?.prompted(id, text);
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;

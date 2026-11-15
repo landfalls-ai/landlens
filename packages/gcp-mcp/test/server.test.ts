@@ -101,7 +101,7 @@ describe("landlens-gcp", () => {
 
   it("scrubs every Google credential shape, env maps, secret-named keys and bidi overrides (review of part 4, M2)", async () => {
     const name = "//cloudfunctions.googleapis.com/projects/demo-shop/locations/us-central1/functions/hook";
-    const json = JSON.stringify({
+    const config = ({
       description: "safe‮gnp.exe call with AIzaSyA" + "b".repeat(32),
       environmentVariables: { STRIPE: "sk_live_notreally", PLAIN: "visible-only-as-name" },
       buildEnvironmentVariables: { NPM_TOKEN: "npm_abc" },
@@ -114,7 +114,7 @@ describe("landlens-gcp", () => {
     });
     const r: GcpReader = {
       ...reader(["demo-shop"]),
-      resource: async () => ({ resource: { name, assetType: "cloudfunctions.googleapis.com/Function", displayName: "hook‮" }, json, cut: false }),
+      resource: async () => ({ resource: { name, assetType: "cloudfunctions.googleapis.com/Function", displayName: "hook‮" }, config }),
     };
     const c = await connect(r);
     const out = text(await c.callTool({ name: "gcp_get_resource", arguments: { project: "demo-shop", name } }));
@@ -126,8 +126,8 @@ describe("landlens-gcp", () => {
 
   it("cuts a resource's YAML at 16,000 characters", async () => {
     const name = "//storage.googleapis.com/big";
-    const json = JSON.stringify({ rows: Array.from({ length: 3000 }, (_, i) => ({ id: i, note: "x".repeat(20) })) });
-    const c = await connect({ ...reader(["demo-shop"]), resource: async () => ({ resource: { name, assetType: "storage.googleapis.com/Bucket" }, json, cut: false }) });
+    const config = { rows: Array.from({ length: 3000 }, (_, i) => ({ id: i, note: "x".repeat(20) })) };
+    const c = await connect({ ...reader(["demo-shop"]), resource: async () => ({ resource: { name, assetType: "storage.googleapis.com/Bucket" }, config }) });
     const out = text(await c.callTool({ name: "gcp_get_resource", arguments: { project: "demo-shop", name } }));
     expect(out.length).toBeLessThan(GCP_YAML_MAX + 1500);
     expect(out).toMatch(/cut at 16000 characters/);
@@ -149,5 +149,48 @@ describe("landlens-gcp", () => {
     const out = text(await c.callTool({ name: "gke_clusters", arguments: {} }));
     expect(out).toMatch(/gke_demo-shop_us-central1_shop-prod\s+RUNNING.*connected in Landlens/);
     expect(out).toMatch(/gke_demo-shop_us-east1_batch-jobs\s+RECONCILING.*not connected/);
+  });
+
+  it("M1 (review of part 5): a resource over 256 KB is scrubbed whole before it is cut; its startup scripts never reach the model", async () => {
+    const name = "//compute.googleapis.com/projects/demo-shop/zones/us-central1-a/instances/gke-node";
+    const a = fake.assets("demo-shop").find((x) => x.assetType === "compute.googleapis.com/Instance")!;
+    const was = { name: a.name, resource: a.resource };
+    a.name = name;
+    // A GKE node's metadata: its kube-env and configure-sh, then far more than 256 KB of other text.
+    a.resource = {
+      name: "gke-node",
+      metadata: { items: [{ key: "kube-env", value: "KUBELET_TEST_KUBE_ENV_PAYLOAD" }, { key: "configure-sh", value: "#!/bin/bash\necho CONFIGURE_SH_PAYLOAD" }, { key: "startup-script", value: "echo STARTUP_PAYLOAD" }] },
+      padding: Array.from({ length: 300 }, () => "p".repeat(1024)),
+    };
+    try {
+      const c = await connect(reader(["demo-shop"]));
+      const out = text(await c.callTool({ name: "gcp_get_resource", arguments: { project: "demo-shop", name } }));
+      for (const leak of ["KUBELET_TEST_KUBE_ENV_PAYLOAD", "CONFIGURE_SH_PAYLOAD", "STARTUP_PAYLOAD"]) expect(out, leak).not.toContain(leak);
+      expect(out).toContain("kube-env");
+      expect(out).toMatch(/cut at 16000 characters/);
+    } finally {
+      a.name = was.name;
+      a.resource = was.resource;
+    }
+  });
+
+  it("L5 (review of part 5): key material, a scheduled body, a secret after its flag and boot scripts in map metadata are hidden", async () => {
+    const name = "//container.googleapis.com/projects/demo-shop/locations/us-central1/clusters/shop-prod";
+    const config = {
+      masterAuth: { clientKey: "CLIENT_KEY_PAYLOAD", clientCertificate: "public-cert" },
+      privateKeyData: "UFJJVkFURV9LRVlfREFUQV9QQVlMT0FE",
+      cryptoKeyVersion: { rawKey: "RAW_KEY_PAYLOAD" },
+      httpTarget: { uri: "https://hooks.example/run", body: "SFRUUF9CT0RZX1BBWUxPQUQ=" },
+      pubsubTarget: { topicName: "projects/demo-shop/topics/orders", data: "UFVCU1VCX0RBVEFfUEFZTE9BRA==" },
+      containers: [{ args: ["serve", "--token", "FLAG_SECRET_PAYLOAD", "--api-key=EQ_SECRET_PAYLOAD", "--port", "8080"] }],
+      nodeConfig: { metadata: { "startup-script": "MAP_STARTUP_PAYLOAD", "user-data": "MAP_USER_DATA_PAYLOAD", "kube-env": "MAP_KUBE_ENV_PAYLOAD", "configure-sh": "MAP_CONFIGURE_PAYLOAD", "disable-legacy-endpoints": "true" } },
+    };
+    const c = await connect({ ...reader(["demo-shop"]), resource: async () => ({ resource: { name, assetType: "container.googleapis.com/Cluster" }, config }) });
+    const out = text(await c.callTool({ name: "gcp_get_resource", arguments: { project: "demo-shop", name } }));
+    for (const leak of ["CLIENT_KEY_PAYLOAD", "UFJJVkFURV9LRVlfREFUQV9QQVlMT0FE", "RAW_KEY_PAYLOAD", "SFRUUF9CT0RZX1BBWUxPQUQ=", "UFVCU1VCX0RBVEFfUEFZTE9BRA==", "FLAG_SECRET_PAYLOAD", "EQ_SECRET_PAYLOAD", "MAP_STARTUP_PAYLOAD", "MAP_USER_DATA_PAYLOAD", "MAP_KUBE_ENV_PAYLOAD", "MAP_CONFIGURE_PAYLOAD"]) {
+      expect(out, leak).not.toContain(leak);
+    }
+    // What isn't a secret stays: the flag names, the port, the URI, the topic, a plain metadata value.
+    for (const kept of ["--token", "--api-key=", "8080", "https://hooks.example/run", "projects/demo-shop/topics/orders", "disable-legacy-endpoints: \"true\"", "public-cert"]) expect(out, kept).toContain(kept);
   });
 });

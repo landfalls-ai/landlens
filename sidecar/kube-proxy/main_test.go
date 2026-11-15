@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -189,5 +190,52 @@ func TestSecretComesFromTheFirstLineOfStdin(t *testing.T) {
 	}
 	if _, err := readSecret(bufio.NewReader(strings.NewReader(""))); err == nil {
 		t.Fatal("no secret must be refused")
+	}
+}
+
+// Review of wave 6 part 5, L1: a GKE cluster's sidecar checks the address it dials, after resolution, so a name or
+// a spelling that lands on this machine or the metadata server is refused there too.
+func TestRefuseLocalChecksTheResolvedAddress(t *testing.T) {
+	api, seen := fakeAPIServer(t)
+	local := strings.Replace(api.URL, "127.0.0.1", "localhost", 1)
+	cfg, err := loadConfig(writeKubeconfig(t, local), "fake-ctx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Dial = refusingLocalDialer()
+	h, err := newHandler(cfg, testSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(h)
+	t.Cleanup(proxy.Close)
+	req, _ := http.NewRequest("GET", proxy.URL+"/version", nil)
+	req.Header.Set(SecretHeader, testSecret)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502: the loopback API server was dialled", res.StatusCode)
+	}
+	if seen.URL != nil {
+		t.Fatalf("the request reached %s", seen.URL)
+	}
+}
+
+func TestLocalAddresses(t *testing.T) {
+	for _, s := range []string{"127.0.0.1", "127.9.9.9", "::1", "169.254.169.254", "fe80::1", "0.0.0.0", "0.1.2.3", "::", "224.0.0.1", "ff02::1"} {
+		if !localAddress(net.ParseIP(s)) {
+			t.Errorf("%s should be refused", s)
+		}
+	}
+	for _, s := range []string{"10.0.0.2", "172.16.0.2", "192.168.1.2", "34.120.18.77", "2600:1900::1"} {
+		if localAddress(net.ParseIP(s)) {
+			t.Errorf("%s should be allowed", s)
+		}
+	}
+	if !localAddress(nil) {
+		t.Error("an address that isn't one should be refused")
 	}
 }

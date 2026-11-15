@@ -132,8 +132,12 @@ export async function searchResources(client: GcpClient, project: string, o: { q
   return { items, cut: !!token };
 }
 
-/** One resource by its full name, with its own JSON (versionedResources[0].resource), cut at 256 KB. */
-export async function getResource(client: GcpClient, project: string, name: string): Promise<{ resource: GcpResource; json?: string; cut: boolean } | undefined> {
+/**
+ * One resource by its full name, with its own configuration (versionedResources[0].resource): `config` is the whole
+ * parsed object, for main to scrub before anything reaches the agent; `json` is the drawer's copy, cut at 256 KB.
+ * Only the drawer's copy is ever cut (review of part 5, M1): what the agent gets is scrubbed first, from `config`.
+ */
+export async function getResource(client: GcpClient, project: string, name: string): Promise<{ resource: GcpResource; json?: string; cut: boolean; config?: unknown } | undefined> {
   checkProject(project);
   if (!GcpResourceName.safeParse(name).success) throw new GcpError(400, "That isn't a resource name.");
   const body = parse(SearchPage, await client.get("cloudasset", `/v1/projects/${project}:searchAllResources`, {
@@ -142,9 +146,9 @@ export async function getResource(client: GcpClient, project: string, name: stri
   const r = (body.results ?? []).find((x) => x.name === name);
   if (!r) return undefined;
   const own = r.versionedResources?.[0]?.resource;
-  if (own === undefined || own === null) return { resource: toResource(r), cut: false };
+  if (own === undefined || own === null || typeof own !== "object") return { resource: toResource(r), cut: false };
   const json = escapeInvisible(JSON.stringify(own, null, 2));
-  return json.length > MAX_JSON ? { resource: toResource(r), json: json.slice(0, MAX_JSON), cut: true } : { resource: toResource(r), json, cut: false };
+  return json.length > MAX_JSON ? { resource: toResource(r), json: json.slice(0, MAX_JSON), cut: true, config: own } : { resource: toResource(r), json, cut: false, config: own };
 }
 
 /** Asset types with their counts, most first then by name; built from the cached list (search has no count call). */

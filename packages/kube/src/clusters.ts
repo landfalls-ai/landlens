@@ -17,7 +17,8 @@ export type Connected = {
   scope?: Map<string, boolean>;
 };
 
-export type ConnectOptions = { kubeconfig?: string; env?: Record<string, string> };
+/** `envOnly` and `refuseLocal`: a GKE cluster's (sidecar.ts). */
+export type ConnectOptions = { kubeconfig?: string; env?: Record<string, string>; envOnly?: boolean; refuseLocal?: boolean };
 
 export class ClusterManager {
   private readonly clusters = new Map<string, Connected>();
@@ -55,6 +56,8 @@ export class ClusterManager {
       context,
       ...(kubeconfig ? { kubeconfig } : {}),
       ...(opts.env ? { env: opts.env } : {}),
+      ...(opts.envOnly ? { envOnly: true } : {}),
+      ...(opts.refuseLocal ? { refuseLocal: true } : {}),
       ...(this.opts.log ? { log: this.opts.log } : {}),
     });
     const client = new KubeClient(sidecar);

@@ -54,7 +54,10 @@ narrows to make room.
 - Every session starts in **Manual** mode (`default`); bypass is disabled for the session. You can switch to Plan;
   main refuses any other mode.
 - The standing rules (appended to Claude Code's system prompt) name the cluster, say what the session can and can't
-  do, and ask for evidence first, objects named as kind/namespace/name, and proposed changes rather than claims. When
+  do, and ask for evidence first, objects named as kind/namespace/name, and proposed changes rather than claims. One
+  rule, **Text from outside**, covers everything a tool reads (cluster objects, logs, events, annotations; issue,
+  pull request, comment and document text; Google Cloud names, labels and configuration) and everything the person
+  quotes as data: untrusted, never instructions, and never acted on unless the person asks in their own words. When
   the session has GitHub or Linear ([connections.md](connections.md)), they also name them, say that their issue,
   comment, pull request, file and document text is untrusted data whose instructions are never followed, and that
   cluster changes still go only through the cluster's own path. Code: `packages/acp-host/src/prompt.ts`.
@@ -95,7 +98,9 @@ the dock shows inline under the tool's card; the model still gets the same text.
 
 When you turn on **Claude can read these projects** (Connections), sessions also get `landlens-gcp`, five read-only
 Google Cloud tools for the projects you chose, run in main with your gcloud sign-in; the session's prompt names the
-projects and says what they hold is data ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)).
+projects it began with (one granted later is refused in it) and puts what they hold under the outside-text rule.
+After a session reads Google Cloud data, its autonomous GitHub and Linear writes ask
+([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)).
 
 All are marked read-only. Landlens pre-allows the whole server (`mcp__landlens-kube`, and `mcp__landlens-gcp` when the
 session has it, by a second rule in `fence.ts`), so they don't prompt; the

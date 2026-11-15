@@ -88,16 +88,22 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Google APIs or a real GKE cluster.
 - **GKE clusters connect with gcloud's user token only** ([gcp.md](gcp.md#gke-clusters-in-the-catalog)): a cluster
   that doesn't take Google sign-in for users, or whose private endpoint this machine can't reach, won't connect; the
-  catalog lists only clusters with an address, and a context your kubeconfig already names is yours, not Landlens's.
-  The list is read when the catalog is (Welcome, the switcher's menu), cached 60 s.
+  catalog lists only clusters with an IP endpoint and a valid CA or a `gke.goog` DNS endpoint, and a context your
+  kubeconfig already names is yours, not Landlens's. Any other address a chosen project lists (private or public)
+  is trusted with gcloud's token, as gcloud trusts it; a loopback HTTPS proxy can't be used for a GKE cluster, and
+  through any proxy the sidecar checks the proxy's address, not the cluster's. A development build opens only the
+  fake's clusters unless `LANDLENS_GKE_REAL=1`. The list is read when the catalog is (Welcome, the switcher's menu),
+  cached 60 s. A `gcp.json` from before this release asks again for each cluster and for Claude's tools.
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
-  clusters and sessions.
+  clusters and sessions; a project granted later is readable only in a new session.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
   asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones
-  ([connections.md](connections.md#autonomous-mode)).
+  ([connections.md](connections.md#autonomous-mode)). Google Cloud data holds it (every write asks after), but
+  cluster text (logs, events, annotations) doesn't: a hostile log line read in an autonomous session is the same
+  residual risk. A write you approve can still carry what the session read.
 - **Linear's autonomous updates and comments are held to the team only by the issue's identifier**: `update_issue`
   and `create_comment` run on their own only on an issue named `<KEY>-<number>` with the scope's key; one named by its
   UUID asks, since Landlens can't place it in a team without a read it doesn't make.

@@ -17,7 +17,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { appMayCall, drifted, modelMayCall, preAllowed, readsOnly, toolUi, type ListedServer } from "./approval.js";
-import { Autonomy } from "./autonomy.js";
+import { Autonomy, WHY } from "./autonomy.js";
 import { CallLog, newCallId } from "./calls.js";
 import { Pairing, TOOL_USE_META } from "./pairing.js";
 import { providerResult, providerTool, type ProviderRules } from "./providers/index.js";
@@ -375,6 +375,15 @@ export class McpGateway {
     for (const s of this.sessions.values()) s.dropBuiltin(name);
   }
 
+  /**
+   * The person quoted a Google Cloud resource into this session (main saw its brief in the prompt): from now on its
+   * writes ask, as after a landlens-gcp read (review of wave 6 part 5, W1).
+   */
+  gcpQuoted(acpSession: string) {
+    const s = this.agentSession(acpSession);
+    if (s) for (const a of s.autonomy.values()) a.hold(WHY.gcp);
+  }
+
   /** Called by GatewaySession.close(). */
   drop(s: GatewaySession) {
     this.sessions.delete(hash(s.token).toString("hex"));
@@ -477,6 +486,8 @@ export class McpGateway {
     const readOnly = readsOnly(t, provider);
     if (origin === "agent") {
       if (!modelMayCall(t)) return refuse(`${tool} is for its app's view only.`);
+      // Google Cloud data enters the session: its writes ask from now on, before this read runs (W1).
+      if (server === GCP_MCP_SERVER) for (const a of s.autonomy.values()) a.hold(WHY.gcp);
       const rule = `mcp__${server}__${tool}`;
       if (!isBuiltin(server)) {
         if (s.allow.includes(rule)) this.log.gate(id, "read");

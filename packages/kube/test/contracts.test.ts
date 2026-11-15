@@ -87,13 +87,13 @@ describe("IPC contracts", () => {
     expect(channels["gcp:projects"].safeParse({ token: "ya29.x" }).data).not.toHaveProperty("token");
   });
 
-  it("takes Claude's Google Cloud reading only on its own channel, and a cloud cluster's yes only as a flag (part 5)", () => {
+  it("takes Claude's Google Cloud reading only on its own channel, and no cloud cluster's yes from the page (part 5, L3)", () => {
     // gcp:choose no longer turns on what Claude reads (L6 of part 4's review): the key is dropped.
     expect(channels["gcp:choose"].safeParse({ projects: ["demo-shop"], agentRead: true }).data).not.toHaveProperty("agentRead");
     expect(channels["gcp:agent-read"].safeParse({ on: true }).success).toBe(true);
     expect(channels["gcp:agent-read"].safeParse({ on: "yes" }).success).toBe(false);
-    expect(channels["cluster:connect"].safeParse({ context: "gke_demo-shop_us-central1_shop-prod", cloud: true }).success).toBe(true);
-    expect(channels["cluster:connect"].safeParse({ context: "x", cloud: "yes" }).success).toBe(false);
+    // Main asks the cloud-cluster question in a native dialog: a page's `cloud: true` is dropped, never a yes.
+    expect(channels["cluster:connect"].safeParse({ context: "gke_demo-shop_us-central1_shop-prod", cloud: true }).data).not.toHaveProperty("cloud");
     expect(channels["cluster:connect"].safeParse({ context: "x", kubeconfig: "/tmp/k" }).data).not.toHaveProperty("kubeconfig");
   });
 });

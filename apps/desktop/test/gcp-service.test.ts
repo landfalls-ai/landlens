@@ -5,8 +5,9 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { CLOUD_DECLINED } from "@landlens/contracts";
 import { gcpMode, GcpService, MAX_CACHED, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
-import { FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
+import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
 let fake: FakeGcp;
@@ -18,9 +19,10 @@ beforeEach(() => {
   fake.slowMs = 0;
 });
 
-function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number } = {}) {
+function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number; kept?: unknown; onAgentOff?: () => void } = {}) {
   const data = mkdtempSync(join(tmpdir(), "landlens-gcp-"));
   const file = join(data, "gcp.json");
+  if (o.kept !== undefined) writeFileSync(file, JSON.stringify(o.kept), { mode: 0o600 });
   const logs: string[] = [];
   const dir = o.dir ?? sdkDir();
   const svc = new GcpService({
@@ -33,6 +35,7 @@ function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined;
     log: (l) => logs.push(l),
     ...(o.fetch ? { fetch: o.fetch } : {}),
     ...(o.now ? { now: o.now } : {}),
+    ...(o.onAgentOff ? { onAgentOff: o.onAgentOff } : {}),
   });
   return { svc, file, logs, dir, data };
 }
@@ -46,8 +49,8 @@ describe("when Google Cloud is on (D86)", () => {
     expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "https://cloudasset.googleapis.com" }, false)).toEqual({ on: false });
     expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "http://localhost:4000" }, false)).toEqual({ on: false });
     expect(gcpMode({ LANDLENS_GCP_REAL: "true" }, false)).toEqual({ on: false });
-    expect(gcpMode(env, false)).toEqual({ on: true, endpoint: "http://127.0.0.1:4000", gcloud: "/tmp/fake-gcloud" });
-    expect(gcpMode({ LANDLENS_GCP_REAL: "1", LANDLENS_GCLOUD: "relative/gcloud" }, false)).toEqual({ on: true });
+    expect(gcpMode(env, false)).toEqual({ on: true, dev: true, endpoint: "http://127.0.0.1:4000", gcloud: "/tmp/fake-gcloud" });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "1", LANDLENS_GCLOUD: "relative/gcloud" }, false)).toEqual({ on: true, dev: true });
   });
 
   it("says off-dev, missing, signed-out or ready", async () => {
@@ -235,23 +238,27 @@ describe("GKE clusters in the catalog (D91)", () => {
     expect(fake.hits("/clusters")).toHaveLength(1);
   });
 
-  it("connects a GKE context only once you said yes, kept; never one it didn't list", async () => {
-    const { svc, file, data } = service();
+  it("connects a GKE context only once main asked and you said yes, kept; never one it didn't list", async () => {
+    const { svc, file, data, dir } = service();
     await svc.choose(["demo-shop"]);
     await svc.gkeContexts();
     const ctx = "gke_demo-shop_us-central1_shop-prod";
-    await expect(svc.gkeConnect(ctx, false)).rejects.toThrow(/cloud cluster/);
-    const ok = await svc.gkeConnect(ctx, true);
-    expect(ok).toEqual({ kubeconfig: join(data, "gke", "kubeconfig"), env: { PATH: process.env.PATH ?? "" } });
-    expect(JSON.parse(readFileSync(file, "utf8")).confirmed).toEqual([ctx]);
-    expect(await svc.gkeConnect(ctx, false)).toBeDefined();
+    const asked: string[] = [];
+    await expect(svc.gkeConnect(ctx, async (q) => (asked.push(q.message), false))).rejects.toThrow(CLOUD_DECLINED);
+    expect(asked).toEqual(["Connect shop-prod?"]);
+    const ok = await svc.gkeConnect(ctx, async (q) => (asked.push(q.detail), true));
+    expect(asked[1]).toContain("This is a cloud cluster.");
+    // gcloud's environment only (L6), and the sidecar checks the address it dials (L1), except for the fake's.
+    expect(ok).toEqual({ kubeconfig: join(data, "gke", "kubeconfig"), env: { HOME: process.env.HOME, PATH: process.env.PATH ?? "", CLOUDSDK_CONFIG: dir, CLOUDSDK_CORE_DISABLE_PROMPTS: "1" }, envOnly: true, refuseLocal: false });
+    expect(JSON.parse(readFileSync(file, "utf8")).confirmed).toEqual([{ context: ctx, endpoint: "203.0.113.17", ca: expect.stringMatching(/^[0-9a-f]{64}$/), account: "person@example.com" }]);
+    expect(await svc.gkeConnect(ctx, async () => { throw new Error("not asked again"); })).toBeDefined();
     expect((await svc.gkeContexts()).contexts[0]!.confirmed).toBe(true);
-    expect(await svc.gkeConnect("gke_demo-shop_us-central1_not-listed", true)).toBeUndefined();
-    expect(await svc.gkeConnect("orbstack", true)).toBeUndefined();
+    expect(await svc.gkeConnect("gke_demo-shop_us-central1_not-listed", async () => true)).toBeUndefined();
+    expect(await svc.gkeConnect("orbstack", async () => true)).toBeUndefined();
   });
 
   it("refuses a cluster pointed at this machine unless Google Cloud is the development fake", async () => {
-    fake.clusters.set("demo-shop", [{ name: "local", location: "us-central1", endpoint: "127.0.0.1:26443", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } }]);
+    fake.clusters.set("demo-shop", [{ name: "local", location: "us-central1", endpoint: "127.0.0.1:26443", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } }]);
     try {
       const { svc } = service();
       await svc.choose(["demo-shop"]);
@@ -272,7 +279,7 @@ describe("the agent's reader and Ask Claude's brief (D93, D94)", () => {
     expect(g.projects).toEqual(["demo-shop"]);
     expect((await g.reader.projects()).map((p) => p.id)).toEqual(["demo-shop"]);
     expect((await g.reader.resources({ project: "demo-shop", assetType: "sqladmin.googleapis.com/Instance" })).items).toHaveLength(4);
-    await expect(g.reader.types("payments-core")).rejects.toThrow(/Choose payments-core/);
+    await expect(g.reader.types("payments-core")).rejects.toThrow(/payments-core isn't one of the projects the person let Claude read/);
     await svc.setAgentRead(false, async () => true);
     expect(await g.reader.projects()).toEqual([]);
     await expect(g.reader.types("demo-shop")).rejects.toThrow(/turned off/);
@@ -343,7 +350,7 @@ const until = async (f: () => boolean) => {
 describe("Fable's security review of part 4, fixed", () => {
   it("M1: with the development fake and no absolute gcloud named, gcloud is missing and the real one is never looked for", async () => {
     const mode = gcpMode({ LANDLENS_GCP_ENDPOINT: fake.origin, LANDLENS_GCLOUD: "relative/gcloud" }, false);
-    expect(mode).toEqual({ on: true, endpoint: fake.origin });
+    expect(mode).toEqual({ on: true, dev: true, endpoint: fake.origin });
     const s = stubbed({ endpoint: fake.origin });
     expect((await s.svc.status(true)).state).toBe("missing");
     expect(s.found()).toBe(0);
@@ -471,5 +478,156 @@ describe("Fable's security review of part 4, fixed", () => {
     (s.svc as unknown as { sweep(): void }).sweep();
     expect(MAX_CACHED).toBe(50_000);
     expect([...lists.keys()]).toEqual(["demo-shop-1\nq1", "demo-shop-1\nq2"]);
+  });
+});
+
+describe("Fable's security review of part 5, fixed", () => {
+  const VM = "//compute.googleapis.com/projects/demo-shop/zones/us-central1-a/instances/web-frontend-1";
+  const yes = async () => true;
+
+  it("M1: Ask Claude's brief and the agent's read scrub a resource over 256 KB whole; the drawer's JSON alone is cut", async () => {
+    const a = fake.assets("demo-shop").find((x) => x.name === VM)!;
+    const was = a.resource;
+    a.resource = {
+      name: "web-frontend-1",
+      metadata: { items: [{ key: "kube-env", value: "BRIEF_KUBE_ENV_PAYLOAD" }, { key: "startup-script", value: "echo BRIEF_STARTUP_PAYLOAD" }] },
+      padding: Array.from({ length: 300 }, () => "p".repeat(1024)),
+    };
+    try {
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      const r = await svc.resource("demo-shop", VM);
+      expect(r.cut).toBe(true);
+      expect(r.json).toContain("BRIEF_KUBE_ENV_PAYLOAD"); // the person's own drawer
+      expect(r.brief).toContain("kube-env");
+      for (const leak of ["BRIEF_KUBE_ENV_PAYLOAD", "BRIEF_STARTUP_PAYLOAD"]) expect(r.brief, leak).not.toContain(leak);
+      expect(r).not.toHaveProperty("config"); // the parsed object stays in main
+      await svc.setAgentRead(true, yes);
+      const g = (await svc.agentReader(() => false))!;
+      const got = await g.reader.resource("demo-shop", VM);
+      expect(got).not.toHaveProperty("json");
+      expect((got.config as { padding: string[] }).padding).toHaveLength(300); // whole, for the tool to scrub first
+    } finally {
+      a.resource = was;
+    }
+  });
+
+  it("M3: a project chosen after the yes stays unreadable to Claude until main asks again", async () => {
+    const { svc, file } = service();
+    await svc.choose(["demo-shop"]);
+    await svc.setAgentRead(true, yes);
+    expect(JSON.parse(readFileSync(file, "utf8")).grant).toEqual({ account: "person@example.com", projects: ["demo-shop"] });
+    // The page adds a project (gcp:choose has no dialog): Claude's sessions don't get it.
+    const s = await svc.choose(["demo-shop", "orbit-analytics"]);
+    expect(s).toMatchObject({ agentRead: true, agentProjects: ["demo-shop"] });
+    const g = (await svc.agentReader(() => false))!;
+    expect(g.projects).toEqual(["demo-shop"]);
+    expect((await g.reader.projects()).map((p) => p.id)).toEqual(["demo-shop"]);
+    await expect(g.reader.types("orbit-analytics")).rejects.toThrow(/isn't one of the projects the person let Claude read/);
+    // On again asks, naming both; a no changes nothing.
+    const asked: string[] = [];
+    expect((await svc.setAgentRead(true, async (q) => (asked.push(q.detail), false))).agentProjects).toEqual(["demo-shop"]);
+    expect(asked[0]).toContain("demo-shop, orbit-analytics");
+    expect((await svc.setAgentRead(true, yes)).agentProjects).toEqual(["demo-shop", "orbit-analytics"]);
+    // Taken out and chosen again: not in the grant any more.
+    await svc.choose(["demo-shop"]);
+    expect((await svc.choose(["demo-shop", "orbit-analytics"])).agentProjects).toEqual(["demo-shop"]);
+  });
+
+  it("M3: another gcloud account turns Claude's reading off, and says so to main; an older file's bare switch asks again", async () => {
+    let off = 0;
+    const { svc, dir, file } = service({ onAgentOff: () => off++ });
+    await svc.choose(["demo-shop"]);
+    await svc.setAgentRead(true, yes);
+    expect((await svc.agentReader(() => false))?.projects).toEqual(["demo-shop"]);
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    const s = await svc.status(true);
+    expect(s).toMatchObject({ state: "ready", account: "someone-else@example.com", agentRead: false });
+    expect(off).toBe(1);
+    expect(JSON.parse(readFileSync(file, "utf8"))).not.toHaveProperty("grant");
+    expect(await svc.agentReader(() => false)).toBeUndefined();
+    const old = service({ kept: { projects: ["demo-shop"], agentRead: true, confirmed: [] } });
+    expect((await old.svc.status()).agentRead).toBe(false);
+    expect(await old.svc.agentReader(() => false)).toBeUndefined();
+  });
+
+  it("L8: a session keeps the projects it started with; one granted later isn't readable in it", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    await svc.setAgentRead(true, yes);
+    const before = (await svc.agentReader(() => false))!;
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    await svc.setAgentRead(true, yes);
+    expect((await before.reader.projects()).map((p) => p.id)).toEqual(["demo-shop"]);
+    await expect(before.reader.resources({ project: "orbit-analytics" })).rejects.toThrow(/in this session/);
+    const after = (await svc.agentReader(() => false))!;
+    expect(after.projects).toEqual(["demo-shop", "orbit-analytics"]);
+    expect((await after.reader.resources({ project: "orbit-analytics" })).total).toBeGreaterThan(0);
+  });
+
+  it("L3: a yes is for that cluster's address, CA and account: a cluster recreated under the name asks again", async () => {
+    const { svc, file } = service({ kept: { projects: ["demo-shop"], agentRead: false, confirmed: ["gke_demo-shop_us-central1_shop-prod"] } });
+    const ctx = "gke_demo-shop_us-central1_shop-prod";
+    // An older file's bare name doesn't count.
+    expect((await svc.gkeContexts()).contexts.find((c) => c.name === ctx)!.confirmed).toBe(false);
+    let asked = 0;
+    const ask = async () => (asked++, true);
+    await svc.gkeConnect(ctx, ask);
+    await svc.gkeConnect(ctx, ask);
+    expect(asked).toBe(1);
+    fake.clusters.set("demo-shop", [{ name: "shop-prod", location: "us-central1", status: "RUNNING", endpoint: "203.0.113.99", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } }]);
+    try {
+      (svc as unknown as { clustersCache?: unknown }).clustersCache = undefined;
+      expect((await svc.gkeContexts()).contexts[0]!.confirmed).toBe(false);
+      await svc.gkeConnect(ctx, ask);
+      expect(asked).toBe(2);
+      expect(JSON.parse(readFileSync(file, "utf8")).confirmed.map((c: { endpoint: string }) => c.endpoint)).toEqual(["203.0.113.99"]);
+    } finally {
+      fake.clusters.delete("demo-shop");
+    }
+  });
+
+  it("L4: an unpackaged build opens only the fake's clusters on this machine, unless LANDLENS_GKE_REAL=1 too", async () => {
+    expect(gcpMode({ LANDLENS_GCP_REAL: "1" }, false)).toEqual({ on: true, dev: true });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "1", LANDLENS_GKE_REAL: "1" }, false)).toEqual({ on: true, dev: true, gkeReal: true });
+    expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "http://127.0.0.1:4000", LANDLENS_GKE_REAL: "1" }, false)).toEqual({ on: true, dev: true, endpoint: "http://127.0.0.1:4000" });
+    expect(gcpMode({ LANDLENS_GKE_REAL: "1" }, true)).toEqual({ on: true });
+    const ctx = "gke_demo-shop_us-central1_shop-prod";
+    const dev = service({ mode: { on: true, dev: true, endpoint: fake.origin, gcloud: FAKE_GCLOUD } });
+    await dev.svc.choose(["demo-shop"]);
+    let asked = 0;
+    await expect(dev.svc.gkeConnect(ctx, async () => (asked++, true))).rejects.toThrow(/development build opens only the fake's GKE clusters/);
+    expect(asked).toBe(0);
+    fake.clusters.set("demo-shop", [{ name: "local", location: "us-central1", endpoint: "127.0.0.1:26443", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } }]);
+    try {
+      const local = service({ mode: { on: true, dev: true, endpoint: fake.origin, gcloud: FAKE_GCLOUD } });
+      await local.svc.choose(["demo-shop"]);
+      expect(await local.svc.gkeConnect("gke_demo-shop_us-central1_local", yes)).toMatchObject({ refuseLocal: false });
+    } finally {
+      fake.clusters.delete("demo-shop");
+    }
+    const real = service({ mode: { on: true, dev: true, endpoint: fake.origin, gcloud: FAKE_GCLOUD, gkeReal: true } });
+    await real.svc.choose(["demo-shop"]);
+    expect(await real.svc.gkeConnect(ctx, yes)).toBeDefined();
+  });
+
+  it("L7: a GKE cluster leaves (main disconnects it) when its project is taken out, gcloud signs out or the account changes", async () => {
+    const { svc, dir } = service();
+    const gone: string[][] = [];
+    svc.onGkeGone((cs) => gone.push(cs));
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    await svc.gkeContexts();
+    await svc.choose(["orbit-analytics"]);
+    expect(gone.at(-1)).toEqual(["gke_demo-shop_us-central1_shop-prod", "gke_demo-shop_europe-west1-b_shop-staging", "gke_demo-shop_us-east1_batch-jobs"]);
+    await svc.choose(["demo-shop"]);
+    await svc.gkeContexts();
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    expect(gone.at(-1)).toHaveLength(3);
+    await svc.gkeContexts();
+    writeFileSync(join(dir, "account"), "");
+    await svc.status(true);
+    await svc.gkeContexts();
+    expect(gone).toHaveLength(3);
   });
 });

@@ -14,6 +14,10 @@ import type { AddressInfo } from "node:net";
 
 export const GCP_TOKEN = "ya29.FakeTokenForLandlensTestsOnly_0123456789abcdefghijklmnop";
 export const GCP_ACCOUNT = "person@example.com";
+/** A throwaway self-signed CA certificate (base64 PEM, no key anywhere), as Google gives a cluster's CA. */
+export const FAKE_CLUSTER_CA = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJkRENDQVJxZ0F3SUJBZ0lVS21ab2hnZGZMbkt6MUlBdW9LbHo3Vk1zWVNFd0NnWUlLb1pJemowRUF3SXcKSHpFZE1Cc0dBMVVFQXd3VWJHRnVaR3hsYm5NdFptRnJaUzFuYTJVdFkyRXdJQmNOTWpZeE1URTFNVE15T0RBNQpXaGdQTWpFeU5qRXdNakl4TXpJNE1EbGFNQjh4SFRBYkJnTlZCQU1NRkd4aGJtUnNaVzV6TFdaaGEyVXRaMnRsCkxXTmhNRmt3RXdZSEtvWkl6ajBDQVFZSUtvWkl6ajBEQVFjRFFnQUVjUDJqQ3Y1N1Q4RW5UOEJWTFR3TFJET3QKczhPYXl1NjRUeThwbkdZVVpGdmQxa24rU3NOVXEzZ2JGRllvdHBKL25BSVk2VUlnYml4YTUvSncvY0ZiNktNeQpNREF3SFFZRFZSME9CQllFRlA0YXlDRkRhUDVzUmZjVERRUGV4azJIVDQ4cU1BOEdBMVVkRXdFQi93UUZNQU1CCkFmOHdDZ1lJS29aSXpqMEVBd0lEU0FBd1JRSWhBTEJSVGcwRW1CKysrYWJta3JKT3pFUU1aejlyMEQwRzhHZS8KVHFROCtmN2VBaUJZVFRvVXc0UFVKR0l6TmRWbmhHTjY5bnFVQ1g1VWJjdVo4MGVFTDFwYW9nPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=";
+/** A certificate that isn't a CA (basicConstraints CA:FALSE). */
+export const FAKE_LEAF_CERT = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJXRENCLzZBREFnRUNBaFJVTU9jc0lrOGE0ZTBGUnY3RWdBbGg5anFnempBS0JnZ3Foa2pPUFFRREFqQVQKTVJFd0R3WURWUVFEREFodWIzUXRZUzFqWVRBZ0Z3MHlOakV4TVRVeE16STRNRGxhR0E4eU1USTJNVEF5TWpFegpNamd3T1Zvd0V6RVJNQThHQTFVRUF3d0libTkwTFdFdFkyRXdXVEFUQmdjcWhrak9QUUlCQmdncWhrak9QUU1CCkJ3TkNBQVF1MHVVTGIzbXp2bHJiM1NnWjBTZVdua0gzMlNQanpiK0FZSytmVVhwZFZ3SGE5V0U5NGRJRlRnYmkKbDhqS1pMMExxT1RPRjRaeWNMR0d2TExveHp0Nm95OHdMVEFkQmdOVkhRNEVGZ1FVelNFQUV6RTlGTHRHNmxuKwpMd0pMTnhpcFNkRXdEQVlEVlIwVEFRSC9CQUl3QURBS0JnZ3Foa2pPUFFRREFnTklBREJGQWlFQXd4Um5NVHowCkVWMnlhVDJjNmJkamdDSk0ydHg4cHd3VU5lejFiWDltZkt3Q0lHRTF6bGRUS3hpNHdwK29qY092QXFmeVF6d3oKS3VROHhWWVpodzBYZkNwdQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==";
 
 export type Recorded = { method: string; path: string; query: Record<string, string>; authorization?: string; userProject?: string };
 export type Failure = { status: number; reason?: string; message?: string; api?: "cloudasset" | "container" | "cloudresourcemanager" };
@@ -144,8 +148,8 @@ function smallProject(P: string): Asset[] {
 // The addresses are documentation ranges (RFC 5737): nothing real answers there, and no test connects to them.
 const CLUSTERS: Record<string, unknown[]> = {
   "demo-shop": [
-    { name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "203.0.113.17", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } },
-    { name: "shop-staging", location: "europe-west1-b", status: "RUNNING", currentMasterVersion: "1.32.9-gke.1051000", endpoint: "198.51.100.90", masterAuth: { clusterCaCertificate: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" } },
+    { name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "203.0.113.17", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } },
+    { name: "shop-staging", location: "europe-west1-b", status: "RUNNING", currentMasterVersion: "1.32.9-gke.1051000", endpoint: "198.51.100.90", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } },
     { name: "batch-jobs", location: "us-east1", status: "RECONCILING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "", controlPlaneEndpointsConfig: { dnsEndpointConfig: { endpoint: "gke-0a1b2c3d4e-batch.us-east1.gke.goog" } } },
   ],
 };

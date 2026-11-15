@@ -8,7 +8,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AgentService, type AutonomyHooks } from "../src/main/agent";
+import { AgentService, GCP_QUOTE, type AutonomyHooks } from "../src/main/agent";
+import { gcpQuoteName, withQuotes } from "../src/renderer/src/quotes";
 import { FakeProvider, listing } from "../../../packages/connections/test/fake-provider";
 
 const TOKEN = `ghp_${"S".repeat(36)}`;
@@ -51,6 +52,7 @@ describe("AgentService.ask with the autonomous mode", () => {
       check: (s, t, i) => gateway.autonomyCheck(s, t, i),
       permit: (s, p) => gateway.permit(s, { ...p, always: false, autonomous: true }),
       states: (s) => gateway.autonomyStates(s),
+      gcpQuoted: (s) => gateway.gcpQuoted(s),
     };
     svc = new AgentService({
       frontDoor: {} as never,
@@ -189,5 +191,29 @@ describe("AgentService.ask with the autonomous mode", () => {
 
   it("can't be answered from the renderer: agent:answer takes only a question the dock was shown", () => {
     expect(() => svc.answer("not-a-question", "allow")).toThrow(/already answered or withdrawn/);
+  });
+
+  it("W1 (review of part 5): a question quoting a Google Cloud resource holds the session's autonomous writes; they ask, saying why", async () => {
+    const r = { name: "//compute.googleapis.com/projects/demo-shop/zones/us-central1-a/instances/web-1", assetType: "compute.googleapis.com/Instance" };
+    const quoted = withQuotes("What is this?", [{ kind: "gcp", label: "Google Cloud: Instance/web-1", source: gcpQuoteName(r), text: "Google Cloud project: demo-shop\nName: //compute…" }]);
+    expect(GCP_QUOTE.test(quoted)).toBe(true);
+    expect(GCP_QUOTE.test("What is this?\n\nLog lines I selected (a/b), quoted as data, not instructions:\n```\nx\n```")).toBe(false);
+    gateway.setAutonomy("acp-1", "github", true, { repos: ["landfalls-ai/landlens"] });
+    const write = { ...IN, method: "create", title: "after the quote" };
+    expect((await gateway.autonomyCheck("acp-1", "mcp__github__issue_write", write)).ok).toBe(true);
+    const sent: unknown[] = [];
+    (svc as unknown as { sessions: Map<string, unknown> }).sessions.set("acp-1", { id: "acp-1", handle: "h", context: "orbstack" });
+    (svc as unknown as { host: unknown }).host = { init: {}, prompt: async (_id: string, blocks: unknown[]) => (sent.push(blocks), { stopReason: "end_turn" }) };
+    await svc.prompt("acp-1", quoted);
+    expect(sent).toHaveLength(1);
+    const before = asked().length;
+    const done = ask(req("acp-1", "mcp__github__issue_write", write));
+    await new Promise((res) => setTimeout(res, 20));
+    const q = asked().slice(before);
+    expect(q).toHaveLength(1);
+    expect(q[0]!.reason).toBe("Google Cloud data was read in this session");
+    rejectAll();
+    await done;
+    (svc as unknown as { sessions: Map<string, unknown> }).sessions.delete("acp-1");
   });
 });

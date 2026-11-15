@@ -162,6 +162,14 @@ which the transcript also notes.
 6. **Three refused in a row** by these rules (not by the budget) turn it off.
 7. **It stops** on **Stop**, at the end of the session, when the connection's level drops to Read only, when it is
    disconnected or taken from sessions, and when its tools are found changed.
+8. **Google Cloud data holds it** (review of part 5, W1). Once a session runs one of Claude's Google Cloud tools, or
+   a question in it quotes a Google Cloud resource (Ask Claude on a resource), every GitHub and Linear write in the
+   session asks, for the rest of it, with "Asked because: Google Cloud data was read in this session". The hold is
+   set before the read runs, checked in main and again in the gateway when the call arrives, and survives **Stop** and
+   turning it on again. The strip says "Autonomous, held:" and the sheet says why. Names, labels and configuration in
+   a Google Cloud project can be written by anyone who can edit it, so they aren't let steer a write that runs on its
+   own. Cluster text (logs, events, annotations) doesn't hold it: that risk stays as before, which is why the sheet
+   says "Anything it can read may end up there."
 
 **How a write runs on its own.** Claude Code still asks its permission question. Main (`AgentService.ask`) asks the
 gateway whether this call, with these arguments, would run on its own; only when it says yes does main answer

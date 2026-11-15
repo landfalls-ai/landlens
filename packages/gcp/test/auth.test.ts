@@ -76,6 +76,11 @@ describe("Fable's security review of part 4, fixed", () => {
     expect(auth.held()).toBe(GCP_TOKEN);
   });
 
+  it("part 5 L6: gcloud's environment (a GKE sidecar's whole one) keeps the proxy variables and nothing else of Landlens's", () => {
+    const e = gcloudEnv({ HOME: "/h", PATH: "/p", HTTPS_PROXY: "http://proxy:3128", no_proxy: "localhost", GH_TOKEN: "ghp_x", LANDLENS_TOKEN: "t", KUBECONFIG: "/k" });
+    expect(e).toEqual({ HOME: "/h", PATH: "/p", HTTPS_PROXY: "http://proxy:3128", no_proxy: "localhost", CLOUDSDK_CORE_DISABLE_PROMPTS: "1" });
+  });
+
   it("L3: gcloud is told never to ask, and gets no input: a prompt fails at once instead of waiting out the limit", async () => {
     expect(gcloudEnv({}).CLOUDSDK_CORE_DISABLE_PROMPTS).toBe("1");
     const dir = mkdtempSync(join(tmpdir(), "landlens-prompt-"));

@@ -304,6 +304,11 @@ export type GcpStatus = {
   projects: string[];
   /** "Claude can read these projects" (D93): the landlens-gcp tools in agent sessions. Off by default. */
   agentRead: boolean;
+  /**
+   * While agentRead: the chosen projects you said yes to, for this account (review of part 5, M3). A project chosen
+   * after that question isn't readable by Claude until main asks again (gcp:agent-read with on).
+   */
+  agentProjects?: string[];
 };
 export type GcpProject = { id: string; name: string; number: string };
 /** One resource as Cloud Asset's search returns it: every string cut to 300 characters, at most 20 labels. */
@@ -322,8 +327,12 @@ export type GcpTypeCount = { assetType: string; count: number };
 export type GkeCluster = { project: string; location: string; name: string; status: string; version: string; endpoint: string; context: string };
 /** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
 export const GCP_MCP_SERVER = "landlens-gcp";
-/** What a GKE context needs said once before the first connect (D91). */
+/** What a GKE context needs said once before the first connect (D91); main asks it in a native dialog (part 5, L3). */
 export const CLOUD_CONFIRM = "This is a cloud cluster. Claude will read it, and can change it only through changes you approve.";
+/** cluster:connect's answer when you said no to that question: the page shows nothing for it. */
+export const CLOUD_DECLINED = "You didn't connect the cloud cluster.";
+/** cluster:status: main disconnected a cluster (a GKE cluster whose project you unchose, or gcloud's account changed). */
+export type ClusterStatusEvent = { handle: string; context: string; state: "disconnected"; reason: string };
 /** The most resources Landlens reads in one project (10 pages of 500), and the most one gcp:resources answer holds. */
 export const GCP_MAX_RESOURCES = 5000;
 export const GCP_PAGE = 500;
@@ -363,6 +372,11 @@ export type AutonomyState = {
   mode: ConnMode;
   /** Why it can't be turned on in this session (its tools changed, or were never accepted). */
   blocked?: string;
+  /**
+   * Why every write asks in this session even while it is on (review of wave 6 part 5, W1): Google Cloud data was read
+   * in it, through landlens-gcp or a resource the person quoted.
+   */
+  held?: string;
 };
 /** Turn a connection's autonomy on (with its scope) or off, for one session. */
 export const AutonomyRequest = z.object({ session: SessionId, provider: ConnProvider, on: z.boolean(), scope: AutonomyScope.optional() })
@@ -457,8 +471,8 @@ export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
-  // `cloud`: you said yes to "This is a cloud cluster…" for a GKE context (D91); asked once per cluster.
-  "cluster:connect": z.object({ context: z.string().min(1).max(253), cloud: z.boolean().optional() }),
+  // A GKE context (D91): main asks "This is a cloud cluster…" itself, in a native dialog, once per cluster (part 5, L3).
+  "cluster:connect": z.object({ context: z.string().min(1).max(253) }),
   "cluster:disconnect": z.object({ handle: Handle }),
   "cluster:discovery": z.object({ handle: Handle }),
   "cluster:access": z.object({ handle: Handle, checks: z.array(AccessCheck).max(200) }),

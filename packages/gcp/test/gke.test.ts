@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { checkEndpoint, GKE_CONTEXT, gkeKubeconfig, listClusters, writeGkeKubeconfig, type GkeClusterFull } from "../src/gke.js";
-import { FakeGcp, GCP_ACCOUNT, GCP_TOKEN } from "./fake-gcp.js";
+import { checkCa, checkEndpoint, GKE_CONTEXT, gkeKubeconfig, listClusters, writeGkeKubeconfig, type GkeClusterFull } from "../src/gke.js";
+import { FAKE_CLUSTER_CA, FAKE_LEAF_CERT, FakeGcp, GCP_ACCOUNT, GCP_TOKEN } from "./fake-gcp.js";
 import { clientFor, FAKE_GCLOUD, sdkDir } from "./helpers.js";
 
 let fake: FakeGcp;
@@ -30,7 +30,7 @@ describe("listClusters", () => {
 
   it("refuses a local or link-local control plane unless it is the development fake's", async () => {
     fake.clusters.set("payments-core", [
-      { name: "to-me", location: "us-central1", endpoint: "127.0.0.1:26443" },
+      { name: "to-me", location: "us-central1", endpoint: "127.0.0.1:26443", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } },
       { name: "metadata", location: "us-central1", endpoint: "169.254.169.254" },
       { name: "weird", location: "us-central1", endpoint: "https://evil.example/x" },
     ]);
@@ -52,6 +52,55 @@ describe("listClusters", () => {
     expect(checkEndpoint("localhost:6443")).toBe("");
     expect(checkEndpoint("0.0.0.0")).toBe("");
     expect(checkEndpoint("169.254.169.254", true)).toBe("");
+  });
+
+  it("L1 (review of part 5): only a canonical dotted quad or a gke.goog name; never another spelling of loopback or the metadata server", () => {
+    // Forms Go's resolver reads as 127.0.0.1 or 169.254.169.254.
+    for (const e of ["0x7f.0.0.1", "0127.0.0.1", "127.1", "2130706433", "0x7f000001", "0xa9.0xfe.0xa9.0xfe", "0169.254.169.254", "169.254.169.254:80", "10.0.0.010"]) {
+      expect(checkEndpoint(e, false), e).toBe("");
+      expect(checkEndpoint(e, true), `${e}, with the fake`).toBe("");
+    }
+    // DNS names that resolve somewhere local, or anywhere but GKE's DNS endpoints.
+    for (const e of ["metadata.google.internal", "metadata", "anything.internal", "localtest.me", "evil.example", "gke.goog.evil.example", "localhost", "a.localhost"]) expect(checkEndpoint(e), e).toBe("");
+    // Reserved, multicast and broadcast; private ranges are allowed (private clusters).
+    for (const e of ["224.0.0.1", "255.255.255.255", "240.0.0.1", "0.1.2.3"]) expect(checkEndpoint(e), e).toBe("");
+    for (const e of ["10.0.0.2", "172.16.0.2", "192.168.1.2", "100.64.0.1", "34.120.18.77:443"]) expect(checkEndpoint(e), e).toBe(e);
+    expect(checkEndpoint("gke-dc6d549babec45f49a431dc9ca926da159ca-518563762004.us-central1-c.gke.goog")).not.toBe("");
+    expect(checkEndpoint("127.0.0.1:26443", true)).toBe("127.0.0.1:26443");
+    expect(checkEndpoint("localhost:6443", true)).toBe("");
+    expect(checkEndpoint("203.0.113.17:0443")).toBe("");
+  });
+
+  it("L2 (review of part 5): an IP endpoint needs a valid cluster CA; a gke.goog DNS endpoint uses the system roots", async () => {
+    expect(checkCa(FAKE_CLUSTER_CA)).toBe(FAKE_CLUSTER_CA);
+    expect(checkCa(FAKE_LEAF_CERT)).toBeUndefined();
+    expect(checkCa("LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t")).toBeUndefined(); // the header alone isn't a certificate
+    expect(checkCa(undefined)).toBeUndefined();
+    const dns = "gke-0a1b2c3d4e-268401937752.us-central1.gke.goog";
+    fake.clusters.set("payments-core", [
+      { name: "no-ca", location: "us-central1", endpoint: "203.0.113.40" },
+      { name: "bad-ca", location: "us-central1", endpoint: "203.0.113.41", masterAuth: { clusterCaCertificate: FAKE_LEAF_CERT } },
+      { name: "no-ca-dns", location: "us-central1", endpoint: "203.0.113.42", controlPlaneEndpointsConfig: { dnsEndpointConfig: { endpoint: dns } } },
+      { name: "good", location: "us-central1", endpoint: "203.0.113.43", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA }, controlPlaneEndpointsConfig: { dnsEndpointConfig: { endpoint: dns } } },
+    ]);
+    try {
+      const cs = await listClusters(clientFor(fake).client, "payments-core");
+      expect(cs.map((c) => [c.name, c.endpoint, !!c.ca])).toEqual([
+        ["no-ca", "", false],
+        ["bad-ca", "", false],
+        ["no-ca-dns", dns, false],
+        ["good", "203.0.113.43", true],
+      ]);
+      const doc = parse(gkeKubeconfig(cs, FAKE_GCLOUD, GCP_ACCOUNT));
+      expect(doc.clusters.map((c: { name: string; cluster: Record<string, string> }) => [c.name, c.cluster.server, "certificate-authority-data" in c.cluster])).toEqual([
+        ["gke_payments-core_us-central1_no-ca-dns", `https://${dns}`, false],
+        ["gke_payments-core_us-central1_good", "https://203.0.113.43", true],
+      ]);
+      // An IP endpoint handed in without a CA is never written: the system roots would check it.
+      expect(parse(gkeKubeconfig([cluster({ ca: undefined })], FAKE_GCLOUD, GCP_ACCOUNT)).clusters).toEqual([]);
+    } finally {
+      fake.clusters.delete("payments-core");
+    }
   });
 });
 

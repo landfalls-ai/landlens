@@ -8,7 +8,7 @@ import {
   Archive, ArrowLeft, Boxes, Braces, Cloud, CircleAlert, CircleCheck, CircleDashed, CircleX, Copy, Cpu, Database, ExternalLink, FolderTree, Globe, KeyRound,
   Lock, MessagesSquare, Network, Package, RefreshCw, Rocket, Search, Server, Shapes, Sparkles, SquareArrowOutUpRight, Table2, Users, X, type LucideIcon,
 } from "lucide-react";
-import type { AskContext } from "./quotes";
+import { gcpQuoteName, type AskContext } from "./quotes";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, useNow, type ApiError } from "./api";
 import { CodeEditor } from "./CodeEditor";
@@ -50,7 +50,7 @@ export function gkeContextOf(r: Pick<GcpResource, "name" | "assetType">): string
   return m ? `gke_${m[1]}_${m[2]}_${m[3]}` : undefined;
 }
 /** The resource as the dock's context: the brief main built, quoted as data (quotes.ts). */
-export const gcpContext = (r: GcpResource, brief: string): AskContext => ({ kind: "gcp", label: `Google Cloud: ${resourceLabel(r)}`, text: brief });
+export const gcpContext = (r: GcpResource, brief: string): AskContext => ({ kind: "gcp", label: `Google Cloud: ${gcpQuoteName(r)}`, source: gcpQuoteName(r), text: brief });
 
 /** The resource's own name: its display name, else the last part of its full name. */
 export const resourceLabel = (r: GcpResource) => r.displayName || r.name.split("/").at(-1) || r.name;
@@ -610,11 +610,13 @@ export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => 
     api.invoke("gcp:status", { fresh: true }).then(props.onStatus, () => undefined).finally(() => setChecking(false));
   };
   // Turning it on asks in a dialog from main (L6 of part 4's review): this page can't say yes for you.
-  const agentRead = () => {
+  const agentRead = (on = !s.agentRead) => {
     setBusy(true);
     setError(undefined);
-    api.invoke("gcp:agent-read", { on: !s.agentRead }).then(props.onStatus, (e: ApiError) => setError(e.message)).finally(() => setBusy(false));
+    api.invoke("gcp:agent-read", { on }).then(props.onStatus, (e: ApiError) => setError(e.message)).finally(() => setBusy(false));
   };
+  // Chosen after you said yes (review of part 5, M3): Claude can't read these until main asks again.
+  const pending = s.agentRead ? s.projects.filter((p) => !(s.agentProjects ?? []).includes(p)) : [];
   return (
     <section className="panel conn-card gcp-card" aria-label="Google Cloud connection">
       <header className="panel-head">
@@ -638,14 +640,21 @@ export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => 
             </div>
             <div className="conn-row">
               <label className="switch">
-                <input type="checkbox" role="switch" checked={s.agentRead} disabled={busy || (!s.agentRead && !s.projects.length)} onChange={agentRead} aria-label="Claude can read these projects" />
+                <input type="checkbox" role="switch" checked={s.agentRead} disabled={busy || (!s.agentRead && !s.projects.length)} onChange={() => agentRead()} aria-label="Claude can read these projects" />
                 <span>Claude can read these projects</span>
               </label>
               <span className="dim small">
                 {s.agentRead
                   ? "Claude's sessions have read-only Google Cloud tools for these projects, run in Landlens with your sign-in; what they read is scrubbed of secret values. Claude gets no Google token."
                   : "Off: Claude's sessions have no Google Cloud tools. Turning it on asks you first."}
+                {s.agentRead ? " A project you choose later, or another gcloud account, isn't included until Landlens asks again; sessions keep the projects they started with." : ""}
               </span>
+              {pending.length ? (
+                <div className="gcp-card-pending" role="status">
+                  <span className="small">Claude can't read <b className="mono">{pending.join(", ")}</b> yet: chosen after you said yes.</span>
+                  <button className="secondary sm" disabled={busy} onClick={() => agentRead(true)}>Let Claude read {pending.length === 1 ? "it" : "them"} too…</button>
+                </div>
+              ) : null}
               {error ? <span className="tone-bad small" role="alert">{error}</span> : null}
             </div>
           </>

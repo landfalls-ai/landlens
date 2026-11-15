@@ -23,7 +23,8 @@ export type GcpReader = {
   projects(): Promise<{ id: string; name?: string }[]>;
   types(project: string): Promise<{ types: GcpTypeCount[]; total: number; cut: boolean; error?: string }>;
   resources(r: { project: string; assetType?: string; query?: string }): Promise<{ items: GcpResource[]; total: number; cut: boolean; error?: string }>;
-  resource(project: string, name: string): Promise<{ resource: GcpResource; json?: string; cut: boolean }>;
+  /** `config`: the resource's whole configuration, parsed and not yet scrubbed (resourceYaml scrubs it, then cuts). */
+  resource(project: string, name: string): Promise<{ resource: GcpResource; config?: unknown }>;
   clusters(): Promise<{ clusters: GkeCluster[]; errors: { project: string; message: string }[] }>;
   /** Whether Landlens is connected to this context now. */
   connected(context: string): boolean;
@@ -116,12 +117,13 @@ export function gcpMcpServer(reader: GcpReader, o: { now?: () => number } = {}):
     annotations: READ_ONLY,
   }, run(async ({ project, name }: { project: string; name: string }) => {
     const r = await reader.resource(project, name);
-    const y = resourceYaml(r.json, GCP_YAML_MAX);
+    // Scrubbed whole, then cut (review of part 5, M1): never cut text, which would skip the positional rules.
+    const y = resourceYaml(r.config, GCP_YAML_MAX);
     return [
       ...resourceLines(r.resource),
       `Service: ${serviceOf(r.resource.assetType)}`,
       "",
-      r.json ? `Configuration (secret values, startup scripts and environment values hidden${r.cut || y.cut ? "; cut" : ""}):\n${y.text}` : "Cloud Asset gives no configuration for this type; the fields above are what its search returns.",
+      y.text ? `Configuration (secret values, startup scripts and environment values hidden${y.cut ? "; cut" : ""}):\n${y.text}` : "Cloud Asset gives no configuration for this type; the fields above are what its search returns.",
     ].join("\n");
   }));
 

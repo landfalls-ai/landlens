@@ -100,6 +100,8 @@ async function start() {
     loginPath: () => loginPath(),
     env: process.env,
     log: (l) => console.log(l),
+    // gcloud's account changed: the grant to Claude ends, and landlens-gcp leaves open sessions at once (part 5, M3).
+    onAgentOff: () => mcp?.gcpOff(),
   });
   mcp = new McpService({
     store: mcpStore,
@@ -140,6 +142,7 @@ async function start() {
       check: (session, toolName, input) => mcpSvc.autonomyCheck(session, toolName, input),
       permit: (session, p) => mcpSvc.autonomyPermit(session, p),
       states: (session) => mcpSvc.autonomyStates(session),
+      gcpQuoted: (session) => gateway.gcpQuoted(session),
     },
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),

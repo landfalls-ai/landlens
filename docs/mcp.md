@@ -20,7 +20,9 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
   namespaces, Landlens's metrics source). It is still allowed whole (`mcp__landlens-kube`): every tool reads through
   the front door, which refuses writes.
 - **landlens-gcp** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)) is the second built-in server: five
-  read-only Google Cloud tools for the projects you chose, run in main with your gcloud sign-in. A session gets it only
+  read-only Google Cloud tools for the projects you chose (and granted, for the account signed in) when the session
+  began, run in main with your gcloud sign-in. When a session calls it, the gateway holds that session's autonomous
+  writes, so they ask. A session gets it only
   while **Claude can read these projects** is on (Connections), and it is allowed whole (`mcp__landlens-gcp`); turning
   the switch off takes it out of running sessions at once. The gateway's built-ins are a map by name, and no remote
   server may take a built-in's name or any name starting `landlens`.
