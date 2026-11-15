@@ -12,15 +12,18 @@
   },
   "dependencies": {
     "@landlens/contracts": "workspace:*",
+    "ws": "8.23.0",
     "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
     "typescript": "7.0.2",
     "vitest": "4.1.12"
   },
   "exports": {
     ".": "./src/index.ts",
-    "./status": "./src/status.ts"
+    "./status": "./src/status.ts",
+    "./redact": "./src/redact.ts"
   }
 }

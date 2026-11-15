@@ -1,0 +1,42 @@
+# The workbench's scenario (docs/workbench.md): a deployment of two pods whose app container writes a log line every
+# second (now and then an ERROR, now and then in colour), beside a sidecar with no shell at all (the pause image).
+# kubectl --context orbstack apply -f deploy/scenarios/workbench.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: landlens-dev
+  labels: { app.kubernetes.io/part-of: landlens-scenarios }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-web
+  namespace: landlens-dev
+  labels: { app: shop-web, scenario: workbench }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: shop-web } }
+  template:
+    metadata:
+      labels: { app: shop-web }
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              while true; do
+                i=$((i+1))
+                if [ $((i % 7)) -eq 0 ]; then echo "ERROR order $i failed: payment gateway timeout after 3000ms";
+                elif [ $((i % 5)) -eq 0 ]; then printf '\033[32mINFO\033[0m checkout %s ok in %sms\n' "$i" "$((i % 90 + 10))";
+                else echo "GET /products/$((i % 40)) 200 $((i % 30 + 2))ms"; fi
+                sleep 1
+              done
+          resources: { requests: { cpu: 5m, memory: 8Mi }, limits: { memory: 32Mi } }
+        - name: sidecar
+          image: registry.k8s.io/pause:3.10
+          resources: { requests: { cpu: 1m, memory: 4Mi }, limits: { memory: 16Mi } }

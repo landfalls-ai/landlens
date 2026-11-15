@@ -10,8 +10,12 @@ const CHANNELS: readonly Channel[] = [
   "metrics:series", "metrics:settings", "metrics:configure", "metrics:test", "metrics:disconnect",
   "mcp:servers", "mcp:save", "mcp:test", "mcp:enable", "mcp:auto-run", "mcp:remove", "mcp:preset", "mcp:calls", "mcp:try",
   "mcp:app-open", "mcp:app-call", "mcp:app-close", "mcp:app-link",
+  "logs:open", "logs:close", "terminal:open", "terminal:local", "terminal:input", "terminal:resize", "terminal:close",
 ];
-const PUSH: readonly PushChannel[] = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call"];
+const PUSH: readonly PushChannel[] = [
+  "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status",
+];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */
 function unwrap(err: unknown): Error & { status: number } {

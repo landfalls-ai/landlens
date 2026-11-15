@@ -12,3 +12,5 @@ export * from "./redact.js";
 export * from "./health.js";
 export * from "./changes.js";
 export * from "./diff.js";
+export * from "./exec.js";
+export * from "./logs.js";

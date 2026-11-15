@@ -117,6 +117,22 @@ hold whatever the model asks for, and whatever mode Claude Code is in.
 | A write tool's call may take the broker's 15 minutes and one more, not the gateway's usual 2 minutes, so a slow answer isn't cut off (which would withdraw the card, or apply while the agent is told it failed) | `upstream.ts` |
 | `rollout_undo` reads the earlier ReplicaSet with the broker's token, so the template it restores has its real env values, which the agent never sees | live test |
 
+## Terminals
+
+Logs and terminals are yours, not the agent's ([workbench.md](workbench.md)). The rules keep them that way and keep
+them on the record.
+
+| Rule | How it's checked |
+|---|---|
+| A pod shell's exec goes through the front door, never straight to the sidecar, with a token issued for that terminal alone: full access as you to that one cluster, labelled `you · <context> · shell <namespace>/<pod>`, so every shell is in the audit trail (status 101) under its own label | desktop unit test (label, policy, cluster); kube live test (the shell runs, the audit has 101, a revoked token gets 401) |
+| The token is revoked when the shell exits, the connection drops, the tab closes, the window goes or the cluster disconnects | desktop unit tests (refused session, closed window); kube live test |
+| A terminal is driven only by the window that opened it: input, resize and close from another window are refused ("no such terminal"); a window may hold at most 20 terminals and 50 log streams | desktop unit tests |
+| The local terminal gets your environment without Landlens's and Electron's variables (`ELECTRON_*`, `LANDLENS_*`, `VITE_*`, `NODE_OPTIONS`, `CHROME_*`, your `KUBECONFIG`), plus a `KUBECONFIG` file (mode 0400, in its own 0700 folder) naming only the cluster you are on, through the front door, and its own token in `LANDLENS_TOKEN`; the folder is removed and the token revoked when it ends | desktop unit test (environment); e2e (`kubectl` in the local terminal reaches the cluster through Landlens's kubeconfig) |
+| The agent never reads or types into a terminal: there is no channel for it. Text reaches the agent only when you select it and press Ask Claude, and then in the prompt, redacted as `get_logs` output is and capped at 200 lines or 16 KB | `withQuotes` in `AgentDock.tsx`; the terminal channels are the renderer's alone (`preload`) |
+| A multi-line paste into a pod shell asks first | e2e covers the shell; the paste bar by hand |
+| Terminal and log channels are typed and bounded: ids are random (12 bytes, base64url), input at most 64 KB a message, sizes 1–1000, tails at most 10,000 lines, `sinceTime` RFC 3339 | contracts (zod) |
+| The shell buttons are disabled when a SelfSubjectAccessReview says your role can't create `pods/exec` there; the cluster still decides (a refused exec says why) | `useCanExec`; by hand |
+
 ## MCP: the gateway and app views
 
 Every MCP call of an agent session goes through Landlens's gateway in main ([mcp.md](mcp.md)), and some tools come

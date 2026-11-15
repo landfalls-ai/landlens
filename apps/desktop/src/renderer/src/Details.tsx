@@ -1,6 +1,6 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { Box, Check, ChevronRight, CircleX, Clock, Copy, Server, Sparkles, X } from "lucide-react";
+import { Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
@@ -10,8 +10,11 @@ import { copyText, duration, splitName, statusTone } from "./present";
 import { Status } from "./ResourceTable";
 import { Yaml } from "./Yaml";
 import { MetricsTab, metricsScope } from "./MetricsTab";
+import type { LogSource, ShellTarget } from "./benchState";
+import { logSourceOf, LogsView } from "./LogsView";
+import { direct, shellable, ShellMenu, targetOf, useCanExec } from "./ShellMenu";
 
-type Tab = "overview" | "events" | "yaml" | "metrics";
+type Tab = "overview" | "events" | "yaml" | "metrics" | "logs";
 export type NavTarget = { kind: string; name: string; namespace?: string };
 
 /** Waiting reasons that mean a container can't run (kept in step with packages/kube/src/health.ts). */
@@ -31,10 +34,35 @@ export function Details(props: {
   /** Changes when the Clickland settings do. */
   metricsVersion: number;
   onSettings: () => void;
+  /** Open a pod shell, or logs, in the panel. */
+  onShell: (t: ShellTarget) => void;
+  onLogsInPanel: (s: LogSource) => void;
+  /** Asked from outside (a row's menu): show this tab, on this container. Changes `n` to ask again. */
+  show?: { tab: "logs" | "shell"; container?: string; n: number };
 }) {
   const { object: o, type, now } = props;
-  const TABS: Tab[] = metricsScope(type) ? ["overview", "events", "yaml", "metrics"] : ["overview", "events", "yaml"];
+  const logs = logSourceOf(type.kind, o);
+  const TABS: Tab[] = [...(metricsScope(type) ? ["overview", "events", "yaml", "metrics"] as Tab[] : ["overview", "events", "yaml"] as Tab[]), ...(logs ? ["logs" as Tab] : [])];
   const [tab, setTab] = useState<Tab>("overview");
+  const [logContainer, setLogContainer] = useState<string>();
+  const [shellMenu, setShellMenu] = useState(false);
+  const canExec = useCanExec(props.handle, o.metadata.namespace);
+  const pod = type.resource === "pods" && type.group === "";
+  const workloadSel = logs?.selector ? { namespace: logs.namespace, selector: logs.selector } : undefined;
+  const openShell = () => {
+    const d = pod ? direct(o) : undefined;
+    if (d) return props.onShell(d);
+    setShellMenu((m) => !m);
+  };
+  const showLogs = (container?: string) => {
+    setLogContainer(container);
+    setTab("logs");
+  };
+  useEffect(() => {
+    if (!props.show) return;
+    if (props.show.tab === "logs") showLogs(props.show.container);
+    else openShell();
+  }, [props.show?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();
   const [copied, setCopied] = useState(false);
 
@@ -57,10 +85,8 @@ export function Details(props: {
     return () => window.removeEventListener("keydown", onKey);
   }, [TABS.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (tab === "metrics" && !metricsScope(type)) setTab("overview");
-  }, [tab, type]);
-
-  const pod = type.resource === "pods" && type.group === "";
+    if ((tab === "metrics" && !metricsScope(type)) || (tab === "logs" && !logs)) setTab("overview");
+  }, [tab, type, logs]);
   const view = isSecret(type) ? redactSecret(o) : o;
   const status = pod ? podStatus(o) : undefined;
   const tone = status ? statusTone(status.text, status.tone) : props.tone;
@@ -75,6 +101,15 @@ export function Details(props: {
           <span className={`kind-tile sm${tone === "bad" || tone === "warn" ? ` ${tone}` : ""}`}><Ic icon={kindIcon(type.resource)} size={15} /></span>
           <div className="eyebrow">{type.kind}{o.metadata.namespace ? <><span className="sep"> / </span>{o.metadata.namespace}</> : null}</div>
           <span className="grow" />
+          {pod || workloadSel ? (
+            <button className="icon-btn" aria-label="Open shell" aria-haspopup={pod && direct(o) ? undefined : "menu"} disabled={canExec === false}
+              title={canExec === false ? `Your role can't exec in ${o.metadata.namespace}` : pod && !shellable(o).some((c) => c.running) ? "No container is running" : "Open a shell (runs as you)"}
+              onClick={openShell}><Ic icon={SquareTerminal} size={15} /></button>
+          ) : null}
+          {shellMenu ? (
+            <ShellMenu handle={props.handle} {...(pod ? { pod: o } : workloadSel ? { workload: workloadSel } : {})}
+              onPick={(t) => (setShellMenu(false), props.onShell(t))} onClose={() => setShellMenu(false)} />
+          ) : null}
           {isSecret(type) ? null : (
             <button
               className="ask-btn"
@@ -114,10 +149,13 @@ export function Details(props: {
             {t === "events" && Array.isArray(events) && events.length ? <span className={"count" + (warnings ? " warn" : "")} aria-hidden="true">{events.length}</span> : null}
           </button>
         ))}
-        <button role="tab" aria-selected={false} aria-disabled="true" tabIndex={-1} title="Logs arrive in wave 4">Logs</button>
       </nav>
-      <div className="drawer-body">
-        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} />}
+      <div className={"drawer-body" + (tab === "logs" ? " flush" : "")}>
+        {tab === "logs" && logs ? (
+          <LogsView key={`${o.metadata.uid}`} handle={props.handle} source={{ ...logs, ...(logContainer ? { container: logContainer } : {}) }} place="drawer" onAsk={props.onAsk} onOpenInPanel={props.onLogsInPanel} />
+        ) : null}
+        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate}
+          onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec} />}
         {tab === "events" && <Events events={events} now={now} />}
         {tab === "yaml" && <Yaml text={stringify(view, { lineWidth: 0 })} />}
         {tab === "metrics" && metricsScope(type) && <MetricsTab handle={props.handle} type={type} object={o} version={props.metricsVersion} onSettings={props.onSettings} />}
@@ -136,7 +174,10 @@ function readyOf(o: KubeObject): string | undefined {
   return undefined;
 }
 
-function Overview({ o, type, now, onNavigate }: { o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void }) {
+function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec }: {
+  o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void;
+  onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined;
+}) {
   const pod = type.resource === "pods" && type.group === "";
   const created = Date.parse(o.metadata.creationTimestamp ?? "");
   // In the order they happened; ties (most of them share the pod's first seconds) in lifecycle order.
@@ -171,7 +212,7 @@ function Overview({ o, type, now, onNavigate }: { o: KubeObject; type: ResourceT
         <dt>Created</dt>
         <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
-      {pod ? <Containers pod={o} now={now} /> : null}
+      {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} /> : null}
       {conditions.length ? (
         <section>
           <h3>Conditions</h3>
@@ -262,7 +303,7 @@ function Diagnosis({ pod, now }: { pod: KubeObject; now: number }) {
   );
 }
 
-function Containers({ pod, now }: { pod: KubeObject; now: number }) {
+function Containers({ pod, now, onLogs, onShell, canExec }: { pod: KubeObject; now: number; onLogs: (c: string) => void; onShell: (c: string) => void; canExec: boolean | undefined }) {
   const statuses = new Map<string, any>((pod.status?.containerStatuses ?? []).map((c: any) => [c.name, c]));
   const specs: any[] = pod.spec?.containers ?? [];
   if (!specs.length) return null;
@@ -277,9 +318,15 @@ function Containers({ pod, now }: { pod: KubeObject; now: number }) {
           const last = s?.lastState?.terminated;
           return (
             <li key={c.name}>
-              <div className="row-between">
+              <div className="c-head">
                 <strong className="c-name"><Ic icon={Box} size={13} />{c.name}</strong>
                 <Status text={state} tone={tone} />
+                <span className="c-acts">
+                  <button className="secondary" aria-label={`Logs of ${c.name}`} onClick={() => onLogs(c.name)}><Ic icon={ScrollText} size={12} />Logs</button>
+                  <button className="secondary" aria-label={`Open shell in ${c.name}`} disabled={!s?.state?.running || canExec === false}
+                    title={canExec === false ? `Your role can't exec in ${pod.metadata.namespace}` : s?.state?.running ? "Open a shell (runs as you)" : "The container isn't running"}
+                    onClick={() => onShell(c.name)}><Ic icon={SquareTerminal} size={12} />Shell</button>
+                </span>
               </div>
               <div className="mono c-image">{c.image}</div>
               {s?.restartCount || last ? (

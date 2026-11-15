@@ -7,11 +7,12 @@ import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { ClicklandSettingsStore } from "./clickland-settings";
 import type { McpService } from "./mcp";
+import type { WorkbenchService } from "./workbench";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService, workbench: WorkbenchService) {
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -119,6 +120,14 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "mcp:app-call": ({ view, name, arguments: args }) => mcp.viewCall(view, name, args ?? {}),
     "mcp:app-close": async ({ view }) => (mcp.views.close(view), { ok: true }),
     "mcp:app-link": async ({ view, url }) => ({ opened: await mcp.viewLink(view, url) }),
+    // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
+    "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
+    "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),
+    "terminal:open": async (req, event) => workbench.openTerminal(req, event.sender),
+    "terminal:local": async ({ handle }, event) => workbench.openLocal({ handle }, event.sender),
+    "terminal:input": async ({ terminal, data }, event) => (workbench.input(terminal, data, event.sender), { ok: true }),
+    "terminal:resize": async ({ terminal, cols, rows }, event) => (workbench.resize(terminal, cols, rows, event.sender), { ok: true }),
+    "terminal:close": async ({ terminal }, event) => (workbench.close(terminal, event.sender), { ok: true }),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {

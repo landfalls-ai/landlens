@@ -16,6 +16,7 @@ export async function checkAccess(client: KubeClient, checks: AccessCheck[]): Pr
               group: c.group,
               resource: c.resource,
               ...(c.namespace ? { namespace: c.namespace } : {}),
+              ...(c.subresource ? { subresource: c.subresource } : {}),
             },
           },
         });

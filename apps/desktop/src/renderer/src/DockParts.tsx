@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import type { AskContext } from "./AgentDock";
 import { AppFrame } from "./AppFrame";
 import type { ObjectTarget } from "./app-host";
-import { Ic, kindIcon } from "./icons";
+import { contextIcon, Ic, kindIcon } from "./icons";
 import { Markdown } from "./Markdown";
 
 export type Tool = { id: string; title: string; kind?: string; status: string; input?: unknown; output: string; mcp?: string };
@@ -74,7 +74,7 @@ function Entry({ item, streaming }: { item: Item; streaming: boolean }) {
       return (
         <div className="msg msg-user">
           {item.context.length ? (
-            <div className="chips">{item.context.map((c) => <span key={c.label} className="chip"><Ic icon={kindIcon(c.ref.resource)} size={11} />{c.label}</span>)}</div>
+            <div className="chips">{item.context.map((c) => <span key={c.label} className="chip"><Ic icon={contextIcon(c)} size={11} />{c.label}</span>)}</div>
           ) : null}
           <div>{item.text}</div>
         </div>

@@ -107,6 +107,8 @@ export const AccessCheck = z.object({
   group: orAny(GroupName),
   resource: orAny(ResourceName),
   namespace: NamespaceName.optional(),
+  /** "exec" for pods/exec, "log" for pods/log. */
+  subresource: z.string().max(32).regex(/^[a-z]+$/, "not a subresource").optional(),
 });
 export type AccessCheck = z.infer<typeof AccessCheck>;
 
@@ -198,6 +200,20 @@ export const McpServerInput = z.object({
   appOrigins: z.array(McpAppOrigin).max(10).optional(),
 });
 
+/** A container's name (a DNS label). */
+export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
+/** A log stream's or terminal's id, made by main. */
+export const StreamId = z.string().regex(/^[A-Za-z0-9_-]{8,40}$/);
+
+export type LogLine = { ts: string; text: string };
+export type LogsPush = { stream: string; lines: LogLine[] };
+export type LogsEnd = { stream: string; status?: number; message?: string };
+export type TerminalData = { terminal: string; data: string };
+/** A terminal opened, or ended: the shell exited (code), or the connection failed (message). */
+/** How a session ended: the shell exited, the connection dropped, or the cluster refused it (status says why). */
+export type TerminalEnd = "exit" | "lost" | "refused";
+export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -229,6 +245,18 @@ export const channels = {
   // Wave 3: which of your Claude Code skills agent sessions get.
   "agent:settings": z.object({}),
   "agent:skills": z.object({ chosen: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).max(50) }),
+  // The workbench (wave 4): followed logs and pod shells, with your own access.
+  "logs:open": z.object({
+    handle: Handle, namespace: NamespaceName, pod: ObjectName, container: ContainerName,
+    previous: z.boolean().optional(), tailLines: z.number().int().min(1).max(10_000).optional(),
+    sinceTime: z.string().regex(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/).optional(),
+  }),
+  "logs:close": z.object({ stream: StreamId }),
+  "terminal:open": z.object({ handle: Handle, namespace: NamespaceName, pod: ObjectName, container: ContainerName, shell: z.enum(["auto", "bash", "sh"]).optional() }),
+  "terminal:local": z.object({ handle: Handle }),
+  "terminal:input": z.object({ terminal: StreamId, data: z.string().max(65_536) }),
+  "terminal:resize": z.object({ terminal: StreamId, cols: z.number().int().min(1).max(1000), rows: z.number().int().min(1).max(1000) }),
+  "terminal:close": z.object({ terminal: StreamId }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -277,6 +305,13 @@ export type Responses = {
   "agent:forget": { ok: true };
   "agent:settings": AgentSettingsInfo;
   "agent:skills": { ok: true };
+  "logs:open": { stream: string };
+  "logs:close": { ok: true };
+  "terminal:open": { terminal: string; label: string };
+  "terminal:local": { terminal: string; label: string; shell: string };
+  "terminal:input": { ok: true };
+  "terminal:resize": { ok: true };
+  "terminal:close": { ok: true };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;
@@ -579,7 +614,10 @@ export type AgentStatus =
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */
-export const pushChannels = ["watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call"] as const;
+export const pushChannels = [
+  "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status",
+] as const;
 export type PushChannel = (typeof pushChannels)[number];
 
 /** An error crossing IPC keeps a Kubernetes-like status code so the UI can say "no access" vs "failed". */

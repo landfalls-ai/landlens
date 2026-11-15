@@ -42,7 +42,7 @@ Three rules hold in every wave:
 └────────────────────────────────────────────────────────────────────────┘
 ┌──────────────── renderer (sandboxed React, no Node) ──────────────────┐
 │ catalog · cluster views (workloads, config, network, storage, RBAC,   │
-│ CRDs, events) · logs · terminal (xterm) · YAML editor (Monaco, diff)  │
+│ CRDs, events) · logs · terminal (xterm) · YAML editor (CodeMirror 6, diff)  │
 │ · agent dock: messages, plan, tool-call cards, permission prompts,    │
 │   diffs, "Ask about this" from any object                             │
 └───────────────────────────────────────────────────────────────────────┘

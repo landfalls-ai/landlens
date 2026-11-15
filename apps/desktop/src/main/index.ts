@@ -8,6 +8,7 @@ import { AgentHistory, AgentSettings } from "./agent-history";
 import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
 import { registerIpc } from "./ipc";
+import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
@@ -95,7 +96,9 @@ async function start() {
     settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp);
+  const workbench = new WorkbenchService({ clusters, frontDoor, dataDir: app.getPath("userData") });
+  liveSessions = () => workbench.terminalCount();
+  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp, workbench);
   const service = mcp;
   shutdown = async () => {
     metrics.stopAll();
@@ -138,8 +141,17 @@ app.whenReady().then(start).catch((err) => {
 app.on("window-all-closed", () => app.quit());
 
 let quitting = false;
+/** Shells and terminals that quitting would end (D23): asked about once. */
+let liveSessions = () => 0;
 app.on("before-quit", (event) => {
   if (quitting || !shutdown) return;
+  const n = liveSessions();
+  if (n) {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const opts = { type: "question" as const, buttons: ["Quit", "Cancel"], defaultId: 0, cancelId: 1, message: `${n} session${n === 1 ? "" : "s"} will end`, detail: "Every shell and terminal open in Landlens closes with it." };
+    const choice = win && !win.isDestroyed() ? dialog.showMessageBoxSync(win, opts) : dialog.showMessageBoxSync(opts);
+    if (choice === 1) return event.preventDefault();
+  }
   event.preventDefault();
   quitting = true;
   void shutdown().finally(() => app.quit());
