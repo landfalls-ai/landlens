@@ -55,6 +55,9 @@ export const ResourceType = z.object({
 });
 export type ResourceType = z.infer<typeof ResourceType>;
 
+/** One object the ⌘K palette can find: its kind and name, nothing of its content. */
+export type SearchEntry = { group: string; version: string; resource: string; kind: string; name: string; namespace?: string };
+
 export const resourceKey = (t: Pick<ResourceType, "group" | "resource">) =>
   t.group ? `${t.resource}.${t.group}` : t.resource;
 
@@ -358,6 +361,8 @@ export const channels = {
   // Helm releases, read-only (wave 4, part 4): decoded in main, as you.
   "helm:list": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
   "helm:get": z.object({ handle: Handle, namespace: NamespaceName, name: ObjectName, revision: z.number().int().min(1).max(1_000_000).optional() }),
+  // The ⌘K palette's names across kinds (D45); `fresh` reads again even if the last read is recent.
+  "search:index": z.object({ handle: Handle, fresh: z.boolean().optional() }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -428,6 +433,7 @@ export type Responses = {
   "forward:open": { ok: true };
   "helm:list": { releases: HelmRelease[]; unreadable: number };
   "helm:get": HelmReleaseDetail;
+  "search:index": { entries: SearchEntry[]; cut: string[]; unreadable: string[]; at: string };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;

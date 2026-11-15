@@ -9,7 +9,7 @@ import { ClicklandSettings } from "./ClicklandSettings";
 import { Details, type NavTarget } from "./Details";
 import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
-import { JumpPalette } from "./JumpPalette";
+import { JumpPalette, type Target, type Verb } from "./JumpPalette";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
@@ -23,7 +23,7 @@ import { Bench } from "./Bench";
 import { useBench } from "./benchState";
 import { useForwards } from "./Forwards";
 import { logSourceOf } from "./LogsView";
-import { direct } from "./ShellMenu";
+import { direct, shellable, targetOf } from "./ShellMenu";
 import { copyText } from "./present";
 import { Toolbar, type StatusFilter } from "./Toolbar";
 import { HelmDrawer, HelmPage, useHelmList } from "./Helm";
@@ -57,12 +57,18 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [agentTab, setAgentTab] = useState<AgentTab>("skills");
   const [mcpCall, setMcpCall] = useState<string>();
   const [helmPick, setHelmPick] = useState<{ namespace: string; name: string }>();
+  const [reachError, setReachError] = useState<string>();
+  useEffect(() => {
+    if (!reachError) return;
+    const t = setTimeout(() => setReachError(undefined), 6000);
+    return () => clearTimeout(t);
+  }, [reachError]);
   const [claude, setClaude] = useState<string>();
   const [width, setWidth] = useState({ app: window.innerWidth, main: window.innerWidth - 232, height: window.innerHeight });
   const bench = useBench();
   const forwardsRunning = useForwards(cluster.context).filter((f) => f.state === "running" || f.state === "reconnecting" || f.state === "starting").length;
   const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number }>();
-  const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit"; container?: string; n: number }>();
+  const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number }>();
   const [leaving, setLeaving] = useState<string>();
   const beforeBench = useRef<HTMLElement | null>(null);
   const app = useRef<HTMLDivElement>(null);
@@ -166,6 +172,40 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
     if (action === "shell" && !pods && !logSourceOf(list.type.kind, o)?.selector) return;
     setSelected(o);
     setShow((s) => ({ tab: action, n: (s?.n ?? 0) + 1 }));
+  };
+  /**
+   * The palette's object (D45): its kind's list, its drawer, and then the action asked for. The object is read first,
+   * so a name that has gone says so instead of opening an empty drawer.
+   */
+  const reach = async (t: Target, verb?: Verb, container?: string) => {
+    const n = nav.find((x) => x.type.group === t.group && x.type.resource === t.resource);
+    const ref = { group: t.group, version: t.version, resource: t.resource, name: t.name, ...(t.namespace ? { namespace: t.namespace } : {}) };
+    if (verb === "ask") return ask({ ref, label: `${t.kind} ${t.namespace ? `${t.namespace}/` : ""}${t.name}` });
+    if (!n) return;
+    let o: KubeObject;
+    try {
+      o = (await api.invoke("resource:get", { handle: cluster.handle, ref })).object;
+    } catch (e) {
+      setReachError(`${t.kind} ${t.name}: ${(e as ApiError).message}`);
+      return;
+    }
+    const pod = t.kind === "Pod" && t.group === "";
+    if (verb === "shell" && pod) {
+      const target = container ? targetOf(o, container, "auto") : direct(o) ?? (() => {
+        const c = shellable(o).find((x) => x.running);
+        return c ? targetOf(o, c.name, "auto") : undefined;
+      })();
+      if (target) return bench.openShell(target), focusBench();
+    }
+    leaveEdit(() => {
+      setCurrent(n);
+      setMcpCall(undefined);
+      setHelmPick(undefined);
+      setStatus("all");
+      if (n.type.namespaced && t.namespace && namespace && namespace !== t.namespace) setNamespace(t.namespace);
+      setSelectedNow(o);
+      if (verb) setShow((s) => ({ tab: verb, ...(container ? { container } : {}), n: (s?.n ?? 0) + 1 }));
+    });
   };
   // Switching cluster ends every session (D23): with live terminals, ask once.
   const switchTo = (context: string) => leaveEdit(() => (bench.terminals ? setLeaving(context) : onSwitch(context)));
@@ -427,7 +467,34 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onCreated={(first) => (setCreating(false), go(first))} />
       ) : null}
       {jump ? (
-        <JumpPalette nav={nav} current={current} items={watch.items} onPick={pick} onSelect={setSelected} onClose={() => setJump(false)} />
+        <JumpPalette
+          handle={cluster.handle}
+          context={cluster.context}
+          {...(contexts ? { contexts } : {})}
+          nav={nav}
+          current={current}
+          items={watch.items}
+          {...(selected && list ? { open: { group: list.type.group, version: list.type.version, resource: list.type.resource, kind: list.type.kind, name: selected.metadata.name, ...(selected.metadata.namespace ? { namespace: selected.metadata.namespace } : {}) } } : {})}
+          onPick={pick}
+          onOpen={(t) => void reach(t)}
+          onAct={(t, verb, container) => void reach(t, verb, container)}
+          onSwitch={switchTo}
+          commands={{
+            togglePanel: () => (bench.open ? bench.setOpen(false) : (bench.setOpen(true), focusBench())),
+            newTerminal: () => (bench.openLocal(), focusBench()),
+            createYaml: () => setCreating(true),
+            toggleSidebar: () => setUserRail(!rail),
+            openDock: () => setDock(true),
+            showForwards: () => (bench.openForwards(), focusBench()),
+          }}
+          onClose={() => setJump(false)}
+        />
+      ) : null}
+      {reachError ? (
+        <div className="notice reach-error" role="alert">
+          <Ic icon={CircleX} size={15} className="tone-bad" />
+          <div className="notice-body"><strong>Couldn't open it.</strong><p>{reachError}</p></div>
+        </div>
       ) : null}
     </div>
   );

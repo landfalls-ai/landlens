@@ -1,7 +1,7 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, clusterHealth, getRelease, KubeError, listContexts, listReleases, withoutSecretValues, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { checkAccess, clusterHealth, getRelease, KubeError, listContexts, listReleases, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
@@ -14,6 +14,7 @@ import { isAppUrl } from "./security";
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
 export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService) {
+  const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -149,7 +150,19 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     // Helm releases, read as you and decoded here; the window gets no secret values (docs/workbench.md#helm-releases).
     "helm:list": ({ handle, namespace }) => helmCall(() => listReleases(clusters.get(handle).client, namespace)),
     "helm:get": ({ handle, namespace, name, revision }) => helmCall(() => getRelease(clusters.get(handle).client, namespace, name, revision)),
+    // The palette's names across kinds (D45): one read shared by every window, again after 15 s or on `fresh`.
+    "search:index": async ({ handle, fresh }) => {
+      const c = clusters.get(handle);
+      const held = searches.get(handle);
+      if (held && !fresh && Date.now() - held.at < SEARCH_FRESH_MS) return held.read;
+      const read = clusters.discovery(handle).then((types) => searchIndex(c.client, types, AbortSignal.timeout(15_000))).then((r) => ({ ...r, at: new Date().toISOString() }));
+      searches.set(handle, { at: Date.now(), read });
+      read.catch(() => searches.get(handle)?.read === read && searches.delete(handle));
+      return read;
+    },
   };
+
+  clusters.onGone((handle) => searches.delete(handle));
 
   for (const name of Object.keys(channels) as Channel[]) {
     ipcMain.handle(name, async (event, raw) => {
@@ -167,6 +180,9 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     });
   }
 }
+
+/** How long one read of the palette's names serves every window (D45). */
+const SEARCH_FRESH_MS = 15_000;
 
 const isSecrets = (t: ResourceType) => t.group === "" && t.resource === "secrets";
 

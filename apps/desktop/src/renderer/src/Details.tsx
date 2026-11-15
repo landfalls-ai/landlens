@@ -45,7 +45,7 @@ export function Details(props: {
   onShell: (t: ShellTarget) => void;
   onLogsInPanel: (s: LogSource) => void;
   /** Asked from outside (a row's menu): show this tab, on this container. Changes `n` to ask again. */
-  show?: { tab: "logs" | "shell" | "edit"; container?: string; n: number };
+  show?: { tab: "logs" | "shell" | "edit" | "forward"; container?: string; n: number };
   /** A custom resource's printer columns, shown as facts (D41). */
   printer?: PrinterColumn[];
   /** A definition's "Open <kind>": the kind's list. */
@@ -77,6 +77,10 @@ export function Details(props: {
     if (props.show.tab === "logs") showLogs(props.show.container);
     else if (props.show.tab === "edit") {
       if (!isSecret(type)) (setTab("yaml"), setEditing(true));
+    } else if (props.show.tab === "forward") {
+      // The palette's forward (D44): the Overview, with the first port's Forward focused.
+      leaveEdit(() => setTab("overview"));
+      setTimeout(() => (document.querySelector<HTMLButtonElement>(".drawer button[aria-label^='Forward ']:not(:disabled)"))?.focus(), 150);
     } else openShell();
   }, [props.show?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [events, setEvents] = useState<KubeObject[] | { error: string }>();

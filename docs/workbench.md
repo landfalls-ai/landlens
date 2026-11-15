@@ -1,9 +1,9 @@
 # The workbench
 
 Wave 4 turns Landlens from a viewer into a place to work: logs that follow, a shell in any container, a terminal on
-your Mac whose kubectl goes through Landlens, a YAML editor, port-forward, CRD columns, Helm releases and, still to
-come, a full command palette. This page covers what is built (part 1: logs and terminals; part 2: the YAML editor;
-part 3: port-forward; part 4 so far: custom resources and Helm releases). The design is Fable's spec for wave 4
+your Mac whose kubectl goes through Landlens, a YAML editor, port-forward, CRD columns, Helm releases and ⌘K search.
+This page covers what is built (part 1: logs and terminals; part 2: the YAML editor; part 3: port-forward; part 4:
+custom resources, Helm releases and the search). The design is Fable's spec for wave 4
 (decisions D1–D46, cited below).
 
 ## The panel
@@ -259,6 +259,35 @@ notes, with dummy development values), installed twice in `landlens-dev` ([its R
 Code: `packages/kube/src/helm.ts` (decode, list, get, merge, hide), `apps/desktop/src/main/ipc.ts` (`helm:list`,
 `helm:get`), `apps/desktop/src/renderer/src/Helm.tsx` (the page and the drawer).
 
+## ⌘K search
+
+⌘K (or **Jump to…**) is search (D44–D45): "Search objects, kinds and actions…", in groups of six: **Actions** (the
+app's commands that match), **Objects** (by name, across kinds), **Kinds** (the sidebar's kinds and pages) and
+**Clusters** (switch to another context).
+
+- **Empty**, it shows the open object's actions ("Actions for catalog-api": Logs, Open shell, Forward a port, Edit,
+  Ask Claude, whichever fit its kind), your recent objects and kinds (per context, at most eight), and the pages.
+- **A first word** of `logs`, `shell`, `forward`, `edit` or `ask` turns the matches into that action: `shell
+  catalog` lists "Open shell in catalog-api-…" for the pods and workloads that have one. Logs fit pods and
+  workloads, a shell the same, a forward pods and Services, editing every kind but Secrets, asking every kind.
+- **Tab** on an object lists its actions (the object shows as a crumb; Backspace or Esc goes back to the search);
+  Tab on a pod's shell or logs row lists its containers. Enter on a shell row opens the pod's only running
+  container, or the first.
+- **`>`** lists the app's commands: Toggle panel, New local terminal, Create from YAML, Show port forwards, Ask
+  Claude, Toggle sidebar, Switch cluster…, Read names again, and the pages.
+- **Enter** opens an object in its list's drawer (reading it first, so a name that has gone says so), or runs the
+  action: a forward opens the drawer with the first port's Forward focused.
+
+The names come from main (D45): on the first ⌘K it lists pods, Deployments, StatefulSets, DaemonSets, Jobs,
+CronJobs, Services, Ingresses, ConfigMaps, Secrets (names only), claims, nodes and namespaces as you, metadata only,
+at most 2,000 of each, and hands every window the same read for 15 seconds (**Read names again** reads now). The list
+on screen is searched too, so a custom kind's objects can be found while its list is open. The foot says how many
+objects there are and which kinds were left out (not readable, or past 2,000).
+
+Code: `packages/kube/src/search.ts` (the names), `apps/desktop/src/main/ipc.ts` (`search:index`),
+`apps/desktop/src/renderer/src/JumpPalette.tsx` (the palette) and `paletteRules.ts` (verbs, matching, the query's
+first word).
+
 ## Tests
 
 - `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
@@ -288,6 +317,12 @@ Code: `packages/kube/src/helm.ts` (decode, list, get, merge, hide), `apps/deskto
   document dropped) and, on OrbStack, `helm.integration.test.ts` (the demo release listed and read through the front
   door, with none of its dummy secrets in values, manifest or notes). `apps/desktop/test/helm.e2e.test.ts`: the list,
   the drawer's four tabs, the values diff, no dummy secret anywhere in the page, Ask Claude and an object's link.
+- `packages/kube/test/search.test.ts` (the palette's names: only searchable kinds that can be listed, metadata only,
+  capped; names and namespaces out, never a Secret's data or annotations; unreadable and cut kinds named).
+  `apps/desktop/test/palette.test.ts` (a query's first word, ranking, the actions that fit a kind).
+  `palette.e2e.test.ts` on OrbStack: the demo chart's objects found across kinds and opened in their drawer, recent
+  items and the open object's actions, `logs` as a first word (no Secrets or ConfigMaps), Tab on a Secret (only Ask
+  Claude) and back, a pod shell from `shell`, a local terminal from `>`.
 - `apps/desktop/test/workbench.e2e.test.ts` on OrbStack with `deploy/scenarios/workbench.yaml` (`shop-web`, two
   pods, an `app` container that logs every second and a `sidecar` with no shell): follows a pod's log, searches it,
   opens a shell that runs as you and reconnects after `exit 3`, the no-shell case, a deployment's two pods merged and
@@ -310,5 +345,5 @@ LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e
 
 ## Still to come in wave 4
 
-Part 4's rest: the full ⌘K palette and Prometheus (D44–D45). See
+Part 4's rest: Prometheus, if a cluster has one. See
 [limitations.md](limitations.md) for what parts 1 to 4 leave out.

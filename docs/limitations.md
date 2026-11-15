@@ -40,6 +40,10 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   text), so a secret under an innocent name shows. Releases are read every 30 seconds, not watched. Logs, terminals,
   the YAML editor and port-forward are built ([workbench.md](workbench.md)), and graphs ([metrics.md](metrics.md)).
   Kinds without their own columns get name, namespace and age; custom kinds get their CRD's printer columns.
+- **⌘K search** ([workbench.md](workbench.md#k-search)) finds objects of the common kinds (workloads, Services,
+  Ingresses, ConfigMaps, Secrets, claims, nodes, namespaces) and of the list on screen; other kinds' objects only
+  while their list is open. It reads names, not watches: a read serves 15 seconds, at most 2,000 names a kind.
+  Matching is by name (prefix, substring, letters in order), not by labels.
 - **Custom resources** ([workbench.md](workbench.md#custom-resources)): a definition's "Open certificates" has no
   count (counting would mean listing every object of the kind). Printer columns read a JSONPath subset; a column
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
