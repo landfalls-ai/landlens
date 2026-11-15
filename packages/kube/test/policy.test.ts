@@ -183,4 +183,22 @@ describe("the approval broker's write policy", () => {
     ] as const) expect(allowed(shell, m, p), `${m} ${p}`).toBe(false);
     expect(allowed({ access: "exec" }, "GET", "/api/v1/namespaces/shop/pods/web-1/exec?command=sh")).toBe(false);
   });
+
+  it("lets a forward's token open that pod's port-forward on its one port and nothing else", () => {
+    const fwd: Policy = { access: "forward", pod: { namespace: "shop", name: "web-1" }, port: 8080 };
+    expect(allowed(fwd, "GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080")).toBe(true);
+    for (const [m, p] of [
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=22"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080,22"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080&ports=22"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/portforward"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-2/portforward?ports=8080"],
+      ["GET", "/api/v1/namespaces/other/pods/web-1/portforward?ports=8080"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/exec?command=sh"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1/proxy/?ports=8080"],
+      ["GET", "/api/v1/namespaces/shop/pods/web-1"],
+      ["GET", "/api/v1/namespaces/shop/services/web/portforward?ports=8080"],
+    ] as const) expect(allowed(fwd, m, p), `${m} ${p}`).toBe(false);
+    expect(allowed({ access: "forward", pod: { namespace: "shop", name: "web-1" } }, "GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080")).toBe(false);
+  });
 });

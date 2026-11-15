@@ -37,6 +37,8 @@ let seq = 0;
 const newId = () => `t${++seq}`;
 
 export const BENCH_MIN = 160;
+/** The pinned Forwards tab's id (D35): not a session, so not in `tabs`. */
+export const FORWARDS = "forwards";
 
 export function useBench() {
   const [tabs, setTabs] = useState<BenchTab[]>([]);
@@ -93,6 +95,7 @@ export function useBench() {
     openShell: (target: ShellTarget) => add({ kind: "shell", target }),
     openLocal: () => add({ kind: "local" }),
     openLogs: (source: LogSource) => add({ kind: "logs", source }),
+    openForwards: () => (setActive(FORWARDS), setOpen(true)),
   };
 }
 

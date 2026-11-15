@@ -1,9 +1,9 @@
 # The workbench
 
 Wave 4 turns Landlens from a viewer into a place to work: logs that follow, a shell in any container, a terminal on
-your Mac whose kubectl goes through Landlens, a YAML editor, and, in the parts still to come, port-forward, CRD
+your Mac whose kubectl goes through Landlens, a YAML editor, port-forward, and, in the part still to come, CRD
 columns, Helm releases and a full command palette. This page covers what is built (part 1: logs and terminals; part
-2: the YAML editor). The design is Fable's spec for wave 4 (decisions D1–D46, cited below).
+2: the YAML editor; part 3: port-forward). The design is Fable's spec for wave 4 (decisions D1–D46, cited below).
 
 ## The panel
 
@@ -155,6 +155,43 @@ and messages), `CreateSheet.tsx`, `editGuard.ts`, `packages/kube/src/edits.ts` (
 apply, conflict and refusal mapping, other owners from `managedFields`) and `edit-yaml.ts` (what the editor shows,
 merge patches, rebasing).
 
+## Port-forward
+
+A port on 127.0.0.1 that reaches a pod's port, or a Service's through a pod behind it (D33–D37).
+
+- **Start from a port** (D33). A pod's container cards list each port ("8080/TCP http"), and a Service's Overview has
+  a **Ports** card ("80/TCP → http · http"), each with **Forward**. It opens a popover: `127.0.0.1 :` and a local
+  port, prefilled with the same port when it is free and 1024 or above, else one in the 8000s (80 → 8080, 443 →
+  8443) or the next free one; **Pick a free port**; "Only this Mac can reach it. It runs as you, through Landlens.";
+  **Keep after restart** (on); **Start** (Enter). A taken port says "Port 8080 is in use." and offers **Use 8081**.
+  Forward is disabled, with the reason, for a UDP port, a pod that isn't running, a Service without a selector, or
+  when a SelfSubjectAccessReview says your role can't create `pods/portforward` there.
+- **A running forward shows on its port line** (D34): its address, Open in browser and Stop.
+- **The panel's pinned Forwards tab** (D35), after the session tabs, with a count of the running ones; the status
+  bar's **2 forwards** opens it. Each row: the state (Running, Starting, Reconnecting, Failed, Stopped), `127.0.0.1:8080
+  → service/shop-front:80 · shop-front-…bkz8j`, the namespace (or why it failed, or the last connection's error,
+  such as "Nothing is listening on port 9999 in the pod (connection refused)."), its age, then Open, Copy address and
+  Stop; a stopped or failed one has Start and Remove.
+- **A Service forward goes through one ready pod** (D36), the oldest, and its target port (a number, or a container
+  port's name). Landlens checks the pod every 5 seconds; when it goes or stops being ready, the forward says
+  Reconnecting and moves to another ready pod. A pod forward of a Deployment's (or any controller's) pod moves the same
+  way to a pod with the same labels; a bare pod's forward fails when the pod goes.
+- **Kept forwards come back** (D37): they are saved per context (`forwards.json` in Landlens's data, without tokens)
+  and start again when you connect to that cluster, without opening a browser. One whose port is taken by then shows
+  Failed with the reason. Stopping one keeps it stopped after a restart; Remove forgets it. Forwards stop when you
+  switch clusters or quit; the ones not kept are forgotten.
+
+**No kubectl.** The design (D36) ran `kubectl port-forward`; Landlens speaks the Kubernetes port-forward API itself,
+over a WebSocket (`v4.channel.k8s.io`) per local connection, through the front door. Each pod a forward reaches gets
+a token labelled `you · <context> · forward <namespace>/<pod>:<port>` that may open that pod's port-forward on that
+one port and nothing else (policy `forward`), revoked when the forward stops or moves to another pod, which closes its
+connections. So every connection is in the audit trail, your RBAC applies, and nothing depends on a kubectl on your
+`PATH`.
+
+Code: `Forwards.tsx` (port lines, the popover, the Forwards tab), `apps/desktop/src/main/forwards.ts`
+(`ForwardService`: choosing and following the pod, tokens, saving and restoring), `packages/kube/src/forward.ts`
+(the WebSocket bridge, listening on 127.0.0.1, choosing a Service's pod and port).
+
 ## Tests
 
 - `packages/kube`: `edits.test.ts` (merge patches, rebasing, refusals mapped to lines, owners, create checks),
@@ -165,7 +202,14 @@ merge patches, rebasing).
   token is labelled as you, full access to that one cluster, and revoked when it ends; another window can't type,
   resize or close it; 20 a window; a local terminal's environment), `log-rows.test.ts` (time order, merging pods,
   ANSI, search), `edits.test.ts` (reviews and applies as you with a token per call; only the reviewing window, on
-  the same cluster, once).
+  the same cluster, once), `forwards.test.ts` (a Service's oldest ready pod with a token for its one port; moving to
+  another pod when it goes, revoking the old token; Reconnecting with no pod; a bare pod's forward failing; a taken
+  port with a free one offered; kept forwards saved without tokens, mode 0600, restored on reconnect but not the
+  stopped ones; forwards end with their cluster).
+- `packages/kube`: `forward.test.ts` (the bridge against a stand-in kubelet: the port prefix skipped, the token sent,
+  a refused connection in words, a refused upgrade's status; 127.0.0.1 only; suggested ports; a Service's target and
+  pod) and, on OrbStack, `forward.integration.test.ts` (three requests at once through the front door with the
+  forward token and in the audit; nothing listening; another port refused with 403; a revoked token with 401).
 - `apps/desktop/test/workbench.e2e.test.ts` on OrbStack with `deploy/scenarios/workbench.yaml` (`shop-web`, two
   pods, an `app` container that logs every second and a `sidecar` with no shell): follows a pod's log, searches it,
   opens a shell that runs as you and reconnects after `exit 3`, the no-shell case, a deployment's two pods merged and
@@ -173,7 +217,10 @@ merge patches, rebasing).
   panel, and 1024×700. `edit.e2e.test.ts`: edits `shop-web`'s replicas through review and apply (a dry run
   changes nothing; only `spec.replicas` is Landlens's afterwards), a refused edit marks line 12, Esc asks before
   discarding, and creates a ConfigMap from the template, then again ("already exists"). It puts `shop-web` back to
-  two replicas and deletes the ConfigMap.
+  two replicas and deletes the ConfigMap. `forward.e2e.test.ts` (`shop-front`, a web server behind a Service):
+  forwards the Service from its Ports card and fetches through it, forwards the pod's container port after a taken
+  port is offered another, lists both in the Forwards tab, deletes the pod and sees the Service forward move to the
+  new one and still serve, stops and removes the pod forward, and gets the kept forward back after a restart.
 
 ```bash
 kubectl --context orbstack apply -f deploy/scenarios/workbench.yaml
@@ -183,5 +230,5 @@ LANDLENS_INTEGRATION=orbstack pnpm --filter @landlens/desktop test:e2e
 
 ## Still to come in wave 4
 
-Part 3, port-forward (D33–D37); part 4, CRD printer columns, Helm releases (read), the full ⌘K palette and
-Prometheus (D38–D45). See [limitations.md](limitations.md) for what parts 1 and 2 leave out.
+Part 4, CRD printer columns, Helm releases (read), the full ⌘K palette and Prometheus (D38–D45). See
+[limitations.md](limitations.md) for what parts 1 to 3 leave out.

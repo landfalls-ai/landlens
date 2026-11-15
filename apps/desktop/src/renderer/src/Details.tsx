@@ -15,6 +15,7 @@ import { logSourceOf, LogsView } from "./LogsView";
 import { direct, shellable, ShellMenu, targetOf, useCanExec } from "./ShellMenu";
 import { leaveEdit } from "./editGuard";
 import { YamlEdit } from "./YamlEdit";
+import { PortLine, useCanForward } from "./Forwards";
 import type { ClusterInfo } from "@landlens/contracts";
 
 type Tab = "overview" | "events" | "yaml" | "metrics" | "logs";
@@ -163,7 +164,7 @@ export function Details(props: {
         {tab === "logs" && logs ? (
           <LogsView key={`${o.metadata.uid}`} handle={props.handle} source={{ ...logs, ...(logContainer ? { container: logContainer } : {}) }} place="drawer" onAsk={props.onAsk} onOpenInPanel={props.onLogsInPanel} />
         ) : null}
-        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate}
+        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
           onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec} />}
         {tab === "events" && <Events events={events} now={now} />}
         {tab === "yaml" ? (
@@ -197,11 +198,13 @@ function readyOf(o: KubeObject): string | undefined {
   return undefined;
 }
 
-function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec }: {
+function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster }: {
   o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void;
-  onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined;
+  onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined; cluster: ClusterInfo;
 }) {
   const pod = type.resource === "pods" && type.group === "";
+  const service = type.resource === "services" && type.group === "";
+  const canForward = useCanForward(cluster.handle, pod || service ? o.metadata.namespace : undefined);
   const created = Date.parse(o.metadata.creationTimestamp ?? "");
   // In the order they happened; ties (most of them share the pod's first seconds) in lifecycle order.
   const conditions: any[] = [...(o.status?.conditions ?? [])].sort(
@@ -235,7 +238,8 @@ function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec }: {
         <dt>Created</dt>
         <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
-      {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} /> : null}
+      {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} cluster={cluster} canForward={canForward} /> : null}
+      {service ? <ServicePorts svc={o} cluster={cluster} canForward={canForward} /> : null}
       {conditions.length ? (
         <section>
           <h3>Conditions</h3>
@@ -326,7 +330,8 @@ function Diagnosis({ pod, now }: { pod: KubeObject; now: number }) {
   );
 }
 
-function Containers({ pod, now, onLogs, onShell, canExec }: { pod: KubeObject; now: number; onLogs: (c: string) => void; onShell: (c: string) => void; canExec: boolean | undefined }) {
+function Containers({ pod, now, onLogs, onShell, canExec, cluster, canForward }: { pod: KubeObject; now: number; onLogs: (c: string) => void; onShell: (c: string) => void; canExec: boolean | undefined; cluster: ClusterInfo; canForward: boolean | undefined }) {
+  const running = pod.status?.phase === "Running" && !pod.metadata.deletionTimestamp;
   const statuses = new Map<string, any>((pod.status?.containerStatuses ?? []).map((c: any) => [c.name, c]));
   const specs: any[] = pod.spec?.containers ?? [];
   if (!specs.length) return null;
@@ -352,6 +357,15 @@ function Containers({ pod, now, onLogs, onShell, canExec }: { pod: KubeObject; n
                 </span>
               </div>
               <div className="mono c-image">{c.image}</div>
+              {(c.ports ?? []).length ? (
+                <div className="ports">
+                  {(c.ports as { containerPort: number; name?: string; protocol?: string }[]).map((p) => (
+                    <PortLine key={`${p.containerPort}/${p.protocol ?? "TCP"}`} handle={cluster.handle} context={cluster.context}
+                      target={{ namespace: pod.metadata.namespace!, kind: "pod", name: pod.metadata.name, port: p.containerPort }}
+                      {...(p.name ? { label: p.name } : {})} {...(p.protocol ? { protocol: p.protocol } : {})} can={canForward} ready={running} notReady="The pod isn't running" />
+                  ))}
+                </div>
+              ) : null}
               {s?.restartCount || last ? (
                 <div className="c-foot">
                   <span>{s?.restartCount ?? 0} restarts</span>
@@ -363,6 +377,26 @@ function Containers({ pod, now, onLogs, onShell, canExec }: { pod: KubeObject; n
           );
         })}
       </ul>
+    </section>
+  );
+}
+
+/** A Service's ports (D33): each forwards through one ready pod behind it. */
+function ServicePorts({ svc, cluster, canForward }: { svc: KubeObject; cluster: ClusterInfo; canForward: boolean | undefined }) {
+  const ports = (svc.spec?.ports ?? []) as { port: number; targetPort?: number | string; name?: string; protocol?: string }[];
+  if (!ports.length) return null;
+  const selector = svc.spec?.selector && Object.keys(svc.spec.selector).length > 0;
+  return (
+    <section>
+      <h3>Ports</h3>
+      <div className="ports flat">
+        {ports.map((p) => (
+          <PortLine key={`${p.port}/${p.protocol ?? "TCP"}`} handle={cluster.handle} context={cluster.context}
+            target={{ namespace: svc.metadata.namespace!, kind: "service", name: svc.metadata.name, port: p.port }}
+            label={`→ ${p.targetPort ?? p.port}${p.name ? ` · ${p.name}` : ""}`} {...(p.protocol ? { protocol: p.protocol } : {})}
+            can={canForward} ready={!!selector} notReady="This Service has no selector, so there is no pod to forward to" />
+        ))}
+      </div>
     </section>
   );
 }

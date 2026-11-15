@@ -153,6 +153,20 @@ Edits from the YAML editor and Create from YAML are yours, sent as you ([workben
 | Edit channels are typed and bounded: review ids match `ed` and 8–32 base64url characters; the YAML is at most 512 KB | contracts (zod) |
 | A review is kept 15 minutes, then swept; a window keeps at most 20; a window's reviews are forgotten when it closes, a cluster's when it stops, and an editor's when it closes or its tab changes. An apply for a cluster that's gone is refused and the review kept | kube unit test (expiry); desktop unit tests (window closes, 20 a window, cluster gone) |
 
+## Your forwards
+
+Port-forwards are yours, like shells ([workbench.md](workbench.md#port-forward)).
+
+| Rule | How it's checked |
+|---|---|
+| A forward listens on 127.0.0.1 only, never on another address, on a port from 1024 to 65535 | kube unit test (the address); contracts (zod) |
+| Each connection goes through the front door, never straight to the sidecar, with a token issued for the pod it reaches, labelled `you · <context> · forward <namespace>/<pod>:<port>`. The token may open that pod's port-forward with exactly one `ports` value, that port, and nothing else (policy `forward`): not another port (`8080,22` is two), another pod or namespace, exec, proxy or a read | kube unit test (policy); desktop unit test (label, policy); kube live test (served through the front door and in the audit; another port 403; a revoked token 401) |
+| The token is revoked when the forward stops, is removed, moves to another pod, or its cluster goes, and when Landlens quits; revoking closes its open connections | desktop unit tests (moving, stopping, cluster gone) |
+| Kept forwards are saved without tokens or pods (context, namespace, kind, name, ports, labels), mode 0600, and read back through a schema; restoring one opens nothing | desktop unit test |
+| Open in browser opens only `http(s)://127.0.0.1:<the forward's port>/`, built in main from the forward; the window names a forward's id, never a URL | desktop unit test |
+| The agent can't start, see or stop a forward (no IPC or MCP channel), and its sandboxed shell can't reach one: the sandbox allows only the front door's port | live fence test (`acp-host`, `orbstack,claude`: curl, curl without the proxy, and a raw socket to a local server all fail) |
+| Any other program of yours on this Mac can reach a forward, as with `kubectl port-forward` | not a rule: see [limitations.md](limitations.md) |
+
 ## MCP: the gateway and app views
 
 Every MCP call of an agent session goes through Landlens's gateway in main ([mcp.md](mcp.md)), and some tools come

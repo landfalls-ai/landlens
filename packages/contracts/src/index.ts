@@ -220,6 +220,38 @@ export type EditOwner = { path: string; manager: string; line?: number };
 /** `agent`: the diff (or created objects) scrubbed as the agent's own reads are: what "Ask Claude to check it" sends. */
 export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean; agent?: string };
 
+/** Port-forward (wave 4, part 3). A local port is 1024 or above; a remote one any TCP port. */
+export const LocalPort = z.number().int().min(1024).max(65535);
+export const RemotePort = z.number().int().min(1).max(65535);
+export const ForwardId = z.string().regex(/^fw[A-Za-z0-9_-]{8,32}$/, "not a forward id");
+export type ForwardState = "starting" | "running" | "reconnecting" | "failed" | "stopped";
+/**
+ * A forward: 127.0.0.1:localPort → a pod's port, or a Service's port through one ready pod. `pod` and `podPort` are
+ * where it goes now. `keep`: saved, and started again when Landlens reconnects to the cluster.
+ */
+export type ForwardInfo = {
+  id: string;
+  context: string;
+  namespace: string;
+  kind: "pod" | "service";
+  name: string;
+  port: number;
+  localPort: number;
+  keep: boolean;
+  state: ForwardState;
+  pod?: string;
+  podPort?: number;
+  /** Why it failed, or what it is waiting for. */
+  message?: string;
+  /** The last connection's error ("Nothing is listening on port 8080 in the pod"). */
+  lastError?: string;
+  /** When it entered its state (ms). */
+  since: number;
+  connections: number;
+  scheme: "http" | "https";
+};
+export type ForwardsPush = { forwards: ForwardInfo[] };
+
 /** How a session ended: the shell exited, the connection dropped, or the cluster refused it (status says why). */
 export type TerminalEnd = "exit" | "lost" | "refused";
 export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
@@ -280,6 +312,17 @@ export const channels = {
   "edit:create": z.object({ handle: Handle, namespace: NamespaceName.optional(), yaml: z.string().max(512 * 1024) }),
   "edit:apply": z.object({ handle: Handle, id: EditId }),
   "edit:discard": z.object({ id: EditId }),
+  "forward:list": z.object({}),
+  /** The local port to offer for a remote one (free now). */
+  "forward:suggest": z.object({ port: RemotePort }),
+  "forward:check": z.object({ port: LocalPort }),
+  "forward:start": z.object({ handle: Handle, namespace: NamespaceName, kind: z.enum(["pod", "service"]), name: ObjectName, port: RemotePort, localPort: LocalPort, keep: z.boolean() }),
+  "forward:stop": z.object({ id: ForwardId }),
+  /** Start a stopped or failed forward again, on this cluster. */
+  "forward:resume": z.object({ id: ForwardId, handle: Handle }),
+  "forward:remove": z.object({ id: ForwardId }),
+  /** Open http(s)://127.0.0.1:<its port>/ in your browser. */
+  "forward:open": z.object({ id: ForwardId }),
   "metrics:series": MetricsRequest,
   "metrics:settings": z.object({ context: z.string().min(1).max(253).optional() }),
   "metrics:configure": ClicklandSettingsInput,
@@ -340,6 +383,14 @@ export type Responses = {
   "edit:create": EditReview;
   "edit:apply": { results: string[] };
   "edit:discard": { ok: true };
+  "forward:list": ForwardsPush;
+  "forward:suggest": { port: number };
+  "forward:check": { free: boolean; next?: number };
+  "forward:start": ForwardInfo;
+  "forward:stop": { ok: true };
+  "forward:resume": ForwardInfo;
+  "forward:remove": { ok: true };
+  "forward:open": { ok: true };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
   "metrics:configure": ClicklandSettings;
@@ -644,7 +695,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 /** Main → renderer push channels. */
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

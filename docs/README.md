@@ -5,7 +5,7 @@
 | [agent.md](agent.md) | Claude Code in the dock: what you see, the cluster tools, the fence and how it was checked |
 | [architecture.md](architecture.md) | The processes, a request end to end, the front door, the code map |
 | [mcp.md](mcp.md) | The MCP gateway every agent session's MCP calls go through, the MCP page (servers, call log), MCP App views in the dock, pairing cards with calls, adding a server |
-| [workbench.md](workbench.md) | The panel, followed logs, pod shells that run as you, the local terminal (wave 4) |
+| [workbench.md](workbench.md) | The panel, followed logs, pod shells that run as you, the local terminal, the YAML editor, port-forward (wave 4) |
 | [metrics.md](metrics.md) | Graphs: Clickland, then metrics-server, else a reason; setup and the key; what each chart shows |
 | [design.md](design.md) | Iris, the look: direction, tokens, layout and width rules, screens, components, what the tests rely on |
 | [security.md](security.md) | Every security rule and how it is checked |

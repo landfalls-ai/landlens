@@ -8,6 +8,7 @@ import { AgentHistory, AgentSettings } from "./agent-history";
 import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
 import { registerIpc } from "./ipc";
+import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
 import { McpServerStore } from "./mcp-store";
@@ -98,9 +99,18 @@ async function start() {
   });
   const workbench = new WorkbenchService({ clusters, frontDoor, dataDir: app.getPath("userData") });
   liveSessions = () => workbench.terminalCount();
-  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp, workbench);
+  const forwards = new ForwardService({
+    clusters, frontDoor,
+    file: join(app.getPath("userData"), "forwards.json"),
+    push: (list) => send("forward:update", { forwards: list }),
+    // Only http(s)://127.0.0.1:<port>/, built by the service from the forward itself.
+    openExternal: (url) => shell.openExternal(url),
+    log: (l) => console.log(l),
+  });
+  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp, workbench, forwards);
   const service = mcp;
   shutdown = async () => {
+    forwards.stopAll();
     metrics.stopAll();
     await agent.stop();
     await service.stop();

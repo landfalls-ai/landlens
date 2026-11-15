@@ -2,10 +2,11 @@
 // logs. Hiding it never ends a session; closing a tab does. Every tab stays mounted while it lives, so a hidden
 // shell keeps running and keeps its screen.
 import type { ClusterInfo } from "@landlens/contracts";
-import { ChevronDown, CircleDashed, Maximize2, Minimize2, Plus, ScrollText, SquareTerminal, X } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, CircleDashed, Maximize2, Minimize2, Plus, ScrollText, SquareTerminal, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AskContext } from "./AgentDock";
-import { BENCH_MIN, elide, type BenchState, type BenchTab } from "./benchState";
+import { BENCH_MIN, elide, FORWARDS, type BenchState, type BenchTab } from "./benchState";
+import { ForwardsList, useForwards } from "./Forwards";
 import { Ic, MOD } from "./icons";
 import { LogsView } from "./LogsView";
 import { TerminalView } from "./TerminalView";
@@ -15,6 +16,9 @@ export function Bench(props: { bench: BenchState; cluster: ClusterInfo; onAsk: (
   const [menu, setMenu] = useState(false);
   const [drag, setDrag] = useState(false);
   const self = useRef<HTMLElement>(null);
+  const forwards = useForwards(props.cluster.context);
+  const running = forwards.filter((f) => f.state === "running" || f.state === "starting" || f.state === "reconnecting").length;
+  const pinned = forwards.length > 0 || b.active === FORWARDS;
 
   // The tallest it may be: the toolbar and four rows stay.
   const maxH = Math.max(BENCH_MIN, props.appHeight - 48 - 4 * 32 - 26);
@@ -59,6 +63,17 @@ export function Bench(props: { bench: BenchState; cluster: ClusterInfo; onAsk: (
           {b.tabs.map((t) => (
             <TabButton key={t.id} tab={t} on={t.id === b.active} live={t.kind === "logs" || !!b.live[t.id]} onPick={() => b.setActive(t.id)} onClose={() => b.close(t.id)} />
           ))}
+          {pinned ? (
+            <>
+              {b.tabs.length ? <span className="bench-sep" aria-hidden="true" /> : null}
+              <div className={"bench-tab pinned" + (b.active === FORWARDS ? " on" : "")} title="Port forwards">
+                <button role="tab" id={`tab-${FORWARDS}`} aria-selected={b.active === FORWARDS} aria-controls={`pane-${FORWARDS}`} className="bt-name" onClick={() => b.setActive(FORWARDS)}>
+                  <Ic icon={ArrowLeftRight} size={13} /> <b>Forwards</b>
+                </button>
+                {running ? <span className="count" aria-label={`${running} running`}>{running}</span> : null}
+              </div>
+            </>
+          ) : null}
         </div>
         <div className="bench-acts">
           <button className="icon-btn" aria-label="New" aria-haspopup="menu" aria-expanded={menu} title="New terminal" onClick={() => setMenu((m) => !m)}><Ic icon={Plus} size={14} /></button>
@@ -77,11 +92,16 @@ export function Bench(props: { bench: BenchState; cluster: ClusterInfo; onAsk: (
         </div>
       </div>
       <div className="bench-body">
-        {!b.tabs.length ? (
+        {!b.tabs.length && b.active !== FORWARDS ? (
           <div className="empty">
             <strong>Nothing open</strong>
             <span>Open a shell or logs from a pod, or a terminal on this Mac.</span>
             <button className="secondary" onClick={b.openLocal}><Ic icon={SquareTerminal} size={13} />New local terminal</button>
+          </div>
+        ) : null}
+        {b.active === FORWARDS ? (
+          <div className="bench-pane" role="tabpanel" id={`pane-${FORWARDS}`} aria-labelledby={`tab-${FORWARDS}`}>
+            <ForwardsList handle={props.cluster.handle} context={props.cluster.context} />
           </div>
         ) : null}
         {b.tabs.map((t) => (

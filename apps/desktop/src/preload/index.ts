@@ -12,10 +12,11 @@ const CHANNELS: readonly Channel[] = [
   "mcp:app-open", "mcp:app-call", "mcp:app-close", "mcp:app-link",
   "logs:open", "logs:close", "terminal:open", "terminal:local", "terminal:input", "terminal:resize", "terminal:ack", "terminal:close",
   "edit:review", "edit:create", "edit:apply", "edit:discard",
+  "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
-  "logs:lines", "logs:end", "terminal:data", "terminal:status",
+  "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update",
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */

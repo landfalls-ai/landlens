@@ -34,7 +34,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
 - **macOS only for the fence**: it relies on Claude Code's Seatbelt sandbox. On Linux it would need bubblewrap; the
   session fails rather than run unsandboxed (`failIfUnavailable`).
 - **No `explain` tool yet** (OpenAPI schemas); the agent can run `kubectl explain` instead.
-- **No port-forward or Helm yet** (wave 4, parts 3–4). Logs, terminals and the YAML editor are built
+- **No Helm yet** (wave 4, part 4). Logs, terminals, the YAML editor and port-forward are built
   ([workbench.md](workbench.md)), and graphs ([metrics.md](metrics.md)).
   Kinds without their own columns get name, namespace and age; CRDs don't use printer columns yet (wave 4).
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
@@ -46,8 +46,8 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 7).
-- **Port-forward and attach** pass through the front door and the sidecar but have no UI or live test yet (wave 4,
-  part 3). Exec has both ([workbench.md](workbench.md)).
+- **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
+  both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
   front-door requests ([mcp.md](mcp.md)), but the agent's own kubectl requests and the IDE's are still kept in
   memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls).
@@ -94,6 +94,12 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   An edit is one object; a leading-zero number like `0600` is refused rather than guessed (YAML 1.1 and 1.2 differ),
   so such values need `0o600` or quotes. A review lasts 15 minutes and a window keeps at most 20. The Apply guard
   (no card-wide Enter, key presses ignored for half a second) is renderer behaviour, checked in e2e only by a click.
+- **Port-forward** ([workbench.md](workbench.md#port-forward)) is TCP only. A Service forward goes through one pod,
+  not spread across them as the Service would. The pod is checked every 5 seconds, so a connection in the seconds
+  after its pod goes can fail. A WebSocket can't half-close, so a client that half-closes waits for the pod's answer
+  for up to 30 seconds. Any program on this Mac can reach a forward (as with `kubectl port-forward`), though the
+  agent's sandbox can't. A bare pod's forward fails when the pod goes. Kept forwards are matched to a cluster by its
+  context's name. The row menu's F (D6) and the palette's forward action aren't built.
 - **Graphs are CPU and memory only**, for the cluster, nodes, pods and Deployments, StatefulSets and DaemonSets: no
   network, disk, GPU, or Prometheus. Namespaces are a Top namespaces list, not a chart of their own.
 - **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is

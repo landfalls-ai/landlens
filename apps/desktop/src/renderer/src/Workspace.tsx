@@ -20,6 +20,7 @@ import { Sidebar, type Current } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { Bench } from "./Bench";
 import { useBench } from "./benchState";
+import { useForwards } from "./Forwards";
 import { logSourceOf } from "./LogsView";
 import { direct } from "./ShellMenu";
 import { copyText } from "./present";
@@ -56,6 +57,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [claude, setClaude] = useState<string>();
   const [width, setWidth] = useState({ app: window.innerWidth, main: window.innerWidth - 232, height: window.innerHeight });
   const bench = useBench();
+  const forwardsRunning = useForwards(cluster.context).filter((f) => f.state === "running" || f.state === "reconnecting" || f.state === "starting").length;
   const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number }>();
   const [show, setShow] = useState<{ tab: "logs" | "shell" | "edit"; container?: string; n: number }>();
   const [leaving, setLeaving] = useState<string>();
@@ -330,6 +332,8 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           sessions={bench.sessions}
           panelOpen={bench.open}
           onSessions={() => (bench.setOpen(true), focusBench())}
+          forwards={forwardsRunning}
+          onForwards={() => bench.openForwards()}
         />
       {selected && list ? (
         <Details

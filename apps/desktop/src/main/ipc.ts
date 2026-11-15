@@ -7,12 +7,13 @@ import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { ClicklandSettingsStore } from "./clickland-settings";
 import type { McpService } from "./mcp";
+import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService, workbench: WorkbenchService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService) {
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
 
@@ -27,7 +28,10 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "cluster:connect": async ({ context }) => {
       // Only contexts from the user's kubeconfig; the name goes to the sidecar as an argument.
       if (!listContexts().some((c) => c.name === context)) throw ipcError(404, `no context named ${context} in your kubeconfig`);
-      return clusters.connect(context);
+      const info = await clusters.connect(context);
+      // Kept forwards for this context start again (D37), without opening anything.
+      forwards.restore(info);
+      return info;
     },
     "cluster:disconnect": async ({ handle }) => {
       metrics.service.forget(handle);
@@ -133,6 +137,15 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "edit:create": (r, event) => workbench.reviewCreate(r, event.sender),
     "edit:apply": (r, event) => workbench.applyEdit(r, event.sender),
     "edit:discard": async ({ id }, event) => (workbench.discardEdit(id, event.sender), { ok: true }),
+    // Port-forwards belong to the app, not a window (docs/workbench.md#port-forward).
+    "forward:list": async () => ({ forwards: forwards.list() }),
+    "forward:suggest": ({ port }) => forwards.suggest(port),
+    "forward:check": ({ port }) => forwards.check(port),
+    "forward:start": (r) => forwards.start(r),
+    "forward:stop": async ({ id }) => (forwards.stop(id), { ok: true }),
+    "forward:resume": ({ id, handle }) => forwards.resume(id, handle),
+    "forward:remove": async ({ id }) => (forwards.remove(id), { ok: true }),
+    "forward:open": async ({ id }) => (forwards.open(id), { ok: true }),
   };
 
   for (const name of Object.keys(channels) as Channel[]) {

@@ -37,13 +37,15 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 - TLS with a certificate made fresh each run by the sidecar binary (`--loopback-cert`) and kept in memory. kubectl
   and client-go only send credentials over TLS.
 - Every request needs a bearer token Landlens issued. A token names the clusters it may reach and carries a policy
-  (`packages/kube/src/policy.ts`): `full` (whatever your RBAC allows) or `read` (get, list and watch only; no Secrets;
-  no exec, attach, port-forward or proxy; optionally a few namespaces). Paths that could be read two ways (`//`,
+  (`packages/kube/src/policy.ts`): `full` (whatever your RBAC allows), `read` (get, list and watch only; no Secrets;
+  no exec, attach, port-forward or proxy; optionally a few namespaces), `write` (only the approval broker's requests),
+  `exec` (one pod's shell) or `forward` (one pod's port-forward on one port). Paths that could be read two ways (`//`,
   dot segments, percent-encoding) are refused.
 - Allowed requests go to the cluster's sidecar; the caller's token never reaches the cluster. Every decision is
   audited (label, method, path, allowed, status, reason).
 - Tools get a kubeconfig (`toolKubeconfig`) whose clusters point at the front door with the certificate pinned, and
-  whose user is an exec credential plugin that reads the token from `LANDLENS_TOKEN`. No file holds a token. Without
+  whose user is an exec credential plugin that reads the token from `LANDLENS_TOKEN`, or, for a local terminal,
+  from a 0400 file in that terminal's own folder. Without
   the variable, kubectl fails to authenticate.
 
 ## Code map

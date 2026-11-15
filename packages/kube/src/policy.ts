@@ -16,6 +16,8 @@ export type ParsedRequest =
       name?: string;
       subresource?: string;
       verb: Verb;
+      /** For `portforward`: the `ports` query values, as sent. */
+      ports?: string[];
     };
 
 export type Policy = {
@@ -23,9 +25,14 @@ export type Policy = {
    * "full": anything the user's RBAC allows. "read": get/list/watch only. "write": exactly what the approval broker
    * sends (one object's get, patch and delete, creates, ReplicaSet lists): no subresources, no non-resource writes.
    */
-  access: "full" | "read" | "write" | "exec";
-  /** For "exec": the one pod whose exec this token may open (a pod shell's token; nothing else, not even a read). */
+  access: "full" | "read" | "write" | "exec" | "forward";
+  /**
+   * For "exec": the one pod whose exec this token may open (a pod shell's token; nothing else, not even a read). For
+   * "forward": the one pod whose port-forward it may open, on `port` only.
+   */
   pod?: { namespace: string; name: string };
+  /** For "forward": the one port. */
+  port?: number;
   /** Resources this token may never touch, as `resource` or `resource.group` (e.g. "secrets"). */
   deniedResources?: string[];
   /** If set, namespaced requests must be in one of these namespaces, and all-namespace reads are refused. */
@@ -106,7 +113,8 @@ export function parseRequest(method: string, rawPath: string): ParsedRequest {
   if (parts.length > i + 3) subresource = parts.slice(i + 2).join("/"); // e.g. proxy/some/path
 
   const verb = resourceVerb(m, name, subresource, watchParam || watchPrefix);
-  return { kind: "resource", group, version, namespace, resource, name, subresource, verb };
+  const ports = subresource === "portforward" ? url.searchParams.getAll("ports") : undefined;
+  return { kind: "resource", group, version, namespace, resource, name, subresource, verb, ...(ports ? { ports } : {}) };
 }
 
 function nonResourceVerb(m: string): Verb {
@@ -168,6 +176,13 @@ export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf =
     const p = policy.pod;
     const ok = !!p && k === "pods" && req.subresource === "exec" && req.namespace === p.namespace && req.name === p.name;
     return ok ? { allow: true } : { allow: false, reason: "this token may only open a shell in its own pod" };
+  }
+  if (policy.access === "forward") {
+    // One value naming one port: the kubelet splits each value on commas, so "8080,22" would be two.
+    const p = policy.pod;
+    const ok = !!p && policy.port !== undefined && k === "pods" && req.subresource === "portforward" && req.namespace === p.namespace && req.name === p.name
+      && req.ports?.length === 1 && req.ports[0] === String(policy.port);
+    return ok ? { allow: true } : { allow: false, reason: "this token may only forward its own pod's port" };
   }
 
   if (policy.deniedResources?.some((d) => d === k || d === req.resource && !req.group)) {
