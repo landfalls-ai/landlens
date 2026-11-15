@@ -37,6 +37,68 @@ export function logPath(r: LogRequest): string {
   return `/api/v1/namespaces/${encodeURIComponent(r.namespace)}/pods/${encodeURIComponent(r.pod)}/log?${q}`;
 }
 
+/**
+ * The last lines of a container's log, not followed, read with a time limit (the doctor's evidence, wave 5 D60). Up
+ * to `readBytes` (1 MB) is read and only the last `maxBytes` kept, cut at a line start, so a long stack trace keeps its
+ * end, which is the crash itself (part 2 review, finding 5). Lines keep their text only.
+ */
+export async function readLogTail(
+  client: Pick<KubeClient, "request">, r: LogRequest, opts: { maxBytes: number; timeoutMs: number; readBytes?: number; signal?: AbortSignal },
+): Promise<{ lines: string[]; cut: boolean }> {
+  const readBytes = Math.max(opts.readBytes ?? 1048576, opts.maxBytes);
+  const timeout = AbortSignal.timeout(opts.timeoutMs);
+  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
+  const res = await client.request(logPath({ ...r, follow: false }), { signal, headers: { Accept: "*/*" } });
+  const chunks: Uint8Array[] = [];
+  let kept = 0;
+  let read = 0;
+  let dropped = false; // bytes dropped from the start
+  let stopped = false; // the answer was longer than readBytes
+  const reader = res.body?.getReader();
+  while (reader) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const take = Math.min(value.byteLength, readBytes - read);
+    chunks.push(take < value.byteLength ? value.subarray(0, take) : value);
+    kept += take;
+    read += take;
+    // Keep only what can still be in the last maxBytes.
+    while (chunks.length > 1 && kept - chunks[0]!.byteLength >= opts.maxBytes) {
+      kept -= chunks.shift()!.byteLength;
+      dropped = true;
+    }
+    if (read >= readBytes) {
+      stopped = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+  }
+  let buf = Buffer.concat(chunks);
+  if (!res.ok) throw toKubeError(res.status, buf.subarray(0, 4096).toString("utf8"));
+  if (buf.byteLength > opts.maxBytes) {
+    buf = buf.subarray(buf.byteLength - opts.maxBytes);
+    dropped = true;
+  }
+  let text = buf.toString("utf8");
+  if (dropped) {
+    // Start at a whole line; a single line longer than the window is kept from where the window starts.
+    const nl = text.indexOf("\n");
+    if (nl >= 0 && nl < text.length - 1) text = text.slice(nl + 1);
+  }
+  const raw = text.split("\n");
+  if (stopped && raw.length > 1) raw.pop(); // its last line was cut
+  return { lines: raw.filter((l) => l.length).map((l) => splitLine(l).text), cut: dropped || stopped };
+}
+
+/**
+ * The kubelet answers a log whose file is gone (a container already removed) with 200 and one sentence of its own,
+ * "unable to retrieve container logs for docker://…", not an error: that isn't the container's output.
+ */
+// A container whose only output is this sentence is read as gone too: it can only hide its own log (review, L7).
+export function logsGone(lines: string[]): boolean {
+  return lines.length === 1 && /^unable to retrieve container logs for [a-z]+:\/\/[0-9a-f]+$/.test(lines[0]!);
+}
+
 /** "2026-11-15T10:00:00.123456789Z message" → its parts; a line without a timestamp keeps its text. */
 export function splitLine(raw: string): LogLine {
   const sp = raw.indexOf(" ");

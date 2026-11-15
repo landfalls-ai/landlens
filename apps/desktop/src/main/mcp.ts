@@ -31,6 +31,8 @@ export class McpService {
     frontDoor: FrontDoor;
     clusters: ClusterManager;
     metrics: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>) => Promise<MetricsSeries>;
+    /** The person's certificate facts for cluster_overview's Preview (DoctorService.certsFor). */
+    certs?: (handle: string, namespaces?: string[]) => Awaited<ReturnType<NonNullable<AgentCluster["certs"]>>>;
     push: (call: McpCall) => void;
     ask: Ask;
     log?: (l: string) => void;
@@ -190,6 +192,7 @@ export class McpService {
         const cluster = frontDoorCluster({
           url: this.deps.frontDoor.clusterUrl(handle), certificate: this.deps.frontDoor.certificate, token, context: info.context,
           types: async () => types, metrics: (r, read) => this.deps.metrics(handle, r, read),
+          ...(this.deps.certs ? { certs: async (ns: string[] | undefined) => this.deps.certs!(handle, ns) } : {}),
         });
         const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: this.deps.store.remotesFor(info.context) });
         return { session, revoke: () => this.deps.frontDoor.revokeToken(token) };

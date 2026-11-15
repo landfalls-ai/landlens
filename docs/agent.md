@@ -26,6 +26,10 @@ you choose which of your Claude Code skills a session gets.
 `k8s://<context>/<namespace>/<Kind>/<name>`, so the agent starts from what you are looking at. They are read with the
 session's own token, so they are scrubbed and limited exactly as the agent's own reads are. Not offered on Secrets.
 
+"Ask Claude" on a problem from the doctor ([doctor.md](doctor.md#ask-claude-on-a-problem)) attaches the problem's
+brief (its facts, events and, if read, the crash's last log lines; not Landlens's hint), quoted as data, and asks for
+the cause, the evidence and one proposed change. Any change it proposes is a change card you approve or reject.
+
 Links in an answer show their host beside the text, so a link can't hide where it goes.
 
 The cluster view stays on screen while the dock is open: the clusters rail folds to its dots and the details drawer
@@ -62,7 +66,7 @@ the dock shows inline under the tool's card; the model still gets the same text.
 
 | Tool | What it returns |
 |---|---|
-| `cluster_overview` | Problems first: crash-looping, image-pull, OOM-killed, pending and unready pods; deployments short of replicas; unready nodes; recent warning events |
+| `cluster_overview` | The doctor's problems ([doctor.md](doctor.md)), worst first, grouped by owner, each with its id; what it couldn't check; counts; the last hour's warning events |
 | `describe` | One object with its state, owner chain up to the Deployment, each container's state, last exit, env names, probes and resources, and its events |
 | `get_logs` | A container's log tail; `previous: true` for the run before the last restart |
 | `get_events` | Recent events, newest first, for a namespace or one object, optionally warnings only |

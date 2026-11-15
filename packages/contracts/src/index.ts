@@ -20,6 +20,8 @@ export const ObjectName = z
   .regex(/^(?!\.{1,2}$)[\x21-\x7e]+$/, "not an object name")
   .regex(/^[^/%?#\\"<>`{}|^[\]]+$/, "not an object name");
 export const Handle = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/, "not a cluster handle");
+/** A problem's id as the doctor makes it: one line, at most 600 characters. */
+export const ProblemId = z.string().min(1).max(600).regex(/^[^\u0000-\u001f\u007f]+$/, "not a problem id");
 export const Uid = z.string().regex(/^[A-Za-z0-9-]{1,64}$/, "not a uid");
 
 export const KubeContext = z.object({
@@ -299,6 +301,9 @@ export const channels = {
   "cluster:discovery": z.object({ handle: Handle }),
   "cluster:access": z.object({ handle: Handle, checks: z.array(AccessCheck).max(200) }),
   "cluster:health": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
+  // The cluster doctor (wave 5): its report for a scope, and evidence for one problem in it.
+  "doctor:list": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
+  "doctor:evidence": z.object({ handle: Handle, namespace: NamespaceName.optional(), id: ProblemId }),
   "resource:get": z.object({ handle: Handle, ref: ResourceRef }),
   "resource:events": z.object({ handle: Handle, namespace: NamespaceName.optional(), uid: Uid }),
   "watch:subscribe": WatchRequest,
@@ -395,6 +400,8 @@ export type Responses = {
   "cluster:discovery": { types: ResourceType[] };
   "cluster:access": { allowed: boolean[] };
   "cluster:health": ClusterHealth;
+  "doctor:list": DoctorReport;
+  "doctor:evidence": DoctorEvidence;
   "resource:get": { object: KubeObject };
   "resource:events": { items: KubeObject[] };
   "watch:subscribe": { subscription: string };
@@ -611,17 +618,79 @@ export type ClicklandTest = {
 };
 
 /** What is wrong in a cluster right now, problems first: the Overview page and the agent's cluster_overview. */
-export type HealthProblem = {
-  kind: "Pod" | "Deployment" | "Node";
+/** The doctor's classes of problem (docs/doctor.md), in the order its rules are tried. */
+export type ProblemClass =
+  | "crashloop" | "start" | "image" | "config" | "oom" | "pending" | "probe" | "notready"
+  | "restarts" | "unavailable" | "node" | "warning" | "cert";
+/** What the doctor could read; a missing check is said plainly rather than read as "no problems". */
+export type DoctorCheck = "pods" | "workloads" | "nodes" | "events" | "certs";
+/**
+ * ok; forbidden (no access); error (failed this time); partial (a cap, a failed page or Secrets left out cut it);
+ * pending (still being read: certificates on a first ask); skipped (not read for this ask: certificates for the agent
+ * in namespaces the window isn't showing); off (not for this scope).
+ */
+export type DoctorCheckState = "ok" | "forbidden" | "error" | "partial" | "pending" | "skipped" | "off";
+/** A TLS Secret's certificate as main reads it from `tls.crt`: dates and names, never the key or the PEM. */
+export type CertFact = {
+  notBefore: string;
+  /** The earliest notAfter in the chain. */
+  notAfter: string;
+  which: "leaf" | "chain";
+  subject: string;
+  issuer: string;
+  sans: string[];
+  selfSigned: boolean;
+  unreadable?: true;
+};
+export type ProblemEvent = { at: string; reason: string; message: string; count: number };
+/** Small, structured evidence: what the row, the drawer and the agent's brief read. No env, labels or annotations. */
+export type ProblemFacts = {
+  lastState?: { reason?: string; exitCode?: number; signal?: number; finishedAt?: string; message?: string };
+  image?: string;
+  scheduling?: string;
+  /** A pending pod's nodeSelector as `key=value`, only pairs shaped like labels, at most 10. */
+  nodeSelector?: string[];
+  probe?: { type: "readiness" | "liveness" | "startup"; how: string; period?: number; timeout?: number; failureThreshold?: number; lastMessage?: string };
+  available?: string;
+  limit?: string;
+  events: ProblemEvent[];
+  cert?: CertFact;
+  usedBy?: string[];
+};
+export type Problem = {
+  id: string;
+  class: ProblemClass;
+  /** "bad" is failing, "warn" is to watch. */
+  tone: "bad" | "warn";
+  /** The subject: the owner (a Deployment), not each of its pods. */
+  kind: string;
   namespace?: string;
   name: string;
-  /** CrashLoopBackOff, OOMKilled, Pending, NotReady, Unavailable, Restarts, … */
+  group: string;
+  version: string;
+  resource: string;
+  /** CrashLoopBackOff, OOMKilled, Unschedulable, ReadinessProbe, FailedMount, Expired, … */
   reason: string;
-  /** One line: "in container api, 11 restarts; last exit Error code 1". */
+  /** "orders-api is crash-looping". */
+  title: string;
+  /** One line: "container api · exit 1 (Error) · 14 restarts · 5 pods". */
   detail: string;
-  tone: "bad" | "warn";
   container?: string;
   restarts?: number;
+  /** At most 50 names; podCount is exact. */
+  pods: string[];
+  podCount: number;
+  since?: string;
+  facts: ProblemFacts;
+  /** Landlens's own rule-based first suggestion: static text with names and numbers, never workload-written text. */
+  hint: { cause: string; next: string[] };
+};
+/** Kept for the callers that predate the doctor. */
+export type HealthProblem = Problem;
+export type DoctorReport = { at: string; problems: Problem[]; cut: boolean; checks: Record<DoctorCheck, DoctorCheckState> };
+/** On-demand evidence for one problem (D60): the previous run's last lines for a crash, an OOM kill or a probe kill. */
+export type DoctorEvidence = {
+  log?: { pod: string; container: string; previous: boolean; lines: string[]; cut: boolean } | { error: string };
 };
 export type HealthEvent = {
   at: string;
@@ -638,8 +707,12 @@ export type ClusterHealth = {
   pods: { total: number; running: number; succeeded: number; pending: number; failing: number; restarts: number };
   deployments: { total: number; available: number } | null;
   namespaces: number;
-  problems: HealthProblem[];
+  problems: Problem[];
   warnings: HealthEvent[];
+  /** What could be read; absent from callers that predate the doctor. */
+  checks: Record<DoctorCheck, DoctorCheckState>;
+  /** More problems than the cap (500). */
+  cut: boolean;
 };
 
 /** A choice the agent offers: a mode, or a value of a config option such as the model. */

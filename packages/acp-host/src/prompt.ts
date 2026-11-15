@@ -23,6 +23,7 @@ export function clusterSystemPrompt(c: { context: string; server: string; versio
     ``,
     `How to answer:`,
     `- Gather evidence before concluding: the failing object's state, its last exit, its logs and events.`,
+    `- A problem quoted from Landlens's doctor is where to start, not a conclusion: check it against the cluster first.`,
     `- Name what you looked at as kind/namespace/name so the person can open it in Landlens.`,
     ...(c.writes
       ? [
@@ -44,6 +45,15 @@ export function clusterSystemPrompt(c: { context: string; server: string; versio
 /** A Kubernetes object or text attached to a prompt as an ACP embedded resource. */
 export function resourceBlock(uri: string, text: string, mimeType = "application/yaml") {
   return { type: "resource" as const, resource: { uri, mimeType, text } };
+}
+
+/**
+ * What "Ask about this" attaches when the session can't read the object (it has gone, or the session's limit refuses
+ * it): the same URI form and a fixed sentence, so the question still goes. Only an API error (one with a status)
+ * comes here; anything else fails the ask as before (review of wave 5 part 4, L5).
+ */
+export function unreadableObject(context: string, ref: { resource: string; name: string; namespace?: string }, status: number): { uri: string; body: string } {
+  return { uri: objectUri(context, ref.resource, ref.name, ref.namespace), body: `# Landlens couldn't read this object with the session's access (HTTP ${status}).\n` };
 }
 
 /** k8s://<context>/<namespace or _cluster>/<kind>/<name> */

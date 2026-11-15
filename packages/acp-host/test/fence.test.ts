@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentEnv } from "../src/env.js";
 import { sessionOptions } from "../src/fence.js";
-import { clusterSystemPrompt, objectUri, safeVersion } from "../src/prompt.js";
+import { clusterSystemPrompt, objectUri, safeVersion, unreadableObject } from "../src/prompt.js";
 
 const opts = sessionOptions({
   home: "/Users/me/", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234,
@@ -83,6 +83,9 @@ describe("the standing rules", () => {
   it("build k8s:// URIs that can't be confused", () => {
     expect(objectUri("orbstack", "Pod", "a/b", "ns")).toBe("k8s://orbstack/ns/Pod/a%2Fb");
     expect(objectUri("ctx", "Node", "n1")).toBe("k8s://ctx/_cluster/Node/n1");
+    expect(unreadableObject("orbstack", { resource: "deployments", name: "gone", namespace: "shop" }, 404)).toEqual({
+      uri: "k8s://orbstack/shop/deployments/gone", body: "# Landlens couldn't read this object with the session's access (HTTP 404).\n",
+    });
   });
 });
 

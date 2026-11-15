@@ -1,5 +1,5 @@
-// The landing page: is this cluster healthy? One verdict, four tiles, the problems worst first, the recent warnings,
-// and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
+// The landing page: is this cluster healthy? One verdict, four tiles, the worst five problems (the Problems page has
+// them all), the recent warnings, and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
 import type { ClusterHealth, HealthEvent, HealthProblem, MetricsRange, MetricsSeries } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
@@ -11,6 +11,11 @@ import type { ApiError } from "./api";
 import { Sparkline } from "./charts/Sparkline";
 import { useMetrics } from "./metrics";
 import { Usage } from "./Usage";
+import { ChecksStrip } from "./Problems";
+import { missingChecks } from "@landlens/kube/checks";
+
+/** The Overview shows the worst few; the Problems page has them all. */
+const OV_PROBLEMS = 5;
 
 export function Overview(props: {
   handle: string;
@@ -21,8 +26,10 @@ export function Overview(props: {
   error?: ApiError;
   now: number;
   onOpenList: (resource: "nodes" | "pods" | "deployments", failing?: boolean) => void;
+  /** A row opens the problem's drawer on the Problems page (D57). */
   onOpenProblem: (p: HealthProblem) => void;
   onAskProblem: (p: HealthProblem) => void;
+  onSeeAll: () => void;
   onAskAll: () => void;
 }) {
   const { health: h, now } = props;
@@ -47,6 +54,7 @@ export function Overview(props: {
   return (
     <div className="ov">
       <Verdict h={h} onAsk={props.onAskAll} />
+      <ChecksStrip h={h} />
       <div className="tiles">
         {h.nodes ? (
           <a className="tile" role="link" tabIndex={0} aria-label={`Open nodes: ${h.nodes.ready} of ${h.nodes.total} ready`} onClick={() => props.onOpenList("nodes")} onKeyDown={(e) => e.key === "Enter" && props.onOpenList("nodes")}>
@@ -95,11 +103,14 @@ export function Overview(props: {
       </div>
       <div className="ov-cols">
         <section className="panel" aria-label="Problems">
-          <header className="panel-head"><h3>Problems</h3><span className="count-badge">{h.problems.length}</span><span className="grow" /><span className="dim small">worst first</span></header>
+          <header className="panel-head"><h3>Problems</h3><span className="count-badge">{h.problems.length}</span><span className="grow" /><button className="link-btn small" onClick={props.onSeeAll}>Open Problems</button></header>
           {h.problems.length ? (
-            <ul className="ov-list">{h.problems.map((x) => <ProblemRow key={`${x.kind}/${x.namespace}/${x.name}/${x.reason}`} p={x} onOpen={props.onOpenProblem} onAsk={props.onAskProblem} />)}</ul>
+            <>
+              <ul className="ov-list">{h.problems.slice(0, OV_PROBLEMS).map((x) => <ProblemRow key={x.id} p={x} onOpen={props.onOpenProblem} onAsk={props.onAskProblem} />)}</ul>
+              {h.problems.length > OV_PROBLEMS ? <button className="show-all" onClick={props.onSeeAll}>See all {h.problems.length}{h.cut ? "+" : ""}</button> : null}
+            </>
           ) : (
-            <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>No problems found</span></div>
+            <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>{missingChecks(h.checks).length ? "No problems found in what was checked" : "No problems found"}</span></div>
           )}
         </section>
         <section className="panel" aria-label="Recent warnings">
@@ -121,11 +132,13 @@ function Verdict({ h, onAsk }: { h: ClusterHealth; onAsk: () => void }) {
   const bad = h.problems.filter((p) => p.tone === "bad");
   const warn = h.problems.filter((p) => p.tone === "warn");
   if (!h.problems.length) {
+    // "All clear" only when every check was made (part 3 review, M2): otherwise the strip below says what wasn't.
+    const skipped = missingChecks(h.checks).length > 0;
     return (
-      <section className="verdict ok" aria-label="Verdict">
-        <span className="verdict-icon"><Ic icon={CircleCheck} size={22} /></span>
+      <section className={`verdict ${skipped ? "warn" : "ok"}`} aria-label="Verdict">
+        <span className="verdict-icon"><Ic icon={skipped ? TriangleAlert : CircleCheck} size={22} /></span>
         <div className="verdict-text">
-          <h2>All clear</h2>
+          <h2>{skipped ? "No problems found, but some checks were skipped" : "All clear"}</h2>
           <p>{plural(h.pods.running, "pod")} running{h.nodes ? ` on ${plural(h.nodes.total, "node")}` : ""}.</p>
         </div>
       </section>
@@ -147,27 +160,16 @@ function Verdict({ h, onAsk }: { h: ClusterHealth; onAsk: () => void }) {
   );
 }
 
-/** "A pod is crash-looping in landlens-dev": one clause for the verdict; the second one leans on the first. */
+/** "orders-api is crash-looping in landlens-dev": one clause for the verdict, from the doctor's title. */
 function describe(p: HealthProblem, before?: HealthProblem): ReactNode {
-  const a = before ? "a" : "A";
   const where = p.namespace && p.namespace !== before?.namespace ? <> in <b>{p.namespace}</b></> : null;
-  if (p.kind === "Node") return <>node <b>{p.name}</b> is {p.reason === "NotReady" ? "not ready" : `under ${p.reason}`}</>;
-  if (p.kind === "Deployment") {
-    const its = before?.kind === "Pod" && before.namespace === p.namespace && before.name.startsWith(`${p.name}-`);
-    return <>{its ? "its" : a} deployment{its ? null : where} has {p.tone === "bad" ? "no available replicas" : "too few replicas"}</>;
-  }
-  const what: Record<string, string> = {
-    CrashLoopBackOff: "is crash-looping", ImagePullBackOff: "can't pull its image", ErrImagePull: "can't pull its image",
-    OOMKilled: "ran out of memory", Pending: "is stuck pending", NotReady: "is running but not ready", Restarts: "keeps restarting",
-    CreateContainerConfigError: "has a broken container config",
-  };
-  return <>{a} pod {what[p.reason] ?? `is failing (${p.reason})`}{where}</>;
+  return <>{p.title}{where}</>;
 }
 
 function ProblemRow({ p, onOpen, onAsk }: { p: HealthProblem; onOpen: (p: HealthProblem) => void; onAsk: (p: HealthProblem) => void }) {
   const { base, hash } = p.kind === "Pod" ? splitByShape(p.name) : { base: p.name, hash: "" };
   return (
-    <li className="ov-row" tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(p)} aria-label={`${p.kind} ${p.namespace ? `${p.namespace}/` : ""}${p.name}: ${p.reason}`}>
+    <li className="ov-row" tabIndex={0} onClick={() => onOpen(p)} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(p)} aria-label={`${p.title}. ${p.kind} ${p.namespace ? `${p.namespace}/` : ""}${p.name}: ${p.reason}`}>
       <span className={`kind-tile sm ${p.tone}`}><Ic icon={iconOfKind(p.kind)} size={14} /></span>
       <div className="ov-main">
         <div className="ov-name">

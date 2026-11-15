@@ -196,7 +196,9 @@ export function AgentDock(props: {
   useEffect(() => {
     if (info && props.pending && sent.current !== props.pending.id) {
       sent.current = props.pending.id;
-      void send(props.pending.text);
+      // Busy with a turn: the question waits in the box with its chips, and sending is left to you (D64).
+      if (busy) setDraft(props.pending.text);
+      else void send(props.pending.text);
     }
   }, [info, props.pending]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -52,7 +52,16 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   every kind come with wave 4's command palette.
 - **A failing pod's diagnosis** shows its last output line only when the container left a termination message
   (`terminationMessagePolicy: FallbackToLogsOnError`); otherwise open its Logs tab (Previous).
-- **The Overview polls** `cluster:health` every 10s while the window is visible, rather than following the watches.
+- **The Overview polls** `cluster:health` every 10s while the window is visible; main answers from the doctor's
+  shared pod watch and reads workloads, nodes and events only when they are older than 15 or 30 seconds.
+- **The doctor** ([doctor.md](doctor.md)) checks certificates only in `kubernetes.io/tls` Secrets (at most 500 per
+  scope): not cert-manager `Certificate`s, Opaque Secrets with PEM, webhook CA bundles or the control plane's own.
+  The API server can't sort events, so with more than 2,000 warning events the newest of a busy namespace can be left
+  out, and past 5,000 pods (or 2,000 of a workload kind) the rest aren't checked (the page says the list is partial). A bare ReplicaSet with a `pod-template-hash` label shows as a Deployment
+  that doesn't exist. There is no mute, acknowledge or history of cleared problems, and the thresholds are fixed.
+  On the Problems page, **Open full logs** opens the pod's Logs tab on its current run (choose Previous there), ⌘K's
+  recent items don't keep problems. The agent sees certificates only for namespaces a Landlens window is showing (the
+person's check reads them), and Ask Claude sends one problem at a time.
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **One cluster at a time** in the window. Connecting to another disconnects the first.

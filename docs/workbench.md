@@ -263,9 +263,10 @@ Code: `packages/kube/src/helm.ts` (decode, list, get, merge, hide), `apps/deskto
 
 ## ⌘K search
 
-⌘K (or **Jump to…**) is search (D44–D45): "Search objects, kinds and actions…", in groups of six: **Actions** (the
-app's commands that match), **Objects** (by name, across kinds), **Kinds** (the sidebar's kinds and pages) and
-**Clusters** (switch to another context).
+⌘K (or **Jump to…**) is search (D44–D45): "Search objects, kinds, problems and actions…", in groups of six:
+**Actions** (the app's commands that match), **Problems** (the doctor's, by title or name: wave 5,
+[doctor.md](doctor.md#the-problems-page)), **Objects** (by name, across kinds), **Kinds** (the sidebar's kinds and
+pages) and **Clusters** (switch to another context).
 
 - **Empty**, it shows the open object's actions ("Actions for catalog-api": Logs, Open shell, Forward a port, Edit,
   Ask Claude, whichever fit its kind), your recent objects and kinds (per context, at most eight), and the pages.
@@ -275,8 +276,11 @@ app's commands that match), **Objects** (by name, across kinds), **Kinds** (the 
 - **Tab** on an object lists its actions (the object shows as a crumb; Backspace or Esc goes back to the search);
   Tab on a pod's shell or logs row lists its containers. Enter on a shell row opens the pod's only running
   container, or the first.
-- **`>`** lists the app's commands: Toggle panel, New local terminal, Create from YAML, Show port forwards, Ask
-  Claude, Toggle sidebar, Switch cluster…, Read names again, and the pages.
+- **`problems`** as the first word searches only problems (`problems cart`); alone it lists the worst six. Enter
+  opens a problem's drawer on the Problems page; Tab lists Open, Ask Claude and Open <Kind>. Problems come from the
+  report the window already holds: ⌘K reads nothing more for them.
+- **`>`** lists the app's commands: Toggle panel, New local terminal, Create from YAML, Show port forwards, Show
+  problems, Ask Claude, Toggle sidebar, Switch cluster…, Read names again, and the pages.
 - **Enter** opens an object in its list's drawer (reading it first, so a name that has gone says so), or runs the
   action: a forward opens the drawer with the first port's Forward focused.
 

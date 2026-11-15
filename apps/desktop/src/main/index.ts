@@ -9,6 +9,7 @@ import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
 import { PrometheusChoices } from "./prometheus-choice";
 import { registerIpc } from "./ipc";
+import { DoctorService } from "./doctor";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { McpService } from "./mcp";
@@ -49,6 +50,7 @@ async function start() {
     log: (l) => console.log(`[sidecar] ${l}`),
   });
   const hub = new WatchHub(clusters);
+  const doctor = new DoctorService({ clusters, hub });
   let win: BrowserWindow | undefined;
   const send = (channel: string, payload: unknown) => {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -74,6 +76,7 @@ async function start() {
     frontDoor,
     clusters,
     metrics: series,
+    certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     push: (call) => send("mcp:call", call),
     ask: {
       confirm: async ({ message, detail, yes }) => {
@@ -97,6 +100,7 @@ async function start() {
     onToolCall: (u) => gateway.card(u),
     onPermit: (p) => gateway.permit(p.session, p),
     metrics: series,
+    certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
     history: new AgentHistory(join(app.getPath("userData"), "agent-history.json")),
     settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
     log: (l) => console.log(l),
@@ -111,7 +115,7 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards, doctor);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();

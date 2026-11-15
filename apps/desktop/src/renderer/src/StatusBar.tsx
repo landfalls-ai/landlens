@@ -2,7 +2,7 @@
 import { Activity, ArrowLeftRight, CircleX, Database, PlugZap, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import { Ic } from "./icons";
 
-export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: () => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void }) {
+export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void }) {
   return (
     <footer className="statusbar">
       <span className="sb-item"><i className="dot tone-ok" aria-hidden="true" />Connected</span>
@@ -20,12 +20,12 @@ export function StatusBar(props: { server: string; watching: string; claude?: st
       </button>
       {props.claude ? <span className="sb-item claude" aria-live="polite" title={props.claude}><Ic icon={Sparkles} size={11} /><span className="sb-text">{props.claude}</span></span> : null}
       {props.bad ? (
-        <button className="sb-item bad" onClick={props.onProblems} title={`${props.bad} failing: open Overview`} aria-label={`${props.bad} failing, open Overview`}>
+        <button className="sb-item bad" onClick={() => props.onProblems("bad")} title={`${props.bad} failing: open Problems`} aria-label={`${props.bad} failing, open Problems`}>
           <Ic icon={CircleX} size={11} />{props.bad}
         </button>
       ) : null}
       {props.warn ? (
-        <button className="sb-item warn" onClick={props.onProblems} title={`${props.warn} to watch: open Overview`} aria-label={`${props.warn} to watch, open Overview`}>
+        <button className="sb-item warn" onClick={() => props.onProblems("warn")} title={`${props.warn} to watch: open Problems`} aria-label={`${props.warn} to watch, open Problems`}>
           <Ic icon={TriangleAlert} size={11} />{props.warn}
         </button>
       ) : null}

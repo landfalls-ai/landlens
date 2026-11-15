@@ -1,10 +1,11 @@
 // Every renderer request lands here: checked to come from our own page, validated with the contract's schema, then
 // answered. Errors cross as JSON {status, message} so the UI can tell "no access" from "failed".
 import { channels, type Channel, type KubeObject, type Request, type Responses, type ResourceType, type WatchEvent } from "@landlens/contracts";
-import { checkAccess, clusterHealth, getRelease, KubeError, listContexts, listReleases, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
+import { checkAccess, getRelease, KubeError, listContexts, listReleases, searchIndex, withoutSecretValues, type SearchIndex, type ClusterManager, type WatchHub } from "@landlens/kube";
 import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "electron";
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
+import type { DoctorService } from "./doctor";
 import type { ClicklandSettingsStore } from "./clickland-settings";
 import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
@@ -14,7 +15,7 @@ import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -37,6 +38,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     },
     "cluster:disconnect": async ({ handle }) => {
       metrics.service.forget(handle);
+      doctor.forget(handle);
       await mcp.forget(handle);
       await hub.stopAll(handle);
       await clusters.disconnect(handle);
@@ -44,10 +46,10 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     },
     "cluster:discovery": async ({ handle }) => ({ types: await clusters.discovery(handle) }),
     "cluster:access": async ({ handle, checks }) => ({ allowed: await checkAccess(clusters.get(handle).client, checks) }),
-    "cluster:health": async ({ handle, namespace }) => {
-      const client = clusters.get(handle).client;
-      return clusterHealth((path) => client.json(path), namespace ? { namespace } : {});
-    },
+    // The Overview's health and the doctor's report come from one service, reading as you (wave 5, D53).
+    "cluster:health": async ({ handle, namespace }) => doctor.health(handle, namespace),
+    "doctor:list": async ({ handle, namespace }) => doctor.report(handle, namespace),
+    "doctor:evidence": async ({ handle, namespace, id }) => doctor.evidence(handle, namespace, id),
     "resource:get": async ({ handle, ref }) => {
       const type = await clusters.typeOf(handle, ref); // only kinds the cluster serves
       return { object: withoutSecretValues(await clusters.getObject(handle, ref), isSecrets(type)) };

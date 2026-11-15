@@ -5,8 +5,8 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { NewSessionResponse } from "@agentclientprotocol/sdk";
-import { agentApprovedPolicy, agentReadOnlyPolicy, ChangeBroker, toolKubeconfig, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
-import type { AgentChange, MetricsSeries } from "@landlens/contracts";
+import { agentApprovedPolicy, agentReadOnlyPolicy, type CertInput, ChangeBroker, toolKubeconfig, type ChangeDecision, type ClusterManager, type FrontDoor } from "@landlens/kube";
+import type { AgentChange, DoctorCheckState, MetricsSeries } from "@landlens/contracts";
 import { frontDoorCluster, frontDoorSend, type AgentCluster } from "@landlens/kube-mcp";
 import { sessionOptions } from "./fence.js";
 import type { AcpHost } from "./host.js";
@@ -55,6 +55,8 @@ export async function startClusterSession(deps: {
    * front door with the session's token, for what the series reads from the cluster itself.
    */
   metrics?: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>) => Promise<MetricsSeries>;
+  /** The person's certificate facts for cluster_overview (main's DoctorService.certsFor). */
+  certs?: (handle: string, namespaces?: string[]) => { state: DoctorCheckState; certs?: CertInput[] };
   /** Parent folder for session working folders. */
   sessionsDir: string;
   home: string;
@@ -129,6 +131,7 @@ export async function startClusterSession(deps: {
     types: async () => types,
     ...(req.namespaces?.length ? { namespaces: req.namespaces } : {}),
     ...(deps.metrics ? { metrics: (r, read) => deps.metrics!(req.handle, r, read) } : {}),
+    ...(deps.certs ? { certs: async (ns) => deps.certs!(req.handle, ns) } : {}),
     ...(propose ? { propose } : {}),
   });
   let mcp: Awaited<ReturnType<SessionMcp["open"]>>;

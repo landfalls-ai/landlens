@@ -1,0 +1,31 @@
+# Five replicas that all crash-loop: the worker can't parse LEDGER_SHARDS. One problem with 5 pods, not five.
+# node deploy/scenarios/doctor/up.mjs (all of them), or kubectl --context orbstack -n landlens-dev apply -f this file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledger-worker
+  namespace: landlens-dev
+  labels: { app: ledger-worker, scenario: doctor }
+spec:
+  replicas: 5
+  selector: { matchLabels: { app: ledger-worker } }
+  template:
+    metadata:
+      labels: { app: ledger-worker, scenario: doctor }
+    spec:
+      terminationGracePeriodSeconds: 1
+
+      containers:
+        - name: worker
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "ledger-worker 1.8.0 starting"
+              echo "FATAL: cannot parse LEDGER_SHARDS=three (want a number)" >&2
+              exit 2
+          env:
+            - { name: LEDGER_SHARDS, value: three }
+          resources:
+            requests: { cpu: 5m, memory: 8Mi }
+            limits: { memory: 16Mi }

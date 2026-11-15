@@ -58,6 +58,9 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/client.ts` | Requests through a sidecar; API paths; `slim`, `withoutSecretValues` |
 | `packages/kube/src/discovery.ts` | API discovery (aggregated v2, else per group), with each kind a CRD defines marked `custom` |
 | `packages/kube/src/search.ts` | The ⌘K palette's names: metadata-only lists of the common kinds, kind, name and namespace out |
+| `packages/kube/src/checks.ts` | The sentence for each check the doctor couldn't make (the page's strip and the agent's overview) |
+| `packages/kube/src/doctor.ts`, `doctor-hints.ts` | The cluster doctor's rules: problems grouped by owner, worst first, with Landlens's first suggestion |
+| `packages/kube/src/certs.ts` | TLS Secrets' certificates as dates and names (`tls.crt` only) |
 | `packages/kube/src/helm.ts` | Helm releases, read-only: lists and decodes Helm's release Secrets as you, merges values as Helm does, hides secret values and Secret data before the window sees them |
 | `packages/kube/src/watch.ts` | `ResourceWatcher`: paginated list, watch with bookmarks, relist on 410, batches |
 | `packages/kube/src/clusters.ts` | `ClusterManager` (connect, discovery, get, events) and `WatchHub` (shared, ref-counted watchers) |
@@ -77,13 +80,15 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/renderer/src/App.tsx` | The catalog and connecting; Welcome or Workspace |
 | `apps/desktop/src/renderer/src/Workspace.tsx` | A connected window: what is open, the width rules, the health poll, keyboard |
 | `apps/desktop/src/renderer/src/Sidebar.tsx`, `Toolbar.tsx`, `StatusBar.tsx` | The cluster switcher and nav (or rail), the main toolbar, the status bar |
-| `apps/desktop/src/renderer/src/Overview.tsx` | The landing page: verdict, tiles, problems, warnings, nodes |
+| `apps/desktop/src/renderer/src/Overview.tsx` | The landing page: verdict, tiles, the worst five problems, warnings, nodes |
+| `apps/desktop/src/renderer/src/Problems.tsx`, `problemRules.ts` | The Problems page and its drawer: filters, sections, facts, events, log evidence; ⌘K's problem matching |
 | `apps/desktop/src/renderer/src/health.ts` | `useHealth`: `cluster:health` every 10s while visible; sidebar badges |
 | `apps/desktop/src/renderer/src/ResourceTable.tsx`, `Details.tsx`, `Yaml.tsx` | Lists, the drawer with its diagnosis, the YAML well |
 | `apps/desktop/src/renderer/src/Welcome.tsx`, `JumpPalette.tsx` | Pick a cluster; ⌘K Jump to |
 | `apps/desktop/src/renderer/src/icons.tsx`, `Mark.tsx`, `present.ts`, `styles.css` | Icons per kind, the brand mark, name splitting and tones, the tokens and styles ([design.md](design.md)) |
 | `packages/kube/src/health.ts` | `clusterHealth`: one health computation for the Overview and the agent's `cluster_overview` |
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
+| `apps/desktop/src/main/doctor.ts` | `DoctorService`: the doctor per cluster and scope, from the shared pod watch and timed reads; the Overview's health, evidence for a problem, certificate facts for the agent |
 | `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the cluster's Prometheus (found, asked through the service proxy), the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
 | `apps/desktop/src/main/clickland-settings.ts` | Clickland's address, cluster names and the key encrypted with safeStorage |
 | `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars` and the pure `scale.ts` helpers |

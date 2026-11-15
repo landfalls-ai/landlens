@@ -181,6 +181,13 @@ export class WatchHub {
     return id;
   }
 
+  /** The shared watcher's current objects for a subscription (no second copy is kept); undefined if it is gone. */
+  items(id: string): KubeObject[] | undefined {
+    const key = this.bySubscription.get(id);
+    const s = key ? this.shared.get(key) : undefined;
+    return s?.watcher.snapshot();
+  }
+
   unsubscribe(id: string) {
     const key = this.bySubscription.get(id);
     if (!key) return;
