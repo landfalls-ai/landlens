@@ -499,7 +499,8 @@ export function AgentDock(props: {
         {!panel ? <button className="icon-btn" aria-label="History" title="History" onClick={() => setPanel("history")}><Ic icon={History} size={15} /></button> : null}
         <button className="icon-btn" onClick={props.onClose} aria-label={`Close ${agent}`} title={closeTitle}><Ic icon={X} size={15} /></button>
       </header>
-      {!panel ? <AutonomyStrip states={autonomy} onStop={(st) => setAuto(st.provider, false)} /> : null}
+      {/* The strip can't be dismissed, only stopped: it stays while History is open too (L3 of the part 3 review). */}
+      <AutonomyStrip states={autonomy} onStop={(st) => setAuto(st.provider, false)} />
       {panel === "history" ? (
         <HistoryPanel
           context={props.cluster.context}

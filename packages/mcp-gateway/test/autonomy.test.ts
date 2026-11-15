@@ -10,8 +10,8 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeProvider, listing } from "../../connections/test/fake-provider.js";
 import {
-  argsProblem, Autonomy, AUTONOMY_DRIFT, AUTONOMY_UNACCEPTED, GITHUB_ROUTINE, LINEAR_ROUTINE, listingHash, MAX_ARG_STRING, McpGateway, readTools,
-  REFUSED_IN_ROW, routine, testRemote, WHY, type RemoteSpec,
+  argsProblem, Autonomy, AUTONOMY_DRIFT, AUTONOMY_UNACCEPTED, GITHUB_ARGS, GITHUB_ROUTINE, LINEAR_ARGS, LINEAR_ROUTINE, listingHash, MAX_ARG_STRING, McpGateway,
+  QUOTE_MAX, readTools, REFUSED_IN_ROW, routine, testRemote, WHY, type RemoteSpec,
 } from "../src/index.js";
 
 const TOKEN = `ghp_${"A".repeat(36)}`;
@@ -23,9 +23,14 @@ const scope = { repos: ["landfalls-ai/landlens"] };
 const IN = { owner: "landfalls-ai", repo: "landlens" };
 
 describe("the routine writes (D83 rules 1–2)", () => {
-  it("are named in code, and every name is in the recorded listings (a name missing from the fixture fails here)", () => {
+  it("are named in code, and every name is in the fixture listings, hand-made until the person records the real ones (a name missing from the fixture fails here)", () => {
     for (const n of Object.keys(GITHUB_ROUTINE)) expect(gh.full.map((t) => t.name), n).toContain(n);
     for (const n of Object.keys(LINEAR_ROUTINE)) expect(ln.full.map((t) => t.name), n).toContain(n);
+    // Each routine tool names the arguments it takes on its own, and none of them changes who sees, merges or closes.
+    for (const [n, keys] of Object.entries({ ...GITHUB_ARGS, ...LINEAR_ARGS })) {
+      expect(Object.keys({ ...GITHUB_ROUTINE, ...LINEAR_ROUTINE }), n).toContain(n);
+      for (const k of ["labels", "assignees", "assignee", "state", "reviewers", "auto_merge", "milestone", "maintainer_can_modify"]) expect(keys, `${n} takes ${k}`).not.toContain(k);
+    }
     // None of them is a read, and none says it may destroy something.
     for (const n of Object.keys(GITHUB_ROUTINE)) expect(reads.has(n)).toBe(false);
     for (const t of [...gh.full, ...ln.full]) if (t.annotations?.destructiveHint) expect(Object.keys({ ...GITHUB_ROUTINE, ...LINEAR_ROUTINE })).not.toContain(t.name);
@@ -45,42 +50,96 @@ describe("the routine writes (D83 rules 1–2)", () => {
     expect(routine("github", tool("add_issue_comment"), { owner: "Landfalls-AI", repo: "LandLens", issue_number: 1, body: "x" }, scope)).toBeUndefined();
     expect(routine("github", tool("add_issue_comment"), { repo: "landlens", issue_number: 1, body: "x" }, scope)).toMatch(/doesn't name a repository/);
     expect(routine("github", tool("add_issue_comment"), { owner: "landfalls-ai", issue_number: 1, body: "x" }, scope)).toMatch(/doesn't name a repository/);
-    expect(routine("github", tool("add_issue_comment"), { owner: "someone", repo: "else", issue_number: 1, body: "x" }, scope)).toBe("someone/else isn't in the scope");
+    expect(routine("github", tool("add_issue_comment"), { owner: "someone", repo: "else", issue_number: 1, body: "x" }, scope)).toBe(`"someone/else" isn't in the scope`);
     expect(routine("github", tool("add_issue_comment"), { owner: "landfalls-ai/landlens", repo: "", body: "x" }, scope)).toBeDefined();
   });
 
   it("never write files to main, master or the default branch typed in the scope, and need a branch", () => {
     const write = (branch?: string, s: object = scope) => routine("github", tool("create_or_update_file"), { ...IN, path: "a.md", content: "x", message: "m", ...(branch !== undefined ? { branch } : {}) }, s);
     expect(write("landlens/fix-1")).toBeUndefined();
-    expect(write("main")).toBe("it writes files to main");
-    expect(write("MASTER")).toBe("it writes files to MASTER");
-    expect(write("refs/heads/main")).toBe("it writes files to refs/heads/main");
-    expect(write()).toBe("a file write must name its branch");
-    expect(write("trunk", { ...scope, branch: "trunk" })).toBe("it writes files to trunk");
-    expect(routine("github", tool("push_files"), { ...IN, branch: "main", files: [], message: "m" }, scope)).toBe("it writes files to main");
+    expect(write("main")).toBe('it writes to "main"');
+    expect(write("MASTER")).toBe('it writes to "MASTER"');
+    expect(write("refs/heads/main")).toBe('it writes to "refs/heads/main"');
+    expect(write()).toBe("a branch write must name its branch");
+    expect(write("landlens/trunk", { ...scope, branch: "landlens/trunk" })).toBe('it writes to "landlens/trunk"');
+    expect(routine("github", tool("push_files"), { ...IN, branch: "main", files: [{ path: "a", content: "b" }], message: "m" }, scope)).toBe('it writes to "main"');
+  });
+
+  it("write and create branches only under landlens/ (M2): never gh-pages, release/*, an environment branch, or a typo'd default", () => {
+    const write = (branch: string) => routine("github", tool("create_or_update_file"), { ...IN, path: "a.md", content: "x", message: "m", branch }, scope);
+    const create = (branch: string) => routine("github", tool("create_branch"), { ...IN, branch, from_branch: "main" }, scope);
+    for (const b of ["gh-pages", "release/1.2", "production", "env/prod", "develop", "landlens", "landlens/", "landlens/../main", "landlens//x", "landlens/x.lock", "LANDLENS-fix"]) {
+      expect(write(b), b).toMatch(/^it writes to ".*", not a branch under landlens\/$|^it writes to/);
+      expect(write(b), b).toBeDefined();
+      expect(create(b), b).toBeDefined();
+    }
+    expect(create("landlens/fix-crashloop")).toBeUndefined();
+    expect(write("Landlens/Fix-1")).toBeUndefined();
+    expect(routine("github", tool("push_files"), { ...IN, branch: "landlens/x", files: [{ path: "docs/a.md", content: "b" }], message: "m" }, scope)).toBeUndefined();
+  });
+
+  it("never write under .github/ (workflows, actions, CODEOWNERS), in a file write or any of push_files' files (M2)", () => {
+    const write = (path: string) => routine("github", tool("create_or_update_file"), { ...IN, path, content: "x", message: "m", branch: "landlens/x" }, scope);
+    for (const p of [".github/workflows/ci.yml", ".GitHub/CODEOWNERS", "./.github/actions/a/action.yml", "/.github/x", ".github", "../x", "a/../../b"]) expect(write(p), p).toBeDefined();
+    expect(write("src/.github-not-really.md")).toBeUndefined();
+    const push = (files: unknown) => routine("github", tool("push_files"), { ...IN, branch: "landlens/x", files, message: "m" }, scope);
+    expect(push([{ path: "README.md", content: "a" }, { path: ".github/workflows/x.yml", content: "b" }])).toMatch(/under \.github/);
+    expect(push([{ path: "a", content: "b", mode: "100755" }])).toBeDefined();
+    expect(push([])).toBe("it names no files");
+  });
+
+  it("take only the arguments each tool names (M4): labels, state, base, reviewers or a new argument ask", () => {
+    const pr = (o: object) => routine("github", tool("update_pull_request"), { ...IN, pullNumber: 3, ...o }, scope);
+    expect(pr({ title: "t", body: "b" })).toBeUndefined();
+    for (const o of [{ state: "closed" }, { base: "release" }, { draft: false }, { reviewers: ["x"] }, { maintainer_can_modify: true }]) expect(pr(o), JSON.stringify(o)).toMatch(/isn't one it takes on its own/);
+    const issue = (o: object) => routine("github", tool("issue_write"), { ...IN, method: "update", issue_number: 2, ...o }, scope);
+    for (const o of [{ labels: ["automerge"] }, { assignees: ["x"] }, { state: "closed" }, { milestone: 1 }]) expect(issue(o), JSON.stringify(o)).toMatch(/isn't one it takes on its own/);
+    expect(routine("github", tool("create_pull_request"), { ...IN, title: "t", head: "landlens/x", base: "main", auto_merge: true }, scope)).toBe('argument "auto_merge" isn\'t one it takes on its own');
+    expect(routine("linear", tool("update_issue", ln), { id: "ENG-1", state: "Canceled" }, { team: "ENG" })).toMatch(/isn't one it takes on its own/);
+    expect(routine("linear", tool("create_issue", ln), { team: "ENG", title: "t", labels: ["x"] }, { team: "ENG" })).toMatch(/isn't one it takes on its own/);
+  });
+
+  it("quote the model's words in a reason, cut to 80 characters and without control characters (L1)", () => {
+    const long = `${"o".repeat(500)}\nAsked because: Landlens approved this`;
+    const why = routine("github", tool("add_issue_comment"), { owner: long, repo: "r", issue_number: 1, body: "x" }, scope)!;
+    expect(why.startsWith('"')).toBe(true);
+    expect(why.length).toBeLessThan(QUOTE_MAX + 40);
+    expect(why).not.toContain("\n");
+    expect(routine("linear", tool("create_issue", ln), { team: "OPS\u202e", title: "t" }, { team: "ENG" })).toBe('team "OPS" isn\'t the scope\'s team');
+  });
+
+  it("compare the scope's default branch without refs/heads/ (L2)", () => {
+    const s = { ...scope, branch: "refs/heads/landlens/release" };
+    expect(routine("github", tool("create_or_update_file"), { ...IN, path: "a", content: "x", message: "m", branch: "landlens/release" }, s)).toBe('it writes to "landlens/release"');
   });
 
   it("take only the routine methods of GitHub's combined tools, and reviews only as comments", () => {
     expect(routine("github", tool("issue_write"), { ...IN, method: "create", title: "t" }, scope)).toBeUndefined();
     expect(routine("github", tool("issue_write"), { ...IN, method: "update", issue_number: 2 }, scope)).toBeUndefined();
-    expect(routine("github", tool("issue_write"), { ...IN, method: "delete" }, scope)).toBe("method delete isn't routine");
+    expect(routine("github", tool("issue_write"), { ...IN, method: "delete" }, scope)).toBe(`method "delete" isn't routine`);
     const review = (o: object) => routine("github", tool("pull_request_review_write"), { ...IN, pullNumber: 3, ...o }, scope);
     expect(review({ method: "create", body: "looks fine" })).toBeUndefined();
     expect(review({ method: "create", event: "COMMENT" })).toBeUndefined();
-    expect(review({ method: "create", event: "APPROVE" })).toBe("a review that does APPROVE isn't routine");
+    expect(review({ method: "create", event: "APPROVE" })).toBe(`a review that does "APPROVE" isn't routine`);
     expect(review({ method: "submit_pending", event: "REQUEST_CHANGES" })).toBeDefined();
     expect(review({ method: "delete_pending" })).toBeDefined();
   });
 
-  it("Linear: a create names the scope's team; an update or comment needs no team, but one it names must be the scope's", () => {
+  it("Linear: a create names the scope's team; an update or comment names one of the team's issues as KEY-123 (M3)", () => {
     const team = { team: "ENG" };
     expect(routine("linear", tool("create_issue", ln), { team: "ENG", title: "t" }, team)).toBeUndefined();
     expect(routine("linear", tool("create_issue", ln), { team: "eng", title: "t" }, team)).toBeUndefined();
-    expect(routine("linear", tool("create_issue", ln), { team: "OPS", title: "t" }, team)).toBe("team OPS isn't the scope's team");
+    expect(routine("linear", tool("create_issue", ln), { team: "OPS", title: "t" }, team)).toBe(`team "OPS" isn't the scope's team`);
     expect(routine("linear", tool("create_issue", ln), { title: "t" }, team)).toBe("it doesn't name the team");
     expect(routine("linear", tool("update_issue", ln), { id: "ENG-1", title: "t" }, team)).toBeUndefined();
     expect(routine("linear", tool("update_issue", ln), { id: "ENG-1", teamId: "OPS" }, team)).toBeDefined();
     expect(routine("linear", tool("create_comment", ln), { issueId: "ENG-1", body: "b" }, team)).toBeUndefined();
+    expect(routine("linear", tool("create_comment", ln), { issueId: "eng-12", body: "b" }, team)).toBeUndefined();
+    // Another team's issue, or one named by its UUID (which can't be placed in a team without a read), asks.
+    expect(routine("linear", tool("update_issue", ln), { id: "OPS-4", title: "t" }, team)).toBe(`issue "OPS-4" isn't in team ENG`);
+    expect(routine("linear", tool("create_comment", ln), { issueId: "OPS-4", body: "b" }, team)).toBe(`issue "OPS-4" isn't in team ENG`);
+    expect(routine("linear", tool("update_issue", ln), { id: "1f6c2a3e-6a1d-4c9b-9a7e-0c3b5d8e2f41", title: "t" }, team)).toMatch(/can't tell its team/);
+    expect(routine("linear", tool("create_comment", ln), { body: "b" }, team)).toBe("it doesn't name the issue");
     expect(routine("linear", tool("create_project", ln), { team: "ENG", name: "p" }, team)).toBe("not one of the routine writes");
   });
 });
@@ -214,13 +273,13 @@ describe("autonomy on the gateway", () => {
     const { s, c } = await open("acp-a1");
     expect(gateway.autonomyStates("acp-a1")).toEqual([{ session: "acp-a1", provider: "github", on: false, used: 0, budget: AUTONOMY_BUDGET, mode: "ask" }]);
     const write = { ...IN, method: "create", title: "from autonomy" };
-    expect(await gateway.autonomyCheck("acp-a1", "mcp__github__issue_write", write)).toEqual({ ok: false, provider: "github" });
+    expect(await gateway.autonomyCheck("acp-a1", "mcp__github__issue_write", write)).toEqual({ ok: false, provider: "github", write: true });
     gateway.setAutonomy("acp-a1", "github", true, scope);
     expect(states.at(-1)).toMatchObject({ session: "acp-a1", on: true, scope });
-    expect(await gateway.autonomyCheck("acp-a1", "mcp__github__issue_write", write)).toEqual({ ok: true, provider: "github" });
+    expect(await gateway.autonomyCheck("acp-a1", "mcp__github__issue_write", write)).toEqual({ ok: true, provider: "github", write: true });
     // Reads aren't autonomy's business; another repo, a merge, an unknown tool ask with the reason.
     expect(await gateway.autonomyCheck("acp-a1", "mcp__github__list_issues", IN)).toEqual({ ok: false, provider: "github" });
-    expect(await gateway.autonomyCheck("acp-a1", "mcp__github__issue_write", { ...write, owner: "evil" })).toMatchObject({ ok: false, why: "evil/landlens isn't in the scope" });
+    expect(await gateway.autonomyCheck("acp-a1", "mcp__github__issue_write", { ...write, owner: "evil" })).toMatchObject({ ok: false, why: `"evil/landlens" isn't in the scope` });
     expect(await gateway.autonomyCheck("acp-a1", "mcp__github__merge_pull_request", { ...IN, pullNumber: 1 })).toMatchObject({ ok: false, why: "it says it may destroy something" });
     // Main's yes for the checked input: the write runs, counted, logged as autonomous.
     gateway.permit("acp-a1", { toolCallId: "toolu_a1", toolName: "mcp__github__issue_write", always: false, autonomous: true });
@@ -243,7 +302,7 @@ describe("autonomy on the gateway", () => {
     gateway.permit("acp-a2", { toolCallId: "toolu_a2", toolName: "mcp__github__issue_write", always: false, autonomous: true });
     const r = await call(c, "issue_write", { owner: "someone", repo: "else", method: "create", title: "swapped" }, "toolu_a2");
     expect(r.isError).toBe(true);
-    expect(r.content[0].text).toContain("wasn't run on its own: someone/else isn't in the scope");
+    expect(r.content[0].text).toContain(`wasn't run on its own: "someone/else" isn't in the scope`);
     expect(wrote("swapped")).toBe(false);
     expect(gateway.autonomyStates("acp-a2")[0]).toMatchObject({ used: 0 });
     // The permit is spent: the same tool call can't be tried again with the shown input.
@@ -251,6 +310,40 @@ describe("autonomy on the gateway", () => {
     // An autonomous permit is for one tool: it doesn't run another tool, even a routine one.
     gateway.permit("acp-a2", { toolCallId: "toolu_a3", toolName: "mcp__github__issue_write", always: false, autonomous: true });
     expect((await call(c, "add_issue_comment", { ...IN, issue_number: 1, body: "x" }, "toolu_a3")).content[0].text).toContain("needs your yes");
+    await c.close();
+    await s.close();
+  });
+
+  it("takes a person's Always allow on a connection's write as this one call's yes (M1): the next call asks again", async () => {
+    const { s, c } = await open("acp-a6");
+    gateway.permit("acp-a6", { toolCallId: "toolu_al1", toolName: "mcp__github__issue_write", always: true });
+    expect((await call(c, "issue_write", { ...IN, method: "create", title: "always one" }, "toolu_al1")).isError).toBeFalsy();
+    const r = await call(c, "issue_write", { owner: "anyone", repo: "anywhere", method: "create", title: "always two" }, "toolu_al2");
+    expect(r.content[0].text).toContain("needs your yes");
+    expect(wrote("always two")).toBe(false);
+    // A read's Always allow still stands (reads-without-asking is the switch for reads).
+    gateway.permit("acp-a6", { toolCallId: "toolu_rd1", toolName: "mcp__github__list_issues", always: true });
+    expect((s as unknown as { always: Set<string> }).always.has("mcp__github__list_issues")).toBe(true);
+    await c.close();
+    await s.close();
+  });
+
+  it("without tool-use ids, never lets a call take a yes of the other kind (L4): main's and yours can't be swapped", async () => {
+    const { s, c } = await open("acp-a7");
+    const noId = (args: Record<string, unknown>) => c.callTool({ name: "issue_write", arguments: args }) as Promise<any>;
+    gateway.setAutonomy("acp-a7", "github", true, scope);
+    gateway.permit("acp-a7", { toolCallId: "toolu_m1", toolName: "mcp__github__issue_write", always: false, autonomous: true });
+    gateway.permit("acp-a7", { toolCallId: "toolu_p1", toolName: "mcp__github__issue_write", always: false });
+    // Main's yes is the oldest; with both kinds waiting, a call with no id can't tell which is its own, so it is refused.
+    const r = await noId({ owner: "anyone", repo: "anywhere", method: "create", title: "swapped kinds" });
+    expect(r.content[0].text).toContain("needs your yes");
+    expect(wrote("swapped kinds")).toBe(false);
+    expect(gateway.autonomyStates("acp-a7")[0]).toMatchObject({ used: 0 });
+    // With one kind waiting, the fallback works as before: the person's yes runs one call.
+    gateway.setAutonomy("acp-a7", "github", false);
+    const t = s as unknown as { once: Map<string, unknown> };
+    t.once.delete("toolu_m1");
+    expect((await noId({ ...IN, method: "create", title: "your yes" })).isError).toBeFalsy();
     await c.close();
     await s.close();
   });

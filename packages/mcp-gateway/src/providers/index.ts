@@ -8,8 +8,8 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { GITHUB_ROUTINE, type RoutineRule } from "./github.js";
 import { LINEAR_ROUTINE } from "./linear.js";
 
-export { GITHUB_ROUTINE, inRepos, offMain, protectedBranches, type RoutineRule } from "./github.js";
-export { LINEAR_ROUTINE } from "./linear.js";
+export { BRANCH_PREFIX, branchName, GITHUB_ARGS, GITHUB_ROUTINE, inRepos, onOwnBranch, protectedBranches, quote, QUOTE_MAX, type RoutineRule } from "./github.js";
+export { LINEAR_ARGS, LINEAR_ROUTINE } from "./linear.js";
 
 /** Each provider's routine writes, by tool name. A tool not named here is never routine. */
 export const ROUTINE: Readonly<Record<ConnProvider, Readonly<Record<string, RoutineRule>>>> = { github: GITHUB_ROUTINE, linear: LINEAR_ROUTINE };

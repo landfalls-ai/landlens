@@ -133,20 +133,30 @@ which the transcript also notes.
 **What runs on its own** (D83), all of it checked in the gateway:
 
 1. **Routine tools, by name, in code.** GitHub: `issue_write` (method create or update), `add_issue_comment`,
-   `update_issue_comment`, `create_branch`, `create_or_update_file` and `push_files` (on a named branch that isn't
-   main, master or the default branch you typed), `create_pull_request`, `update_pull_request`,
-   `pull_request_review_write` (create or submit a review as a COMMENT only; an approval or a request for changes
-   asks), `add_comment_to_pending_review`, `add_reply_to_pull_request_comment`. Linear: `create_issue` (it must name
-   the scope's team), `update_issue` and `create_comment` (a team they name must be the scope's). Every other tool
-   asks: merges, deletes, closing by merge, repositories, workflows, secrets, releases, and any tool a vendor adds
-   until a release of Landlens names it. A tool whose annotations say it may destroy something asks even if named.
-2. **The scope.** A GitHub write must name `owner` and `repo`, and together they must be one of the scope's
-   repositories (case aside). A Linear write is placed by its team key.
-3. **The budget.** 20 writes a session, then it turns off; 5 in any minute, then the next one asks (it stays on).
-4. **The arguments.** Anything the credential scrubber would change (the patterns the front door and the call log
+   `update_issue_comment`, `create_branch`, `create_or_update_file` and `push_files` (only on a branch under
+   `landlens/`, below), `create_pull_request`, `update_pull_request`, `pull_request_review_write` (create or submit a
+   review as a COMMENT only; an approval or a request for changes asks), `add_comment_to_pending_review`,
+   `add_reply_to_pull_request_comment`. Linear: `create_issue` (it must name the scope's team), `update_issue` and
+   `create_comment` (on one of the team's issues, below). Every other tool asks: merges, deletes, closing by merge,
+   repositories, workflows, secrets, releases, and any tool a vendor adds until a release of Landlens names it. A
+   tool whose annotations say it may destroy something asks even if named.
+2. **Only the arguments each tool names** (`GITHUB_ARGS`, `LINEAR_ARGS`). An issue write takes its title and body,
+   never labels, assignees, a milestone or a state; a pull request update its title and body, never a state, base,
+   draft flag or reviewers; a Linear update its title and description, never a state. Any other argument asks,
+   including one a vendor adds later (an auto-merge flag would ask, even after you accept the new listing).
+3. **The scope.** A GitHub write must name `owner` and `repo`, and together they must be one of the scope's
+   repositories (case aside). Branches are an allowlist: a branch is created and files are written only on a branch
+   under `landlens/` (well formed, never main, master or the default branch you typed, with or without
+   `refs/heads/`), so gh-pages, `release/*`, environment branches a GitOps tool deploys from, and a mistyped default
+   branch all ask. No file goes under `.github/` (workflows, actions, CODEOWNERS), in `path` or any of `push_files`'
+   files, and no path climbs with `..`. A Linear create names the scope's team; an update or a comment must name one
+   of its issues by identifier (`ENG-123` for team ENG): an issue named by its UUID can't be placed in a team without a
+   read, so it asks.
+4. **The budget.** 20 writes a session, then it turns off; 5 in any minute, then the next one asks (it stays on).
+5. **The arguments' content.** Anything the credential scrubber would change (the patterns the front door and the call log
    use) asks; so does any string over 20,000 characters or arguments over 200 KB.
-5. **Three refused in a row** by these rules (not by the budget) turn it off.
-6. **It stops** on **Stop**, at the end of the session, when the connection's level drops to Read only, when it is
+6. **Three refused in a row** by these rules (not by the budget) turn it off.
+7. **It stops** on **Stop**, at the end of the session, when the connection's level drops to Read only, when it is
    disconnected or taken from sessions, and when its tools are found changed.
 
 **How a write runs on its own.** Claude Code still asks its permission question. Main (`AgentService.ask`) asks the
@@ -154,12 +164,21 @@ gateway whether this call, with these arguments, would run on its own; only when
 allow-once itself and give the gateway a permit marked autonomous, for that tool call. When the call arrives, the
 gateway checks the arguments that actually arrived again and counts it; if they no longer pass, it refuses the call
 ("github · issue_write wasn't run on its own: …"). An autonomous permit never becomes "always". The renderer can't
-answer for you: `agent:answer` takes only a question the dock was shown.
+answer for you: `agent:answer` takes only a question the dock was shown. A GitHub or Linear write is never offered
+**Always allow**, autonomous or not: it would let every later call of that tool run anywhere, uncounted, while the
+strip still counted. The dock doesn't show the option, main refuses it if sent, and the gateway takes an "always" for
+such a write as a yes for that one call. If Claude Code stops sending tool-use ids, a call takes the oldest yes for
+its tool only while every waiting yes for it is of one kind (yours, or main's), so main's yes and yours can't be
+swapped.
 
 **A write that asks** is the existing question card, now with the provider's mark, the tool ("GitHub · issue
-write?"), "Asked because: other-org/elsewhere isn't in the scope" when autonomous is on and said no, and the
-arguments as a short table (repository, team, issue or pull request, branch, title, file, the first 600 characters of
-the body, a few other plain values), not raw JSON. Enter allows it and Esc rejects it, as before.
+write?"), "Asked because: "other-org/elsewhere" isn't in the scope" when autonomous is on and said no (the model's
+words in the reason are quoted, cut to 80 characters, with control characters removed), and the arguments as a
+short table, not raw JSON: repository, team, issue or pull request, the branch (a pull request's **From** head and
+**Into** base), title, file, every file's path (up to 20, then how many more), the first 600 characters of the body
+with how many more there are, then every other argument (nested ones as JSON). **Show all arguments** opens every
+argument, whole, as indented JSON with credentials cut (`provider-args.ts`), so nothing you approve is hidden. Enter
+allows it and Esc rejects it, as before. The warn strip stays while History is open.
 
 **Marked where it ran.** A tool row in the dock that ran on its own has a **ran on its own** chip. The call log keeps
 how each call got through (`McpCall.gate`: read, asked, autonomous, or preview); the Calls tab has an **Autonomous**
@@ -167,9 +186,20 @@ filter, the same chip on its rows, and **Allowed by** in the drawer.
 
 **What it doesn't stop.** Inside the scope, an issue or comment written to steer Claude can make it write wrong or
 leaking things (anything it can read, from the cluster or the providers, may end up in an issue in scope), up to the
-budget; the scope, the routine list and the budget bound that, nothing more. Linear's updates and comments name an
-issue, not a team, so they aren't held to the team ([limitations.md](limitations.md)). The repositories you name are
-taken as typed: Landlens doesn't check that they exist or that the default branch is right.
+budget; the scope, the routine list and the budget bound that, nothing more. In particular:
+
+- A repository in scope may be **public**: whatever Claude writes there (an issue, a comment, a file on a
+  `landlens/` branch) is published, so a steered session can leak what it read to the world.
+- An edit **overwrites** what is there: `update_issue_comment`, `issue_write` (update), `update_pull_request` and
+  Linear's `update_issue` can replace other people's comments, issue bodies and descriptions, within the scope.
+- **CI and GitOps still run.** A push to a `landlens/` branch or a pull request can start the repository's workflows
+  (`pull_request` and `push` triggers) with whatever secrets they get, and a GitOps tool that watches branches by
+  pattern can deploy one: a cluster change that never shows a change card. Workflow files themselves can't be
+  written, but a workflow can run code from the branch (a test, a build script).
+- A Linear issue named by identifier is placed in a team by its key; Landlens doesn't read Linear to check it.
+
+The repositories you name are taken as typed: Landlens doesn't check that they exist or that the default branch is
+right.
 
 **On the MCP page** the Servers tab lists `github` and `linear` (when connected) after `landlens-kube`, each with a
 **From Connections** chip, its tools marked by the read-only listing, Preview for reads that need no arguments, and
@@ -354,6 +384,9 @@ provider and writes the fixture.
   one, but that isn't stated anywhere.
 - With your own GitHub and Linear connected, start a session and ask for a read (an issue list) and a write: the read
   runs without asking, the write asks. The e2e proves this against the fakes only.
-- The routine list names GitHub's and Linear's tools as the hand-made fixtures do. Once the listings are recorded,
-  check that the names and arguments match (`owner`, `repo`, `method`, `branch`, Linear's `team`). A name or argument that doesn't match makes those writes ask, so
-  autonomous would do less than it says, not more.
+- The routine rules were written against the hand-made fixtures, not the vendors' real listings. Once the listings
+  are recorded, re-check the routine rules against them: each routine tool's name, and each argument it takes on its
+  own (`GITHUB_ARGS`, `LINEAR_ARGS` in `packages/mcp-gateway/src/providers/`): `owner`, `repo`, `method`, `branch`,
+  `path`, `files[].path`, Linear's `team`, `id` and `issueId`. A name or argument that doesn't match makes those
+  writes ask, so autonomous would do less than it says, not more; an argument the real tool has that isn't in the
+  list asks too, until a release names it. Re-check after every vendor change that you accept.

@@ -248,6 +248,11 @@ describe.runIf(run)("Connections against the fake providers", { timeout: 90_000 
     expect(await strip.innerText()).toContain("GitHub writes to landfalls-ai/landlens run without asking.");
     await d.getByRole("button", { name: "GitHub · autonomous 0/20" }).waitFor();
     await both(page, "a3-03-autonomous-strip");
+    // The strip can't be dismissed: it stays while History is open (L3), then back to the session.
+    await d.getByRole("button", { name: "History" }).click();
+    await d.getByRole("button", { name: "Back to the session" }).waitFor();
+    await expect(strip.isVisible()).resolves.toBe(true);
+    await d.getByRole("button", { name: "Back to the session" }).click();
   });
 
   it.runIf(claude)("in scope a routine write runs on its own and says so; out of scope it asks, with the reason", async () => {
@@ -265,7 +270,7 @@ describe.runIf(run)("Connections against the fake providers", { timeout: 90_000 
     await ask.waitFor({ timeout: 240_000 });
     const asked = await ask.innerText();
     expect(asked).toMatch(/GitHub · issue write/);
-    expect(asked).toContain("Asked because: other-org/elsewhere isn't in the scope");
+    expect(asked).toContain(`Asked because: "other-org/elsewhere" isn't in the scope`);
     expect(asked).toContain("other-org/elsewhere");
     expect(asked).toContain("Out of scope test");
     // The write in scope ran, on the fake, without a question; the out-of-scope one hasn't.

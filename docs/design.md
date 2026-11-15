@@ -153,8 +153,11 @@ all N) and Recent warnings; Nodes. It reads
 - **A GitHub or Linear question** is the ask card with the provider's mark in a 22px tile, "GitHub · issue write?",
   "Asked because: …" in `--warn-text` with a `CircleAlert` when autonomous said no, and an `.args-table`: a ringed
   `<dl>` of 92px labels and mono values divided by hairlines (Repository, Team, Issue, Pull request, Method, Branch,
-  Title, File(s), then up to six more plain values), the Body in the sans face, pre-wrapped, its first 600
-  characters, at most 140px before it scrolls. The answers are Claude Code's own, with ↵ and esc hints.
+  From, Into, Title, File, Files with up to 20 paths, then every other argument, nested ones as JSON), the Body in
+  the sans face, pre-wrapped, its first 600 characters and "(+N more characters)", at most 140px before it scrolls.
+  Under it, **Show all arguments** (`.args-all`, a `<details>`) opens every argument as indented mono JSON in a ringed
+  `--bg-1` well, at most 260px before it scrolls. The answers are Claude Code's own, with ↵ and esc hints, without
+  **Always allow** for these writes. The warn strip stays under the head while History is open.
 - **Views in the dock**: only the newest view stays open; earlier ones fold to their tool row plus a one-line verdict
   (the tool's first line of text, ellipsised, with "Show view"; a heading ending in ":" takes its first item), and
   reopen on a click ("Hide view" folds them back). A view shows at most 320px; past that a fade to `--bg-2` with

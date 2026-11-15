@@ -28,7 +28,8 @@ const AGENT_TITLE = "Claude Code";
  * may run on its own, and main's yes for one that may.
  */
 export type AutonomyHooks = {
-  check(session: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider }>;
+  /** `write`: a GitHub or Linear write, which the dock never offers "always allow" for (M1). */
+  check(session: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider; write?: boolean }>;
   permit(session: string, p: { toolCallId: string; toolName: string }): void;
   states(session: string): AutonomyState[];
 };
@@ -366,7 +367,7 @@ export class AgentService {
    */
   private async ask(req: RequestPermissionRequest, signal: AbortSignal): Promise<RequestPermissionOutcome> {
     const name = (req.toolCall._meta as { claudeCode?: { toolName?: unknown } } | undefined)?.claudeCode?.toolName;
-    let auto: { ok: boolean; why?: string; provider?: ConnProvider } = { ok: false };
+    let auto: { ok: boolean; why?: string; provider?: ConnProvider; write?: boolean } = { ok: false };
     if (typeof name === "string" && /^mcp__/.test(name) && this.deps.autonomy) {
       auto = await this.deps.autonomy.check(req.sessionId, name, req.toolCall.rawInput ?? {}).catch(() => ({ ok: false }));
       const once = req.options.find((o) => o.kind === "allow_once");
@@ -377,11 +378,17 @@ export class AgentService {
         return { outcome: "selected", optionId: once.optionId };
       }
     }
-    return this.askDock(req, signal, auto.provider, auto.why);
+    return this.askDock(req, signal, auto.provider, auto.why, auto.write);
   }
 
-  private askDock(req: RequestPermissionRequest, signal: AbortSignal, provider?: ConnProvider, reason?: string): Promise<RequestPermissionOutcome> {
+  /**
+   * Show the question in the dock. A GitHub or Linear write is offered no "always allow" (M1 of the part 3 review):
+   * it would let every later call of that tool run anywhere, uncounted, past the autonomous limits. The option isn't
+   * shown, and answer() refuses it as not one of the choices; the gateway takes no "always" for such a write either.
+   */
+  private askDock(req: RequestPermissionRequest, signal: AbortSignal, provider?: ConnProvider, reason?: string, write?: boolean): Promise<RequestPermissionOutcome> {
     const request = randomBytes(9).toString("base64url");
+    if (provider && write) req = { ...req, options: req.options.filter((o) => o.kind !== "allow_always") };
     return new Promise((resolve) => {
       const toolName = (req.toolCall._meta as { claudeCode?: { toolName?: unknown } } | undefined)?.claudeCode?.toolName;
       this.pending.set(request, {

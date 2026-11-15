@@ -90,9 +90,12 @@ person's check reads them), and Ask Claude sends one problem at a time.
   asking, and the scope is typed again each time; there is no default scope per connection. Inside the scope, a
   hostile issue or comment can still steer up to 20 writes, wrong or leaking ones
   ([connections.md](connections.md#autonomous-mode)).
-- **Linear's autonomous updates and comments aren't held to the team**: `update_issue` and `create_comment` name an
-  issue, and Landlens can't place an issue in a team without a read it doesn't make, so only a create (and any call
-  that names a team) is checked against the scope's team.
+- **Linear's autonomous updates and comments are held to the team only by the issue's identifier**: `update_issue`
+  and `create_comment` run on their own only on an issue named `<KEY>-<number>` with the scope's key; one named by its
+  UUID asks, since Landlens can't place it in a team without a read it doesn't make.
+- **Autonomous GitHub writes still start CI**: a push to a `landlens/` branch or a pull request can run the
+  repository's workflows, and a GitOps tool that deploys branches by pattern could deploy one; a repository in scope
+  may be public ([connections.md](connections.md#autonomous-mode)).
 - **The routine list is fixed in code**: a tool GitHub or Linear adds or renames asks until a release of Landlens
   names it, and the list matches the hand-made fixtures until the real listings are recorded. The repositories and
   default branch typed in the sheet aren't checked against GitHub.

@@ -9,6 +9,7 @@ import type { ObjectTarget } from "./app-host";
 import { ProviderMark } from "./ConnectionsPage";
 import { contextIcon, Ic, kindIcon } from "./icons";
 import { Markdown } from "./Markdown";
+import { providerArgRows, providerArgsJson } from "./provider-args";
 
 export type Tool = { id: string; title: string; kind?: string; status: string; input?: unknown; output: string; mcp?: string };
 export type Item =
@@ -291,53 +292,26 @@ function ProviderAsk({ ask, provider, onAnswer }: { ask: AgentPermissionRequest;
   );
 }
 
-const cut = (v: string, n: number) => (v.length > n ? `${v.slice(0, n)}…` : v);
-const scalar = (v: unknown) => typeof v === "string" || typeof v === "number" || typeof v === "boolean";
-
 /**
- * A write's arguments as a short table, not raw JSON: the repository or team, the issue or pull request, the branch,
- * the title, the file, then the first 600 characters of the body; a few more plain values after.
+ * A write's arguments as a short table, not raw JSON (D84): the repository or team, the issue or pull request, the
+ * branches, the title, the files, the first 600 characters of the body, then the other arguments; what is cut says
+ * how much. **Show all arguments** opens every argument, whole (M5 of the part 3 review), so nothing approved is hidden.
  */
 export function ProviderArgs({ args }: { args: unknown }) {
-  const a = (args && typeof args === "object" && !Array.isArray(args) ? args : {}) as Record<string, unknown>;
-  const rows: [string, string][] = [];
-  const used = new Set<string>();
-  const take = (label: string, keys: string[], show: (v: unknown) => string | undefined = (v) => (scalar(v) ? cut(String(v), 200) : undefined)) => {
-    for (const k of keys) {
-      if (a[k] === undefined || used.has(k)) continue;
-      const v = show(a[k]);
-      used.add(k);
-      if (v !== undefined) return void rows.push([label, v]);
-    }
-  };
-  if (typeof a.owner === "string" && typeof a.repo === "string") {
-    rows.push(["Repository", `${a.owner}/${a.repo}`]);
-    used.add("owner").add("repo");
-  }
-  take("Team", ["team", "teamId", "teamKey"]);
-  take("Issue", ["issue_number", "issueId"]);
-  take("Pull request", ["pullNumber", "pull_number"]);
-  take("Id", ["id", "comment_id", "commentId"]);
-  take("Method", ["method"]);
-  take("Branch", ["branch", "head"]);
-  take("From", ["from_branch", "base"]);
-  take("Title", ["title", "name"]);
-  take("File", ["path"]);
-  take("Files", ["files"], (v) => (Array.isArray(v) ? `${v.length}: ${v.slice(0, 4).map((f) => (f && typeof f === "object" ? String((f as { path?: unknown }).path ?? "?") : "?")).join(", ")}${v.length > 4 ? ", …" : ""}` : undefined));
-  take("Body", ["body", "description", "content", "message"], (v) => (typeof v === "string" ? cut(v, 600) : undefined));
-  let more = 0;
-  for (const [k, v] of Object.entries(a)) {
-    if (used.has(k)) continue;
-    if (more++ >= 6) break;
-    rows.push([k, scalar(v) ? cut(String(v), 120) : Array.isArray(v) ? `${v.length} items` : "…"]);
-  }
+  const rows = providerArgRows(args);
   if (!rows.length) return null;
   return (
-    <dl className="args-table" aria-label="Arguments">
-      {rows.map(([k, v], i) => (
-        <div key={i} className={k === "Body" ? "args-body" : undefined}><dt>{k}</dt><dd className={k === "Body" ? undefined : "mono"}>{v}</dd></div>
-      ))}
-    </dl>
+    <>
+      <dl className="args-table" aria-label="Arguments">
+        {rows.map((r, i) => (
+          <div key={i} className={r.body ? "args-body" : undefined}><dt>{r.label}</dt><dd className={r.body ? undefined : "mono"}>{r.value}</dd></div>
+        ))}
+      </dl>
+      <details className="args-all">
+        <summary>Show all arguments</summary>
+        <pre className="mono" aria-label="All arguments">{providerArgsJson(args)}</pre>
+      </details>
+    </>
   );
 }
 

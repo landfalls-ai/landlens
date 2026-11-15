@@ -286,7 +286,9 @@ describe("McpService", () => {
       const open = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
       open.bind("acp-m2");
       const session = () => [...(svc.gateway as unknown as { sessions: Map<string, GatewaySession> }).sessions.values()].find((x) => x.acpSession === "acp-m2")!;
-      svc.gateway.permit("acp-m2", { toolCallId: "t1", toolName: "mcp__github__issue_write", always: true });
+      // Two unused yeses for a write (an "always" for a connection's write is one call's yes since part 3's review, M1).
+      svc.gateway.permit("acp-m2", { toolCallId: "t2", toolName: "mcp__github__issue_write", always: false });
+      svc.gateway.permit("acp-m2", { toolCallId: "t3", toolName: "mcp__github__issue_write", always: false });
       const info = { provider: "github" as const, state: "ready" as const, mode: "ask" as const, readsAuto: true, give: true };
       svc.connectionChanged(info);
       expect(session().takePermit("mcp__github__issue_write", "t2")).toBe(true); // nothing changed: the yes stands

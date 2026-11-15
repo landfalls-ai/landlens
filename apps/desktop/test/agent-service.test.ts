@@ -108,7 +108,7 @@ describe("AgentService.ask with the autonomous mode", () => {
 
   it("asks in the dock, with the reason, for a write out of scope, a merge, or credential-shaped arguments", async () => {
     const cases: [string, unknown, string][] = [
-      ["mcp__github__issue_write", { owner: "other", repo: "place", method: "create", title: "t" }, "other/place isn't in the scope"],
+      ["mcp__github__issue_write", { owner: "other", repo: "place", method: "create", title: "t" }, `"other/place" isn't in the scope`],
       ["mcp__github__merge_pull_request", { ...IN, pullNumber: 4 }, "it says it may destroy something"],
       ["mcp__github__add_issue_comment", { ...IN, issue_number: 1, body: `token ${TOKEN}` }, "it contains something shaped like a credential"],
     ];
@@ -156,6 +156,35 @@ describe("AgentService.ask with the autonomous mode", () => {
     const ac = new AbortController();
     ac.abort();
     expect(await ask(req("acp-1", "mcp__github__issue_write", { ...IN, method: "create", title: "t" }), ac.signal)).toEqual({ outcome: "cancelled" });
+  });
+
+  it("offers no Always allow for a GitHub write (M1), autonomous or not, and refuses it if sent; a cluster tool keeps it", async () => {
+    gateway.setAutonomy("acp-1", "github", false);
+    const before = asked().length;
+    const done = ask(req("acp-1", "mcp__github__issue_write", { ...IN, method: "create", title: "t" }));
+    await new Promise((r) => setTimeout(r, 20));
+    const q = asked().slice(before)[0]!;
+    expect(q.options.map((o) => o.kind)).toEqual(["allow_once", "reject_once"]);
+    expect(() => svc.answer(q.request, "always")).toThrow(/isn't one of the choices/);
+    svc.answer(q.request, "reject");
+    expect((await done).optionId).toBe("reject");
+    // With autonomous on, an out-of-scope write asks the same way: no Always allow to turn it into "anywhere".
+    gateway.setAutonomy("acp-1", "github", true, { repos: ["landfalls-ai/landlens"] });
+    const b2 = asked().length;
+    const d2 = ask(req("acp-1", "mcp__github__issue_write", { owner: "other", repo: "place", method: "create", title: "t" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(asked().slice(b2)[0]!.options.map((o) => o.kind)).not.toContain("allow_always");
+    rejectAll();
+    await d2;
+    // A cluster tool and a read keep it.
+    for (const name of ["mcp__landlens-kube__scale", "mcp__github__list_issues"]) {
+      const b = asked().length;
+      const d = ask(req("acp-1", name, IN));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(asked().slice(b)[0]!.options.map((o) => o.kind), name).toContain("allow_always");
+      rejectAll();
+      await d;
+    }
   });
 
   it("can't be answered from the renderer: agent:answer takes only a question the dock was shown", () => {

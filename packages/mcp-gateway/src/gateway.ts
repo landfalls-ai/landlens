@@ -117,7 +117,9 @@ export class GatewaySession {
 
   /**
    * Whether you allowed this call: a "don't ask again" for the tool, or a yes to this very tool call (by its tool_use
-   * id; if Claude Code stopped sending that, the oldest unused yes for the same tool). A yes is used up by its call.
+   * id; if Claude Code stopped sending that, the oldest unused yes for the same tool, but only while every unused yes
+   * for it is of one kind: L4 of the part 3 review, so a call that main let run on its own can't take your yes for
+   * another call and run uncounted, nor the other way). A yes is used up by its call.
    */
   takePermit(rule: string, toolUseId: string | undefined): boolean {
     return !!this.takePermitKind(rule, toolUseId);
@@ -134,13 +136,10 @@ export class GatewaySession {
       this.once.delete(toolUseId);
       return kind(p);
     }
-    for (const [id, p] of this.once) {
-      if (p.rule === rule) {
-        this.once.delete(id);
-        return kind(p);
-      }
-    }
-    return undefined;
+    const same = [...this.once].filter(([, p]) => p.rule === rule);
+    if (!same.length || same.some(([, p]) => p.autonomous !== same[0]![1].autonomous)) return undefined;
+    this.once.delete(same[0]![0]);
+    return kind(same[0]![1]);
   }
 
   /** A server's rules and every yes for its tools leave the session: they run only after a new yes. */
@@ -323,7 +322,7 @@ export class McpGateway {
    * write in scope within the budget, passes. A failure on the rules counts toward the three in a row that turn it
    * off. Nothing is counted on a pass: run() checks the arguments that arrive and counts then.
    */
-  async autonomyCheck(acpSession: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider }> {
+  async autonomyCheck(acpSession: string, toolName: string, input: unknown): Promise<{ ok: boolean; why?: string; provider?: ConnProvider; write?: boolean }> {
     const m = /^mcp__([a-z][a-z0-9-]{0,30}[a-z0-9])__([A-Za-z0-9_.-]{1,128})$/.exec(toolName);
     const s = this.agentSession(acpSession);
     if (!m || !s || m[1] === BUILTIN_MCP_SERVER) return { ok: false };
@@ -332,14 +331,16 @@ export class McpGateway {
     if (!spec?.provider || !up) return { ok: false };
     const provider = spec.provider.id;
     const a = s.autonomy.get(provider);
-    if (!a?.on || spec.provider.readTools.has(m[2]!)) return { ok: false, provider };
+    // A provider's write is never offered "always allow" (M1), autonomous or not: `write` tells main so.
+    if (spec.provider.readTools.has(m[2]!)) return { ok: false, provider };
+    if (!a?.on) return { ok: false, provider, write: true };
     const t = await this.listTools(up).then((ts) => ts.find((x) => x.name === m[2]), () => undefined);
-    if (!t) return { ok: false, provider, why: "not one of the routine writes" };
+    if (!t) return { ok: false, provider, write: true, why: "not one of the routine writes" };
     const args = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
     const r = a.check(providerTool(t), args);
-    if (!r) return { ok: true, provider };
+    if (!r) return { ok: true, provider, write: true };
     if (r.rules) a.refused();
-    return { ok: false, provider, why: r.why };
+    return { ok: false, provider, write: true, why: r.why };
   }
 
   /** Called by GatewaySession.close(). */
@@ -379,7 +380,13 @@ export class McpGateway {
     const name = p.toolName ?? this.cardNames.get(p.toolCallId);
     // Main's yes for an autonomous write names its tool: it never stands in for another.
     if (p.autonomous && !name) return;
-    s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, p.always, !!p.autonomous);
+    // "Always allow" never covers a connection's write (M1): it would run every later call of that tool anywhere,
+    // uncounted, past the autonomous limits. It counts as this one call's yes. A write with no name can't be told
+    // from a read, so its "always" is this call's yes too.
+    const m = name ? /^mcp__([a-z0-9-]+)__(.+)$/.exec(name) : null;
+    const prov = m ? s?.init.remotes.find((r) => r.name === m[1])?.provider : undefined;
+    const always = p.always && !!m && !(prov && !prov.readTools.has(m[2]!));
+    s?.permit(p.toolCallId, name && /^mcp__/.test(name) ? name : undefined, always, !!p.autonomous);
   }
 
   async listTools(u: Upstream, keep = true): Promise<Tool[]> {

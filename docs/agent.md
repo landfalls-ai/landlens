@@ -17,7 +17,7 @@ you choose which of your Claude Code skills a session gets.
 | A row per tool call, consecutive calls grouped in one list: what it is (for example `describe pod landlens-dev/orders-api-…` or `shell kubectl logs …`), its status as an icon, and, opened, what it ran and what came back with line numbers and error lines marked | `tool_call`, `tool_call_update` |
 | The plan, as a checklist | `plan` |
 | "Run a shell command?" with the command and Claude Code's own choices (Yes / Yes, and don't ask again for … / No); Enter picks the first, Esc rejects, when the composer is empty | `session/request_permission` |
-| A GitHub or Linear write: the provider's mark, the tool, "Asked because: …" when autonomous said no, and its arguments as a short table | `session/request_permission`, with main's `provider` and `reason` |
+| A GitHub or Linear write: the provider's mark, the tool, "Asked because: …" when autonomous said no, its arguments as a short table and **Show all arguments**; no Always allow | `session/request_permission`, with main's `provider` and `reason` |
 | `GitHub · asks` / `GitHub · autonomous 3/20` chips above the composer's foot, the scope sheet, and a warn strip with Stop under the head while autonomous; **ran on its own** on a tool row | main's `agent:autonomy`, and the call log's `gate` ([connections.md](connections.md#autonomous-mode)) |
 | Mode (Manual or Plan) and model pickers, in the composer's foot | the session's modes and config options |
 | A change card: the agent's reason, each operation with its diff, risk tags, Approve / Reject / Reject with a note | the `landlens-kube` write tools, through Landlens's approval broker (not ACP) |
