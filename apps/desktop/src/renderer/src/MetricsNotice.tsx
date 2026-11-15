@@ -6,6 +6,19 @@ import { Ic } from "./icons";
 import { RANGES } from "./metrics";
 import type { MetricsRange } from "@landlens/contracts";
 
+/** Choosing the Prometheus Landlens found, or no longer using it: the workspace asks main and redraws every chart. */
+export const PROMETHEUS_EVENT = "landlens:prometheus";
+const choosePrometheus = (use: string | null) => window.dispatchEvent(new CustomEvent(PROMETHEUS_EVENT, { detail: use }));
+
+/** A found Prometheus, offered (security review, wave 4 part 4, finding 4): it is used only once you choose it. */
+function PrometheusOffer({ found }: { found: string }) {
+  return (
+    <button className="link-btn prom-offer" title={`Landlens found a Prometheus at ${found}. Anyone who can make a Service with Prometheus's labels could pose as one, so it is used only once you choose it.`} onClick={() => choosePrometheus(found)}>
+      Use Prometheus <span className="mono">{found}</span>
+    </button>
+  );
+}
+
 const TITLE: Partial<Record<MetricsReason["code"], string>> = {
   "clickland-unreachable": "Clickland isn't answering",
   "clickland-unauthorized": "Clickland refused the key",
@@ -29,6 +42,7 @@ export function MetricsUnavailable({ data, onSettings }: { data: MetricsSeries; 
           or install metrics-server in the cluster for live samples while Landlens is open.
         </p>
         <button className={off ? "primary" : "secondary"} onClick={onSettings}><Ic icon={PlugZap} size={14} />{off ? "Connect Clickland" : "Clickland settings"}</button>
+        {data.prometheusFound ? <p className="small">This cluster has a Prometheus: <PrometheusOffer found={data.prometheusFound} /></p> : null}
       </div>
     </div>
   );
@@ -39,13 +53,14 @@ export function MetricsSource({ data, onSettings }: { data: MetricsSeries; onSet
   if (data.source === "clickland")
     return <span className="metrics-src" title={`Clickland, k8s.cluster.name “${data.cluster}”, ${data.step}s steps`}><Ic icon={Database} size={12} />Clickland<span className="dim mono">{data.cluster}</span></span>;
   if (data.source === "prometheus")
-    return <span className="metrics-src" title={`The cluster's Prometheus (${data.prometheus}), cAdvisor series, ${data.step}s steps`}><Ic icon={Flame} size={12} />Prometheus<span className="dim mono">{data.prometheus?.split("/")[1]}</span></span>;
+    return <span className="metrics-src" title={`The cluster's Prometheus (${data.prometheus}), cAdvisor series, ${data.step}s steps`}><Ic icon={Flame} size={12} />Prometheus<span className="dim mono">{data.prometheus?.split("/")[1]}</span><button className="link-btn" onClick={() => choosePrometheus(null)}>Stop using</button></span>;
   if (data.source !== "metrics-server") return null;
   const why = data.reasons.find((r) => r.code !== "live-only");
   return (
     <span className="metrics-src live" title={data.reasons.map((r) => r.message).join("\n")}>
       <Ic icon={History} size={12} />Live from metrics-server, no history
       {why ? <button className="link-btn" onClick={onSettings}>{why.code === "clickland-off" ? "Connect Clickland" : "Clickland settings"}</button> : null}
+      {data.prometheusFound ? <PrometheusOffer found={data.prometheusFound} /> : null}
     </span>
   );
 }

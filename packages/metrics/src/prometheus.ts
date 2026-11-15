@@ -34,13 +34,36 @@ function targetOf(s: Svc, provider: string): PrometheusTarget | undefined {
   if (!name || !namespace || !safeName(name) || !safeName(namespace)) return undefined;
   const ports = s.spec?.ports ?? [];
   const p = ports.find((x) => x.name === "web" || x.name === "http" || x.name === "http-web") ?? ports.find((x) => x.port === 9090) ?? ports[0];
-  if (!p?.port) return undefined;
+  if (!p || typeof p.port !== "number" || !Number.isInteger(p.port) || p.port < 1 || p.port > 65535) return undefined;
   return { namespace, service: name, port: String(p.port), scheme: p.name === "https" ? "https" : "http", provider };
 }
 
-/** The first Prometheus the cluster has, or undefined; services you can't list are skipped. */
-export async function findPrometheus(get: Get): Promise<PrometheusTarget | undefined> {
-  for (const l of BY_LABEL) {
+/**
+ * The Prometheus to offer: the one you chose, if it is still there; else the first at a well-known name, then by the
+ * operator's label, then by the Helm chart's labels. A found one is only offered: anyone who can make a Service with
+ * those labels could pose as Prometheus, so it is used once you choose it (security review, part 4, finding 4).
+ */
+export async function findPrometheus(get: Get, chosen?: string): Promise<PrometheusTarget | undefined> {
+  if (chosen) {
+    const [namespace, service] = chosen.split("/");
+    if (namespace && service && safeName(namespace) && safeName(service)) {
+      try {
+        const t = targetOf(await get(`/api/v1/namespaces/${namespace}/services/${service}`), "chosen");
+        if (t) return t;
+      } catch {
+        /* gone: look again */
+      }
+    }
+  }
+  for (const n of BY_NAME) {
+    try {
+      const t = targetOf(await get(`/api/v1/namespaces/${n.namespace}/services/${n.service}`), n.provider);
+      if (t) return t;
+    } catch {
+      /* not there */
+    }
+  }
+  for (const l of [...BY_LABEL].reverse()) {
     try {
       const list = await get(`/api/v1/services?labelSelector=${encodeURIComponent(l.selector)}&limit=5`);
       for (const s of (list?.items ?? []) as Svc[]) {
@@ -48,16 +71,7 @@ export async function findPrometheus(get: Get): Promise<PrometheusTarget | undef
         if (t) return t;
       }
     } catch {
-      /* not allowed to list services across namespaces: try the names */
-    }
-  }
-  for (const n of BY_NAME) {
-    try {
-      const s = await get(`/api/v1/namespaces/${n.namespace}/services/${n.service}`);
-      const t = targetOf(s, n.provider);
-      if (t) return t;
-    } catch {
-      /* not there */
+      /* not allowed to list services across namespaces */
     }
   }
   return undefined;
@@ -128,6 +142,10 @@ export const stepFor = (r: ScopeRequest) => Math.max(15, Math.round(RANGE_MS[r.r
 export async function prometheusSeries(read: Get, ask: Get, t: PrometheusTarget, r: ScopeRequest, now = Date.now()): Promise<MetricsSeries> {
   for (const n of [r.namespace, r.name]) if (n !== undefined && !safeName(n)) throw Object.assign(new Error("not a Kubernetes name"), { status: 400 });
   const step = stepFor(r);
+  // The reader must be able to list the scope's pods itself (a namespace, or every namespace for the cluster), so
+  // Prometheus never shows a reader more than its own reads would (security review, part 4, finding 9).
+  if (r.scope === "namespace") await read(`/api/v1/namespaces/${r.namespace}/pods?limit=1`);
+  if (r.scope === "cluster") await read("/api/v1/pods?limit=1");
   const base = await liveSeries(read, [], r, step, now);
   const pods = r.scope === "deployment" || r.scope === "statefulset" || r.scope === "daemonset" ? (await workloadPods(read, r)).filter(safeName) : undefined;
   const q = queries(r, step, pods);

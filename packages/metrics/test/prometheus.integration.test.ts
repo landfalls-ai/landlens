@@ -34,7 +34,7 @@ describe.runIf(run)("Prometheus on OrbStack", () => {
     await clusters?.disconnectAll();
     await door?.stop();
     if (run) {
-      kubectl("delete", "-f", resolve(ROOT, "deploy/scenarios/prometheus/prometheus.yaml"), "--ignore-not-found");
+      kubectl("delete", "-f", resolve(ROOT, "deploy/scenarios/prometheus/prometheus.yaml"), "--ignore-not-found", "--wait=true");
       kubectl("delete", "configmap", "landlens-prometheus-data", "--ignore-not-found");
     }
   }, 120_000);
@@ -59,8 +59,17 @@ describe.runIf(run)("Prometheus on OrbStack", () => {
     expect(s.memory.limit).toBe(32 * 1048576);
   }, 60_000);
 
-  it("is the source the IDE picks with no Clickland, for a pod, a namespace and the cluster", async () => {
-    const m = new MetricsService({ clickland: () => ({ clusterName: (x) => x }), cluster: () => ({ context: "orbstack", get }) });
+  it("is offered, not used, until it is chosen", async () => {
+    const m = new MetricsService({ clickland: () => ({ clusterName: (x) => x }), cluster: () => ({ context: "orbstack", get }), prometheus: { chosen: () => undefined } });
+    const s = await m.series({ handle, scope: "cluster", range: "1h" });
+    expect(s).toMatchObject({ source: "none", prometheusFound: "landlens-dev/landlens-prometheus" });
+    expect(await m.foundPrometheus(handle)).toBe("landlens-dev/landlens-prometheus");
+    m.stopAll();
+  }, 60_000);
+
+  it("is the source the IDE picks with no Clickland once chosen, for a pod, a namespace and the cluster", async () => {
+    const ask = (path: string) => clusters.get(handle).client.jsonCapped(path, { maxBytes: 8 * 1048576, timeoutMs: 10_000 });
+    const m = new MetricsService({ clickland: () => ({ clusterName: (x) => x }), cluster: () => ({ context: "orbstack", get, ask }), prometheus: { chosen: () => "landlens-dev/landlens-prometheus" } });
     const pod = await m.series({ handle, scope: "pod", namespace: "landlens-dev", name: pods[0]!, range: "1h" });
     expect(pod).toMatchObject({ source: "prometheus", by: "container", prometheus: "landlens-dev/landlens-prometheus" });
     expect(pod.cpu.series.map((l) => l.key)).toEqual(["app"]);

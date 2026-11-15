@@ -41,13 +41,18 @@ describe.runIf(run)("graphs from Prometheus on OrbStack", () => {
   afterAll(async () => {
     await app?.close();
     if (run) {
-      kubectl("delete", "-f", resolve(ROOT, "deploy/scenarios/prometheus/prometheus.yaml"), "--ignore-not-found");
+      kubectl("delete", "-f", resolve(ROOT, "deploy/scenarios/prometheus/prometheus.yaml"), "--ignore-not-found", "--wait=true");
       kubectl("delete", "configmap", "landlens-prometheus-data", "--ignore-not-found");
     }
   }, 120_000);
 
-  it("draws the Overview's usage from the cluster's Prometheus, and names it", async () => {
+  it("offers the Prometheus it finds, and draws the Overview's usage from it once chosen", async () => {
     const usage = page.getByRole("region", { name: "Usage" });
+    // Found, not trusted: anyone who can make a Service with Prometheus's labels could pose as one.
+    const offer = usage.getByRole("button", { name: /Use Prometheus\s*landlens-dev\/landlens-prometheus/ });
+    await offer.waitFor({ timeout: 30_000 });
+    await shot(page, "w4-62-prometheus-offer");
+    await offer.click();
     const src = usage.locator(".metrics-src", { hasText: "Prometheus" });
     await src.waitFor({ timeout: 30_000 });
     expect(await src.innerText()).toMatch(/Prometheus\s*landlens-prometheus/);

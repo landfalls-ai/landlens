@@ -84,9 +84,10 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     await page.setViewportSize({ width: 1440, height: 880 });
   }, 180_000);
 
+  // Closing under load (other projects' containers share the engine) can take longer than the default 10 s.
   afterAll(async () => {
     await app?.close();
-  });
+  }, 60_000);
 
   it("shows the kubeconfig contexts", async () => {
     await page.getByRole("heading", { name: "Pick a cluster" }).waitFor();

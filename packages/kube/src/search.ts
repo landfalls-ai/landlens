@@ -22,6 +22,10 @@ export const SEARCH_KINDS: readonly { group: string; resource: string }[] = [
 ];
 /** At most this many names of one kind; a kind with more says so. */
 export const MAX_PER_KIND = 2000;
+/** Read in pages of this many, each at most 16 MB (metadata carries annotations), all of a kind at most 64 MB. */
+const PAGE = 500;
+const MAX_PAGE_BYTES = 16 * 1048576;
+const MAX_KIND_BYTES = 64 * 1048576;
 const META = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;q=0.9";
 
 export type SearchIndex = { entries: SearchEntry[]; cut: string[]; unreadable: string[] };
@@ -33,14 +37,24 @@ export async function searchIndex(client: KubeClient, types: ResourceType[], sig
   const unreadable: string[] = [];
   const lists = await Promise.all(served.map(async (t) => {
     try {
-      const list = await client.json(`${apiPath(t)}?limit=${MAX_PER_KIND}`, { headers: { Accept: META }, ...(signal ? { signal } : {}) });
-      if (list.metadata?.continue) cut.push(t.resource);
-      return ((list.items ?? []) as { metadata?: { name?: unknown; namespace?: unknown } }[]).slice(0, MAX_PER_KIND).flatMap((o): SearchEntry[] => {
-        const name = o.metadata?.name;
-        const ns = o.metadata?.namespace;
-        if (typeof name !== "string") return [];
-        return [{ group: t.group, version: t.version, resource: t.resource, kind: t.kind, name, ...(t.namespaced && typeof ns === "string" ? { namespace: ns } : {}) }];
-      });
+      // Pages, each capped as it streams in, so annotations can't make one read hold gigabytes (security review,
+      // part 4, finding 10).
+      const out: SearchEntry[] = [];
+      let next = "";
+      let bytes = 0;
+      do {
+        const q = new URLSearchParams({ limit: String(PAGE), ...(next ? { continue: next } : {}) });
+        const page = await client.jsonText(`${apiPath(t)}?${q}`, { headers: { Accept: META }, maxBytes: MAX_PAGE_BYTES, ...(signal ? { signal } : {}) });
+        bytes += page.bytes;
+        for (const o of ((page.value.items ?? []) as { metadata?: { name?: unknown; namespace?: unknown } }[])) {
+          const name = o.metadata?.name;
+          const ns = o.metadata?.namespace;
+          if (typeof name === "string") out.push({ group: t.group, version: t.version, resource: t.resource, kind: t.kind, name, ...(t.namespaced && typeof ns === "string" ? { namespace: ns } : {}) });
+        }
+        next = typeof page.value.metadata?.continue === "string" ? page.value.metadata.continue : "";
+      } while (next && out.length < MAX_PER_KIND && bytes < MAX_KIND_BYTES);
+      if (next) cut.push(t.resource);
+      return out.slice(0, MAX_PER_KIND);
     } catch {
       unreadable.push(t.resource);
       return [];

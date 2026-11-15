@@ -335,3 +335,5 @@
 .palette-foot kbd { font-size: 10.5px; }
 .palette-foot .grow { flex: 1; }
 .reach-error { position: fixed; top: 12vh; left: 50%; transform: translateX(-50%); z-index: 60; width: min(480px, calc(100vw - 48px)); box-shadow: var(--shadow-2); }
+.prom-offer { margin-left: 8px; }
+.prom-offer .mono { font-size: 11.5px; }

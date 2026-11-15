@@ -11,8 +11,13 @@ import { MetricsServerSampler, type Get, type SamplerOptions } from "./sampler.j
 export type MetricsDeps = {
   /** Clickland's stored address and key, if a key is stored; and the cluster name for a kubeconfig context. */
   clickland: () => { config?: ClicklandConfig; clusterName: (context: string) => string };
-  /** A connected cluster: its kubeconfig context, and GET through its sidecar. Throws if not connected. */
-  cluster: (handle: string) => { context: string; get: Get };
+  /**
+   * A connected cluster: its kubeconfig context, and GET through its sidecar. `ask`, when given, is how Prometheus is
+   * asked: with a time limit and a size cap. Throws if not connected.
+   */
+  cluster: (handle: string) => { context: string; get: Get; ask?: Get };
+  /** The Prometheus you chose for a context, `namespace/name`. */
+  prometheus?: { chosen: (context: string) => string | undefined };
   fetch?: typeof fetch;
   now?: () => number;
   sampler?: SamplerOptions;
@@ -38,7 +43,7 @@ export class MetricsService {
   /** Per Clickland URL: whether it honours `where`, checked at most every five minutes. */
   private readonly filters = new Map<string, { at: number; ok: boolean }>();
   /** Per cluster: the Prometheus found (or none), looked for again after five minutes. */
-  private readonly prometheus = new Map<string, { at: number; target?: PrometheusTarget }>();
+  private readonly prometheus = new Map<string, { at: number; chosen: string | undefined; target?: PrometheusTarget }>();
   constructor(private readonly deps: MetricsDeps) {}
 
   private now() {
@@ -64,16 +69,24 @@ export class MetricsService {
       }
     } else reasons.push({ code: "clickland-off", message: "Clickland isn't connected, so there is no history." });
 
-    // Prometheus, if the cluster has one: asked through the API server's service proxy as you.
-    const prom = await this.findPrometheus(req.handle, cluster.get);
+    // Prometheus, if the cluster has one and you chose it: asked through the API server's service proxy as you.
+    const chosen = this.deps.prometheus?.chosen(cluster.context);
+    const prom = await this.findPrometheus(req.handle, cluster.get, chosen);
+    let found: string | undefined;
     if (prom) {
-      try {
-        const out = await prometheusSeries(opts.read ?? cluster.get, cluster.get, prom, req, this.now());
-        out.reasons = reasons;
-        return out;
-      } catch (err) {
-        if ((err as { status?: number }).status === 400) throw err;
-        reasons.push({ code: "prometheus-failed", message: `Prometheus (${prom.namespace}/${prom.service}) didn't answer: ${(err as Error).message}`.slice(0, 300) });
+      const key = `${prom.namespace}/${prom.service}`;
+      if (key === chosen) {
+        try {
+          const out = await prometheusSeries(opts.read ?? cluster.get, cluster.ask ?? cluster.get, prom, req, this.now());
+          out.reasons = reasons;
+          return out;
+        } catch (err) {
+          if ((err as { status?: number }).status === 400) throw err;
+          reasons.push({ code: "prometheus-failed", message: `Prometheus (${key}) didn't answer: ${(err as Error).message}`.slice(0, 300) });
+        }
+      } else {
+        found = key;
+        reasons.push({ code: "prometheus-found", message: `Landlens found a Prometheus at ${key}. It is used once you choose it, since anyone who can make a Service with Prometheus's labels could pose as one.` });
       }
     }
 
@@ -83,12 +96,13 @@ export class MetricsService {
       await sampler.touch();
       const out = await liveSeries(opts.read ?? cluster.get, sampler.samples(this.now() - RANGE_MS[req.range]), req, sampler.intervalMs / 1000, this.now());
       const span = RANGE_MS[req.range] > 3_600_000 ? " (at most the last hour)" : "";
+      if (found) out.prometheusFound = found;
       out.reasons = [...reasons, { code: "live-only", message: `Sampled from metrics-server every ${sampler.intervalMs / 1000}s since Landlens opened this view${span}.` }];
       return out;
     }
     reasons.push({ code: "no-metrics-server", message: served.message });
     const to = this.now();
-    return { source: "none", reasons, step: 0, from: to - RANGE_MS[req.range], to, by: "container", cpu: { series: [] }, memory: { series: [] } };
+    return { source: "none", reasons, ...(found ? { prometheusFound: found } : {}), step: 0, from: to - RANGE_MS[req.range], to, by: "container", cpu: { series: [] }, memory: { series: [] } };
   }
 
   /**
@@ -159,12 +173,20 @@ export class MetricsService {
     return ok;
   }
 
-  private async findPrometheus(handle: string, get: Get): Promise<PrometheusTarget | undefined> {
+  private async findPrometheus(handle: string, get: Get, chosen?: string): Promise<PrometheusTarget | undefined> {
     const known = this.prometheus.get(handle);
-    if (known && this.now() - known.at < 300_000) return known.target;
-    const target = await findPrometheus(get).catch(() => undefined);
-    this.prometheus.set(handle, { at: this.now(), ...(target ? { target } : {}) });
+    if (known && known.chosen === chosen && this.now() - known.at < 300_000) return known.target;
+    const target = await findPrometheus(get, chosen).catch(() => undefined);
+    this.prometheus.set(handle, { at: this.now(), chosen, ...(target ? { target } : {}) });
     return target;
+  }
+
+  /** The Prometheus found for a cluster now (`namespace/name`), for choosing it; looked for again. */
+  async foundPrometheus(handle: string): Promise<string | undefined> {
+    const c = this.deps.cluster(handle);
+    this.prometheus.delete(handle);
+    const t = await this.findPrometheus(handle, c.get);
+    return t ? `${t.namespace}/${t.service}` : undefined;
   }
 
   private sampler(handle: string, get: Get) {

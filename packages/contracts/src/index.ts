@@ -361,6 +361,8 @@ export const channels = {
   // Helm releases, read-only (wave 4, part 4): decoded in main, as you.
   "helm:list": z.object({ handle: Handle, namespace: NamespaceName.optional() }),
   "helm:get": z.object({ handle: Handle, namespace: NamespaceName, name: ObjectName, revision: z.number().int().min(1).max(1_000_000).optional() }),
+  // Use the Prometheus Landlens found for this cluster's context (it must still be the one found), or stop using one.
+  "metrics:prometheus": z.object({ handle: Handle, use: z.string().regex(/^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\/[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$/).nullable() }),
   // The ⌘K palette's names across kinds (D45); `fresh` reads again even if the last read is recent.
   "search:index": z.object({ handle: Handle, fresh: z.boolean().optional() }),
   "metrics:series": MetricsRequest,
@@ -433,6 +435,7 @@ export type Responses = {
   "forward:open": { ok: true };
   "helm:list": { releases: HelmRelease[]; unreadable: number };
   "helm:get": HelmReleaseDetail;
+  "metrics:prometheus": { ok: true };
   "search:index": { entries: SearchEntry[]; cut: string[]; unreadable: string[]; at: string };
   "metrics:series": MetricsSeries;
   "metrics:settings": ClicklandSettings;
@@ -567,6 +570,7 @@ export type MetricsReasonCode =
   | "clickland-failed"
   | "clickland-no-cluster" // answers, but has nothing for this cluster's name
   | "prometheus-failed" // found in the cluster, but its answer couldn't be read
+  | "prometheus-found" // found, but not chosen yet: anyone who can make a Service could pose as one
   | "no-metrics-server"
   | "live-only"; // metrics-server: samples only since Landlens opened, at most an hour
 export type MetricsReason = { code: MetricsReasonCode; message: string };
@@ -588,6 +592,8 @@ export type MetricsSeries = {
   cluster?: string;
   /** Prometheus: the Service that answered, `namespace/name`. */
   prometheus?: string;
+  /** A Prometheus Landlens found but you haven't chosen, `namespace/name`: offered, not used. */
+  prometheusFound?: string;
 };
 export type ClicklandSettings = {
   url: string;

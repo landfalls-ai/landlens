@@ -10,6 +10,7 @@ import { Details, type NavTarget } from "./Details";
 import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
 import { JumpPalette, type Target, type Verb } from "./JumpPalette";
+import { PROMETHEUS_EVENT } from "./MetricsNotice";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
@@ -27,6 +28,7 @@ import { direct, shellable, targetOf } from "./ShellMenu";
 import { copyText } from "./present";
 import { Toolbar, type StatusFilter } from "./Toolbar";
 import { HelmDrawer, HelmPage, useHelmList } from "./Helm";
+import { Boundary } from "./Boundary";
 import { CreateSheet } from "./CreateSheet";
 import { leaveEdit } from "./editGuard";
 
@@ -58,6 +60,18 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
   const [mcpCall, setMcpCall] = useState<string>();
   const [helmPick, setHelmPick] = useState<{ namespace: string; name: string }>();
   const [reachError, setReachError] = useState<string>();
+  // Choosing or dropping a found Prometheus (MetricsNotice): main checks it is still the one found, then every chart asks again.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const use = (e as CustomEvent<string | null>).detail;
+      api.invoke("metrics:prometheus", { handle: cluster.handle, use }).then(
+        () => setMetricsVersion((n) => n + 1),
+        (err: ApiError) => setReachError(`Prometheus: ${err.message}`),
+      );
+    };
+    window.addEventListener(PROMETHEUS_EVENT, on);
+    return () => window.removeEventListener(PROMETHEUS_EVENT, on);
+  }, [cluster.handle]);
   useEffect(() => {
     if (!reachError) return;
     const t = setTimeout(() => setReachError(undefined), 6000);
@@ -365,6 +379,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             </div>
           </div>
         ) : (
+          <Boundary what="this list" resetKey={list ? `${list.type.group}/${list.type.resource}` : ""}>
           <ResourceTable
             resource={list.type.resource}
             columns={columns}
@@ -383,6 +398,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
             onMenu={(o, x, y) => setRowMenu({ o, x, y })}
             onAction={act}
           />
+          </Boundary>
         )}
       </main>
       <StatusBar
@@ -401,6 +417,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onForwards={() => bench.openForwards()}
         />
       {selected && list ? (
+        <Boundary what="this object" resetKey={selected?.metadata.uid}>
         <Details
           handle={cluster.handle}
           cluster={cluster}
@@ -422,9 +439,12 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
           {...(show ? { show } : {})}
         />
+        </Boundary>
       ) : null}
       {helmSel ? (
-        <HelmDrawer handle={cluster.handle} release={helmSel} now={now} onClose={() => setHelmPick(undefined)} onAsk={ask} onNavigate={go} />
+        <Boundary what="this release" resetKey={`${helmSel.namespace}/${helmSel.name}`}>
+          <HelmDrawer handle={cluster.handle} release={helmSel} now={now} onClose={() => setHelmPick(undefined)} onAsk={ask} onNavigate={go} />
+        </Boundary>
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
       <Bench bench={bench} cluster={cluster} onAsk={ask} appHeight={width.height} />
@@ -493,7 +513,7 @@ export function Workspace({ cluster, contexts, onSwitch }: { cluster: ClusterInf
       {reachError ? (
         <div className="notice reach-error" role="alert">
           <Ic icon={CircleX} size={15} className="tone-bad" />
-          <div className="notice-body"><strong>Couldn't open it.</strong><p>{reachError}</p></div>
+          <div className="notice-body"><strong>{reachError.startsWith("Prometheus:") ? "Couldn't change the Prometheus." : "Couldn't open it."}</strong><p>{reachError}</p></div>
         </div>
       ) : null}
     </div>

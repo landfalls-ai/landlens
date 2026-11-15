@@ -13,7 +13,7 @@ const CHANNELS: readonly Channel[] = [
   "logs:open", "logs:close", "terminal:open", "terminal:local", "terminal:input", "terminal:resize", "terminal:ack", "terminal:close",
   "edit:review", "edit:create", "edit:apply", "edit:discard",
   "forward:list", "forward:suggest", "forward:check", "forward:start", "forward:stop", "forward:resume", "forward:remove", "forward:open",
-  "helm:list", "helm:get", "search:index",
+  "helm:list", "helm:get", "search:index", "metrics:prometheus",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",

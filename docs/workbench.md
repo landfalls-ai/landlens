@@ -249,9 +249,11 @@ Helm's releases, read-only (D42–D43): **Helm releases** is the last item under
 - **How it reads them**: main lists Helm's release Secrets (`owner=helm`, type `helm.sh/release.v1`) as you, metadata
   only, then reads just the latest revision of each (and the one a drawer or diff asks for). It decodes them itself
   (base64, gzip, JSON), at most 16 MB unpacked, and hides secret values before anything reaches the window: keys that
-  name a secret (`password`, `token`, `apiKey`, `clientSecret`, `privateKey`, `credentials`, `dsn` and their kin,
-  but not pointers like `existingSecret` or `passwordKey`) lose their value, and credential-shaped text anywhere
-  (a URL's password, a bearer token) is scrubbed as in logs. If you can't read Secrets, the page says so.
+  name a secret by their words (`password`, `userPassword`, `DB_PASSWORD`, `apiKeys`, `clientSecret`, `privateKey`,
+  `credentials`, `dsn` and their kin, but not pointers or switches like `existingSecret`, `passwordKey` or
+  `usePassword`) lose their value and everything under it, an `env`-style `{name: DB_PASSWORD, value}` its value,
+  and credential-shaped text anywhere (a URL's password, a bearer token) is scrubbed as in logs. A value hidden there
+  is hidden in the notes and the manifest too. If you can't read Secrets, the page says so.
 
 The scenario is a small chart, `deploy/scenarios/helm/landlens-demo` (a ConfigMap, a Secret, a Deployment and
 notes, with dummy development values), installed twice in `landlens-dev` ([its README](../deploy/scenarios/helm/README.md)).

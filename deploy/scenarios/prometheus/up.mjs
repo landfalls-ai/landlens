@@ -28,9 +28,10 @@ times.forEach((t, k) => cpu.push(`container_cpu_usage_seconds_total{id="/",node=
 times.forEach((t) => mem.push(`container_memory_working_set_bytes{id="/",node="${node}"} ${3 * 1073741824} ${t}`));
 const om = ["# TYPE container_cpu_usage_seconds_total counter", ...cpu, "# TYPE container_memory_working_set_bytes gauge", ...mem, "# EOF", ""].join("\n");
 
+// The old Prometheus goes first, so no pod is left mounting a ConfigMap that isn't there.
+kubectl(["delete", "-f", join(here, "prometheus.yaml"), "--ignore-not-found", "--wait=true"]);
 kubectl(["delete", "configmap", "landlens-prometheus-data", "--ignore-not-found"]);
 kubectl(["create", "configmap", "landlens-prometheus-data", "--from-file=series.om=/dev/stdin"], om);
-kubectl(["delete", "-f", join(here, "prometheus.yaml"), "--ignore-not-found", "--wait=true"]);
 kubectl(["apply", "-f", join(here, "prometheus.yaml")]);
 kubectl(["rollout", "status", "deploy/landlens-prometheus", "--timeout=180s"]);
 console.log(`Prometheus up in landlens-dev with ${pods.length} pods' series on ${node}: ${pods.join(", ")}`);

@@ -10,7 +10,7 @@ how to fix it.
 | Source | When | What you get |
 |---|---|---|
 | **Clickland** | A key is stored, Clickland answers, honours metric filters, and has samples for this cluster's name | History for 1h, 6h or 24h: kubelet stats and cluster state every 30s (Clickland `docs/sources.md`), in 30s to 12 min steps |
-| **Prometheus** | Clickland isn't connected or fails, and the cluster has a Prometheus Landlens can find ([below](#prometheus)) | History for 1h, 6h or 24h from its cAdvisor series, about 240 points (15 s to 6 min steps) |
+| **Prometheus** | Clickland isn't connected or fails, and the cluster has a Prometheus Landlens found and you chose ([below](#prometheus)) | History for 1h, 6h or 24h from its cAdvisor series, about 240 points (15 s to 6 min steps) |
 | **metrics-server** | Clickland and Prometheus aren't there or fail, and the cluster serves `metrics.k8s.io` | Live samples every 15s from when a view first asks, kept for an hour in a ring buffer; no history before that |
 | **none** | Neither | The reasons (one per source) and the fix: "Connect Clickland", or install metrics-server |
 
@@ -28,14 +28,20 @@ rather than draw the wrong pod.
 ## Prometheus
 
 The wave 4 plan's "Prometheus if found". Landlens looks the way OpenLens does, once per five minutes per cluster, as
-you: a Service labelled `app=prometheus,component=server` (the Prometheus Helm chart), or
-`app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server` (its newer labels), or
-`operated-prometheus=true` (the operator), in any namespace; else `lens-metrics/prometheus`,
-`openshift-monitoring/prometheus-k8s`, `monitoring/prometheus-k8s` or `stacklight/prometheus-server`. Its port is
-the one named `web`, `http` or `http-web`, else 9090, else the first.
+you: the Service you chose, if it is still there; else `lens-metrics/prometheus`, `openshift-monitoring/prometheus-k8s`,
+`monitoring/prometheus-k8s` or `stacklight/prometheus-server`; else a Service labelled `operated-prometheus=true` (the
+operator), `app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server` or `app=prometheus,component=server`
+(the Helm chart), in any namespace. Its port is the one named `web`, `http` or `http-web`, else 9090, else the first.
+
+**A found Prometheus is offered, not used, until you choose it**: the source line and the no-metrics notice say "Use
+Prometheus monitoring/prometheus-server", and the choice is kept per context. Anyone who can make a Service with
+those labels could otherwise pose as Prometheus, see the names of what you look at, and draw invented graphs for you
+and the agent (security review, wave 4 part 4). Choosing checks it is still the one found; "Stop using" on the
+Prometheus source line forgets it.
 
 It asks through the API server's service proxy (`/api/v1/namespaces/<ns>/services/http:<name>:<port>/proxy/api/v1/query_range`)
-with fixed cAdvisor queries Landlens builds itself; nothing anyone types becomes PromQL:
+with fixed cAdvisor queries Landlens builds itself, a 10 s limit and an 8 MB cap on each answer; nothing anyone types
+becomes PromQL:
 
 | Scope | One series per | CPU (cores) | Memory |
 |---|---|---|---|
@@ -46,8 +52,8 @@ with fixed cAdvisor queries Landlens builds itself; nothing anyone types becomes
 
 The rate window `w` is twice the step, at least five minutes. The cluster scope also asks per namespace for the Top
 namespaces list. Requests, limits and allocatable come from the cluster itself, as for metrics-server, and are read
-first, so a reader who can't see a scope's objects (the agent's namespace-limited token) gets nothing from
-Prometheus either. A Prometheus that answers badly is passed over with "Prometheus (ns/name) didn't answer: …", and
+first, with the reader listing the scope's pods (a namespace's, or every namespace's for the cluster), so a reader
+who can't see a scope's objects (the agent's namespace-limited token) gets nothing from Prometheus either. A Prometheus that answers badly is passed over with "Prometheus (ns/name) didn't answer: …", and
 metrics-server is next. The source line reads "Prometheus prometheus-server", the Service in its tooltip.
 
 On OrbStack, `deploy/scenarios/prometheus` runs a Prometheus in `landlens-dev` labelled like the Helm chart's server.

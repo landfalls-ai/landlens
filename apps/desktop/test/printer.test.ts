@@ -88,4 +88,16 @@ describe("printer columns", () => {
     expect(conditionCell(unknown)).toEqual({ text: "Unknown", tone: "muted" });
     expect(conditionCell({ ...cert, status: {} } as KubeObject)).toBeUndefined();
   });
+
+  it("survives the shapes anyone who can create the object may give it (security review, part 4, findings 7–8)", () => {
+    const huge = { apiVersion: "x/v1", kind: "W", metadata: { name: "w", uid: "u" }, spec: { items: Array.from({ length: 300_000 }, (_, i) => i) } } as unknown as KubeObject;
+    expect(readPath(huge, ".spec.items[*]")).toHaveLength(50);
+    for (const conditions of ["x", {}, [null], [1, "a"], [{ type: "Ready", status: "False", reason: { not: "text" } }]]) {
+      const o = { apiVersion: "x/v1", kind: "W", metadata: { name: "w", uid: "u" }, status: { conditions } } as unknown as KubeObject;
+      const c = conditionCell(o);
+      if (c) expect(typeof c.text).toBe("string");
+    }
+    const long = { apiVersion: "x/v1", kind: "W", metadata: { name: "w", uid: "u" }, spec: { n: "9".repeat(5000), at: `2026-11-15T00:00:00Z${"x".repeat(5000)}` } } as unknown as KubeObject;
+    expect(printerColumn({ name: "N", type: "integer", jsonPath: ".spec.n" }, 0).cell(long, 0).text.length).toBeLessThanOrEqual(301);
+  });
 });

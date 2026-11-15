@@ -6,6 +6,7 @@ import { ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from "elect
 import type { MetricsService } from "@landlens/metrics";
 import type { AgentService } from "./agent";
 import type { ClicklandSettingsStore } from "./clickland-settings";
+import type { PrometheusChoices } from "./prometheus-choice";
 import type { McpService } from "./mcp";
 import type { ForwardService } from "./forwards";
 import type { WorkbenchService } from "./workbench";
@@ -13,7 +14,7 @@ import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -111,6 +112,13 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "metrics:configure": async (input) => metrics.settings.set(input),
     "metrics:test": (input) => metrics.service.test(input),
     "metrics:disconnect": async () => metrics.settings.clear(),
+    // Choosing a Prometheus: only the one Landlens finds now, for this cluster's context (docs/metrics.md#prometheus).
+    "metrics:prometheus": async ({ handle, use }) => {
+      const context = clusters.get(handle).info.context;
+      if (use !== null && (await metrics.service.foundPrometheus(handle)) !== use) throw ipcError(409, `Landlens doesn't find a Prometheus at ${use} now.`);
+      metrics.prometheus.set(context, use);
+      return { ok: true };
+    },
     // MCP (docs/mcp.md). A server's header value comes in with save and test; nothing sends it back.
     "mcp:servers": ({ context }) => mcp.servers(context),
     "mcp:save": async (input) => mcp.save(input),

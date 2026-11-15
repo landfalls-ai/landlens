@@ -22,6 +22,7 @@ function cluster(prom: (query: string) => unknown) {
     if (path === "/apis/apps/v1/namespaces/shop/deployments/web")
       return { spec: { selector: { matchLabels: { app: "web" } }, template: { spec: { containers: [{ name: "app", resources: { requests: { cpu: "100m", memory: "64Mi" }, limits: { memory: "128Mi" } } }] } } } };
     if (path === "/api/v1/namespaces/shop/pods?labelSelector=app=web") return { items: [{ metadata: { name: "web-1" } }, { metadata: { name: "web-2" } }] };
+    if (path === "/api/v1/pods?limit=1" || path === "/api/v1/namespaces/shop/pods?limit=1") return { items: [] };
     if (path === "/api/v1/nodes") return { items: [{ metadata: { name: "orbstack" }, status: { allocatable: { cpu: "8", memory: "16Gi" } } }] };
     throw Object.assign(new Error("not found"), { status: 404 });
   });
@@ -93,17 +94,46 @@ describe("Prometheus", () => {
     expect(n.cpu.series.map((l) => l.key)).toEqual(["orbstack"]);
   });
 
-  it("sits between Clickland and metrics-server, and says why it was passed over", async () => {
-    const make = (prom: (q: string) => unknown) => {
+  it("sits between Clickland and metrics-server, once chosen, and says why it was passed over", async () => {
+    const make = (prom: (q: string) => unknown, chosen: string | undefined = "monitoring/prometheus-server") => {
       const c = cluster(prom);
-      return new MetricsService({ clickland: () => ({ clusterName: (x) => x }), cluster: () => ({ context: "orbstack", get: c.get }), now: () => NOW, sampler: { timers: { set: () => 1, clear: () => {} }, now: () => NOW } });
+      return new MetricsService({ clickland: () => ({ clusterName: (x) => x }), cluster: () => ({ context: "orbstack", get: c.get }), prometheus: { chosen: () => chosen }, now: () => NOW, sampler: { timers: { set: () => 1, clear: () => {} }, now: () => NOW } });
     };
     const ok = await make(() => matrix("node", { orbstack: [1] })).series({ handle: "hhhhhhhhhhhh", scope: "cluster", range: "1h" });
     expect(ok.source).toBe("prometheus");
     expect(ok.reasons.map((r) => r.code)).toEqual(["clickland-off"]);
+    // Found but not chosen: offered, not used (security review, part 4, finding 4).
+    const offered = await make(() => matrix("node", { orbstack: [1] }), "").series({ handle: "hhhhhhhhhhhh", scope: "cluster", range: "1h" });
+    expect(offered).toMatchObject({ source: "none", prometheusFound: "monitoring/prometheus-server" });
+    expect(offered.reasons.map((r) => r.code)).toEqual(["clickland-off", "prometheus-found", "no-metrics-server"]);
+    const other = await make(() => matrix("node", { orbstack: [1] }), "elsewhere/prom").series({ handle: "hhhhhhhhhhhh", scope: "cluster", range: "1h" });
+    expect(other).toMatchObject({ source: "none", prometheusFound: "monitoring/prometheus-server" });
     const bad = await make(() => ({ status: "error", error: "bad" })).series({ handle: "hhhhhhhhhhhh", scope: "cluster", range: "1h" });
     expect(bad.source).toBe("none");
     expect(bad.reasons.map((r) => r.code)).toEqual(["clickland-off", "prometheus-failed", "no-metrics-server"]);
     expect(bad.reasons[1]!.message).toMatch(/Prometheus \(monitoring\/prometheus-server\) didn't answer/);
+  });
+
+  it("prefers the one you chose and the well-known names to labels anyone can set, and wants a real port", async () => {
+    const svc = (ns: string, name: string, port: unknown = 9090) => ({ metadata: { name, namespace: ns }, spec: { ports: [{ name: "web", port }] } });
+    const get = vi.fn(async (p: string): Promise<any> => {
+      if (p === "/api/v1/namespaces/mine/services/prom") return svc("mine", "prom");
+      if (p === "/api/v1/namespaces/monitoring/services/prometheus-k8s") return svc("monitoring", "prometheus-k8s");
+      if (p.includes("labelSelector")) return { items: [svc("aaa-tenant", "fake")] };
+      throw Object.assign(new Error("nope"), { status: 404 });
+    });
+    expect(await findPrometheus(get, "mine/prom")).toMatchObject({ namespace: "mine", service: "prom", provider: "chosen" });
+    expect(await findPrometheus(get)).toMatchObject({ namespace: "monitoring", service: "prometheus-k8s" });
+    expect(await findPrometheus(get, "gone/prom")).toMatchObject({ service: "prometheus-k8s" });
+    const ports = vi.fn(async (p: string): Promise<any> => (p.includes("labelSelector") ? { items: [svc("m", "p", "80/../x"), svc("m", "q", 70000)] } : Promise.reject(new Error("no"))));
+    expect(await findPrometheus(ports)).toBeUndefined();
+  });
+
+  it("asks the reader for the scope's pods before Prometheus, for a namespace and the cluster", async () => {
+    const c = cluster(() => matrix("pod", {}));
+    const denied = async (p: string) => (p.includes("/pods?limit=1") ? Promise.reject(Object.assign(new Error("forbidden"), { status: 403 })) : c.get(p));
+    await expect(prometheusSeries(denied, c.get, T, { scope: "namespace", namespace: "shop", range: "1h" }, NOW)).rejects.toMatchObject({ status: 403 });
+    await expect(prometheusSeries(denied, c.get, T, { scope: "cluster", range: "1h" }, NOW)).rejects.toMatchObject({ status: 403 });
+    expect(c.calls.some((p) => p.includes("/proxy/"))).toBe(false);
   });
 });

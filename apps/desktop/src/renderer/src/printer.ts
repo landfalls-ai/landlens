@@ -94,10 +94,12 @@ export function readPath(obj: unknown, path: string): unknown[] {
           if (x !== undefined) next.push(x);
         }
       } else if ("all" in s) {
-        if (Array.isArray(v)) next.push(...v);
-        else if (v && typeof v === "object") next.push(...Object.values(v));
+        // A bounded loop, not a spread: a 300,000-item array would overflow the stack (security review, finding 7).
+        const items = Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : [];
+        for (let i = 0; i < items.length && next.length < MAX_RESULTS; i++) next.push(items[i]);
       } else if (Array.isArray(v)) {
-        for (const item of v) {
+        for (let i = 0; i < v.length && next.length < MAX_RESULTS; i++) {
+          const item = v[i];
           let x: unknown = item;
           for (const k of s.filter) x = own(x, k);
           if ((x === s.value) === (s.op === "==")) next.push(item);
@@ -117,7 +119,17 @@ export function printerColumns(crd: KubeObject, version: string): PrinterColumn[
   return (v?.additionalPrinterColumns ?? []).filter((c) => !c.priority && typeof c.jsonPath === "string" && typeof c.name === "string").slice(0, 12);
 }
 
-const show = (v: unknown): string => (v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+/** A value as cell text, at most 300 characters whatever its type (security review, finding 8). */
+const cut = (s: string) => (s.length > 300 ? `${s.slice(0, 300)}…` : s);
+const show = (v: unknown): string => {
+  if (v === null || v === undefined) return "";
+  if (typeof v !== "object") return cut(String(v));
+  try {
+    return cut(JSON.stringify(v) ?? "");
+  } catch {
+    return "";
+  }
+};
 
 /** A printer column as a table column: dates as ages, numbers right-aligned, booleans as a word with a tone. */
 export function printerColumn(c: PrinterColumn, i: number): Column {
@@ -135,7 +147,7 @@ export function printerColumn(c: PrinterColumn, i: number): Column {
       return { ...base, width: "minmax(64px, 96px)", num: true, cell: (o) => {
         const vs = read(o);
         const n = Number(vs[0]);
-        return { text: vs.map(show).join(", "), ...(Number.isFinite(n) ? { sort: n } : {}) };
+        return { text: cut(vs.map(show).join(", ")), ...(Number.isFinite(n) ? { sort: n } : {}) };
       } };
     case "boolean":
       return { ...base, width: "minmax(64px, 96px)", kind: "bool", cell: (o) => {
@@ -153,12 +165,18 @@ export function printerColumn(c: PrinterColumn, i: number): Column {
 
 /** A Ready or Available condition, the pod way: quiet when True, the reason in bad when False, muted when Unknown. */
 export function conditionCell(o: KubeObject): Cell | undefined {
-  const cs = (o.status?.conditions ?? []) as { type?: string; status?: string; reason?: string; message?: string }[];
+  // A custom resource's status has whatever shape its CRD allows: only an array of objects with string fields counts.
+  const raw: unknown = o.status?.conditions;
+  if (!Array.isArray(raw)) return undefined;
+  const cs = raw.filter((x): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x)).slice(0, 100);
   const c = cs.find((x) => x.type === "Ready") ?? cs.find((x) => x.type === "Available");
   if (!c) return undefined;
+  const type = c.type as string;
+  const reason = typeof c.reason === "string" ? cut(c.reason) : "";
+  const message = typeof c.message === "string" ? c.message.slice(0, 1000) : "";
   const tone: Tone = c.status === "True" ? "ok" : c.status === "False" ? "bad" : "muted";
-  const text = c.status === "True" ? c.type! : c.status === "False" ? c.reason || `Not ${c.type!.toLowerCase()}` : "Unknown";
-  return { text, tone, ...(c.message ? { title: c.message } : {}) };
+  const text = c.status === "True" ? type : c.status === "False" ? reason || `Not ${type.toLowerCase()}` : "Unknown";
+  return { text, tone, ...(message ? { title: message } : {}) };
 }
 
 export const conditionColumn: Column = {

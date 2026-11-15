@@ -1,7 +1,8 @@
 // Helm releases (wave 4, part 4): decoded from Helm's release Secrets in main, with no secret values for the window.
 import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
-import { coalesce, decodeRelease, getRelease, hideSecrets, isSensitiveKey, listReleases, manifestForWindow, MAX_DECODED } from "../src/helm.js";
+import { coalesce, decodeRelease, getRelease, hideSecrets, isSensitiveKey, listReleases, manifestForWindow, MAX_DECODED, wholeDocuments } from "../src/helm.js";
+import { redactText } from "../src/redact.js";
 import type { KubeClient } from "../src/client.js";
 
 /** A release Secret's `data.release`: Helm's base64(gzip(JSON)), then the API's base64. */
@@ -155,5 +156,62 @@ describe("Helm releases", () => {
     const m = manifestForWindow("apiVersion: v1\nkind: Secret\nmetadata: {name: x}\ndata:\n  k: v\n  - broken: [\n", "shop");
     expect(m.text).not.toContain("k: v");
     expect(m.text).toContain("couldn't read");
+  });
+
+  describe("the security review's cases (wave 4, part 4)", () => {
+    it("knows a user's password, plurals and env names are secrets, and switches are not", () => {
+      for (const k of ["userPassword", "user_password", "userToken", "userSecret", "userApiKey", "passwords", "tokens", "apiKeys", "DB_PASSWORD", "PRIVATE_KEY", "secret_key"]) expect(isSensitiveKey(k), k).toBe(true);
+      for (const k of ["usePassword", "enablePassword", "createToken", "existingSecret", "tokenKey", "passwordKey", "secretKeyRef", "secretName"]) expect(isSensitiveKey(k), k).toBe(false);
+    });
+
+    it("hides everything under a secret's key but its pointers, and an env entry's value", () => {
+      const h = hideSecrets({ token: ["abc12345", "def67890"], password: { value: "hunter22", name: "keep-me", enabled: true }, env: [{ name: "DB_PASSWORD", value: "pg-pass-1" }, { name: "LOG_LEVEL", value: "debug" }] });
+      expect(h.value).toEqual({
+        token: ["<hidden · 8 characters>", "<hidden · 8 characters>"],
+        password: { value: "<hidden · 8 characters>", name: "keep-me", enabled: true },
+        env: [{ name: "DB_PASSWORD", value: "<hidden · 9 characters>" }, { name: "LOG_LEVEL", value: "debug" }],
+      });
+      expect(h.literals.sort()).toEqual(["abc12345", "def67890", "hunter22", "pg-pass-1"]);
+    });
+
+    it("hides the values' secrets in the notes and the rest of the manifest, and a Secret inside a List", async () => {
+      const MAN = `${MANIFEST}---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: leaky}
+data:
+  conf: "admin=s3cret-dev-pass"
+---
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: Secret
+    metadata: {name: inner}
+    data: {password: "aW5uZXI="}
+`;
+      const { client } = fakeClient({ "sh.helm.release.v1.demo.v1": { labels: labels("demo", 1, "deployed"), data: encode(release(1, { manifest: MAN, info: { status: "deployed", notes: "Log in with s3cret-dev-pass, Bearer abcdefghijklmnopqrstu" } })) } });
+      const d = await getRelease(client, "shop", "demo");
+      expect(d.notes).toBe("Log in with <hidden>, <redacted auth header>");
+      expect(d.manifest).not.toContain("s3cret-dev-pass");
+      expect(d.manifest).not.toContain("aW5uZXI=");
+      expect(d.manifest).toContain("password: <hidden · 8 base64 characters>");
+    });
+
+    it("cuts the manifest at a document's start, never inside one", () => {
+      const a = "kind: ConfigMap\nmetadata: {name: a}\n";
+      const b = "---\napiVersion: v1\ndata:\n  password: c2VjcmV0\nkind: Secret\n";
+      expect(wholeDocuments(a + b, a.length + 10)).toEqual({ shown: a, cut: true });
+      expect(wholeDocuments(a + b, 10_000)).toEqual({ shown: a + b, cut: false });
+    });
+
+    it("scrubs long text in linear time, and a label that isn't a time is no time", async () => {
+      const t = Date.now();
+      redactText("a.".repeat(200_000));
+      expect(Date.now() - t).toBeLessThan(2000);
+      expect(hideSecrets({ note: "x".repeat(50_000) }).value).toEqual({ note: expect.stringMatching(/… \(33616 more characters\)$/) });
+      const { client } = fakeClient({ "sh.helm.release.v1.demo.v1": { labels: { ...labels("demo", 1, "deployed"), modifiedAt: "soon" }, data: encode(release(1, { info: { status: "deployed" } })) } });
+      expect((await getRelease(client, "shop", "demo")).release.updated).toBeUndefined();
+    });
   });
 });

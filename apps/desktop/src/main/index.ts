@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { AgentService } from "./agent";
 import { ClicklandSettingsStore } from "./clickland-settings";
+import { PrometheusChoices } from "./prometheus-choice";
 import { registerIpc } from "./ipc";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
@@ -53,12 +54,15 @@ async function start() {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
   };
   const settings = new ClicklandSettingsStore(join(app.getPath("userData"), "clickland.json"), safeStorage);
+  const prometheus = new PrometheusChoices(join(app.getPath("userData"), "prometheus.json"));
   const metrics = new MetricsService({
     clickland: () => ({ config: settings.config(), clusterName: (context) => settings.clusterName(context) }),
     cluster: (handle) => {
       const c = clusters.get(handle);
-      return { context: c.info.context, get: (path) => c.client.json(path) };
+      // Prometheus answers are capped and timed: a Service anyone made could hold the call or send gigabytes.
+      return { context: c.info.context, get: (path) => c.client.json(path), ask: (path) => c.client.jsonCapped(path, { maxBytes: 8 * 1048576, timeoutMs: 10_000 }) };
     },
+    prometheus: { chosen: (context) => prometheus.chosen(context) },
   });
   // For the metrics tool: `read` is the session's own front-door token (its policy, scrubbing and audit), so what the
   // series reads from the cluster is read as the session. The usage numbers are Clickland's or the shared sampler's.
@@ -107,7 +111,7 @@ async function start() {
     openExternal: (url) => shell.openExternal(url),
     log: (l) => console.log(l),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings }, mcp, workbench, forwards);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus }, mcp, workbench, forwards);
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();

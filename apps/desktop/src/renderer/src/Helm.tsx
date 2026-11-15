@@ -32,10 +32,16 @@ export function useHelmList(handle: string, namespace: string, on: boolean) {
   useEffect(() => {
     if (!on) return;
     let live = true;
-    const read = () => api.invoke("helm:list", { handle, ...(namespace ? { namespace } : {}) }).then(
-      (r) => live && setState({ releases: r.releases, unreadable: r.unreadable, loading: false }),
-      (e: ApiError) => live && setState({ error: e, loading: false }),
-    );
+    let busy = false;
+    // One read at a time: a tick while the last read runs is skipped (security review, part 4, finding 10).
+    const read = () => {
+      if (busy) return;
+      busy = true;
+      void api.invoke("helm:list", { handle, ...(namespace ? { namespace } : {}) }).then(
+        (r) => live && setState({ releases: r.releases, unreadable: r.unreadable, loading: false }),
+        (e: ApiError) => live && setState({ error: e, loading: false }),
+      ).finally(() => (busy = false));
+    };
     setState((s) => ({ ...s, loading: !s.releases }));
     void read();
     const t = setInterval(read, EVERY_MS);
