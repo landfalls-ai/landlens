@@ -15,7 +15,7 @@
 // MCP server, with the key or sign-in added here, never in a session's environment. Its reads are Landlens's list, the
 // server's hints and the accepted listing together (D110, D111); its writes always ask (D113).
 import { createHash, randomBytes } from "node:crypto";
-import { FAMILY_HTTP_HOST, FAMILY_NOTES, familyUrlAllowed, type FamilyInfo, type FamilyList, type McpServerInfo, type McpTest, type McpToolInfo, type Sibling } from "@landlens/contracts";
+import { FAMILY_HTTP_HOST, FAMILY_NOTES, familyUrlAllowed, type FamilyInfo, type FamilyList, type McpServerInfo, type McpTest, type McpToolInfo, type Sibling, type TelemetryInfo } from "@landlens/contracts";
 import {
   clicklandWho, ConnError, FamilyError, familyPinOk, FamilyStore, landfallConnector, landfallTarget, landflowCan, landflowWho, type LandflowCan, McpOAuth, mcpRefresh, mcpRevoke, mcpSignIn, originOf, siblingHealth,
   SIBLINGS, type Crypto, type FamilyPin, type McpOAuthTokens, type McpOAuthUsed, type McpSignIn, type OAuthClientRecord,
@@ -144,6 +144,14 @@ export class FamilyService {
     return !!url && familyUrlAllowed(url, this.o.overrides?.httpHosts ?? []);
   }
 
+  /** The same rule for main's other senders (telemetry's collector, wave 7 part 5): https, or http only to this machine. */
+  urlAllowed(url: string): boolean {
+    return this.allowed(url);
+  }
+
+  /** Where telemetry stands, for the Clickland card (main/telemetry.ts sets it). */
+  telemetryInfo: (() => TelemetryInfo) | undefined;
+
   /** Landflow's key and webhook secret, only while its stored address is one this build takes (M2). */
   private landflowSec() {
     const sec = this.store.landflowSecrets();
@@ -231,6 +239,7 @@ export class FamilyService {
       ...(who ? { scopes: who.scopes } : {}),
       ...(cfg && t?.note ? { note: t.note } : writes ? { note: FAMILY_NOTES.clicklandWrites } : {}),
       ...(consoleUrl ? { console: consoleUrl } : {}),
+      ...(this.telemetryInfo ? { telemetry: this.telemetryInfo() } : {}),
     };
   }
 

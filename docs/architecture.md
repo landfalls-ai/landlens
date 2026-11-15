@@ -12,7 +12,8 @@ How Landlens is built today (waves 1 and 2, the graphs and MCP). The plan and th
 | Preload | The bridge: `invoke(channel, request)` and `on(pushChannel)` for the listed channels only | `apps/desktop/src/preload/index.ts` |
 | `landlens-kube-proxy` (Go), one per connected cluster | Holds that cluster's credentials (client-go reads your kubeconfig, so exec plugins, OIDC and client certificates work as in kubectl) and forwards requests to the API server | `sidecar/kube-proxy/` |
 | `claude-agent-acp` (Node), one per window, started when the dock first opens | Runs your Claude Code; Landlens speaks ACP v1 to it over stdio. Its shell commands run in Claude Code's sandbox | `packages/acp-host/` |
-| Clickland (another project, optional) | Metrics history; main alone calls it over HTTP at the configured address with a read-scoped key ([metrics.md](metrics.md)) | `packages/metrics/` |
+| Clickland (another project, optional) | Metrics history, logs and traces; main alone calls it over HTTP at the configured address with a read-scoped key ([metrics.md](metrics.md)). With telemetry on, main also sends Landlens's own spans, counts and events to its OpenTelemetry collector (OTLP/HTTP JSON, [family.md](family.md#what-landlens-reports)); the sidecar sends nothing | `packages/metrics/`, `packages/telemetry/` |
+| Landflow and Landfall (other projects, optional) | The Land family ([family.md](family.md)): main signs in to each, serves their MCP servers to sessions, sends a problem to Landflow's triage or a flow, and a session's summary to the brain, each on the person's click | `packages/connections/`, `apps/desktop/src/main/family.ts`, `landflow.ts`, `brain.ts` |
 | The MCP gateway (in main) | The agent's one MCP endpoint, on a loopback port with one bearer token per session: Landlens's read-only cluster tools (`landlens-kube`, in memory per session) and the remote MCP servers you turned on for the cluster, every call logged and checked ([mcp.md](mcp.md)) | `packages/mcp-gateway/`, `packages/kube-mcp/` |
 | MCP App views (in the renderer, sandboxed frames) | HTML from an MCP server, served by main on `landlens-app:` with its own CSP, framed with `sandbox="allow-scripts"` | `apps/desktop/src/main/app-views.ts`, `renderer/src/AppFrame.tsx` |
 
@@ -98,7 +99,9 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/main/ipc.ts` | IPC handlers |
 | `apps/desktop/src/main/doctor.ts` | `DoctorService`: the doctor per cluster and scope, from the shared pod watch and timed reads; the Overview's health, evidence for a problem, certificate facts for the agent |
 | `packages/metrics/src/` | Graphs: the Clickland client and scope queries, the cluster's Prometheus (found, asked through the service proxy), the metrics-server sampler (ring buffer), `MetricsService` (which source answers) ([metrics.md](metrics.md)) |
-| `apps/desktop/src/main/clickland-settings.ts` | Clickland's address, cluster names and the key encrypted with safeStorage |
+| `apps/desktop/src/main/clickland-settings.ts` | Clickland's address, cluster names, the console, telemetry's switches (in clear) and the key encrypted with safeStorage |
+| `packages/telemetry/src/` | Landlens's own telemetry: the closed record constructors, OTLP/HTTP JSON, the queue, what a question was about ([family.md](family.md#what-landlens-reports)) |
+| `apps/desktop/src/main/telemetry.ts`, `brain.ts` | `TelemetryService` (fed by the agent's observers, the gateway's call log, changes, clusters, the front door's audit and the doctor) and `BrainService` (a session's facts, the brain sheet, send and remove) |
 | `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars` and the pure `scale.ts` helpers |
 | `apps/desktop/src/renderer/src/Usage.tsx`, `MetricsTab.tsx`, `MetricsNotice.tsx`, `ClicklandSettings.tsx`, `metrics.ts` | The Overview's Usage card, the drawer's Metrics tab, source and empty-state notices, Connect Clickland, the polling hook |
 | `apps/desktop/scripts/fuses.mjs` | The Electron fuses the packaged app ships with |

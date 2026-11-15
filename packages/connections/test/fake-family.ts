@@ -414,7 +414,13 @@ export class FakeLandflow extends FakeBase {
   /** Each run's input, as Landflow's execute route took it. */
   readonly inputs = new Map<string, unknown>();
   private readonly idem = new Map<string, string>();
-  readonly brain: unknown[] = [];
+  /** The brain's work events, by `<source>/<sourceId>` (brain/work.ts keys an event by its owner, source and id). */
+  readonly work = new Map<string, Record<string, unknown>>();
+  /** The second brain is off on this instance: /api/brain/work answers 503 (BrainOffError). */
+  brainOff = false;
+  get brain(): Record<string, unknown>[] {
+    return [...this.work.values()];
+  }
   /** Tools listed beside its own (a Landflow whose listing Landlens must refuse). */
   extraTools: Tool[] = [];
 
@@ -525,18 +531,42 @@ export class FakeLandflow extends FakeBase {
       if (!e) return this.json(res, 404, { error: "Execution not found" });
       return this.json(res, 200, this.executionAnswer(ex[1]!, e));
     }
-    if (p === "/api/brain/work") {
+    // The brain's work events (apps/web/src/app/api/brain/work/route.ts, [sourceId]/route.ts; lib/server/brain/work.ts;
+    // packages/protocol/src/work-events.ts validateWorkEvent): scope brain:write; 1–50 events; each checked alone and
+    // saved or rejected with its reason; the same source and sourceId updates the event; 503 when the brain is off.
+    if (p === "/api/brain/work" && req.method === "POST") {
       if (!known) return refuse();
-      if (!can("brain:write")) return this.json(res, 403, { error: "This key lacks brain:write" });
+      if (!can("brain:write")) return this.json(res, 403, { error: "This API key doesn't have the brain:write scope" });
+      if (this.brainOff) return this.json(res, 503, { error: "The second brain is off on this instance" });
       const b = body ? JSON.parse(body) : {};
       const events = Array.isArray(b.events) ? b.events : [];
-      const rejected: { index: number; reason: string }[] = [];
-      events.forEach((e: { title?: unknown; summary?: unknown }, index: number) => {
-        if (typeof e.title !== "string" || e.title.length > 200 || /\n/.test(e.title)) rejected.push({ index, reason: "title: one line, at most 200 characters" });
-        else if (e.summary !== undefined && (typeof e.summary !== "string" || e.summary.length > 500)) rejected.push({ index, reason: "summary: at most 500 characters" });
-        else this.brain.push(e);
-      });
-      return this.json(res, 200, { saved: events.length - rejected.length, rejected });
+      if (events.length < 1 || events.length > 50) return this.json(res, 400, { error: "Send at least one event" });
+      const saved: { sourceId: string; id: string; created: boolean }[] = [];
+      const rejected: { sourceId: string; reason: string }[] = [];
+      for (const e of events as Record<string, unknown>[]) {
+        const errors = workErrors(e);
+        const sourceId = typeof e?.sourceId === "string" ? e.sourceId : "";
+        if (errors.length) rejected.push({ sourceId, reason: errors.join("; ") });
+        else if (Date.parse(String(e.occurredAt)) > Date.now() + 86_400_000) rejected.push({ sourceId, reason: "occurredAt is more than a day in the future" });
+        else if (e.kind !== "work.session") rejected.push({ sourceId, reason: "Unknown work kind; an admin can declare it" });
+        else {
+          const k = `${String(e.source)}/${sourceId}`;
+          const created = !this.work.has(k);
+          this.work.set(k, { ...e });
+          saved.push({ sourceId, id: `wk_${createHash("sha256").update(k).digest("hex").slice(0, 12)}`, created });
+        }
+      }
+      return this.json(res, 200, { saved, rejected });
+    }
+    const work = /^\/api\/brain\/work\/([^/]+)$/.exec(p);
+    if (work && req.method === "DELETE") {
+      if (!known) return refuse();
+      if (!can("brain:write")) return this.json(res, 403, { error: "This API key doesn't have the brain:write scope" });
+      const source = url.searchParams.get("source");
+      if (!source) return this.json(res, 400, { error: "source is required" });
+      if (!this.work.delete(`${source}/${decodeURIComponent(work[1]!)}`)) return this.json(res, 404, { error: "Work event not found" });
+      res.writeHead(204).end();
+      return;
     }
     if (p === "/api/mcp") {
       if (!known) return refuse();
@@ -544,6 +574,39 @@ export class FakeLandflow extends FakeBase {
     }
     return this.json(res, 404, { error: "not found" });
   }
+}
+
+/** Landflow's validateWorkEvent (packages/protocol/src/work-events.ts), as far as the fields go: its error sentences. */
+function workErrors(input: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  if (!input || typeof input !== "object") return ["A work event is an object"];
+  const machinePath = (t: string) => /(?:^|[\s"'`(=:@<\[])(?:\/(?:Users|home|root|private|Volumes|mnt|var\/folders)\/|~\/|[A-Za-z]:\\|\\\\[A-Za-z0-9])/.test(t) || /file:\/\//i.test(t);
+  const text = (name: string, max: number, required = false) => {
+    const v = input[name];
+    if (v === undefined || v === null) return required ? void errors.push(`${name} is required`) : undefined;
+    if (typeof v !== "string") return void errors.push(`${name} must be text`);
+    const t = v.trim();
+    if (!t) return required ? void errors.push(`${name} is required`) : undefined;
+    if (t.length > max) return void errors.push(`${name} is at most ${max} characters`);
+    return t;
+  };
+  const kind = text("kind", 64, true);
+  if (kind && !/^work\.[a-z0-9_]{1,56}$/.test(kind)) errors.push("kind is work.<name>: lowercase letters, digits and underscores");
+  const source = text("source", 40, true);
+  if (source && !/^[a-z0-9-]+$/.test(source)) errors.push("source is lowercase letters, digits and dashes");
+  text("sourceId", 200, true);
+  const title = text("title", 200, true);
+  if (title && /\r|\n/.test(title)) errors.push("title is one line");
+  if (title && machinePath(title)) errors.push("title holds a path on your machine; describe the work without it");
+  const summary = text("summary", 500);
+  if (summary && machinePath(summary)) errors.push("summary holds a path on your machine; describe the work without it");
+  for (const h of ["initiative", "customer", "team"]) text(h, 120);
+  const iso = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) && Number.isFinite(Date.parse(v));
+  if (!iso(input.occurredAt)) errors.push("occurredAt must be an ISO 8601 time");
+  if (input.endedAt !== undefined && input.endedAt !== null && !iso(input.endedAt)) errors.push("endedAt must be an ISO 8601 time");
+  if (input.turns !== undefined && (typeof input.turns !== "number" || !Number.isInteger(input.turns) || input.turns < 0 || input.turns > 1_000_000)) errors.push("turns must be a whole number from 0 to 1000000");
+  if (input.visibility !== undefined && !["private", "team", "org"].includes(String(input.visibility))) errors.push("visibility is private, team or org");
+  return errors;
 }
 
 export class FakeLandfall extends FakeBase {

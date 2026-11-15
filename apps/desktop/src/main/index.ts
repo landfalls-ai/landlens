@@ -5,7 +5,9 @@ import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "ele
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentHistory, AgentSettings } from "./agent-history";
-import { AgentService } from "./agent";
+import { adapterEntry, AgentService } from "./agent";
+import { TelemetryService } from "./telemetry";
+import { BrainService } from "./brain";
 import { ClicklandSettingsStore } from "./clickland-settings";
 import { PrometheusChoices } from "./prometheus-choice";
 import { registerIpc } from "./ipc";
@@ -22,6 +24,8 @@ import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
 import { FamilySentStore } from "@landlens/connections";
 import { loginPath, which } from "@landlens/acp-host";
+import { askOf } from "@landlens/telemetry";
+import type { AgentChange } from "@landlens/contracts";
 import { DEV_URL, hardenApp, hardenSession, registerAppProtocol, RENDERER_INDEX, secureWebPreferences } from "./security";
 
 hardenApp();
@@ -51,8 +55,13 @@ async function start() {
   let mcp: McpService | undefined;
   /** The agent service, once made: the gateway's autonomy pushes go through it (M1 of the wave 7 part 2 review). */
   let agentRef: AgentService | undefined;
-  // The front door's audit trail: the MCP call log files each landlens-kube call's requests under it.
-  const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => mcp?.onAudit(e));
+  /** Landlens's own telemetry (wave 7 part 5): off until the person turns it on. */
+  let telemetry: TelemetryService | undefined;
+  // The front door's audit trail: the MCP call log files each landlens-kube call's requests under it; telemetry counts it.
+  const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => {
+    mcp?.onAudit(e);
+    telemetry?.audit(e);
+  });
   await frontDoor.start();
   const clusters = new ClusterManager({
     sidecarBinary: binary,
@@ -133,6 +142,25 @@ async function start() {
     served: (rows) => siblingText.served("clickland", rows),
   });
   clusters.onGone((handle) => history?.forget(handle));
+  // Landlens's telemetry (docs/family.md#what-landlens-reports): to the collector the person confirmed, through the
+  // family's address rule; counts and names only, built by packages/telemetry. The sidecar sends nothing (D131).
+  const tel = new TelemetryService({
+    settings,
+    allowed: (url) => family.urlAllowed(url),
+    clusterName: (context) => settings.clusterName(context),
+    clusters: () => clusters.list(),
+    problems: () => doctor.problemCounts(),
+    version: app.getVersion(),
+    platform: process.platform,
+    console: () => family.clicklandConsole(),
+    push: () => send("family:update", family.info("clickland")),
+    log: (l) => console.log(l),
+  });
+  telemetry = tel;
+  family.telemetryInfo = () => tel.info();
+  tel.start();
+  clusters.onConnected(() => tel.clusterConnected());
+  clusters.onGone((_handle, why) => tel.clusterGone(why));
   // D109: the server Add Clickland made on the MCP page becomes the family's clickland server, once.
   moveClicklandServer({ store: mcpStore, clickland: settings, family, log: (l) => console.log(l) });
   // Google Cloud (docs/gcp.md): gcloud's sign-in, read-only. An unpackaged build is off unless it has a loopback fake
@@ -177,12 +205,26 @@ async function start() {
   registerAppProtocol(mcp.views);
   const gateway = mcp.gateway;
   const mcpSvc = mcp;
+  const agentHistory = new AgentHistory(join(app.getPath("userData"), "agent-history.json"));
+  // A session's summary to the brain (D134): facts counted here, sent only from the sheet.
+  let brainRef: BrainService | undefined;
+  gateway.log.subscribe((c) => {
+    tel.call(c);
+    brainRef?.call(c);
+  });
+  const agentPush = ((channel: string, payload: unknown) => {
+    if (channel === "agent:change") {
+      tel.change(payload as AgentChange);
+      brainRef?.change(payload as AgentChange);
+    }
+    send(channel, payload);
+  }) as ConstructorParameters<typeof AgentService>[0]["push"];
   const agent = new AgentService({
     siblingText,
     frontDoor,
     clusters,
     sessionsDir: join(app.getPath("userData"), "agent-sessions"),
-    push: send as ConstructorParameters<typeof AgentService>[0]["push"],
+    push: agentPush,
     mcp: mcp.forSessions(),
     onToolCall: (u) => gateway.card(u),
     onPermit: (p) => gateway.permit(p.session, p),
@@ -197,11 +239,25 @@ async function start() {
     },
     metrics: series,
     certs: (handle, namespaces) => doctor.certsFor(handle, namespaces),
-    history: new AgentHistory(join(app.getPath("userData"), "agent-history.json")),
+    history: agentHistory,
     settings: new AgentSettings(join(app.getPath("userData"), "agent-settings.json")),
+    observers: [{
+      started: (st) => tel.sessionStarted(st),
+      ended: (id) => tel.sessionEnded(id),
+      asked: (id, text, refs) => tel.turnStarted(id, askOf(text, refs)),
+      answered: (id, end) => tel.turnEnded(id, end),
+      usage: (id, u) => tel.usage(id, u),
+      mode: (id, m) => tel.modeChanged(id, m),
+      exited: () => tel.adapterExited(),
+    }],
+    // Tests only (unpackaged): a fake ACP agent in place of claude-agent-acp.
+    adapter: adapterEntry(process.env, app.isPackaged),
     log: (l) => console.log(l),
   });
   agentRef = agent;
+  const brain = new BrainService({ family, history: agentHistory, agent });
+  brainRef = brain;
+  agent.addObserver(brain.observer);
   const workbench = new WorkbenchService({ clusters, frontDoor, dataDir: app.getPath("userData") });
   liveSessions = () => workbench.terminalCount();
   const forwards = new ForwardService({
@@ -220,7 +276,7 @@ async function start() {
     // A flow's output is Landflow's text: a question quoting it holds autonomy, decided here (review of part 4, M4).
     served: (rows) => siblingText.served("landflow", rows),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain });
   const service = mcp;
   shutdown = async () => {
     forwards.stopAll();
@@ -228,6 +284,7 @@ async function start() {
     connections.stop();
     family.stop();
     await agent.stop();
+    await tel.stop();
     await service.stop();
     await hub.stopAll();
     await clusters.disconnectAll();

@@ -16,11 +16,13 @@ import { flowOwners, type ConnectionsService } from "./connections";
 import type { FamilyService } from "./family";
 import type { LandflowActions } from "./landflow";
 import type { GcpService } from "./gcp";
+import type { TelemetryService } from "./telemetry";
+import type { BrainService } from "./brain";
 import { isAppUrl } from "./security";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -230,6 +232,16 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "landflow:follow": (req) => landflow.follow(req),
     "landflow:sent": async (req) => landflow.sentFor(req),
     "landflow:open": (req, event) => landflow.open(req, { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }, event.sender),
+    // Landlens's telemetry (D127–D133): turning it on, or a new collector, asks in main's own dialog.
+    "telemetry:set": (req, event) => report.telemetry.set({ ...req }, nativeConfirm(event)),
+    "telemetry:recent": async () => report.telemetry.recent(),
+    "telemetry:open": ({ session }, event) =>
+      report.telemetry.open(session, (s) => agent.isOpen(s) || agent.history().some((e) => e.session === s), { confirm: nativeConfirm(event), openExternal: (url) => shell.openExternal(url) }),
+    // A session's summary to the brain (D134–D135): a sheet per window; send names its digest.
+    "brain:draft": async ({ session }, event) => report.brain.draft(session, event.sender),
+    "brain:ask": ({ sheet }, event) => report.brain.ask(sheet, event.sender),
+    "brain:send": (req, event) => report.brain.send(req, event.sender),
+    "brain:remove": ({ session }) => report.brain.remove(session),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
     "gcp:projects": ({ fresh }) => gcp.projects(!!fresh),

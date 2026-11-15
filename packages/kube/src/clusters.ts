@@ -24,15 +24,21 @@ export class ClusterManager {
   private readonly clusters = new Map<string, Connected>();
   /** Connects in flight, by context, so two clicks don't start two sidecars. */
   private readonly connecting = new Map<string, Promise<ClusterInfo>>();
-  private readonly goneListeners: ((handle: string) => void)[] = [];
+  private readonly goneListeners: ((handle: string, why: "disconnected" | "exited") => void)[] = [];
+  private readonly connectedListeners: ((info: ClusterInfo) => void)[] = [];
 
   constructor(
     private readonly opts: { sidecarBinary: string; kubeconfig?: string; frontDoor: FrontDoor; log?: (l: string) => void },
   ) {}
 
-  /** Called when a cluster goes away: disconnected, or its sidecar exited. */
-  onGone(fn: (handle: string) => void) {
+  /** Called when a cluster goes away: disconnected, or its sidecar exited (`why`). */
+  onGone(fn: (handle: string, why: "disconnected" | "exited") => void) {
     this.goneListeners.push(fn);
+  }
+
+  /** Called when a cluster is connected (Landlens's telemetry counts it, wave 7 D128). */
+  onConnected(fn: (info: ClusterInfo) => void) {
+    this.connectedListeners.push(fn);
   }
 
   /**
@@ -75,7 +81,8 @@ export class ClusterManager {
     const entry: Connected = { info, client, sidecar };
     this.clusters.set(handle, entry);
     this.opts.frontDoor.addCluster(handle, { url: sidecar.url, secret: sidecar.secret, scopeOf: (k) => entry.scope?.get(k) });
-    void sidecar.exited.then(() => this.forget(handle));
+    void sidecar.exited.then(() => this.forget(handle, "exited"));
+    for (const fn of this.connectedListeners) fn(info);
     return info;
   }
 
@@ -133,10 +140,10 @@ export class ClusterManager {
     await Promise.all([...this.clusters.keys()].map((h) => this.disconnect(h)));
   }
 
-  private forget(handle: string) {
+  private forget(handle: string, why: "disconnected" | "exited" = "disconnected") {
     if (!this.clusters.delete(handle)) return;
     this.opts.frontDoor.removeCluster(handle);
-    for (const fn of this.goneListeners) fn(handle);
+    for (const fn of this.goneListeners) fn(handle, why);
   }
 }
 

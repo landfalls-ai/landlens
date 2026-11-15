@@ -42,6 +42,8 @@ export type AuditEntry = {
   call?: string;
   /** A write sent with dryRun=All: checked by the API server, not stored. */
   dryRun?: true;
+  /** The token's policy (its access), when a token matched: Landlens's telemetry counts requests by it (wave 7 D129). */
+  access?: Policy["access"];
 };
 
 /** A gateway call id, as the MCP tools send it; anything else in the header is ignored. */
@@ -142,39 +144,39 @@ export class FrontDoor {
   /** The shared checks for plain and upgraded requests. */
   private check(req: IncomingMessage, upgrade = false):
     | { ok: true; grant: TokenGrant; handle: string; path: string; upstream: Upstream; parsed: ParsedRequest }
-    | { ok: false; status: number; reason: string; label: string; handle: string; path: string } {
+    | { ok: false; status: number; reason: string; label: string; handle: string; path: string; access?: Policy["access"] } {
     const m = PREFIX.exec(req.url ?? "");
     const handle = m?.[1] ?? "";
     const path = m?.[2] ?? req.url ?? "";
     const grant = this.grantFor(req.headers.authorization);
     const label = grant?.label ?? "unknown";
     if (!grant) return { ok: false, status: 401, reason: "missing or unknown Landlens token", label, handle, path };
-    if (!m) return { ok: false, status: 404, reason: "expected /c/<cluster>/<path>", label, handle, path };
+    if (!m) return { ok: false, status: 404, reason: "expected /c/<cluster>/<path>", label, handle, path, access: grant.policy.access };
     if (!grant.clusters.includes(handle)) {
-      return { ok: false, status: 403, reason: "this token may not reach this cluster", label, handle, path };
+      return { ok: false, status: 403, reason: "this token may not reach this cluster", label, handle, path, access: grant.policy.access };
     }
     const upstream = this.upstreams.get(handle);
-    if (!upstream) return { ok: false, status: 503, reason: "cluster is not connected in Landlens", label, handle, path };
-    if (!isCanonicalPath(path)) return { ok: false, status: 400, reason: "path is not canonical", label, handle, path };
+    if (!upstream) return { ok: false, status: 503, reason: "cluster is not connected in Landlens", label, handle, path, access: grant.policy.access };
+    if (!isCanonicalPath(path)) return { ok: false, status: 400, reason: "path is not canonical", label, handle, path, access: grant.policy.access };
     // Impersonation would act as someone else with the user's credentials (kubectl --as). The sidecar strips the
     // headers too; refusing here makes it an error rather than a silent request as the user.
     if (Object.keys(req.headers).some((h) => h.startsWith("impersonate-"))) {
-      return { ok: false, status: 403, reason: "impersonation is not allowed through Landlens", label, handle, path };
+      return { ok: false, status: 403, reason: "impersonation is not allowed through Landlens", label, handle, path, access: grant.policy.access };
     }
     const parsed = parseRequest(req.method ?? "GET", path);
     const decision = authorize(grant.policy, parsed, upstream.scopeOf);
-    if (!decision.allow) return { ok: false, status: 403, reason: decision.reason, label, handle, path };
+    if (!decision.allow) return { ok: false, status: 403, reason: decision.reason, label, handle, path, access: grant.policy.access };
     // A forward token opens only the WebSocket port-forward (v4.channel.k8s.io), where the kubelet takes the port from
     // the query the policy checked. SPDY, and SPDY tunnelled over a WebSocket, name the port inside the stream.
     if (grant.policy.access === "forward") {
       const ws = upgrade && req.method === "GET" && String(req.headers.upgrade ?? "").toLowerCase() === "websocket"
         && String(req.headers["sec-websocket-protocol"] ?? "").trim() === "v4.channel.k8s.io";
-      if (!ws) return { ok: false, status: 403, reason: "a forward token opens only a v4.channel.k8s.io WebSocket", label, handle, path };
+      if (!ws) return { ok: false, status: 403, reason: "a forward token opens only a v4.channel.k8s.io WebSocket", label, handle, path, access: grant.policy.access };
     }
     return { ok: true, grant, handle, path, upstream, parsed };
   }
 
-  private audit(req: IncomingMessage, c: { label: string; handle: string; path: string }, allowed: boolean, status?: number, reason?: string) {
+  private audit(req: IncomingMessage, c: { label: string; handle: string; path: string; access?: Policy["access"] }, allowed: boolean, status?: number, reason?: string) {
     const call = req.headers["x-landlens-call"];
     const dryRun = new URL(c.path, "http://x").searchParams.getAll("dryRun").includes("All");
     this.onAudit({
@@ -188,6 +190,7 @@ export class FrontDoor {
       ...(reason ? { reason } : {}),
       ...(typeof call === "string" && CALL_ID.test(call) ? { call } : {}),
       ...(dryRun ? { dryRun: true as const } : {}),
+      ...(c.access ? { access: c.access } : {}),
     });
   }
 
@@ -209,7 +212,7 @@ export class FrontDoor {
       delete headers["accept-encoding"];
       headers.accept = jsonAccept(req.headers.accept);
     }
-    const who = { label: c.grant.label, handle: c.handle, path: c.path };
+    const who = { label: c.grant.label, handle: c.handle, path: c.path, access: c.grant.policy.access };
     const untrack = this.track(c.grant, () => {
       up.destroy();
       res.destroy();
@@ -244,7 +247,7 @@ export class FrontDoor {
       return;
     }
     const target = new URL(c.upstream.url);
-    const who = { label: c.grant.label, handle: c.handle, path: c.path };
+    const who = { label: c.grant.label, handle: c.handle, path: c.path, access: c.grant.policy.access };
     let audited = false;
     const up = connect(Number(target.port), target.hostname, () => {
       const lines = [`${req.method} ${c.path} HTTP/1.1`, `Host: ${target.host}`, `${SIDECAR_HEADER}: ${c.upstream.secret}`];

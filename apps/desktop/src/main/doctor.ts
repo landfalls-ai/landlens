@@ -226,6 +226,31 @@ export class DoctorService {
     return { state, certs: out };
   }
 
+  /**
+   * The doctor's problems now, counted per cluster, class and tone (Landlens's telemetry gauge, wave 7 D129): from each
+   * cluster's newest report (the whole cluster's when it has one, else its namespaces' added up, each problem once).
+   * Counts only; no problem's name or text.
+   */
+  problemCounts(): { handle: string; class: string; tone: string; n: number }[] {
+    const out: { handle: string; class: string; tone: string; n: number }[] = [];
+    for (const [handle, m] of this.scopes) {
+      const whole = m.get("")?.health;
+      const reports = whole ? [whole] : [...m.values()].flatMap((s) => (s.health ? [s.health] : []));
+      const seen = new Set<string>();
+      const counts = new Map<string, number>();
+      for (const r of reports) for (const p of r.problems) {
+        if (seen.has(p.id)) continue;
+        seen.add(p.id);
+        counts.set(`${p.class} ${p.tone}`, (counts.get(`${p.class} ${p.tone}`) ?? 0) + 1);
+      }
+      for (const [k, n] of counts) {
+        const [cls, tone] = k.split(" ") as [string, string];
+        out.push({ handle, class: cls, tone, n });
+      }
+    }
+    return out;
+  }
+
   forget(handle: string) {
     for (const s of this.scopes.get(handle)?.values() ?? []) this.stop(s);
     this.scopes.delete(handle);

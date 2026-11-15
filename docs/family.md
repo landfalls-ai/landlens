@@ -13,8 +13,10 @@ Connections page. **Part 2, built 15 November 2026:** the family's own MCP serve
 3, built 15 November 2026:** Clickland's log lines and traces in the IDE (the Logs tab's History, a Traces tab, the
 doctor's fallback, Open in Clickland), on [metrics.md](metrics.md#logs-and-traces-from-clickland). **Part 4, built 15
 November 2026:** Landflow on a resource: a problem sent to Landflow's triage flow, the war room it may open, and flows
-tagged `landlens` run on an object ([below](#landflow-on-a-resource)). Still to come: part 5, Landlens's telemetry and
-the brain. See [roadmap.md](roadmap.md).
+tagged `landlens` run on an object ([below](#landflow-on-a-resource)). **Part 5, built 15 November 2026:** Landlens's
+own telemetry to your Clickland's collector, off until you turn it on ([below](#what-landlens-reports)), and a
+session's summary to your Landflow brain, sent only on your click ([below](#a-sessions-summary-to-the-brain)). See
+[roadmap.md](roadmap.md).
 
 ## How Landlens signs in
 
@@ -445,6 +447,96 @@ connected Clickland's `/api/mcp`) is removed from `mcp-servers.json`:
 A server you typed at another address is left alone; one at Clickland's address after the move stays out of sessions
 (L1 above). Main's log says what moved.
 
+## What Landlens reports
+
+Landlens can send its own telemetry to your Clickland's OpenTelemetry collector, so your Claude sessions in Landlens
+show on Clickland's Agents pages as the agent `landlens-claude`, with their tools, tokens and cost, as Landflow's
+agents do (D127–D133). It is **off** until you turn it on, because a tool that holds cluster credentials should send
+nothing you didn't ask for (Lens's own telemetry is on the plan's "Not taking" list).
+
+On the **Clickland** card (Connections), whether or not a Clickland key is saved:
+
+- **Landlens's telemetry**: the switch. Turning it on asks in main's own dialog, "Send Landlens's telemetry to
+  <host>?", which names the collector and says what goes; the window can't turn it on without your yes. Off drops
+  whatever waits, unsent, and empties the drawer. The row says when the collector last answered ("Sent 12:03:41",
+  "Not answering", "Waiting").
+- **Names**: on, the cluster's name (the one set for graphs in Clickland's dialog), the session's namespace (when it
+  is limited to one) and the object or problem a question was about go with a turn. Off is **counts only**: no
+  cluster, namespace, object or kind names at all.
+- **Collector and team…**: the collector's address (OTLP/HTTP, default `http://127.0.0.1:4318`; https, or plain http
+  only to this machine, the family's address rule), and an optional team sent as `team.id` so Clickland groups the
+  sessions. Another address while telemetry is on asks again.
+- **See what is sent**: the last 100 records exactly as queued, each with its attributes, and where they go.
+
+There is no other destination. Records are queued in main (at most 2,000, the oldest dropped), sent every 10 s or as
+soon as 200 wait, as OTLP/HTTP JSON to `<collector>/v1/traces`, `/v1/metrics` and `/v1/logs`, with a 5 s limit and no
+redirects; a batch the collector refuses three times is dropped and counted (a `telemetry.dropped` event). The
+collector's answer is never read beyond its status. The exporter is hand-written (`packages/telemetry`): no
+auto-instrumentation, which would record URLs and headers.
+
+### What is sent
+
+Every record is built by one of `packages/telemetry/src/records.ts`'s constructors. Each attribute is a fixed word
+from a closed list, a number, or a name that matched its pattern and that `redactText` leaves alone; there is no
+free-text field, so a prompt, an answer or a secret has nowhere to go. A property test feeds the constructors
+secret-shaped and long text 3,000 times and finds none of it in a record.
+
+The resource on every request: `service.name=landlens`, `service.namespace=land`, `service.version`, `os.type`, and
+`team.id` if you typed one. No host name, user name, path or machine id.
+
+| Signal | Record | Attributes |
+|---|---|---|
+| Span | `invoke_agent landlens-claude`, one per question (a prompt turn) | `gen_ai.operation.name=invoke_agent`, `gen_ai.agent.name=landlens-claude`, `gen_ai.conversation.id` (the session's id), `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_creation.input_tokens` (from the answer's `_meta.quota.token_count`), `gen_ai.usage.cost` (USD, this turn's share of ACP's running cost), `gen_ai.response.finish_reasons` (end_turn, max_tokens, max_turn_requests, refusal, cancelled, error), `landlens.mode` (default, plan), `landlens.ask` (none, object, problem, logs, clickland-logs, terminal, edit, helm, gcp, landflow). With names: `landlens.cluster`, `landlens.namespace` (one namespace) or `landlens.namespaces` (how many), `landlens.subject.kind`, `.namespace`, `.name`, `landlens.problem.class` |
+| Span | `execute_tool <server>.<tool>`, a child of its turn per gateway call that ended | `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`, `landlens.server` (landlens-kube, landlens-gcp, github, linear, clickland, landflow, landfall; a server you added is `remote`, and so is its tool's name), `landlens.status` (ok, error, refused), `landlens.gate` (auto, asked, autonomous), `landlens.who` (agent, view, you); its duration |
+| Span | `landlens.change`, a child of its turn per change the agent proposed that reached its end | `landlens.verb` (create, update, patch, delete), `landlens.kind` (with names), `landlens.outcome` (approved, rejected, failed, expired), `landlens.waited_ms` |
+| Sum, every 60 s (delta) | `landlens.sessions`, `landlens.agent.turns`, `landlens.tool.calls{server,status}`, `landlens.cluster.writes{verb,outcome}`, `landlens.frontdoor.requests{policy,allowed}`, `gen_ai.client.token.usage{gen_ai.token.type=input\|output}` | counts |
+| Gauge, every 60 s | `landlens.clusters.connected`, `landlens.doctor.problems{cluster,class,tone}` (cluster only with names) | counts |
+| Log | one per event: `session.started`, `session.ended`, `cluster.connected`, `cluster.disconnected`, `sidecar.exited`, `adapter.exited`, `gateway.refused`, `telemetry.dropped` | `landlens.event`, a severity, `landlens.count`; never an error's text |
+
+Never sent: prompt or answer text, thoughts, tool arguments or results, YAML, labels, annotations, images, env,
+events, log lines, error messages, paths, tokens, addresses or names of servers you added, GitHub or Linear names.
+What a question was about is worked out in main from the prompt main is about to send (the quote heads the window
+writes, the doctor brief's `Severity:` and `Subject:` lines, the objects attached), never from a flag the window
+sets, and only its kind, class and Kubernetes names leave. **The Go sidecar sends nothing** (D131): main reports its
+exits.
+
+A session's spans can be opened in Clickland from the dock's session menu, **Open this session in Clickland**, when
+telemetry is on and Clickland's console address is set: main builds the console's
+`/search?signal=traces&query=gen_ai.conversation.id:"<id>"` for a session it knows, and opens it after the native
+dialog that shows the host.
+
+## A session's summary to the brain
+
+With Landflow connected by a key that has `brain:write` ("Can record your work" on its card), the dock offers **Send a
+summary to the brain…**, on the session's menu (the `…` button) and on a quiet line under a session that has answered
+(D134). Landlens never sends one by itself, and the briefing's `autoSend` doesn't change that.
+
+The sheet shows the one `work.session` event that will be sent, drafted by rules in main from the session's own
+record, never from its text:
+
+| Field | Value |
+|---|---|
+| `kind`, `source`, `sourceId` | `work.session`, `landlens`, the session's id: sending again updates the same event |
+| `title` (≤ 200, one line) | "Looked into <problem> on <cluster>" when a question quoted a doctor problem, else "Worked on <cluster>/<namespace> with Claude" or "Worked on <cluster> with Claude"; editable |
+| `summary` (≤ 500) | the session's counts: "3 questions; 14 tool calls (12 cluster reads); proposed 1 change, 1 applied."; editable. **Ask Claude to draft** (open sessions only) sends one turn with Landlens's fixed question, "Summarise this session in at most 400 characters: the question, what you found, what was changed. No names of people, no secrets.", and puts the answer in the box, scrubbed and on one line, still editable. The dock marks that turn as Landlens's |
+| `occurredAt`, `endedAt`, `turns` | the session's start, its last activity and the number of your questions |
+| `team`, `initiative` | empty; you may type them (≤ 120) |
+| `visibility` | **private** (the default), team or org |
+
+Nothing else: no `repo`, `areas`, `url` or `prs`. Tool calls, reads and the problem are counted in this launch of
+Landlens; a session from an earlier launch drafts with its history's questions and changes only.
+
+**Send** (a click; Enter doesn't send) goes from main with the stored key: `POST <landflow>/api/brain/work { events:
+[event] }`. Main sends the fields it drafted exactly as the sheet showed them (the sheet's digest), and your text as
+you typed it, or not at all: text that `redactText` would change comes back to the boxes scrubbed, with "Landlens hid
+something that looked like a secret. Check the text, then send again." Landlens checks Landflow's own rules first (one
+line, no path on your machine, a title that reads like code, the lengths), and Landflow checks and redacts again.
+The answer shows as "Saved to your brain, private." (or shared with your team or organisation) or as Landflow's
+reason, as text. A session that moved on since the sheet was made (another question, a change decided) is refused:
+open the sheet again. **Remove from the brain**, on the same menu, deletes the session's event
+(`DELETE /api/brain/work/<id>?source=landlens`). Reading the brain back in a session is part 2's
+(`my_briefing`, `brain_ask`).
+
 ## IPC
 
 | Channel | Request → answer |
@@ -465,13 +557,24 @@ A server you typed at another address is left alone; one at Clickland's address 
 | `landflow:follow` | `{ run }` → `LandflowRun`. Read at most every 1.5 s, whoever asks |
 | `landflow:sent` | `{ handle }` → `{ entries }`, the newest send per problem of that cluster |
 | `landflow:open` | `{ run, what: "run" \| "room" }` → `{ opened }`. Main's own record of that run's address, after the native dialog; one dialog at a time per window |
+| `telemetry:set` | `{ on?, collector?, names?, team? }` → `TelemetryInfo` (`{ on, collector, names, team?, last?: { at, ok }, waiting, dropped }`). Turning it on, or another collector while on, asks in main's dialog; `team: null` removes the team (part 5) |
+| `telemetry:recent` | `{}` → `{ records, info }`, the last 100 records as queued |
+| `telemetry:open` | `{ session }` → `{ opened }`. A session Landlens knows, Clickland's console set, after the native dialog |
+| `brain:draft` | `{ session }` → `{ sheet, digest, to, event, facts, open }`: the rule-built event under a sheet owned by the asking window, the SHA-256 of the fields main fills, Landflow's host |
+| `brain:ask` | `{ sheet }` → `{ summary }`: one turn with the fixed question; 409 while the session is answering or closed |
+| `brain:send` | `{ sheet, digest, title, summary, visibility, team?, initiative? }` → `{ saved, note, scrubbed? }`. Only the window's own sheet, within 30 minutes, with its digest, while the session is as it was |
+| `brain:remove` | `{ session }` → `{ ok, note }` |
 
 `FamilyInfo` carries no secret: the state, the origin, the method, the account, the scopes, the switches, a note (a
 fixed sentence), what a Landflow key can do, the webhook's path and header with `hasSecret`, Clickland's console
 address, the accepted listing's counts (`tools: { read, write }`) and `drift`. Clickland still connects through
 `metrics:configure` and `metrics:test`, and both now tell the family service, so the card follows. `family:test`
-with **Tools for Claude** on also lists the server and answers its `tools` and `diff`. The telemetry fields (part 5)
-come with their part.
+with **Tools for Claude** on also lists the server and answers its `tools` and `diff`. Clickland's `FamilyInfo` carries
+`telemetry` (part 5), and every telemetry change pushes `family:update`.
+
+Part 5 split D135's `brain:send { session, … }` the same way: `brain:draft` makes the sheet and its digest, and
+`brain:send` names them, so the event sent is the one the sheet showed (part 4's H1). `brain:ask` is new: the
+window's text never reaches the fixed question.
 
 Part 4 split D126's `landflow:triage` and `landflow:run` in two: a prepare (`landflow:alert`, `landflow:input`) that
 builds what will be sent and keeps it under a sheet id owned by the asking window, and a send that takes only that id.
@@ -506,6 +609,13 @@ flow, its output.
   `LANDFLOW_QUOTE` in `main/agent.ts`; in the window `landflow.ts` (`useLandflow`, `useSent`, `useFollow`),
   `TriageSheet.tsx`, `FlowSheet.tsx`, `landflow.css`, and the wiring in `Problems.tsx`, `Details.tsx`,
   `JumpPalette.tsx` and `Workspace.tsx`.
+- Part 5: `packages/telemetry` (`records.ts`: the closed lists and the only constructors; `otlp.ts`: the OTLP/HTTP
+  JSON bodies; `queue.ts`: `TelemetryQueue`; `asks.ts`: `askOf`, `problemTitleOf`); `apps/desktop/src/main/telemetry.ts`
+  (`TelemetryService`) and `brain.ts` (`BrainService`); `AgentObserver`, `draft` and `adapterEntry` in `main/agent.ts`;
+  `packages/connections/src/brain.ts` (`draftWork`, `checkWork`, Landflow's `containsMachinePath` and `looksLikeCode`)
+  and `recordWork`, `removeWork` in `landflow.ts`; `ClicklandSettingsStore.telemetry`; `ClusterManager.onConnected`,
+  the policy in `FrontDoor`'s audit entries, `DoctorService.problemCounts`, `FamilyService.urlAllowed`; in the window
+  `Telemetry.tsx`, `BrainSheet.tsx` (the sheet, the session menu, the strip) and their styles in `landflow.css`.
 
 ## Tests
 
@@ -526,6 +636,36 @@ sibling, built from the sibling's docs and code. Each records every request and 
   request for a trigger, timeline or artifact route is recorded in `forbidden`, which the tests expect to be empty.
 
 Part 3's tests are listed on [metrics.md](metrics.md#tests).
+
+Part 5's tests:
+
+- `packages/telemetry/test/records.test.ts`: 3,000 rounds of secret-shaped and long text (tokens, keys, a password,
+  paths, a second line, 10,000 characters, an instruction) through every constructor: every string in a record is a
+  fixed word, an id or a checked name, and no secret appears; names off; a name that looks like a secret dropped; a
+  server you added and its tool as `remote`; `askOf`. `otlp.test.ts`: the bodies against a fixture.
+  `queue.test.ts`: the cap and its drops, the paths, three tries, batches of 200, a real server's redirect not
+  followed, off clears.
+- `apps/desktop/test/telemetry-main.test.ts`: off builds, keeps and sends nothing; on only after main's dialog, which
+  names the host, and again for another collector; an address the build doesn't take refused, and nothing sent once it
+  stops taking it; a turn with a secret and a problem brief in its prompt reaches the fake collector as Clickland's
+  Agents pages read it, with its tool calls and change as children, and none of the text; a usage_update handed over
+  after the answer; counts only; off drops what waits; Open in Clickland.
+- `packages/connections/test/brain.test.ts` and `apps/desktop/test/brain-main.test.ts`: the draft, the mirror of
+  `validateWorkEvent`, `recordWork` and `removeWork` against the fake's `/api/brain/work`; another window's sheet, an
+  old one, a wrong digest and a session that moved on refused; scrubbed text refused and shown; Landflow's rules
+  first; `brain:write` needed; the fixed question only, its answer scrubbed and cut; busy and closed sessions.
+- `apps/desktop/test/report-hooks.test.ts`: the adapter override only in an unpackaged build; an observer's throw
+  logged and dropped; `brain:send` and `telemetry:set` strict.
+- `apps/desktop/test/report.e2e.test.ts` (`LANDLENS_INTEGRATION=orbstack`): the built app with
+  `test/fixtures/fake-acp-agent.mjs` in place of claude-agent-acp (`LANDLENS_ACP_AGENT`, unpackaged only): telemetry
+  off, then on to the fake collector behind the stubbed dialog; a question with a password in it reaches the fake
+  collector as an `invoke_agent` span with its `api_resources` child (a real gateway read), model, tokens and team,
+  and none of its text; the brain sheet drafted, Claude's draft asked, sent private to the fake Landflow with exactly
+  the event's nine fields, then removed; the drawer. With `clickland` too, D137's telemetry check with that synthetic
+  session against your local collector (`LANDLENS_CLICKLAND_COLLECTOR`, default `http://127.0.0.1:4318`, team
+  `landlens-live-check`): the collector took the records. It reads nothing back.
+
+Each part 5 rule was taken out once to see its test fail (20 cases).
 
 - `family.test.ts`: the address rule and its overrides, this machine's odd spellings, an address stored as typed, the
   key shapes, who-am-I for each sibling (one request, the key only in `Authorization`, `redirect: "error"`), every
@@ -623,5 +763,7 @@ See [limitations.md](limitations.md):
   `executions:read` or walk of the run; `GET /api/workflows?tag=` and a declared input contract (Landflow's to decide).
 - Sending a problem's recovery, as a button (D123).
 - Following a send from another Landflow than the one connected now.
-- Telemetry and the brain (part 5).
+- Reading the telemetry back from Clickland in a test (needs a Clickland key) and D137's live check with Claude Code
+  itself; the brain's live check (`LANDLENS_LIVE_WRITES=1`, the person's to run).
+- The brain's facts for a session from an earlier launch (tool calls and reads are counted in this launch only).
 - Checking each link live with a real key.

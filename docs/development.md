@@ -123,6 +123,7 @@ unpackaged build reads:
 | Variable | What |
 |---|---|
 | `LANDLENS_FAMILY_HTTP_HOSTS` | comma-separated host names (each `^[a-z0-9.-]{1,253}$`, at most 20) a sibling's address may reach over plain http, such as `landflow-host.landflow-dev.svc.cluster.local` for the local Landflow. Without it, plain http goes only to `127.0.0.1`, `localhost` and `[::1]` |
+| `LANDLENS_ACP_AGENT` | an ACP agent's `.js` or `.mjs` script run in place of claude-agent-acp (wave 7 part 5's e2e uses `test/fixtures/fake-acp-agent.mjs`: no Claude Code runs) |
 
 A packaged app reads none: forward the service in Landlens and use `http://127.0.0.1:<port>`. The e2e: `pnpm -s
 build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism
@@ -132,6 +133,14 @@ profile. Of the live checks of the spec's D137, Clickland's logs and traces (`or
 (above); the rest (`orbstack,landflow,claude`, `landfall,claude`, and the writing ones behind `LANDLENS_LIVE_WRITES=1`)
 are not written yet. They come with the parts that use each
 link, and the ones that write are run only by the person.
+
+Telemetry and the brain (wave 7 part 5): `pnpm test` runs `@landlens/telemetry` (the record property test, the OTLP
+bodies, the queue); `apps/desktop/test/telemetry-main.test.ts`, `brain-main.test.ts` and `report-hooks.test.ts` run
+main's services against the fakes. The e2e: `pnpm -s build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack
+npx vitest run --no-file-parallelism test/report.e2e.test.ts` (screenshots `w7p5-*`), with the fake ACP agent, the
+fake Clickland's OTLP sink and the fake Landflow's brain. With `orbstack,clickland` it also sends a synthetic
+session's records to your local collector (`LANDLENS_CLICKLAND_COLLECTOR`, default `http://127.0.0.1:4318`, team
+`landlens-live-check`) and checks the collector took them; it reads nothing back.
 
 ## Where things start
 

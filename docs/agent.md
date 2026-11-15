@@ -179,6 +179,20 @@ lived in the session that ended, and the transcript still holds that text. The h
 only), and a session with none recorded is held as resumed (review of wave 7 part 2, M1). Delete one session or all of a
 cluster's; the agent also deletes its transcript where it supports that (`session/delete`).
 
+## A session's telemetry and its summary
+
+With Landlens's telemetry on ([family.md](family.md#what-landlens-reports)), each question is an `invoke_agent
+landlens-claude` span in your Clickland, with its gateway calls and changes as children, its model, tokens and cost:
+main takes them from ACP (the answer's `_meta.quota.token_count`, `usage_update`'s model and running cost), never the
+text. The dock's session menu (`…`) has **Open this session in Clickland** then, and with a Landflow key that can
+record work, **Send a summary to the brain…** and **Remove from the brain**; a session that has answered also shows a
+quiet line offering the summary. The sheet and what is sent are on [family.md](family.md#a-sessions-summary-to-the-brain).
+Its **Ask Claude to draft** is one turn in the session with Landlens's fixed question; the dock marks it, and it isn't
+counted as one of your questions.
+
+For tests, an unpackaged build runs another ACP agent's script in place of claude-agent-acp when `LANDLENS_ACP_AGENT`
+names a `.js` or `.mjs` file (`test/fixtures/fake-acp-agent.mjs`); a packaged app ignores it.
+
 ## Slash commands
 
 Type `/` in an empty composer. Landlens's own commands come first and run at once: `/new`, `/history`, `/resume`,
@@ -265,7 +279,7 @@ ConfigMap with the exact commands, and said it couldn't check the Secret because
 | `packages/kube/src/changes.ts`, `diff.ts` | The approval broker: checks, preconditions, dry run, diff, apply |
 | `packages/kube-mcp/src/writes.ts` | The write tools and what they tell the agent |
 | `packages/acp-host/src/skills.ts` | Your skills, and the plugin a session gets |
-| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings, the autonomous answer |
+| `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings, the autonomous answer; `AgentObserver` (what telemetry and the brain hear), `draft`, `adapterEntry` |
 | `packages/mcp-gateway/src/autonomy.ts`, `providers/github.ts`, `providers/linear.ts` | The autonomous mode: scope, budget, arguments, the routine writes |
 | `apps/desktop/src/renderer/src/AgentDock.tsx`, `DockParts.tsx`, `ChangeCard.tsx`, `HistoryPanel.tsx`, `SlashMenu.tsx`, `Markdown.tsx` | The dock (`DockParts.tsx` also has the autonomous chips, sheet and strip, and the provider question card) |
 | `apps/desktop/src/renderer/src/AgentPage.tsx` | The Agent page: skills and agents |

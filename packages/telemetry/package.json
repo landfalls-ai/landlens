@@ -1,0 +1,18 @@
+{
+  "name": "@landlens/telemetry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --dir test --exclude '**/*.integration.test.ts'",
+    "test:integration": "echo none"
+  },
+  "dependencies": {
+    "@landlens/contracts": "workspace:*",
+    "@landlens/kube": "workspace:*"
+  },
+  "devDependencies": { "@types/node": "24.19.2", "typescript": "7.0.2", "vitest": "4.1.12" }
+}

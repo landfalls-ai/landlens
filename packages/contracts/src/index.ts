@@ -413,6 +413,8 @@ export type FamilyInfo = {
   triage?: { path: string; header: string; hasSecret: boolean };
   /** Clickland: the console's origin, for Open in Clickland (D118). */
   console?: string;
+  /** Clickland: Landlens's own telemetry to its collector (D127, D133). */
+  telemetry?: TelemetryInfo;
 };
 export type FamilyList = { canStore: boolean; clickland: FamilyInfo; landflow: FamilyInfo; landfall: FamilyInfo };
 /** Every sentence a sibling's note or error can be; the raw error goes to main's log only. */
@@ -582,6 +584,109 @@ export const LANDFLOW_NOTES = {
   dialogOpen: "A dialog is already open.",
   stillGoing: "Still going. Check again in a moment.",
 } as const;
+
+// What Landlens reports (docs/family.md#what-landlens-reports, wave 7 part 5, D127–D135). Telemetry is off until the
+// person turns it on and goes only to the collector address they confirmed; every record is built in main by
+// packages/telemetry/src/records.ts from closed sets: an attribute key is one of TELEMETRY_KEYS and its value an enum,
+// a number or a name that passed the Kubernetes-name rule. There is no free-text field. A session's summary goes to
+// Landflow's brain as one private `work.session` event, drafted by rules in main, shown on a sheet and sent only on the
+// person's click.
+export const TELEMETRY_KEYS = [
+  "gen_ai.operation.name", "gen_ai.agent.name", "gen_ai.conversation.id", "gen_ai.request.model",
+  "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.cache_read.input_tokens",
+  "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cost", "gen_ai.response.finish_reasons", "gen_ai.tool.name",
+  "gen_ai.token.type",
+  "landlens.mode", "landlens.ask", "landlens.cluster", "landlens.namespace", "landlens.namespaces", "landlens.subject.kind",
+  "landlens.subject.namespace", "landlens.subject.name", "landlens.problem.class", "landlens.server", "landlens.status",
+  "landlens.gate", "landlens.who", "landlens.verb", "landlens.kind", "landlens.outcome", "landlens.waited_ms",
+  "landlens.event", "landlens.count", "landlens.policy", "landlens.allowed", "landlens.class", "landlens.tone",
+] as const;
+export type TelemetryKey = (typeof TELEMETRY_KEYS)[number];
+export type TelemetryValue = string | number | boolean;
+export type TelemetryAttrs = { [K in TelemetryKey]?: TelemetryValue };
+/**
+ * One record exactly as it is queued for the collector (D132's drawer shows these). Times are milliseconds since the
+ * epoch; ids are hex. `name` is a span, metric or event name from Landlens's own closed set.
+ */
+export type TelemetryRecord =
+  | { signal: "span"; name: string; at: number; end: number; traceId: string; spanId: string; parentSpanId?: string; error: boolean; attrs: TelemetryAttrs }
+  | { signal: "metric"; name: string; kind: "sum" | "gauge"; at: number; start: number; value: number; attrs: TelemetryAttrs }
+  | { signal: "log"; name: string; at: number; severity: "info" | "warn" | "error"; attrs: TelemetryAttrs };
+/** Where telemetry stands (D133), on the Clickland card. */
+export type TelemetryInfo = {
+  on: boolean;
+  /** The collector's origin (OTLP/HTTP); records go to <collector>/v1/traces, /v1/metrics and /v1/logs. */
+  collector: string;
+  /** Names of the cluster, namespace and the object a question was about go with the records; off is "counts only". */
+  names: boolean;
+  /** `team.id` on every record, if the person typed one. */
+  team?: string;
+  /** The collector's last answer. */
+  last?: { at: string; ok: boolean };
+  /** Records waiting to go; at most 2,000 are kept, older ones dropped. */
+  waiting: number;
+  /** Records dropped since the app started (the cap, or three failed tries). */
+  dropped: number;
+};
+export const DEFAULT_COLLECTOR = "http://127.0.0.1:4318";
+/** A team's name as `team.id`: at most 60 characters, a name (lowercase letters, digits, `-`, `.`, `_`). */
+export const TelemetryTeam = z.string().max(60).regex(/^[a-z0-9](?:[-a-z0-9._]{0,58}[a-z0-9])?$/, "a team name: lowercase letters, digits, - . _");
+export const TELEMETRY_NOTES = {
+  off: "Telemetry is off. Nothing is sent.",
+  declined: "Telemetry stays off: you didn't confirm the collector.",
+  dialogOpen: "A dialog is already open.",
+  noConsole: "Set Clickland's console address first.",
+  noSession: "Landlens has no such session.",
+} as const;
+
+/** A brain sheet main prepared for a session (D134), owned by the window that asked. */
+export const BrainSheetId = z.string().regex(/^bs[A-Za-z0-9_-]{20,40}$/, "not a sheet");
+export const BrainDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
+export const WorkVisibility = z.enum(["private", "team", "org"]);
+export type WorkVisibility = z.infer<typeof WorkVisibility>;
+/** Text the person may edit on the sheet, held to Landflow's limits (packages/protocol/src/work-events.ts). */
+export const BrainTitle = z.string().min(1).max(200);
+export const BrainSummary = z.string().max(500);
+export const BrainHint = z.string().max(120);
+/** The `work.session` event as the sheet shows it and main will send it (D134). */
+export type WorkDraft = {
+  kind: "work.session";
+  source: "landlens";
+  sourceId: string;
+  occurredAt: string;
+  endedAt?: string;
+  turns: number;
+  title: string;
+  summary: string;
+  visibility: WorkVisibility;
+  team?: string;
+  initiative?: string;
+};
+/**
+ * The brain sheet (D134): the event as main drafted it from the session's own record, the facts the summary was drafted
+ * from, where it goes, and the digest of the fields main fills (brain:send names it, so what is sent is what was shown).
+ */
+export type BrainDraft = { sheet: string; digest: string; to: string; event: WorkDraft; facts: string[]; open: boolean };
+/** brain:send's answer: saved, or why not (Landflow's reason as text, or Landlens's fixed sentence). */
+export type BrainSend = { saved: boolean; note: string; scrubbed?: { title: string; summary: string; team?: string; initiative?: string } };
+export const BRAIN_NOTES = {
+  saved: "Saved to your brain, private.",
+  savedTeam: "Saved to your brain, shared with your team.",
+  savedOrg: "Saved to your brain, shared with your organisation.",
+  scrubbed: "Landlens hid something that looked like a secret. Check the text, then send again.",
+  noBrain: "This Landflow key can't record work (brain:write).",
+  notReady: "Connect Landflow first.",
+  noSheet: "That sheet is gone. Open it again.",
+  changed: "This session moved on since the sheet was made. Look again before sending.",
+  closed: "Open the session to ask Claude for a draft.",
+  removed: "Removed from your brain.",
+  notThere: "Nothing of this session is in your brain.",
+  brainOff: "The brain is off on this Landflow.",
+  refused: "Landflow refused the key.",
+  busy: "Claude is busy in this session. Ask again when it has answered.",
+} as const;
+/** The one question "Ask Claude to draft" sends (D134): fixed, never the window's. */
+export const BRAIN_PROMPT = "Summarise this session in at most 400 characters: the question, what you found, what was changed. No names of people, no secrets.";
 
 // Google Cloud (docs/gcp.md, wave 6 part 4): browse every resource of the projects you choose, read-only, with
 // gcloud's own sign-in. Landlens stores no Google credential; the token stays in main. Names are held to Google's
@@ -926,6 +1031,17 @@ export const channels = {
   "landflow:sent": z.object({ handle: Handle }).strict(),
   /** The run in Landflow, or the room it opened: main's own record of it, after the native dialog that shows its host. */
   "landflow:open": z.object({ run: LandflowRunId, what: z.enum(["run", "room"]) }).strict(),
+  // What Landlens reports (docs/family.md#what-landlens-reports, D133, D135). Telemetry: the switch, the collector's
+  // address (main confirms a new one natively), counts only, the team; the drawer's records; a session in Clickland.
+  // The brain: a sheet per session, prepared in main; send names the sheet and the digest of the fields main filled, and
+  // carries only the text the person may edit; main scrubs and checks it again.
+  "telemetry:set": z.object({ on: z.boolean().optional(), collector: FamilyOrigin.optional(), names: z.boolean().optional(), team: TelemetryTeam.nullable().optional() }).strict(),
+  "telemetry:recent": z.object({}).strict(),
+  "telemetry:open": z.object({ session: SessionId }).strict(),
+  "brain:draft": z.object({ session: SessionId }).strict(),
+  "brain:ask": z.object({ sheet: BrainSheetId }).strict(),
+  "brain:send": z.object({ sheet: BrainSheetId, digest: BrainDigest, title: BrainTitle, summary: BrainSummary, visibility: WorkVisibility, team: BrainHint.optional(), initiative: BrainHint.optional() }).strict(),
+  "brain:remove": z.object({ session: SessionId }).strict(),
   // The autonomous mode (D82): per session and connection, never stored. Main answers a routine write's question
   // only when the gateway's check passes; the renderer can turn it on or off, never answer for it.
   "agent:autonomy": AutonomyRequest,
@@ -1040,6 +1156,13 @@ export type Responses = {
   "landflow:follow": LandflowRun;
   "landflow:sent": { entries: LandflowSent[] };
   "landflow:open": { opened: boolean };
+  "telemetry:set": TelemetryInfo;
+  "telemetry:recent": { records: TelemetryRecord[]; info: TelemetryInfo };
+  "telemetry:open": { opened: boolean };
+  "brain:draft": BrainDraft;
+  "brain:ask": { summary: string };
+  "brain:send": BrainSend;
+  "brain:remove": { ok: boolean; note: string };
   "agent:autonomy": AutonomyState;
   "gcp:status": GcpStatus;
   "gcp:projects": { projects: GcpProject[]; cut: boolean };

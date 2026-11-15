@@ -9,6 +9,7 @@ import { api, type ApiError } from "./api";
 import { ChangeCard, ChangeDone, isWaiting, riskWords, type CardKeys } from "./ChangeCard";
 import { answerKeys, AskCard, AutonomyChips, AutonomySheet, AutonomyStrip, Plan, PROVIDER_NAME, Transcript, type Item, type PlanEntry, type Tool } from "./DockParts";
 import { HistoryPanel, whenText } from "./HistoryPanel";
+import { BrainSheet, SessionMenu, SummaryStrip, useReportable } from "./BrainSheet";
 import type { ObjectTarget } from "./app-host";
 import { contextIcon, Ic, kindIcon } from "./icons";
 import { hasView, useMcpCalls } from "./mcpStore";
@@ -67,6 +68,9 @@ export function AgentDock(props: {
   const [autonomy, setAutonomy] = useState<AutonomyState[]>([]);
   const [sheet, setSheet] = useState<ConnProvider>();
   const [sheetError, setSheetError] = useState<string>();
+  // The brain and Clickland for this session (wave 7 part 5): a sheet the person opens; nothing goes by itself.
+  const reportable = useReportable();
+  const [brainSheet, setBrainSheet] = useState(false);
   const session = useRef<string | undefined>(undefined);
   const replaying = useRef(false);
   const early = useRef<AgentUpdate[]>([]);
@@ -497,6 +501,10 @@ export function AgentDock(props: {
         </div>
         <button className="icon-btn" aria-label="New session" title="New session" onClick={() => requestSwitch({ n: opening.n + 1 })}><Ic icon={SquarePen} size={15} /></button>
         {!panel ? <button className="icon-btn" aria-label="History" title="History" onClick={() => setPanel("history")}><Ic icon={History} size={15} /></button> : null}
+        {!panel && info ? (
+          <SessionMenu session={info.session} can={reportable} onSummary={() => setBrainSheet(true)}
+            onNote={(n) => setItems((xs) => [...xs, { type: "note", text: n.text, ...(n.tone === "ok" ? {} : { tone: n.tone }) }])} />
+        ) : null}
         <button className="icon-btn" onClick={props.onClose} aria-label={`Close ${agent}`} title={closeTitle}><Ic icon={X} size={15} /></button>
       </header>
       {/* The strip can't be dismissed, only stopped: it stays while History is open too (L3 of the part 3 review). */}
@@ -571,6 +579,7 @@ export function AgentDock(props: {
         {loose.map(renderChange)}
         {plan.length ? <Plan plan={plan} /> : null}
         {asks.map((p) => <AskCard key={p.request} ask={p} onAnswer={(o) => answer(p, o)} />)}
+        {info && reportable.brain && !busy && !waiting.length && items.some((i) => i.type === "agent") ? <SummaryStrip onSummary={() => setBrainSheet(true)} /> : null}
         <div ref={bottom} />
       </div>
       <form className="dock-input" onSubmit={(e) => {
@@ -684,6 +693,10 @@ export function AgentDock(props: {
           </div>
         </div>
       </form>
+      {brainSheet && info ? (
+        <BrainSheet session={info.session} onClose={() => setBrainSheet(false)}
+          onAsk={() => setItems((xs) => [...xs, { type: "note", text: "Landlens asked for a summary for your brain (its own fixed question)." }])} />
+      ) : null}
     </aside>
   );
 }

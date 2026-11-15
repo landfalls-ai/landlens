@@ -13,6 +13,7 @@ import { api, type ApiError } from "./api";
 import { ClicklandSettings } from "./ClicklandSettings";
 import { ToolRow } from "./ConnectionsPage";
 import { Ic, SiblingMark } from "./icons";
+import { useTelemetry } from "./Telemetry";
 
 const NAME: Record<Sibling, string> = { clickland: "Clickland", landflow: "Landflow", landfall: "Landfall" };
 
@@ -246,6 +247,7 @@ function ClicklandCard(props: { info: FamilyInfo; context?: string; handle?: str
   const [settings, setSettings] = useState(false);
   const check = useCheck("clickland", setError);
   const tools = useTools(c, props.onInfo);
+  const telemetry = useTelemetry(c, props.onInfo);
   const on = c.state !== "off";
   const disconnect = () => {
     if (!window.confirm("Forget Clickland's key? Graphs fall back to the cluster's Prometheus or metrics-server until a key is saved again.")) return;
@@ -267,8 +269,10 @@ function ClicklandCard(props: { info: FamilyInfo; context?: string; handle?: str
       <ul className="fam-rows" aria-label="What Clickland is used for">
         <Row label="Graphs" say="CPU and memory history on the Metrics tab and the Overview, through this key." state={c.state === "ready" ? "In use" : "Not in use"} tone={c.state === "ready" ? "ok" : "muted"} />
         {c.state === "ready" ? tools.rows : null}
+        {telemetry.rows}
       </ul>
       {c.state === "ready" ? tools.panel : null}
+      {telemetry.panel}
       {on ? (
         <div className="fam-acts">
           <button className="secondary sm" onClick={check.run} disabled={check.running}>Check</button>

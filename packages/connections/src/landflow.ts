@@ -19,7 +19,7 @@
 // Every request goes through pinnedFetch to Landflow's stored origin (no redirects, a time limit); the key only in the
 // Authorization header, the webhook's secret only in its own header. Answers are read up to a size limit and reduced
 // to a few checked fields; a failure is one of the fixed sentences, its raw error kept for main's log.
-import { FAMILY_NOTES, familyHttpNote, LANDFLOW_ID, LANDFLOW_NOTES, type LandflowFlow, type LandflowOutcome, type LandflowRunStatus } from "@landlens/contracts";
+import { BRAIN_NOTES, FAMILY_NOTES, familyHttpNote, LANDFLOW_ID, LANDFLOW_NOTES, type LandflowFlow, type LandflowOutcome, type LandflowRunStatus, type WorkDraft } from "@landlens/contracts";
 import { FamilyError } from "./family.js";
 import { failureKind, oneLine, OriginRefused, pinnedFetch, readCapped, TooLarge } from "./providers.js";
 
@@ -254,4 +254,45 @@ export async function getExecution(origin: string, key: string, id: string, base
   if (r.status === 404) throw new FamilyError(404, LANDFLOW_NOTES.gone);
   if (!r.ok) throw new FamilyError(502, familyHttpNote("Landflow", r.status));
   return readExecution(await body(r, MAX_EXECUTION));
+}
+
+// ---- The brain (D134) -------------------------------------------------------------------------------------------------
+//
+// POST /api/brain/work { events: WorkEventInput[1..50] } (apps/web/src/app/api/brain/work/route.ts, scope brain:write):
+// 200 `{ saved: [{ sourceId, id, created }], rejected: [{ sourceId, reason }] }`; the same source and sourceId again
+// updates the event; 503 when the brain is off on the instance. DELETE /api/brain/work/:sourceId?source=<tool>: 204, or
+// 404 when the caller has none by that source and id.
+
+/** What a send to the brain came to: saved, or Landflow's reason (one line, at most 300 characters). */
+export type WorkAnswer = { saved: true } | { saved: false; reason: string };
+
+function brainRefusal(status: number): FamilyError {
+  if (status === 401) return new FamilyError(401, FAMILY_NOTES.landflowRefused);
+  if (status === 403) return new FamilyError(403, BRAIN_NOTES.noBrain);
+  if (status === 503) return new FamilyError(503, BRAIN_NOTES.brainOff);
+  return new FamilyError(502, familyHttpNote("Landflow", status));
+}
+
+/** Record one work event as the key's user (D134): the event exactly as the sheet showed it. */
+export async function recordWork(o: { origin: string; key: string; event: WorkDraft; fetch?: typeof fetch }): Promise<WorkAnswer> {
+  const r = await send(o.origin, "/api/brain/work", {
+    method: "POST",
+    headers: { ...auth(o.key), "Content-Type": "application/json" },
+    body: JSON.stringify({ events: [o.event] }),
+  }, o.fetch ?? fetch);
+  if (!r.ok) throw brainRefusal(r.status);
+  const j = await body(r, MAX_ANSWER);
+  if (!isObj(j) || !Array.isArray(j.saved) || !Array.isArray(j.rejected)) throw new FamilyError(502, FAMILY_NOTES.landflowAnswer);
+  if (j.saved.some((s) => isObj(s) && s.sourceId === o.event.sourceId)) return { saved: true };
+  const why = j.rejected.find((x) => isObj(x) && x.sourceId === o.event.sourceId) as Record<string, unknown> | undefined;
+  return { saved: false, reason: oneLine(why?.reason, 300) ?? FAMILY_NOTES.landflowAnswer };
+}
+
+/** Delete this session's event from the brain: true when Landflow had one. */
+export async function removeWork(o: { origin: string; key: string; sourceId: string; fetch?: typeof fetch }): Promise<boolean> {
+  const r = await send(o.origin, `/api/brain/work/${encodeURIComponent(o.sourceId)}?source=landlens`, { method: "DELETE", headers: auth(o.key) }, o.fetch ?? fetch);
+  if (r.status === 404) return false;
+  if (!r.ok) throw brainRefusal(r.status);
+  await r.body?.cancel().catch(() => undefined);
+  return true;
 }

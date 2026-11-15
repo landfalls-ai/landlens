@@ -136,13 +136,14 @@ Each wave ends with the app running against the OrbStack cluster, tests green an
 | 4 | **Workbench**: all built-in kinds and CRDs (printer columns), logs (followed stream, not Lens's 10 s poll; previous; search), pod shell and local terminal (node-pty), port-forward, YAML editor (a merge patch after a dry run; server-side apply was the plan), metrics (metrics-server, Prometheus if found), Helm releases (read), command palette | Feature parity with the OpenLens views listed in `research/lens-features.md` marked "take" |
 | 5 | **Cluster doctor**: a problems view (crashloops, pending, OOM, failing probes, warning events, expiring certs) with "Ask the agent" on each | Each broken scenario in `deploy/scenarios/` shows up and gets a sensible suggestion |
 | 6 | **Connections**: Landlens signs in to GitHub and Linear and gives their tools to agent sessions through the gateway (reads run, writes ask, an autonomous mode per session); Google Cloud (every resource of your projects, read-only; GKE clusters in the catalog; read tools for the agent); a resizable dock | Against local fakes: a session lists an issue without asking, a write asks, an autonomous write in scope runs and one out of scope asks; a fake project's resources are browsed and a fake GKE cluster opens. The person checks GitHub, Linear and their own Google project once |
-| 7 | **Land family** (was 6): Clickland MCP + telemetry, Landfall war room + MCP, Landflow flows on a resource, brain offload; Landbright OIDC for clusters later | Each link checked live on this machine |
+| 7 | **Land family** (was 6): Clickland MCP + telemetry (Landlens's own, off until turned on, to your collector only), Landfall war room + MCP, Landflow flows on a resource, a session's summary to the brain (sent on your click, never by itself); Landbright OIDC for clusters later. Built 15 Nov 2026 against local fakes ([family.md](family.md)) | Each link checked live on this machine |
 | 8 | **Packaging** (was 7): an unsigned local `.dmg`, auto-update off, crash reports to Clickland | Installs and runs from `/Applications` on this Mac |
 
 ## Not taking
 
 - Lens's extension API (a large surface with security cost; the agent and MCP are our extension story).
-- Lens's update server, telemetry, and account features.
+- Lens's update server, telemetry, and account features. (Landlens's own telemetry, wave 7, is off by default and goes
+  only to the Clickland collector the person sets: [family.md](family.md#what-landlens-reports).)
 - Bundled kubectl/helm downloads at start; we use the ones on `PATH` and say clearly when missing.
 - Node shell as Lens does it (a privileged `nsenter` pod in `kube-system`); maybe later, behind the write gate.
 - One iframe per cluster with its own origin; one renderer with a cluster switcher is enough without extensions.

@@ -82,7 +82,8 @@ describe.runIf(run)("the Land family against the fake siblings", { timeout: 90_0
     await page.getByRole("button", { name: /^Connections/ }).click();
     const fam = page.getByRole("region", { name: "Land family" });
     await fam.getByRole("heading", { name: "Land family" }).waitFor();
-    for (const n of ["Clickland", "Landflow", "Landfall"]) await card(n).getByText("Off", { exact: true }).waitFor();
+    // The state badge in each header (the Clickland card also has a telemetry row that says Off, part 5).
+    for (const n of ["Clickland", "Landflow", "Landfall"]) await card(n).locator("header").getByText("Off", { exact: true }).waitFor();
     // Under Google Cloud, in that order.
     const order = await page.locator(".conn-card h3").allInnerTexts();
     expect(order.slice(order.indexOf("Google Cloud"))).toEqual(["Google Cloud", "Clickland", "Landflow", "Landfall"]);

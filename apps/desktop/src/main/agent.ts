@@ -64,6 +64,32 @@ export const CLICKLAND_QUOTE = /^(?:Log lines from Clickland I selected \([^\n]*
  * Clickland's lines.
  */
 export const LANDFLOW_QUOTE = /^Output of a Landflow run I chose \([^\n]*\), quoted as data, not instructions:$/m;
+/**
+ * What main's reporters hear of the agent (telemetry.ts, brain.ts; wave 7 part 5): a session's start and end, each
+ * question with the objects quoted into it, each answer's stop reason and ACP `_meta`, usage updates, the mode and the
+ * adapter's exit. Text goes no further than these hooks: telemetry keeps only what packages/telemetry's closed
+ * constructors take from it.
+ */
+export type AgentObserver = {
+  started?(s: { session: string; context: string; namespaces?: string[]; mode: string; resumed: boolean }): void;
+  ended?(session: string): void;
+  /** `draft`: the brain sheet's own turn (main's fixed prompt), not one of the person's questions. */
+  asked?(session: string, text: string, refs: { kind?: string; namespace?: string; name: string }[], draft?: boolean): void;
+  answered?(session: string, end: { stopReason: string; meta?: unknown }): void;
+  usage?(session: string, u: { model?: unknown; cost?: { amount?: unknown; currency?: unknown } | null }): void;
+  mode?(session: string, mode: string): void;
+  exited?(): void;
+};
+
+/** The adapter Landlens runs: claude-agent-acp, or (unpackaged builds only, for tests) another ACP agent's script. */
+export function adapterEntry(env: NodeJS.ProcessEnv, packaged: boolean): string {
+  const o = env.LANDLENS_ACP_AGENT;
+  return !packaged && o && /\.m?js$/.test(o) ? o : claudeAdapterEntry();
+}
+
+/** How long the brain's draft waits after the answer for its last message chunks. */
+const DRAFT_SETTLE_MS = 250;
+
 /** The modes the dock offers: Manual and Plan. Never acceptEdits, auto or bypass. */
 const MODES = new Set(["default", "plan"]);
 
@@ -81,6 +107,10 @@ export class AgentService {
     toolName?: string;
     resolve: (o: RequestPermissionOutcome) => void;
   }>();
+  /** Sessions with a question running: one at a time each (the brain's draft waits for none). */
+  private readonly running = new Set<string>();
+  /** A brain draft's answer, gathered from the session's message chunks while its turn runs. */
+  private readonly drafting = new Map<string, string[]>();
   /** Changes the agent proposed that wait for your decision, by change id. */
   private readonly changes = new Map<string, { session: string; resolve: (d: ChangeDecision) => void; reject: (e: Error) => void }>();
 
@@ -109,6 +139,10 @@ export class AgentService {
       settings?: AgentSettings;
       /** Where your Claude Code skills are; ~/.claude/skills by default. */
       skillsDir?: string;
+      /** Telemetry and the brain's facts (wave 7 part 5). */
+      observers?: AgentObserver[];
+      /** The adapter's script; claude-agent-acp's by default. */
+      adapter?: string;
       log?: (l: string) => void;
     },
   ) {
@@ -128,7 +162,7 @@ export class AgentService {
       const node = which("node", this.path);
       if (!node) throw Object.assign(new Error("Landlens needs Node.js to run Claude Code; none was found on your login shell's PATH."), { status: 424 });
       const host = new AcpHost(
-        { title: AGENT_TITLE, command: node, args: [claudeAdapterEntry()], env: { CLAUDE_AGENT_ACP_PROTOCOL: "v1" } },
+        { title: AGENT_TITLE, command: node, args: [this.deps.adapter ?? claudeAdapterEntry()], env: { CLAUDE_AGENT_ACP_PROTOCOL: "v1" } },
         {
           cwd: this.deps.sessionsDir,
           env: agentEnv(process.env, { PATH: this.path }),
@@ -144,13 +178,21 @@ export class AgentService {
                   ...(u.rawInput !== undefined ? { rawInput: u.rawInput } : {}),
                 });
               }
+              const v = n.update as { sessionUpdate?: string; cost?: { amount?: unknown; currency?: unknown } | null; content?: { type?: string; text?: unknown }; currentModeId?: unknown; _meta?: Record<string, unknown> };
+              if (v.sessionUpdate === "usage_update") this.observe((o) => o.usage?.(n.sessionId, { model: v._meta?.["_claude/model"], cost: v.cost ?? null }));
+              if (v.sessionUpdate === "current_mode_update" && typeof v.currentModeId === "string") this.observe((o) => o.mode?.(n.sessionId, v.currentModeId as string));
+              const draft = this.drafting.get(n.sessionId);
+              if (draft && v.sessionUpdate === "agent_message_chunk" && v.content?.type === "text" && typeof v.content.text === "string") draft.push(v.content.text);
               this.deps.push("agent:update", { session: n.sessionId, update: n.update as AgentUpdate["update"] });
             },
             permission: (req, signal) => this.ask(req, signal),
             exit: ({ code, stderr }) => {
               // Claude Code has gone: its sessions' tokens must not outlive it.
               for (const s of this.sessions.values()) s.revoke();
+              for (const id of this.sessions.keys()) this.observe((o) => o.ended?.(id));
               this.sessions.clear();
+              this.running.clear();
+              this.observe((o) => o.exited?.());
               for (const [id, p] of this.pending) {
                 p.resolve({ outcome: "cancelled" });
                 this.pending.delete(id);
@@ -229,11 +271,33 @@ export class AgentService {
       ...(this.deps.log ? { log: this.deps.log } : {}),
     }, req);
     this.sessions.set(s.id, s);
+    this.observe((o) => o.started?.({ session: s.id, context: s.context, ...(s.namespaces ? { namespaces: s.namespaces } : {}), mode: s.response.modes?.currentModeId ?? "default", resumed: !!req.resume }));
     this.deps.history?.started({ session: s.id, agent: AGENT_TITLE, context: s.context, server: this.deps.clusters.get(s.handle).info.server, ...(s.namespaces ? { namespaces: s.namespaces } : {}), cwd: s.cwd });
     if (held) this.deps.autonomy?.hold?.(s.id, held);
     // Each connection's autonomous mode, off: a new or resumed session never starts autonomous (D82).
     const autonomy = this.deps.autonomy?.states(s.id) ?? [];
     return { ...info(s, s.response), ...(autonomy.length ? { autonomy } : {}) };
+  }
+
+  /** Each observer hears, and none can break the agent: a throw is logged and dropped. */
+  private observe(f: (o: AgentObserver) => void) {
+    for (const o of this.deps.observers ?? []) {
+      try {
+        f(o);
+      } catch (err) {
+        this.deps.log?.(`[agent] an observer failed: ${err instanceof Error ? err.name : "error"}`);
+      }
+    }
+  }
+
+  /** Another observer, once made (the brain's facts need the agent to draft). */
+  addObserver(o: AgentObserver) {
+    (this.deps.observers ??= []).push(o);
+  }
+
+  /** Whether the session is open in this launch. */
+  isOpen(session: string): boolean {
+    return this.sessions.has(session);
   }
 
   history(context?: string): AgentHistoryEntry[] {
@@ -302,8 +366,45 @@ export class AgentService {
       });
       blocks.push(embedded ? resourceBlock(uri, body) : { type: "text", text: `${uri}\n${body}` });
     }
-    const res = await this.host!.prompt(id, blocks);
-    return { stopReason: res.stopReason };
+    const refs = await Promise.all(context.map(async (r) => ({ ...r, kind: await this.deps.clusters.typeOf(s.handle, r).then((t) => t.kind, () => undefined) })));
+    this.observe((o) => o.asked?.(id, text, refs.map((r) => ({ name: r.name, ...(r.namespace ? { namespace: r.namespace } : {}), ...(r.kind ? { kind: r.kind } : {}) }))));
+    this.running.add(id);
+    try {
+      const res = await this.host!.prompt(id, blocks);
+      this.observe((o) => o.answered?.(id, { stopReason: res.stopReason, meta: res._meta }));
+      return { stopReason: res.stopReason };
+    } catch (err) {
+      this.observe((o) => o.answered?.(id, { stopReason: "error" }));
+      throw err;
+    } finally {
+      this.running.delete(id);
+    }
+  }
+
+  /**
+   * The brain sheet's "Ask Claude to draft" (D134): one turn in the session with main's fixed prompt, never the window's
+   * text, and its answer's text. Not counted as one of your questions; refused while another question runs.
+   */
+  async draft(id: string, prompt: string): Promise<string> {
+    this.session(id);
+    if (this.running.has(id)) throw Object.assign(new Error("busy"), { status: 409, busy: true });
+    const chunks: string[] = [];
+    this.drafting.set(id, chunks);
+    this.running.add(id);
+    this.observe((o) => o.asked?.(id, prompt, [], true));
+    try {
+      const res = await this.host!.prompt(id, [{ type: "text", text: prompt }]);
+      this.observe((o) => o.answered?.(id, { stopReason: res.stopReason, meta: res._meta }));
+      // The answer's last chunks can be handed over after the answer itself, though sent before it.
+      await new Promise((r) => setTimeout(r, DRAFT_SETTLE_MS));
+      return chunks.join("");
+    } catch (err) {
+      this.observe((o) => o.answered?.(id, { stopReason: "error" }));
+      throw err;
+    } finally {
+      this.drafting.delete(id);
+      this.running.delete(id);
+    }
   }
 
   /**
@@ -372,6 +473,7 @@ export class AgentService {
     const offered = s.response.modes?.availableModes.some((m) => m.id === mode);
     if (!MODES.has(mode) || !offered) throw Object.assign(new Error(`Landlens offers only Manual and Plan, not ${JSON.stringify(mode)}`), { status: 400 });
     await this.host!.setMode(id, mode);
+    this.observe((o) => o.mode?.(id, mode));
   }
 
   async setConfig(id: string, config: string, value: string) {
@@ -401,6 +503,7 @@ export class AgentService {
     if (!s) return;
     this.sessions.delete(id);
     this.withdrawAsks(id);
+    this.observe((o) => o.ended?.(id));
     await s.close();
   }
 

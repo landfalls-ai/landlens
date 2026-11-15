@@ -24,7 +24,9 @@ export type Crypto = {
 };
 
 /** `console`: the console's origin, for Open in Clickland (wave 7, D118); in clear, no secret. */
-type Stored = { url?: string; key?: string; clusters?: Record<string, string>; console?: string };
+type Stored = { url?: string; key?: string; clusters?: Record<string, string>; console?: string; telemetry?: StoredTelemetry };
+/** Landlens's own telemetry (wave 7 D133), in clear: no secret. Off unless `on` is exactly true. */
+export type StoredTelemetry = { on: boolean; collector?: string; names: boolean; team?: string };
 
 export class ClicklandSettingsStore {
   constructor(private readonly path: string, private readonly crypto: Crypto) {}
@@ -121,6 +123,20 @@ export class ClicklandSettingsStore {
     const s = this.read();
     if (url === null) delete s.console;
     else s.console = origin(url);
+    this.write(s);
+  }
+
+  /** Telemetry's settings as stored (D133): off, names on and no collector unless the file says otherwise. */
+  telemetry(): StoredTelemetry {
+    const t = this.read().telemetry as Partial<StoredTelemetry> | undefined;
+    const collector = typeof t?.collector === "string" && origin(t.collector) ? origin(t.collector) : undefined;
+    const team = typeof t?.team === "string" && /^[a-z0-9](?:[-a-z0-9._]{0,58}[a-z0-9])?$/.test(t.team) ? t.team : undefined;
+    return { on: t?.on === true, names: t?.names !== false, ...(collector ? { collector } : {}), ...(team ? { team } : {}) };
+  }
+
+  setTelemetry(t: StoredTelemetry) {
+    const s = this.read();
+    s.telemetry = { on: t.on, names: t.names, ...(t.collector ? { collector: origin(t.collector) } : {}), ...(t.team ? { team: t.team } : {}) };
     this.write(s);
   }
 

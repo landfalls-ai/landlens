@@ -181,14 +181,15 @@ person's check reads them), and Ask Claude sends one problem at a time.
   them shows the new values across the whole chart).
 - **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten
   pods, or a cluster with more than ten nodes, shows the tail summed; the charts fold past four series anyway.
-- **One Clickland for all clusters**, with a cluster name per context. Landlens doesn't yet send its own telemetry to
-  Clickland (wave 7 part 5).
-- **The Land family is connections, session tools, Clickland's logs and traces, and Landflow on a resource so far** (wave 7 parts 1–4,
+- **One Clickland for all clusters**, with a cluster name per context. Landlens's own telemetry goes to one collector
+  you set, off until you turn it on ([family.md](family.md#what-landlens-reports)).
+- **The Land family is connections, session tools, Clickland's logs and traces, Landflow on a resource, telemetry and the brain's session summaries** (wave 7 parts 1–5,
   [family.md](family.md)). Landlens signs in to Clickland, Landflow and Landfall, gives Claude sessions their own MCP
   servers (reads by Landlens's list, the server's hint and the accepted listing; every write asks), and shows
   Clickland's stored lines and traces in the drawer ([metrics.md](metrics.md#logs-and-traces-from-clickland)), and
   sends a problem to Landflow's triage or runs a flow tagged `landlens` on an object, on your click
-  ([family.md](family.md#landflow-on-a-resource)). Not built yet: telemetry or the brain (part 5). Clickland's reads were checked live (:4730, its development bootstrap key, reads only); no other live
+  ([family.md](family.md#landflow-on-a-resource)), and sends its own telemetry and a session's summary to your brain
+  when you turn it on or click Send ([family.md](family.md#what-landlens-reports)). Clickland's reads were checked live (:4730, its development bootstrap key, reads only); no other live
   link was checked with a real key: making a key writes to a sibling, so that waits for the person, and so does recording the siblings' real tool
   listings (`scripts/record-provider-tools.mjs --family`); `FAMILY_READS` was compared by hand with the siblings'
   code ([family.md](family.md#what-the-lists-were-checked-against-review-of-part-2-m6)), and the three recorded-listing
@@ -212,6 +213,19 @@ person's check reads them), and Ask Claude sends one problem at a time.
   offered are the ones Landflow lists with the tag `landlens`, at most 50; their input has no declared contract on
   Landflow's side, and a flow's output can say anything (it reaches a prompt only quoted, under the hold). A send Landflow holds (debounced or batched) has no run, so it
   isn't remembered and leaves no chip. A problem's recovery isn't sent. Run a Landflow flow is a button in the object drawer's header (there is no ⋯ menu there).
+- **Telemetry and the brain** (wave 7 part 5, [family.md](family.md#what-landlens-reports)). Checked against the fake
+  Clickland collector and the fake Landflow, with a fake ACP agent in place of Claude Code; the local Clickland
+  collector took a synthetic session's records, but no test reads them back from Clickland (that needs a key) or runs
+  a live Claude Code turn with telemetry on, and the brain's live check (`LANDLENS_LIVE_WRITES=1`) waits for the
+  person. A turn's model and cost come from ACP's `usage_update`; a turn's span waits 250 ms after the answer for it,
+  and a turn with none has neither. Cost is ACP's running total split by turn, so a turn that overlaps the brain's
+  draft turn counts both. The cluster's name is the one set for graphs (the context's name otherwise); with counts
+  only, neither it nor a change's kind is sent. Change verbs are the approval broker's (create, update, patch,
+  delete), not the tool's (scale, restart, undo). The events are the ones main sees (sessions, clusters, the sidecar's
+  and the adapter's exits, a refused gateway call, drops); there is no `clickland.unreachable` or `cluster.unreachable`.
+  The brain's draft counts tool calls, cluster reads and the problem in this launch only, so a session from an earlier
+  launch drafts from its history's questions and changes. "Ask Claude to draft" is a turn in the session, so it shows
+  in the dock (marked) and in Claude Code's transcript; a session that is answering refuses it.
   After the security review of part 4: a flow shared from another project is listed (marked "Shared from the project
   …") and can be run; Landlens only shows whose it is and refuses one that changed since the list. A ConfigMap's
   values are sent when its YAML is ticked, scrubbed (the keyed pattern now sees `DB_PASSWORD: …` in the YAML text),
