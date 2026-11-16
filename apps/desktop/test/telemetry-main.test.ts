@@ -283,4 +283,20 @@ describe("telemetry in main", () => {
     expect(asked[0]).toContain("clickland.example");
     expect(opened).toEqual([`https://clickland.example/search?signal=traces&query=gen_ai.conversation.id%3A%22${SESSION}%22`]);
   });
+  it("a Secret's reveal and copy build no record; its reads count under the object policy and name nothing (wave 8 part 4, D168)", async () => {
+    const MARK = "LLMARK-telemetry-0123456789abcdef01234567";
+    const { t, confirm, ck, sent } = await setup();
+    await t.set({ on: true, collector: ck.origin }, confirm);
+    // What main's hooks see of a reveal: the front door's audit entry for the object token, and no action count.
+    t.audit({ at: new Date().toISOString(), label: "you · orbstack · secret landlens-dev/hands-secret", method: "GET", cluster: "h1", path: "/api/v1/namespaces/landlens-dev/secrets/hands-secret", allowed: true, status: 200, access: "object" });
+    t.action({ action: "reveal", outcome: "applied" });
+    t.action({ action: "copy", outcome: "applied" });
+    t.tick();
+    expect(JSON.stringify(t.queue.recent())).not.toMatch(new RegExp(`hands-secret|${MARK}|reveal|copy`));
+    await t.queue.flush();
+    const all = sent();
+    expect(all).toContain('"landlens.policy","value":{"stringValue":"object"}');
+    expect(all).not.toMatch(/hands-secret|secrets\/|reveal|"copy"/);
+    expect(all).not.toContain(MARK);
+  });
 });

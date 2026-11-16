@@ -65,6 +65,42 @@ class in `landlens-dev` (and `--down` removes them); `LANDLENS_INTEGRATION=orbst
 test:integration` starts them itself and waits up to 4 minutes for each problem, since pending and not-ready count
 only after 2.
 
+Your actions ([workbench.md](workbench.md#your-actions)): `node deploy/scenarios/hands/up.mjs` makes the `hands-*`
+objects in `landlens-dev` (a Deployment with a PodDisruptionBudget, a StatefulSet, a DaemonSet, a bare Pod, a CronJob
+that never fires, six ConfigMaps, and two Secrets made locally: one holding a random `LLMARK-` marker, one a fresh
+self-signed certificate); `node deploy/scenarios/hands/down.mjs` removes everything labelled `scenario=hands`. Then
+`LANDLENS_INTEGRATION=orbstack npx vitest run test/actions.integration.test.ts` in `packages/kube` (scales,
+restarts, suspends and triggers them and puts each back) and, after `pnpm -s build`, in `apps/desktop`
+`LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/actions.e2e.test.ts` (screenshots `w8p1-*`
+with `LANDLENS_SHOTS`). The unit tests: `packages/kube/test/actions.test.ts`, `edits.test.ts`, and in `apps/desktop`
+`actions-main.test.ts`, `action-log.test.ts`.
+
+Nodes ([workbench.md](workbench.md#nodes-cordon-and-drain)), with the same scenario: a full drain runs only in unit
+tests, against the in-memory API in `packages/kube/test/fake-api.ts` (`drain.test.ts`, and `apps/desktop`'s
+`nodes-main.test.ts`). On OrbStack, `LANDLENS_INTEGRATION=orbstack npx vitest run test/drain.integration.test.ts` in
+`packages/kube` sends reads and dry-run evictions of the scenario's own pods only (a test-local fence refuses
+anything else) and makes and deletes one throwaway PodDisruptionBudget; `test/nodes.e2e.test.ts` in `apps/desktop`
+is reads only (screenshots `w8p2-*`). An unpackaged build sends no node write and no dry-run eviction unless
+`LANDLENS_NODE_WRITES` names the cluster as `<context>@<host>:<port>` (comma-separated; the front door refuses
+every other node write and eviction): leave it unset. OrbStack's one node runs the siblings
+(landflow-dev, clickland-dev, kube-system); never cordon or drain it.
+
+Tables and asks ([workbench.md](workbench.md#tables-selection-columns-namespaces)): unit tests `table-state.test.ts`,
+`ask-presets.test.ts`, `row-keys.test.ts`, `apply-rules.test.ts` and the part 3 block of `actions-main.test.ts`; after `pnpm -s build`, in
+`apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/tables.e2e.test.ts`
+(screenshots `w8p3-*`). It makes ConfigMaps `hands-bulk-1..6` in landlens-dev and deletes them, and uses the fake ACP
+agent (it says "Attached: <uris>." for what a prompt attached). The namespace control is a popover now: e2e tests
+choose one with `chooseNamespace(page, ns)` from `test/e2e-helpers.ts` ("" for all).
+
+Secrets and certificates ([workbench.md](workbench.md#secrets-and-certificates)): unit tests `secrets-main.test.ts`,
+`secret-text.test.ts`, `quotes.test.ts`, `telemetry-main.test.ts`, and in `packages/kube` `policy.test.ts`,
+`frontdoor.test.ts`, `certs.test.ts`; after `pnpm -s build`, in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx
+vitest run --no-file-parallelism test/secrets.e2e.test.ts` (screenshots `w8p4-*`, dummy values only). It makes
+throwaway Secrets `hands-reveal-e2e` (a random marker per run) and `hands-reveal-tls` (a fresh self-signed EC
+certificate) in landlens-dev and deletes them, stubs main's dialog, saves and restores your clipboard (it writes to
+it), and reads the fake ACP agent's `agent-sessions/fake-agent-prompts.jsonl` (every prompt it got, kept beside the
+session folders).
+
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`
 (namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
 healthy two-replica `catalog-api` with requests, limits and an uneven load.

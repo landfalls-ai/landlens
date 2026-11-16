@@ -2,7 +2,7 @@
 // drawn: lucide-react, inline SVG, stroke 1.75, aria-hidden, currentColor.
 import {
   Bot, Box, Cable, Cloud, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
-  KeyRound, Layers, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints,
+  KeyRound, Layers, ListChecks, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints, Zap,
   Workflow, type LucideIcon,
 } from "lucide-react";
 import type { Tone } from "@landlens/kube/status";
@@ -52,12 +52,14 @@ export const RESOURCE_OF_KIND: Record<string, string> = {
   Ingress: "ingresses", ServiceAccount: "serviceaccounts",
 };
 
+// Own keys only: a resource or kind named like an Object.prototype member (`constructor`) is no icon, not a crash
+// (security review of part 3, L1).
 export function kindIcon(resource: string): LucideIcon {
-  return BY_RESOURCE[resource] ?? Shapes;
+  return (Object.hasOwn(BY_RESOURCE, resource) ? BY_RESOURCE[resource] : undefined) ?? Shapes;
 }
 
 export function iconOfKind(kind: string): LucideIcon {
-  return kindIcon(RESOURCE_OF_KIND[kind] ?? "");
+  return kindIcon((Object.hasOwn(RESOURCE_OF_KIND, kind) ? RESOURCE_OF_KIND[kind] : undefined) ?? "");
 }
 
 /** The status shapes: never colour alone. */
@@ -71,8 +73,8 @@ export function Ic({ icon: I, size = 15, className }: { icon: LucideIcon; size?:
 export const MOD = /Mac/.test(navigator.platform) ? "⌘" : "Ctrl ";
 
 /** A dock chip's icon: the object's kind, or logs or a terminal for selected lines. */
-export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" | "helm" | "problem" | "gcp" | "landflow" }): LucideIcon {
-  return c.kind === "problem" ? Stethoscope : c.kind === "landflow" ? Workflow : c.kind === "gcp" ? Cloud : c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : c.kind === "helm" ? Package : SquareTerminal;
+export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" | "helm" | "problem" | "gcp" | "landflow" | "action" | "selection" }): LucideIcon {
+  return c.kind === "selection" ? ListChecks : c.kind === "problem" ? Stethoscope : c.kind === "action" ? Zap : c.kind === "landflow" ? Workflow : c.kind === "gcp" ? Cloud : c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : c.kind === "helm" ? Package : SquareTerminal;
 }
 
 /**

@@ -21,7 +21,7 @@ export const VERBS = ["create", "update", "patch", "delete"] as const;
 /** A change's end: approved (applied), rejected, failed, expired (withdrawn counts as expired). */
 export const OUTCOMES = ["approved", "rejected", "failed", "expired"] as const;
 /** The front door's token policies (packages/kube/src/policy.ts), and `unknown` for a request no token matched. */
-export const POLICIES = ["full", "read", "write", "exec", "forward", "unknown"] as const;
+export const POLICIES = ["full", "read", "write", "exec", "forward", "object", "unknown"] as const;
 export const TOKEN_TYPES = ["input", "output"] as const;
 export const PROBLEM_CLASSES = ["crashloop", "start", "image", "config", "oom", "pending", "probe", "notready", "restarts", "unavailable", "node", "warning", "cert"] as const;
 export const TONES = ["bad", "warn"] as const;
@@ -30,7 +30,10 @@ export const EVENTS = [
   "gateway.refused", "telemetry.dropped",
 ] as const;
 export const SEVERITIES = ["info", "warn", "error"] as const;
-export const SUMS = ["landlens.sessions", "landlens.agent.turns", "landlens.tool.calls", "landlens.cluster.writes", "landlens.frontdoor.requests", "gen_ai.client.token.usage"] as const;
+/** The person's own actions (wave 8, D147) and how each ended. Reveal and copy of a Secret value are never counted. */
+export const ACTIONS = ["scale", "restart", "delete", "trigger", "suspend", "resume", "cordon", "uncordon", "drain"] as const;
+export const ACTION_OUTCOMES = ["applied", "partial", "failed", "conflict", "cancelled", "stopped"] as const;
+export const SUMS = ["landlens.sessions", "landlens.agent.turns", "landlens.tool.calls", "landlens.cluster.writes", "landlens.frontdoor.requests", "gen_ai.client.token.usage", "landlens.actions"] as const;
 export const GAUGES = ["landlens.clusters.connected", "landlens.doctor.problems"] as const;
 export const SPAN_NAMES = { turn: `invoke_agent ${AGENT_NAME}`, change: "landlens.change" } as const;
 
@@ -52,7 +55,7 @@ export type GaugeName = (typeof GAUGES)[number];
 /** Every closed value a record can hold as a string: what the property test checks output strings against. */
 export const ENUM_VALUES: ReadonlySet<string> = new Set<string>([
   AGENT_NAME, "invoke_agent", "execute_tool", ...ASKS, ...MODES, ...STOPS, ...SERVERS, ...CALL_STATUSES, ...GATES, ...WHO, ...VERBS,
-  ...OUTCOMES, ...POLICIES, ...TOKEN_TYPES, ...PROBLEM_CLASSES, ...TONES, ...EVENTS, ...SEVERITIES,
+  ...OUTCOMES, ...POLICIES, ...TOKEN_TYPES, ...PROBLEM_CLASSES, ...TONES, ...EVENTS, ...SEVERITIES, ...ACTIONS, ...ACTION_OUTCOMES,
 ]);
 
 const oneOf = <T extends string>(set: readonly T[], v: unknown): T | undefined => (typeof v === "string" && (set as readonly string[]).includes(v) ? (v as T) : undefined);
@@ -210,7 +213,7 @@ export function changeSpan(t: {
 }
 
 /** A sum's labels: each from its own closed set. */
-export type SumLabels = { server?: unknown; status?: unknown; verb?: unknown; outcome?: unknown; policy?: unknown; allowed?: unknown; type?: unknown };
+export type SumLabels = { server?: unknown; status?: unknown; verb?: unknown; outcome?: unknown; policy?: unknown; allowed?: unknown; type?: unknown; action?: unknown };
 
 /** A counter's growth over [start, at] (delta temporality). */
 export function sum(name: SumName, value: unknown, labels: SumLabels, start: unknown, at: unknown): TelemetryRecord | undefined {
@@ -225,7 +228,8 @@ export function sum(name: SumName, value: unknown, labels: SumLabels, start: unk
       "landlens.server": oneOf(SERVERS, labels.server),
       "landlens.status": oneOf(CALL_STATUSES, labels.status),
       "landlens.verb": oneOf(VERBS, labels.verb),
-      "landlens.outcome": oneOf(OUTCOMES, labels.outcome),
+      "landlens.outcome": name === "landlens.actions" ? oneOf(ACTION_OUTCOMES, labels.outcome) : oneOf(OUTCOMES, labels.outcome),
+      "landlens.action": name === "landlens.actions" ? oneOf(ACTIONS, labels.action) : undefined,
       "landlens.policy": oneOf(POLICIES, labels.policy),
       "landlens.allowed": typeof labels.allowed === "boolean" ? labels.allowed : undefined,
       "gen_ai.token.type": oneOf(TOKEN_TYPES, labels.type),

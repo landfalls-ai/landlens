@@ -17,9 +17,11 @@ import { slashOptions, slashQuery, SlashMenu, type AgentCommand, type SlashOptio
 
 export type { AskContext } from "./quotes";
 
-import { quoteHead, withQuotes, type AskContext } from "./quotes";
+import { inSession, quoteHead, sendable, withQuotes, type AskContext } from "./quotes";
 export { withQuotes };
 
+/** Main's sentences for a message holding a Secret value or attaching a Secret (secrets.ts SECRET_TEXT). */
+const REFUSED_VALUE = new Set(["That holds a Secret value Landlens showed or copied for you: it isn't sent to Claude.", "Secrets aren't sent to Claude."]);
 const SUGGESTIONS = ["What's wrong in this cluster right now?", "Which pods restarted in the last hour, and why?"];
 
 /** How the dock opens its session: a new one, or one from history (replayed). */
@@ -30,8 +32,11 @@ export function AgentDock(props: {
   context: AskContext[];
   onContextChange: (c: AskContext[]) => void;
   onClose: () => void;
-  /** A question to send as soon as the session is ready (Overview's "Ask Claude what's wrong"). */
-  pending?: { id: number; text: string };
+  /**
+   * A question to send as soon as the session is ready (Overview's "Ask Claude what's wrong"). `draft`: put it in the
+   * box selected, for you to overwrite, and send nothing ("Ask Claude about these N", D160).
+   */
+  pending?: { id: number; text: string; draft?: true };
   /** A third suggestion, built from the cluster's worst problem. */
   suggestion?: string;
   /** What Claude is doing, for the status bar. */
@@ -54,6 +59,7 @@ export function AgentDock(props: {
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
+  const selectDraft = useRef(false);
   const [mode, setMode] = useState<string>();
   const [fence, setFence] = useState(false);
   const [panel, setPanel] = useState<"history">();
@@ -217,6 +223,11 @@ export function AgentDock(props: {
   useEffect(() => {
     if (info && props.pending && sent.current !== props.pending.id) {
       sent.current = props.pending.id;
+      if (props.pending.draft) {
+        if (draft === props.pending.text) return void (box.current?.focus(), box.current?.select());
+        selectDraft.current = true;
+        return setDraft(props.pending.text);
+      }
       // Busy with a turn: the question waits in the box with its chips, and sending is left to you (D64).
       if (busy) setDraft(props.pending.text);
       else void send(props.pending.text);
@@ -233,10 +244,15 @@ export function AgentDock(props: {
   }, [busy, asks.length, items, waiting.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => props.onActivity(undefined), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The composer grows with its text, up to eight lines.
+  // The composer grows with its text, up to eight lines. A draft put there for you to overwrite is selected (D160).
   useEffect(() => {
     const el = box.current;
     if (!el) return;
+    if (selectDraft.current) {
+      selectDraft.current = false;
+      el.focus();
+      el.select();
+    }
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 156)}px`;
   }, [draft]);
@@ -294,8 +310,11 @@ export function AgentDock(props: {
   async function send(text: string) {
     const s = session.current;
     if (!s || !text.trim() || busy) return;
-    const context = props.context;
-    setItems((xs) => [...xs, { type: "user", text, context }]);
+    // Quoted text from outside a namespace-limited session's namespaces stays here (L11, M1 of part 3's review).
+    // Nothing about a Secret goes (D166).
+    const context = sendable(props.context, info?.namespaces);
+    const item = { type: "user" as const, text, context };
+    setItems((xs) => [...xs, item]);
     setDraft("");
     props.onContextChange([]);
     setBusy(true);
@@ -305,7 +324,9 @@ export function AgentDock(props: {
       if (r.stopReason === "cancelled") setItems((xs) => [...xs, { type: "note", text: "Stopped." }]);
       else if (r.stopReason !== "end_turn") setItems((xs) => [...xs, { type: "note", text: `Ended: ${r.stopReason}` }]);
     } catch (e) {
-      setItems((xs) => [...xs, { type: "note", text: (e as ApiError).message, tone: "bad" }]);
+      const err = e as ApiError;
+      // A message main refused for holding a Secret value doesn't stay on screen or in the dock's state (L2).
+      setItems((xs) => [...xs.map((x) => (x === item && err.status === 400 && REFUSED_VALUE.has(err.message) ? { ...item, text: "(not sent)", context: [] } : x)), { type: "note", text: err.message, tone: "bad" }]);
     } finally {
       setBusy(false);
     }
@@ -612,7 +633,7 @@ export function AgentDock(props: {
           {props.context.length ? (
             <div className="chips">
               {props.context.map((c) => (
-                <span key={c.label} className="chip ctx-chip" {...(c.text ? { title: quoteHead(c) } : {})}>
+                <span key={c.label} className={`chip ctx-chip${inSession(c, info?.namespaces) ? "" : " dim"}`} {...(c.text ? { title: inSession(c, info?.namespaces) ? quoteHead(c) : "Outside this session's namespaces: not sent" } : {})}>
                   <Ic icon={contextIcon(c)} size={11} />
                   {c.label}
                   <button type="button" aria-label={`Remove ${c.label}`} onClick={() => props.onContextChange(props.context.filter((x) => x !== c))}><Ic icon={X} size={11} /></button>

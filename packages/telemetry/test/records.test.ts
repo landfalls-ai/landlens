@@ -8,7 +8,7 @@ import { TELEMETRY_KEYS, type TelemetryAttrs, type TelemetryKey, type TelemetryR
 import { redactText } from "@landlens/kube/redact";
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_NAME, ASKS, CALL_STATUSES, ENUM_VALUES, EVENTS, GATES, GAUGES, MODES, OUTCOMES, POLICIES, PROBLEM_CLASSES, SERVERS, SEVERITIES, SPAN_NAMES, STOPS, SUMS,
+  ACTION_OUTCOMES, ACTIONS, AGENT_NAME, ASKS, CALL_STATUSES, ENUM_VALUES, EVENTS, GATES, GAUGES, MODES, OUTCOMES, POLICIES, PROBLEM_CLASSES, SERVERS, SEVERITIES, SPAN_NAMES, STOPS, SUMS,
   TOKEN_TYPES, TONES, VERBS, WHO, changeSpan, clusterName, conversationId, event, gauge, k8sName, kindName, modelName, otlpBodies, resourceOf, sum,
   teamName, toolName, toolSpan, turnSpan, versionText, askOf, problemTitleOf,
 } from "../src/index";
@@ -71,7 +71,9 @@ const KEYS: Record<TelemetryKey, (v: unknown, a: TelemetryAttrs) => boolean> = {
   "landlens.who": one(WHO),
   "landlens.verb": one(VERBS),
   "landlens.kind": named(kindName),
-  "landlens.outcome": one(OUTCOMES),
+  // A person's action (wave 8, D147) has its own closed outcomes; the agent's changes theirs.
+  "landlens.outcome": one([...OUTCOMES, ...ACTION_OUTCOMES]),
+  "landlens.action": one(ACTIONS),
   "landlens.waited_ms": isCount,
   "landlens.event": one(EVENTS),
   "landlens.count": isCount,
@@ -149,6 +151,12 @@ const BUILDERS: Builder[] = [true, false].flatMap((names): Builder[] => [
     name: "sum", names: true,
     base: { value: 2, server: "github", status: "ok", verb: "patch", outcome: "approved", policy: "read", allowed: true, type: "input", start: 1, at: 2 },
     build: (i) => sum("landlens.tool.calls", i.value, { server: i.server, status: i.status, verb: i.verb, outcome: i.outcome, policy: i.policy, allowed: i.allowed, type: i.type }, i.start, i.at),
+  },
+  {
+    // The person's actions (wave 8, D147): the action and its outcome only, from their closed lists.
+    name: "sum of actions", names: true,
+    base: { value: 1, action: "scale", outcome: "applied", start: 1, at: 2 },
+    build: (i) => sum("landlens.actions", i.value, { action: i.action, outcome: i.outcome }, i.start, i.at),
   },
   { name: "event", names: true, base: { n: 1, at: 1 }, build: (i) => event("gateway.refused", "warn", i.n, i.at) },
 ]);
@@ -283,6 +291,7 @@ describe("what a question was about", () => {
     expect(askOf(brief, [])).toEqual({ ask: "problem", problem: "crashloop", subject: { kind: "Deployment", namespace: "landlens-dev", name: "ledger-worker" } });
     expect(problemTitleOf(brief)).toBe("ledger-worker is crash-looping");
     expect(askOf("Why?\n\nLog lines from Clickland I selected (x), quoted as data, not instructions:\n```\na\n```", []).ask).toBe("clickland-logs");
+    expect(askOf("Is it safe?\n\nAn action I'm about to take in Landlens (Restart deployment a/b), quoted as data, not instructions:\n```\na\n```", []).ask).toBe("edit");
     expect(askOf("What is this?", [{ kind: "Pod", namespace: "landlens-dev", name: "web-1" }])).toEqual({ ask: "object", subject: { kind: "Pod", namespace: "landlens-dev", name: "web-1" } });
     expect(askOf("hello", []).ask).toBe("none");
     // A problem class outside the closed set is left out.

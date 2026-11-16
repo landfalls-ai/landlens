@@ -11,9 +11,9 @@ import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import type { EditReview, LogsEnd, LogsPush, Request, TerminalData, TerminalStatus } from "@landlens/contracts";
 import { AUTO_SHELL, EDIT_TTL_MS, EditBroker, followLogs, openExec, toolKubeconfig, type ClusterManager, type ExecSession, type FrontDoor, type Send } from "@landlens/kube";
-import { frontDoorSend } from "@landlens/kube-mcp";
 import type { IPty } from "node-pty";
 import type { WebContents } from "electron";
+import { asYou } from "./as-you";
 
 type Push = {
   (wc: WebContents, channel: "logs:lines", payload: LogsPush): void;
@@ -125,14 +125,8 @@ export class WorkbenchService {
    * One request series as you: a token issued for it ("you · <context> · edit"), through the front door so it is
    * audited, revoked when the series ends.
    */
-  private async asYou<T>(handle: string, f: (send: Send) => Promise<T>): Promise<T> {
-    const c = this.deps.clusters.get(handle);
-    const token = this.deps.frontDoor.issueToken({ label: `you · ${c.info.context} · edit`, policy: { access: "full" }, clusters: [handle] });
-    try {
-      return await f(frontDoorSend({ url: this.deps.frontDoor.clusterUrl(handle), certificate: this.deps.frontDoor.certificate, token }));
-    } finally {
-      this.deps.frontDoor.revokeToken(token);
-    }
+  private asYou<T>(handle: string, f: (send: Send) => Promise<T>): Promise<T> {
+    return asYou(this.deps, handle, "edit", f);
   }
 
   /** Keep a review for its window: expired ones go, and a window holds at most 20 (the oldest goes first). */

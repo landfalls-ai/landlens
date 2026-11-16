@@ -5,7 +5,7 @@
 // words are its reason, shown as quoted plain text (D13, D20).
 import type { AgentChange, ChangeOperation, ChangeRisk, DiffLine } from "@landlens/contracts";
 import {
-  ArrowUpRight, Ban, Check, ChevronRight, CircleDashed, Clock, Eye, FolderTree, Globe, HardDrive, KeyRound, Maximize2,
+  ArrowUpRight, Ban, Check, ChevronRight, CircleDashed, Clock, Eye, FolderTree, Globe, HardDrive, KeyRound, LogOut, Maximize2,
   Package, Play, Power, RotateCw, ShieldAlert, ShieldCheck, Sparkles, Trash2, TriangleAlert, UserCog, X, type LucideIcon,
 } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
@@ -15,6 +15,8 @@ import { yamlTokens } from "./Yaml";
 
 export const RISK: Record<ChangeRisk, { icon: LucideIcon; words: string; level: "danger" | "caution"; title: string }> = {
   deletes: { icon: Trash2, words: "Deletes", level: "danger", title: "Applying this removes the object. Landlens can't bring it back." },
+  "evicts-pods": { icon: LogOut, words: "Evicts pods", level: "danger", title: "Applying this evicts pods from a node; their controllers start them elsewhere." },
+  "loses-data": { icon: HardDrive, words: "Loses data", level: "danger", title: "Data on a pod's emptyDir or a volume goes with it." },
   rbac: { icon: ShieldAlert, words: "Changes access", level: "danger", title: "This changes who can do what in the cluster (RBAC)." },
   "cluster-scoped": { icon: Globe, words: "Cluster-wide", level: "danger", title: "This object isn't in a namespace: the change reaches the whole cluster." },
   "reads-secret": { icon: KeyRound, words: "Uses a Secret", level: "danger", title: "Its pods get a Secret's values (env or volume). What they print or send can carry them, and the agent can read pod logs." },
@@ -28,7 +30,7 @@ export const RISK: Record<ChangeRisk, { icon: LucideIcon; words: string; level: 
   "changes-image": { icon: Package, words: "Changes image", level: "caution", title: "Applying this runs a different container image." },
 };
 export const ORDER: ChangeRisk[] = [
-  "deletes", "rbac", "cluster-scoped", "reads-secret", "privileged", "host-access", "namespace", "service-account",
+  "deletes", "evicts-pods", "loses-data", "rbac", "cluster-scoped", "reads-secret", "privileged", "host-access", "namespace", "service-account",
   "new-workload", "scales-to-zero", "restarts-pods", "changes-image",
 ];
 /** A diff this short is never capped (D25). */

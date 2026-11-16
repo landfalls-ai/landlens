@@ -61,12 +61,19 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `packages/kube/src/search.ts` | The ⌘K palette's names: metadata-only lists of the common kinds, kind, name and namespace out |
 | `packages/kube/src/checks.ts` | The sentence for each check the doctor couldn't make (the page's strip and the agent's overview) |
 | `packages/kube/src/doctor.ts`, `doctor-hints.ts` | The cluster doctor's rules: problems grouped by owner, worst first, with Landlens's first suggestion |
-| `packages/kube/src/certs.ts` | TLS Secrets' certificates as dates and names (`tls.crt` only) |
+| `packages/kube/src/certs.ts` | TLS Secrets' certificates as dates and names (`tls.crt` only); `certDetails`, a Secret's certificate cards from `tls.crt` and `ca.crt` (wave 8 part 4) |
 | `packages/kube/src/helm.ts` | Helm releases, read-only: lists and decodes Helm's release Secrets as you, merges values as Helm does, hides secret values and Secret data before the window sees them |
 | `packages/kube/src/watch.ts` | `ResourceWatcher`: paginated list, watch with bookmarks, relist on 410, batches |
 | `packages/kube/src/clusters.ts` | `ClusterManager` (connect, discovery, get, events) and `WatchHub` (shared, ref-counted watchers) |
 | `packages/kube/src/access.ts` | SelfSubjectAccessReview |
-| `packages/kube/src/policy.ts` | Request parsing and token policies |
+| `packages/kube/src/changes.ts`, `edits.ts` | `prepareOp` (read, pin, dry-run, diff, risks), shared by the agent's `ChangeBroker` and your `EditBroker` (YAML edits, Create, and your actions' `reviewOps` and `apply({ each })` with the digest) |
+| `packages/kube/src/actions.ts`, `action-kinds.ts` | Your actions (wave 8): the kind table, the request each action sends, kubectl's triggered Job, and the facts beside the diff |
+| `packages/kube/src/drain.ts` | Drain (wave 8 part 2): the plan from the node, its pods and the budgets; the reads; the dry-run evictions; the run (cordon, evict by uid, retry, follow, stop) |
+| `apps/desktop/src/main/actions.ts`, `action-log.ts`, `as-you.ts`, `native-confirm.ts` | `ActionService` (reviews and applies as you, owned by a window, main's dialog, limits; cordon, the drain review and run, Stop, the node-write fence of D153), the kept action log, the shared as-you token helper, main's own dialog |
+| `apps/desktop/src/renderer/src/ObjectMenu.tsx`, `ActionSheet.tsx`, `ReviewCard.tsx`, `RecentActions.tsx`, `actionAsks.ts`, `DrainPlanView.tsx` | The object menu, the action sheet, the review card shared with the YAML editor, Recent actions, Ask Claude first, the drain sheet (plan and run) |
+| `apps/desktop/src/renderer/src/tableState.ts`, `TablePickers.tsx`, `askPresets.ts`, `applyRules.ts` | Tables (wave 8 part 3): what they remember and its parser, the watch plan for several namespaces and the merge of their watches, the selection's rules and bulk actions; the namespace popover, column picker and selection bar; the preset asks and the selection's quote; a review card's Apply and a bulk's left-out note |
+| `packages/kube/src/policy.ts` | Request parsing and token policies (the `object` policy: one GET of one object, used once) |
+| `apps/desktop/src/main/secrets.ts`; renderer `SecretData.tsx`, `CertPanel.tsx`, `secretText.ts` | Secret values (wave 8 part 4): `SecretService` (unlock in main's dialog, reveal one key, copy through main's clipboard and its clear, certificates, the prompt guard); the Data section and `SecretValue`; the certificate cards |
 | `packages/kube/src/frontdoor.ts` | The front door |
 | `packages/kube/src/tool-kubeconfig.ts` | The kubeconfig for tools and the agent |
 | `apps/desktop/src/main/security.ts` | Sandbox, CSP, navigation and permission guards |

@@ -194,3 +194,84 @@ describe("your edits", () => {
   });
 });
 
+
+describe("your actions' reviews (wave 8, D140)", () => {
+  const scale = (name = "web", replicas = 3) => ({ verb: "patch" as const, patchType: "merge" as const, type, namespace: "shop", name, body: { spec: { replicas } } });
+
+  it("dry-run each operation as you, keep exactly those requests without dryRun, and send them on apply", async () => {
+    const c = cluster();
+    const b = new EditBroker();
+    const r = await b.reviewOps(c.send, [scale()]);
+    expect(r.id).toMatch(/^ed/);
+    expect(r.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(r.operations![0]!.diff.lines.filter((l) => l.t === "-" || l.t === "+").map((l) => l.t + l.text.trim())).toEqual(["-replicas: 2", "+replicas: 3"]);
+    expect(r.agent).toContain("+   replicas: 3");
+    const dry = c.sent.filter((s) => s.method === "PATCH");
+    expect(dry).toHaveLength(1);
+    expect(dry[0]!.path).toBe("/apis/apps/v1/namespaces/shop/deployments/web?fieldManager=landlens&dryRun=All");
+    expect(JSON.parse(dry[0]!.body!)).toEqual({ spec: { replicas: 3 }, metadata: { resourceVersion: "41" } });
+    c.sent.length = 0;
+    const out = await b.apply(c.send, r.id!, { each: true, digest: r.digest! });
+    expect(out.each).toEqual([{ target: "deployment shop/web", outcome: "applied" }]);
+    expect(c.sent.map((s) => [s.method, s.path, s.body])).toEqual([["PATCH", "/apis/apps/v1/namespaces/shop/deployments/web?fieldManager=landlens", dry[0]!.body]]);
+    await expect(b.apply(c.send, r.id!, { each: true })).rejects.toThrow(/expired or was applied/);
+  });
+
+  it("a delete is pinned to uid and resourceVersion, and its dry run says so in its body", async () => {
+    const c = cluster((r) => (r.method === "DELETE" ? { status: 200, text: '{"kind":"Status","status":"Success"}' } : undefined));
+    const r = await new EditBroker().reviewOps(c.send, [{ verb: "delete", type, namespace: "shop", name: "web" }]);
+    const d = c.sent.find((s) => s.method === "DELETE")!;
+    expect(JSON.parse(d.body!)).toEqual({ kind: "DeleteOptions", apiVersion: "v1", propagationPolicy: "Background", preconditions: { uid: "u1", resourceVersion: "41" }, dryRun: ["All"] });
+    expect(r.operations![0]!.risk).toContain("deletes");
+  });
+
+  it("a 409 at the dry run is a conflict; another refusal names the object; nothing is kept", async () => {
+    const conflict = cluster((r) => (r.method === "PATCH" ? { status: 409, text: '{"kind":"Status","message":"the object has been modified"}' } : undefined));
+    const a = await new EditBroker().reviewOps(conflict.send, [scale()]);
+    expect(a).toMatchObject({ conflict: true });
+    expect(a.id).toBeUndefined();
+    const denied = cluster((r) => (r.method === "PATCH" ? { status: 403, text: '{"kind":"Status","message":"deployments.apps \\"web\\" is forbidden: User \\"x\\" cannot patch"}' } : undefined));
+    const b = await new EditBroker().reviewOps(denied.send, [scale()]);
+    expect(b.id).toBeUndefined();
+    expect(b.problems![0]!.message).toMatch(/^deployment shop\/web: deployments.apps "web" is forbidden/);
+    // With leaveOut (bulk, part 3) the others are kept and the refused one is a problem.
+    const some = cluster((r) => (r.method === "PATCH" && r.path.includes("/bad?") ? { status: 422, text: '{"kind":"Status","message":"invalid"}' } : undefined));
+    const c = await new EditBroker().reviewOps(some.send, [scale("web"), scale("bad")], { leaveOut: true });
+    expect(c.id).toMatch(/^ed/);
+    expect(c.operations).toHaveLength(1);
+    expect(c.problems).toEqual([{ message: "deployment shop/bad: invalid" }]);
+  });
+
+  it("apply each: goes on past a conflict, says gone for a deleted object, and refuses a digest that isn't the review's", async () => {
+    let n = 0;
+    const c = cluster((r) => {
+      if (r.method !== "PATCH" || r.path.includes("dryRun")) return undefined;
+      n++;
+      return n === 1 ? { status: 409, text: '{"kind":"Status","message":"modified"}' } : n === 2 ? { status: 500, text: '{"kind":"Status","message":"boom"}' } : undefined;
+    });
+    const b = new EditBroker();
+    const r = await b.reviewOps(c.send, [scale("a"), scale("b"), scale("c")]);
+    expect(r.agent).toMatch(/^patch deployment shop\/a:/);
+    const out = await b.apply(c.send, r.id!, { each: true });
+    expect(out.each!.map((e) => e.outcome)).toEqual(["conflict", "failed", "applied"]);
+    expect(out.each![1]!.message).toBe("boom");
+    const gone = cluster((r) => (r.method === "DELETE" && !r.body?.includes("dryRun") ? { status: 404, text: '{"kind":"Status","message":"not found"}' } : r.method === "DELETE" ? { status: 200, text: "{}" } : undefined));
+    const g = await b.reviewOps(gone.send, [{ verb: "delete", type, namespace: "shop", name: "web" }]);
+    expect((await b.apply(gone.send, g.id!, { each: true })).each).toEqual([{ target: "deployment shop/web", outcome: "gone", message: "It was already gone." }]);
+    const d = await b.reviewOps(c.send, [scale("a")]);
+    await expect(b.apply(c.send, d.id!, { each: true, digest: "0".repeat(64) })).rejects.toThrow(/isn't the review that was shown/);
+    // Refused and dropped: the right digest can't send it afterwards.
+    await expect(b.apply(c.send, d.id!, { each: true, digest: d.digest! })).rejects.toThrow(/expired or was applied/);
+  });
+
+  it("a Secret's delete shows keys and sizes, never a value, and gives no text for Claude", async () => {
+    const secret = { apiVersion: "v1", kind: "Secret", type: "Opaque", metadata: { name: "s", namespace: "shop", uid: "su", resourceVersion: "5", annotations: { "kubectl.kubernetes.io/last-applied-configuration": '{"data":{"password":"TExNQVJLLXNlY3JldA=="}}' } }, data: { password: Buffer.from("LLMARK-secret").toString("base64") } };
+    const send: Send = async (r) => (r.method === "GET" ? { status: 200, text: JSON.stringify(secret), warnings: [] } : { status: 200, text: '{"kind":"Status"}', warnings: [] });
+    const r = await new EditBroker().reviewOps(send, [{ verb: "delete", type: { group: "", version: "v1", resource: "secrets", kind: "Secret", namespaced: true }, namespace: "shop", name: "s" }]);
+    const text = JSON.stringify(r.operations);
+    expect(text).toContain("password: <13 bytes>");
+    expect(text).not.toMatch(/LLMARK|TExNQVJL/);
+    expect(r.agent).toBeUndefined();
+    expect(JSON.stringify(r.prepared.map((p) => p.current))).not.toMatch(/LLMARK|TExNQVJL/);
+  });
+});

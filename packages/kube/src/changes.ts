@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import type { AgentChange, ChangeOperation, ChangeRisk, ChangeState, ChangeVerb } from "@landlens/contracts";
 import { stringify } from "yaml";
-import { apiPath, toKubeError } from "./client.js";
+import { apiPath, toKubeError, withoutSecretValues } from "./client.js";
 import { diffLines } from "./diff.js";
 import { redactText } from "./redact.js";
 
@@ -76,7 +76,12 @@ const HIDDEN = /<redacted[^>]*>|… \(\d+ more characters\)/;
 /** Kinds the agent may never change, whatever you'd approve: it can't read them, so it can't show you a true diff. */
 const NEVER = new Set(["secrets"]);
 
-type Prepared = {
+/**
+ * One operation, ready to apply (D140): the exact request its dry run checked, what to show, and the objects before
+ * and after (for the person's facts and the scrubbed diff "Ask Claude" may send). The agent's broker and the person's
+ * actions both build theirs here, so the same change shows the same diff, risks and preconditions on either card.
+ */
+export type Prepared = {
   op: ChangeOp;
   /** It didn't exist at the dry run (a create by apply): if it exists when you approve, nothing is sent. */
   absent?: boolean;
@@ -85,6 +90,13 @@ type Prepared = {
   contentType?: string;
   body?: string;
   shown: ChangeOperation;
+  /**
+   * The object as read before the dry run (null: it didn't exist), and what the dry run answered (null for a delete).
+   * With hideSecrets, a Secret's values are lengths. Only with keepObjects (the person's actions, for their facts and
+   * the scrubbed diff): the agent's broker doesn't hold unscrubbed objects through an ask (security review, L1).
+   */
+  current?: unknown;
+  after?: unknown;
 };
 
 export class ChangeError extends Error {}
@@ -250,112 +262,126 @@ export class ChangeBroker {
     }
   }
 
-  /** A Deployment's pod template at a revision, from its ReplicaSets, read unscrubbed with the approved token. */
-  private async revisionTemplate(d: any, undo: number | "previous"): Promise<unknown> {
-    const sel = Object.entries(d.spec?.selector?.matchLabels ?? {}).map(([k, v]) => `${k}=${v}`).join(",");
-    const q = new URLSearchParams({ limit: "200", ...(sel ? { labelSelector: sel } : {}) });
-    const r = await this.opts.send({ method: "GET", path: `${apiPath({ group: "apps", version: "v1", resource: "replicasets" }, d.metadata.namespace)}?${q}` });
-    if (r.status !== 200) throw toKubeError(r.status, r.text);
-    const rev = (x: any) => Number(x.metadata?.annotations?.["deployment.kubernetes.io/revision"] ?? 0);
-    const mine = (JSON.parse(r.text).items ?? [])
-      .filter((x: any) => (x.metadata?.ownerReferences ?? []).some((o: any) => o.uid === d.metadata.uid))
-      .sort((a: any, b: any) => rev(b) - rev(a));
-    const now = rev(d) || rev(mine[0]);
-    const target = undo === "previous" ? mine.find((x: any) => rev(x) < now) : mine.find((x: any) => rev(x) === undo);
-    if (!target) throw new ChangeError(undo === "previous" ? "there is no earlier revision" : `there is no revision ${undo}`);
-    if (rev(target) === now) throw new ChangeError(`revision ${undo} is the current one`);
-    const t = structuredClone(target.spec.template);
-    if (t.metadata?.labels) delete t.metadata.labels["pod-template-hash"];
-    return t;
+  /** Read the object, build the exact request, dry-run it and show the difference (D140: shared with the person's actions). */
+  private prepare(op: ChangeOp): Promise<Prepared> {
+    return prepareOp(this.opts.send, op, { fieldManager: FIELD_MANAGER });
   }
+}
 
-  /** Read the object, build the exact request, dry-run it and show the difference. */
-  private async prepare(op: ChangeOp): Promise<Prepared> {
-    const objectPath = apiPath(op.type, op.namespace, op.name);
-    const got = await this.opts.send({ method: "GET", path: objectPath });
-    let current: any = null;
-    if (got.status === 200) current = JSON.parse(got.text);
-    else if (got.status !== 404) throw toKubeError(got.status, got.text);
+/** A Deployment's pod template at a revision, from its ReplicaSets, read unscrubbed with the approved token. */
+async function revisionTemplate(send: Send, d: any, undo: number | "previous"): Promise<unknown> {
+  const sel = Object.entries(d.spec?.selector?.matchLabels ?? {}).map(([k, v]) => `${k}=${v}`).join(",");
+  const q = new URLSearchParams({ limit: "200", ...(sel ? { labelSelector: sel } : {}) });
+  const r = await send({ method: "GET", path: `${apiPath({ group: "apps", version: "v1", resource: "replicasets" }, d.metadata.namespace)}?${q}` });
+  if (r.status !== 200) throw toKubeError(r.status, r.text);
+  const rev = (x: any) => Number(x.metadata?.annotations?.["deployment.kubernetes.io/revision"] ?? 0);
+  const mine = (JSON.parse(r.text).items ?? [])
+    .filter((x: any) => (x.metadata?.ownerReferences ?? []).some((o: any) => o.uid === d.metadata.uid))
+    .sort((a: any, b: any) => rev(b) - rev(a));
+  const now = rev(d) || rev(mine[0]);
+  const target = undo === "previous" ? mine.find((x: any) => rev(x) < now) : mine.find((x: any) => rev(x) === undo);
+  if (!target) throw new ChangeError(undo === "previous" ? "there is no earlier revision" : `there is no revision ${undo}`);
+  if (rev(target) === now) throw new ChangeError(`revision ${undo} is the current one`);
+  const t = structuredClone(target.spec.template);
+  if (t.metadata?.labels) delete t.metadata.labels["pod-template-hash"];
+  return t;
+}
 
-    if (op.undo !== undefined) {
+/**
+ * Read the object, build the exact request pinned to its version, dry-run it, diff before and after, tag risks (D140).
+ * `fieldManager` is the agent's (`landlens-agent`) or the person's (`landlens`). `hideSecrets` (always set on the
+ * person's path): a core Secret's objects before and after go through withoutSecretValues before anything is kept or
+ * diffed, so a Secret's card shows its keys and sizes, never a value.
+ */
+export async function prepareOp(send: Send, op: ChangeOp, o: { fieldManager: string; hideSecrets?: boolean; keepObjects?: boolean }): Promise<Prepared> {
+  const objectPath = apiPath(op.type, op.namespace, op.name);
+  const got = await send({ method: "GET", path: objectPath });
+  let current: any = null;
+  if (got.status === 200) current = JSON.parse(got.text);
+  else if (got.status !== 404) throw toKubeError(got.status, got.text);
+
+  if (op.undo !== undefined) {
+    if (!current) throw new ChangeError("it doesn't exist");
+    op = { ...op, patchType: "json", body: [{ op: "replace", path: "/spec/template", value: await revisionTemplate(send, current, op.undo) }] };
+  }
+  const rv: string | undefined = current?.metadata?.resourceVersion;
+  const uid: string | undefined = current?.metadata?.uid;
+  const q = new URLSearchParams({ fieldManager: o.fieldManager });
+  let method: string;
+  let path = objectPath;
+  let contentType: string | undefined = "application/json";
+  let body: unknown;
+
+  switch (op.verb) {
+    case "create":
+      if (current) throw new ChangeError("it already exists; propose a patch or apply instead");
+      method = "POST";
+      path = apiPath(op.type, op.namespace);
+      body = withMeta(op.body, op.namespace);
+      break;
+    case "update":
       if (!current) throw new ChangeError("it doesn't exist");
-      op = { ...op, patchType: "json", body: [{ op: "replace", path: "/spec/template", value: await this.revisionTemplate(current, op.undo) }] };
-    }
-    const rv: string | undefined = current?.metadata?.resourceVersion;
-    const uid: string | undefined = current?.metadata?.uid;
-    const q = new URLSearchParams({ fieldManager: FIELD_MANAGER });
-    let method: string;
-    let path = objectPath;
-    let contentType: string | undefined = "application/json";
-    let body: unknown;
-
-    switch (op.verb) {
-      case "create":
-        if (current) throw new ChangeError("it already exists; propose a patch or apply instead");
-        method = "POST";
-        path = apiPath(op.type, op.namespace);
-        body = withMeta(op.body, op.namespace);
-        break;
-      case "update":
-        if (!current) throw new ChangeError("it doesn't exist");
-        method = "PUT";
+      method = "PUT";
+      body = withMeta(op.body, op.namespace, rv);
+      break;
+    case "delete":
+      if (!current) throw new ChangeError("it doesn't exist");
+      method = "DELETE";
+      body = { kind: "DeleteOptions", apiVersion: "v1", propagationPolicy: "Background", preconditions: { uid, resourceVersion: rv } };
+      q.delete("fieldManager");
+      break;
+    case "patch": {
+      method = "PATCH";
+      contentType = CONTENT_TYPE[op.patchType!];
+      if (op.patchType === "apply") {
+        q.set("force", "true"); // you approve the result shown, whoever managed those fields before
         body = withMeta(op.body, op.namespace, rv);
-        break;
-      case "delete":
-        if (!current) throw new ChangeError("it doesn't exist");
-        method = "DELETE";
-        body = { kind: "DeleteOptions", apiVersion: "v1", propagationPolicy: "Background", preconditions: { uid, resourceVersion: rv } };
-        q.delete("fieldManager");
-        break;
-      case "patch": {
-        method = "PATCH";
-        contentType = CONTENT_TYPE[op.patchType!];
-        if (op.patchType === "apply") {
-          q.set("force", "true"); // you approve the result shown, whoever managed those fields before
-          body = withMeta(op.body, op.namespace, rv);
-        } else {
-          if (!current) throw new ChangeError("it doesn't exist; to create it, use apply_manifest");
-          body = op.patchType === "json"
-            ? [{ op: "test", path: "/metadata/resourceVersion", value: rv }, ...(op.body as unknown[])]
-            : withResourceVersion(op.body, rv);
-        }
-        break;
+      } else {
+        if (!current) throw new ChangeError("it doesn't exist; to create it, use apply_manifest");
+        body = op.patchType === "json"
+          ? [{ op: "test", path: "/metadata/resourceVersion", value: rv }, ...(op.body as unknown[])]
+          : withResourceVersion(op.body, rv);
       }
+      break;
     }
-    const text = JSON.stringify(body);
-    const dry = new URLSearchParams(q);
-    dry.set("dryRun", "All");
-    // A DELETE with a body takes its options from the body and ignores the query, dryRun included: the dry run of a
-    // delete must say so in its DeleteOptions, or it deletes.
-    const dryBody = op.verb === "delete" ? JSON.stringify({ ...(body as object), dryRun: ["All"] }) : text;
-    const r = await this.opts.send({ method, path: `${path}?${dry}`, ...(contentType ? { contentType } : {}), body: dryBody });
-    if (r.status < 200 || r.status >= 300) throw toKubeError(r.status, r.text);
-    const after = op.verb === "delete" ? null : JSON.parse(r.text);
-    const before = clean(current);
-    const afterClean = clean(after);
-    const diff = diffLines(before ? stringify(before, { lineWidth: 0 }) : "", afterClean ? stringify(afterClean, { lineWidth: 0 }) : "");
-    // A change that would change nothing still goes to you: answering the agent at once would tell it that a value
-    // it can't see equals the one it guessed.
-    const qs = q.toString();
-    return {
-      op,
-      ...(op.verb === "patch" && op.patchType === "apply" && !current ? { absent: true } : {}),
-      method,
-      path: qs ? `${path}?${qs}` : path,
-      ...(contentType ? { contentType } : {}),
-      body: text,
-      shown: {
-        verb: op.verb === "patch" && !current ? "create" : op.verb,
-        kind: op.type.kind,
-        group: op.type.group,
-        ...(op.namespace ? { namespace: op.namespace } : {}),
-        name: op.name,
-        diff,
-        warnings: r.warnings.slice(0, 20),
-        risk: risks(op, current, after),
-      },
-    };
   }
+  const text = JSON.stringify(body);
+  const dry = new URLSearchParams(q);
+  dry.set("dryRun", "All");
+  // A DELETE with a body takes its options from the body and ignores the query, dryRun included: the dry run of a
+  // delete must say so in its DeleteOptions, or it deletes.
+  const dryBody = op.verb === "delete" ? JSON.stringify({ ...(body as object), dryRun: ["All"] }) : text;
+  const r = await send({ method, path: `${path}?${dry}`, ...(contentType ? { contentType } : {}), body: dryBody });
+  if (r.status < 200 || r.status >= 300) throw toKubeError(r.status, r.text);
+  const secret = !!o.hideSecrets && op.type.group === "" && op.type.resource === "secrets";
+  const hide = (x: any) => (secret && x ? withoutSecretValues(x, true) : x);
+  let after = op.verb === "delete" ? null : JSON.parse(r.text);
+  if (secret) (current = hide(current), after = hide(after));
+  const before = clean(current);
+  const afterClean = clean(after);
+  const diff = diffLines(before ? stringify(before, { lineWidth: 0 }) : "", afterClean ? stringify(afterClean, { lineWidth: 0 }) : "");
+  // A change that would change nothing still goes to you: answering the agent at once would tell it that a value
+  // it can't see equals the one it guessed.
+  const qs = q.toString();
+  return {
+    op,
+    ...(op.verb === "patch" && op.patchType === "apply" && !current ? { absent: true } : {}),
+    method,
+    path: qs ? `${path}?${qs}` : path,
+    ...(contentType ? { contentType } : {}),
+    body: text,
+    shown: {
+      verb: op.verb === "patch" && !current ? "create" : op.verb,
+      kind: op.type.kind,
+      group: op.type.group,
+      ...(op.namespace ? { namespace: op.namespace } : {}),
+      name: op.name,
+      diff,
+      warnings: r.warnings.slice(0, 20),
+      risk: risks(op, current, after),
+    },
+    ...(o.keepObjects ? { current, after } : {}),
+  };
 }
 
 function isObject(v: unknown): v is Record<string, any> {
@@ -475,7 +501,7 @@ export function risks(op: ChangeOp, before: any, after: any): ChangeRisk[] {
     if (typeof after.spec?.replicas === "number" && after.spec.replicas === 0 && (before?.spec?.replicas ?? 1) !== 0) out.add("scales-to-zero");
   }
   const order: ChangeRisk[] = [
-    "deletes", "rbac", "namespace", "cluster-scoped", "reads-secret", "privileged", "host-access", "service-account",
+    "deletes", "evicts-pods", "loses-data", "rbac", "namespace", "cluster-scoped", "reads-secret", "privileged", "host-access", "service-account",
     "new-workload", "scales-to-zero", "changes-image", "restarts-pods",
   ];
   return order.filter((r) => out.has(r));

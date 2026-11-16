@@ -7,6 +7,8 @@ import * as acp from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 
 const MODEL = "claude-fake-1";
@@ -35,13 +37,21 @@ acp
   }))
   .onRequest(acp.methods.agent.session.new, (ctx) => {
     const sessionId = randomUUID();
-    sessions.set(sessionId, { servers: ctx.params.mcpServers ?? [], cost: 0 });
+    sessions.set(sessionId, { servers: ctx.params.mcpServers ?? [], cost: 0, cwd: ctx.params.cwd });
     return { sessionId, modes: { currentModeId: "default", availableModes: [{ id: "default", name: "Manual" }, { id: "plan", name: "Plan" }] } };
   })
   .onRequest(acp.methods.agent.session.setMode, () => ({}))
   .onRequest(acp.methods.agent.session.prompt, async (ctx) => {
     const s = sessions.get(ctx.params.sessionId);
     const text = ctx.params.prompt.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    // Every prompt as it arrived, attachments included, beside the session folders (inside Landlens's data folder; a
+    // session's own folder goes when it closes), so a test can search all of it (wave 8 part 4: no Secret value
+    // reaches the agent).
+    try {
+      if (s.cwd) appendFileSync(join(s.cwd, "..", "fake-agent-prompts.jsonl"), `${JSON.stringify(ctx.params.prompt)}\n`);
+    } catch {
+      // a folder that went is no prompt lost to the test: it then finds nothing
+    }
     const say = (t) => ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } });
     if (/^Summarise this session/.test(text)) {
       await say("Checked the cluster's API resources; ");
@@ -50,6 +60,9 @@ acp
       const status = await callKube(s.servers).catch(() => "unreachable");
       await say(`I read the cluster's API resources (${status}). `);
       await say("Everything I was asked about looks fine.");
+      // What was attached, by its address only (wave 8 part 3's preset asks check the object reached the agent).
+      const uris = ctx.params.prompt.filter((b) => b.type === "resource" || b.type === "resource_link").map((b) => b.resource?.uri ?? b.uri).filter(Boolean);
+      if (uris.length) await say(` Attached: ${uris.join(", ")}.`);
     }
     s.cost += 0.0125;
     await ctx.client.notify(acp.methods.client.session.update, {

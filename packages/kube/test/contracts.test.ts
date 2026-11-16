@@ -114,3 +114,40 @@ describe("Clickland's history channels", () => {
     expect(channels["clickland:open"].safeParse({ ...base, signal: "logs", scope: { ...scope, container: "Worker" } }).success).toBe(false);
   });
 });
+
+describe("your actions' channels (wave 8, D144)", () => {
+  const ref = { group: "apps", version: "v1", resource: "deployments", namespace: "landlens-dev", name: "hands-web" };
+  const review = channels["action:review"];
+  it("take an action's closed shape and nothing else", () => {
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: ref, replicas: 3 } }).success).toBe(true);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "delete", targets: [ref, { ...ref, name: "b" }] } }).success).toBe(true);
+    // A title, a body, a path, an extra field, a kind that isn't one: refused.
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: ref, replicas: 3, title: "Scale nothing" } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: { ...ref, body: {} }, replicas: 3 } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "patch", target: ref } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "scale", target: ref, replicas: 1001 } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "delete", targets: Array.from({ length: 51 }, () => ref) } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "delete", targets: [{ ...ref, name: "../x" }] } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "trigger", target: ref }, native: true }).success).toBe(false);
+  });
+  it("apply names a review and its digest only", () => {
+    const apply = channels["action:apply"];
+    expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64) }).success).toBe(true);
+    expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA" }).success).toBe(false);
+    expect(apply.safeParse({ handle: "handle-0001", id: "edAAAAAAAAAAAA", digest: "a".repeat(64), confirmed: true }).success).toBe(false);
+    expect(channels["action:log"].safeParse({ handle: "handle-0001", limit: 500 }).success).toBe(false);
+    // L7: the log is read for a connected cluster (its context and server), not a context name alone.
+    expect(channels["action:log"].safeParse({ handle: "handle-0001", limit: 50 }).success).toBe(true);
+    expect(channels["action:log"].safeParse({ context: "orbstack" }).success).toBe(false);
+  });
+  it("name a node by its own rule for cordon and drain, with drain's two choices and nothing else (part 2)", () => {
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "cordon", node: "orbstack", on: true } }).success).toBe(true);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "ip-10-0-0-1.ec2.internal", bare: false, emptyDir: true } }).success).toBe(true);
+    for (const node of ["../x", "Node1", "a/b", "a?b", "", "-a", "a".repeat(254)]) expect([node, review.safeParse({ handle: "handle-0001", action: { kind: "cordon", node, on: true } }).success]).toEqual([node, false]);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "orbstack", bare: false } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "orbstack", bare: false, emptyDir: false, force: true } }).success).toBe(false);
+    expect(review.safeParse({ handle: "handle-0001", action: { kind: "drain", node: "orbstack", bare: false, emptyDir: false, gracePeriodSeconds: 0 } }).success).toBe(false);
+    expect(channels["action:stop"].safeParse({ run: "edAAAAAAAAAAAA" }).success).toBe(true);
+    expect(channels["action:stop"].safeParse({ run: "edAAAAAAAAAAAA", node: "orbstack" }).success).toBe(false);
+  });
+});

@@ -265,6 +265,59 @@ all N) and Recent warnings; Nodes. It reads
   state from `-soft` and `-text`, rings from `--accent`), and resend on a theme change. Landlens's own views follow
   Iris: kind tile, eyebrow, title, pills with icon and word, inset rows, the viz palette for charts.
 
+- **Your actions** (wave 8, `ObjectMenu.tsx`, `ActionSheet.tsx`, `ReviewCard.tsx`, `RecentActions.tsx`). The object
+  menu is a 240px `.menu.object-menu` on `--bg-2` with an inset `--line` ring, kept inside the window: sections Open,
+  Actions, Ask Claude and Copy name, then **Delete…** in `--bad-text` with `⌫`; an item your role can't use is
+  disabled with a second `--ink-3` line ("Your role can't patch deployments in landlens-dev"). The drawer's head has a
+  **⋯** (`Ellipsis`, "More actions") after Copy name. The action sheet is a 720px `.dialog.action-sheet` over the
+  main pane, the `Zap` icon and "Scale hands-web" in its head. Scale's form is a `.stepper` (− field +, 96px mono
+  field); while main reads, three `.skel` bars and "Checking with the cluster…". The review is `ReviewCard` with
+  `eyebrow` "Your action" (no iris ring, as an edit), main's title, risk tags, then `.change-facts`: one line per
+  fact with `Info` in `--ink-3`, `TriangleAlert` in `--warn-text`, `CircleX` and the text in `--bad-text`, the first
+  word medium. A review main will ask about in its own dialog has a danger button "Delete 12…" instead of the card's
+  second click. The result is one line per object (`CircleCheck` ok, `TriangleAlert` conflict, `CircleX` failed) and
+  **Done**, with **Review again** on a conflict. Recent actions is the status bar's `History` item with the count
+  since start, opening a 420px `.pop.recent-actions` above it: a row is the action's icon, its sentence, its age in
+  mono and the outcome word in its tone.
+- **Nodes** (wave 8 part 2, `DrainPlanView.tsx`). A Node's menu has **Cordon** (`CircleSlash`) or **Uncordon**
+  (`CircleCheck`), then **Drain…** (`LogOut`). Cordon's sheet is the action card; a preview-only card (D153) shows
+  `Info` and "Development build: preview only. Nothing is sent to nodes on this cluster." in `--ink-2` where "Dry run
+  passed" would be, with Apply disabled. The drain sheet (`.drain-sheet`, the same 720px dialog, `LogOut` in its
+  head): three `.badge` counts with icon and word (`LogOut` to evict, `CircleSlash` blocked in bad when not zero,
+  `Pause` stay), the two ticks (`.drain-ticks`), the preview-only, partial and disagreement notes, then one column
+  of `.drain-row` cards (`--bg-1`, inset `--line`): the pod in mono, its namespace in `--ink-3`, the owner as a
+  `.link-btn`, `.chip`s, and for a blocked row a `--bad-soft` card with a 3px `--bad` inset edge and its unblock
+  sentence in `--bad-text`. Groups: *Blocked*, *Will be evicted*, *Stay* (a fold with a chevron). A re-review dims
+  the list (`.drain-stale`) rather than blanking it. The foot: **Ask Claude** (link), Cancel, and the danger
+  **Drain…**; during the run each row's state on its right (`Clock` waiting, a spinning `LoaderCircle` evicting,
+  `CircleCheck` gone in ok, `CircleSlash` blocked and `CircleX` failed in bad), the elapsed time in mono in the
+  head, **Stop**; at the end the summary, **Uncordon…** and **Done**.
+
+### Tables (wave 8 part 3)
+
+The checkbox column is 28 px, `.tick` (a 14 px rounded square, the accent when on, a dash when some); a checked row
+is `.tr.checked` (the accent at 8%, a 2 px accent edge when focused). The selection bar replaces the toolbar's right
+side: a count chip with a check, small secondary buttons (Delete in the bad colour), the ask button and a close
+icon; below 720 px of pane the buttons are their icons. The namespace button is a field with a folder icon and the
+label; its popover (260 px) and the column menu (220 px) are `.table-pop` menus under their button, rows `.pop-row`
+with a `.tick`, **Only** shown on hover, a foot line when several are chosen. The object menu's Ask Claude opens a
+submenu (`.ask-sub`, left of the menu when there is no room right) with a paperclip "Attach to a question", a rule,
+then the presets with the sparkle; the drawer's Ask is a split button (`.ask-split`) with a caret. The Overview under
+several namespaces shows a chip with the layers icon. A bulk card folds operations past three (`.change-folded`) and
+lists what was left out (`.left-out`).
+
+### Secrets (wave 8 part 4)
+
+A Secret's Data section lists keys as rows (`.secret-keys`, `.secret-row`): the key in mono, its size dim, then
+small `.secondary` **Copy** and **Reveal** buttons. The unlock chip (`.lock-chip`, warn tone, an open padlock, the
+countdown in mono, a "Lock now" link) sits in the section's head. A revealed value is a `pre.secret-value`
+(`data-private`, mono, at most 8 lines then it scrolls, `user-select: none`) with a 2 px warn-coloured countdown
+line under it and "Hides in N s"; copy's status is a dim line with a padlock ("Copied. Clears in 30 s"). Certificates
+are `.cert-card`s under a "Certificates" head: the CN in bold with a shield, the key and "leaf" dim in mono, expiry as
+a `.badge` (ok, warn, bad, with a check, clock or cross icon), CA and self-signed as muted badges, then `.facts`
+(issuer, names as mono chips folded past 6, valid, key, serial and SHA-256 with an icon copy button); the chain is a
+mono line with arrows. Other Secrets show a quiet `.link-btn` "Look for certificates".
+
 ## Components
 
 Reuse these classes before writing new ones: `button.primary`, `.secondary`, `.ask-btn`, `.icon-btn`, `.link-btn`;
@@ -307,6 +360,13 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
 
 ## Keyboard
 
+On a focused row, `x` or Space toggles its checkbox and ⌘A selects every row shown (wave 8 part 3); Esc clears a
+selection before it closes the drawer. Shift+click on a checkbox takes a range. In the object menu → opens Ask
+Claude's submenu and ← or Esc goes back; in ⌘K, Tab on an `ask <name>` row lists its preset asks.
+On a focused row, ⌫ (or Delete) opens the delete review (wave 8); every other action is in the row's menu (Shift+F10)
+or ⌘K, so a stray letter can't start a write. In the object menu: ↑/↓, Home/End, a letter jumps by name, Esc. In
+Scale's field, ↑/↓ step one and Shift+↑/↓ ten.
+
 ⌘K jump, ⌘J dock, ⌘B sidebar, ⌘1 Overview, ⌘2 Pods, ⌘3 Problems, `/` filter, ↑/↓ or j/k rows, Enter open, Esc closes the drawer
 (never the dock), `[` `]` drawer tabs; in the dock, Enter and Esc answer the newest ask when the composer is empty.
 In the sidebar (D139): ↑/↓ move over the visible rows and headers, Home/End to the ends, → unfolds a header (or steps
@@ -317,8 +377,18 @@ the page.
 
 ## What the tests rely on
 
-The e2e test finds things by role and name, so keep: heading "Pick a cluster"; buttons "Pods", "Deployments",
-"Secrets", "Ask Claude", "Stop", "Send"; combobox "Namespace"; tabs "Overview", "YAML"; textbox "Message Claude
+The e2e test finds things by role and name, so keep (wave 8 adds menu "<Kind> <name>" with its menuitems "Scale…",
+"Restart", "Delete…"; button "More actions"; dialog with `#action-title`; spinbutton "Replicas"; buttons "Review",
+"Done", "Review again", "Recent actions"; region "Review your action"; list "What happened"; dialog "Recent actions"
+with `.recent-row`; part 2 adds button "Nodes", menuitems "Cordon", "Uncordon", "Drain…", regions "Blocked", "Will be
+evicted", "Stay" with `li[data-pod="<namespace>/<name>"]`, checkboxes "Delete pods that nothing will recreate" and
+"Lose emptyDir data", role note with the preview-only sentence, buttons "Drain…", "Stop", "Uncordon…"; part 3 adds
+checkboxes "Select <name>" and "Select every row shown", toolbar "Selection" with buttons "Restart", "Delete…", "Ask
+Claude", "Clear the selection"; button "Namespaces: <label>" and dialog "Namespaces" with searchbox "Filter
+namespaces", checkboxes by namespace and "All namespaces", buttons "Only <ns>"; button "Columns" and menu "Columns"
+with menuitemcheckboxes; menu "Ask Claude" (the submenu) and button "Preset asks"; e2e helpers `chooseNamespace` and
+`chosenNamespaces` in `test/e2e-helpers.ts`; part 4 adds region "Data" with buttons "Reveal <key>", "Hide <key>", "Copy <key>", "Copy <key> as base64", status "Unlocked for m:ss" with button "Lock now", `pre.secret-value` labelled "Value of <key>", region "Certificates" with `.cert-card`, button "Look for certificates"): heading "Pick a cluster"; buttons "Pods", "Deployments",
+"Secrets", "Ask Claude", "Stop", "Send"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's
 complementary "Resources" and Welcome); regions "Projects", "Types", "Resources" and "Google Cloud connection";

@@ -5,7 +5,8 @@
 | [agent.md](agent.md) | Claude Code in the dock: what you see, the cluster tools, the fence and how it was checked |
 | [architecture.md](architecture.md) | The processes, a request end to end, the front door, the code map |
 | [mcp.md](mcp.md) | The MCP gateway every agent session's MCP calls go through, the MCP page (servers, call log), MCP App views in the dock, pairing cards with calls, adding a server |
-| [workbench.md](workbench.md) | The panel, followed logs, pod shells that run as you, the local terminal, the YAML editor, port-forward, custom resources, Helm releases, ⌘K search (wave 4) |
+| [workbench.md](workbench.md) | The panel, followed logs, pod shells that run as you, the local terminal, the YAML editor, port-forward, custom resources, Helm releases, ⌘K search (wave 4); your actions (wave 8: scale, restart, delete, trigger, suspend, the object menu, Recent actions) |
+| [specs/008-hands/spec.md](specs/008-hands/spec.md) and [tasks.md](specs/008-hands/tasks.md) | Wave 8, Hands: the spec (D140–D172) and where each part stands |
 | [doctor.md](doctor.md) | The cluster doctor (wave 5): the rules, grouping by owner, Landlens's first suggestion, certificates, the broken scenarios |
 | [connections.md](connections.md) | GitHub and Linear (wave 6): Landlens's own sign-in (the device flow, Linear's browser sign-in, pasted tokens), what is stored, where a token may go, the OAuth App to register; the Connections page and their tools in Claude sessions; the autonomous mode |
 | [gcp.md](gcp.md) | Google Cloud (wave 6): browsing your chosen projects' resources read-only, through gcloud's sign-in; what Google is asked and the limits, the error sentences, the page; GKE clusters in the catalog; Claude's read-only tools (`landlens-gcp`) and Ask Claude on a resource; the development overrides and the fakes |

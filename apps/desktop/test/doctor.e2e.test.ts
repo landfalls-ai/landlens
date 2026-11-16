@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chooseNamespace } from "./e2e-helpers";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -75,7 +76,7 @@ describe.runIf(run)("the Problems page on OrbStack", () => {
   it("lists every scenario under its section, grouped, with no skipped checks", async () => {
     await sidebar().getByRole("button", { name: "Problems", exact: true }).click();
     await page.getByRole("heading", { name: "Problems" }).waitFor();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
     // Pending and not-ready wait 2 minutes before they count: a fresh start can take up to 4.
     await expect.poll(async () => {
       const names = await page.locator(".pb-row .pb-title").allInnerTexts();
@@ -149,9 +150,9 @@ describe.runIf(run)("the Problems page on OrbStack", () => {
     await drawer().waitFor();
     await expect.poll(() => drawer().innerText()).toMatch(/cart-api[\s\S]*readiness/);
     // Another scope's report doesn't hold this id: changing the namespace closes the drawer.
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("");
+    await chooseNamespace(page, "");
     await expect.poll(() => drawer().count()).toBe(0);
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
   }, 60_000);
 
   it("opens the page from the status bar's count, preset to that severity", async () => {
@@ -221,7 +222,7 @@ describe.runIf(run)("the Problems page on OrbStack", () => {
     beforeAll(async () => {
       await sidebar().getByRole("button", { name: "Problems", exact: true }).click();
       await page.getByRole("heading", { name: "Problems" }).waitFor();
-      await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+      await chooseNamespace(page, "landlens-dev");
       await page.getByRole("group", { name: "Severity" }).getByRole("button", { name: /^All/ }).click();
     });
 

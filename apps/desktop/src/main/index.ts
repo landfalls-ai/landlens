@@ -1,7 +1,7 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
 import { checkAccess, ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
 import { MetricsService } from "@landlens/metrics";
-import { app, BrowserWindow, dialog, nativeTheme, safeStorage, shell } from "electron";
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, safeStorage, shell } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentHistory, AgentSettings } from "./agent-history";
@@ -16,6 +16,9 @@ import { ClicklandHistory } from "./clickland-history";
 import { SiblingText } from "./sibling-text";
 import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
+import { ActionService, nodeWritesFrom, quitQuestion } from "./actions";
+import { ActionLog } from "./action-log";
+import { clipboardFormats, clipboardMarker, SecretService } from "./secrets";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
@@ -58,10 +61,13 @@ async function start() {
   /** Landlens's own telemetry (wave 7 part 5): off until the person turns it on. */
   let telemetry: TelemetryService | undefined;
   // The front door's audit trail: the MCP call log files each landlens-kube call's requests under it; telemetry counts it.
+  // D153 lives in the front door (security review of wave 8 part 2, M5): an unpackaged build sends no node write and no
+  // eviction through any token unless LANDLENS_NODE_WRITES names the cluster's context and API server; packaged, any.
+  const nodeWrites = nodeWritesFrom(process.env, app.isPackaged);
   const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => {
     mcp?.onAudit(e);
     telemetry?.audit(e);
-  });
+  }, { nodeWrites });
   await frontDoor.start();
   const clusters = new ClusterManager({
     sidecarBinary: binary,
@@ -283,9 +289,38 @@ async function start() {
     // A flow's output is Landflow's text: a question quoting it holds autonomy, decided here (review of part 4, M4).
     served: (rows) => siblingText.served("landflow", rows),
   });
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain });
+  // Your actions (wave 8 parts 1–2): Scale, Restart, Delete, Trigger, Suspend and Resume, Cordon and Drain as you,
+  // with its own broker, and one kept row per apply in actions.json (D147); telemetry counts the action and its outcome
+  // only. An unpackaged build writes to no node unless LANDLENS_NODE_WRITES names the context (D153).
+  const actionLog = new ActionLog(join(app.getPath("userData"), "actions.json"));
+  const actions = new ActionService({
+    clusters, frontDoor,
+    log: actionLog,
+    counted: (a) => tel.action(a),
+    nodeWrites,
+  });
+  // Secret values (wave 8 part 4, D161–D168): one key to the window that unlocked it, or to the clipboard from main
+  // with the platform's markers in the same write (macOS's concealed type; Windows's no-monitor, no-history, no-cloud);
+  // cleared after 30 s, and at quit, if the clipboard still holds it (read only while the marker is still there).
+  const secrets = new SecretService({
+    clusters, frontDoor,
+    log: actionLog,
+    clipboard: {
+      write: (text) => clipboard.write([new ClipboardItem(clipboardFormats(process.platform, text))]),
+      marked: async () => {
+        const f = clipboardMarker(process.platform);
+        return f ? clipboard.has(f) : true;
+      },
+      readText: () => clipboard.readText(),
+      clear: () => clipboard.clear(),
+    },
+  });
+  liveDrains = () => actions.liveRuns();
+  endDrains = () => actions.quit();
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets);
   const service = mcp;
   shutdown = async () => {
+    await secrets.quit();
     forwards.stopAll();
     metrics.stopAll();
     connections.stop();
@@ -332,16 +367,21 @@ app.on("window-all-closed", () => app.quit());
 let quitting = false;
 /** Shells and terminals that quitting would end (D23): asked about once. */
 let liveSessions = () => 0;
+/** Drains running in main (security review of part 2, L9): quitting asks, then stops them and writes their rows. */
+let liveDrains = () => 0;
+let endDrains = () => {};
 app.on("before-quit", (event) => {
   if (quitting || !shutdown) return;
   const n = liveSessions();
-  if (n) {
+  const d = liveDrains();
+  if (n || d) {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-    const opts = { type: "question" as const, buttons: ["Quit", "Cancel"], defaultId: 0, cancelId: 1, message: `${n} session${n === 1 ? "" : "s"} will end`, detail: "Every shell and terminal open in Landlens closes with it." };
+    const opts = { type: "question" as const, buttons: ["Quit", "Cancel"], defaultId: 0, cancelId: 1, ...quitQuestion(n, d) };
     const choice = win && !win.isDestroyed() ? dialog.showMessageBoxSync(win, opts) : dialog.showMessageBoxSync(opts);
     if (choice === 1) return event.preventDefault();
   }
   event.preventDefault();
   quitting = true;
+  endDrains();
   void shutdown().finally(() => app.quit());
 });

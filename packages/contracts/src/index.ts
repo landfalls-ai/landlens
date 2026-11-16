@@ -599,7 +599,7 @@ export const TELEMETRY_KEYS = [
   "landlens.mode", "landlens.ask", "landlens.cluster", "landlens.namespace", "landlens.namespaces", "landlens.subject.kind",
   "landlens.subject.namespace", "landlens.subject.name", "landlens.problem.class", "landlens.server", "landlens.status",
   "landlens.gate", "landlens.who", "landlens.verb", "landlens.kind", "landlens.outcome", "landlens.waited_ms",
-  "landlens.event", "landlens.count", "landlens.policy", "landlens.allowed", "landlens.class", "landlens.tone",
+  "landlens.event", "landlens.count", "landlens.policy", "landlens.allowed", "landlens.class", "landlens.tone", "landlens.action",
 ] as const;
 export type TelemetryKey = (typeof TELEMETRY_KEYS)[number];
 export type TelemetryValue = string | number | boolean;
@@ -809,6 +809,11 @@ export const AutonomyRequest = z.object({ session: SessionId, provider: ConnProv
 export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
 /** A log stream's or terminal's id, made by main. */
 export const KindName = z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,62}$/, "not a kind");
+/** A Secret's key: Kubernetes's rule (1–253 of `[-._a-zA-Z0-9]`). */
+export const SecretKey = z.string().regex(/^[-._a-zA-Z0-9]{1,253}$/, "not a Secret key");
+/** A Secret, by namespace and name only: the kind is always core v1 `secrets`, decided in main, never by the window (D163). */
+export const SecretRef = z.object({ namespace: NamespaceName, name: ObjectName }).strict();
+export type SecretRef = z.infer<typeof SecretRef>;
 export const EditId = z.string().regex(/^ed[A-Za-z0-9_-]{8,32}$/, "not an edit id");
 export const StreamId = z.string().regex(/^[A-Za-z0-9_-]{8,40}$/);
 
@@ -824,6 +829,135 @@ export type EditOwner = { path: string; manager: string; line?: number };
 /** A dry run of your edit: the operations to show, kept under `id` for Apply; or the problems; or a conflict. */
 /** `agent`: the diff (or created objects) scrubbed as the agent's own reads are: what "Ask Claude to check it" sends. */
 export type EditReview = { id?: string; operations?: ChangeOperation[]; owners?: EditOwner[]; changed?: string[]; problems?: EditProblem[]; conflict?: boolean; agent?: string };
+
+/**
+ * Your actions (wave 8, D141–D148): what the person asks main to do to objects. The window names an action's closed
+ * shape and its targets; main resolves each target's type from the cluster's discovery, builds every request, dry-runs
+ * it as you, and keeps it under an `ed…` id. Nothing in a request can carry a body, a path or a title. Cordon and drain
+ * (part 2, D149–D154) name a node, and for a drain the two choices kubectl calls --force and --delete-emptydir-data.
+ */
+export const ACTION_TARGETS = 50;
+/** A Node's name: a DNS subdomain (the API server's own rule for nodes). */
+export const NodeName = z.string().min(1).max(253).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/, "not a node name");
+export const Action = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("scale"), target: ResourceRef.strict(), replicas: z.number().int().min(0).max(1000) }).strict(),
+  z.object({ kind: z.literal("restart"), targets: z.array(ResourceRef.strict()).min(1).max(ACTION_TARGETS) }).strict(),
+  z.object({ kind: z.literal("delete"), targets: z.array(ResourceRef.strict()).min(1).max(ACTION_TARGETS) }).strict(),
+  z.object({ kind: z.literal("trigger"), target: ResourceRef.strict() }).strict(),
+  z.object({ kind: z.literal("suspend"), target: ResourceRef.strict(), suspend: z.boolean() }).strict(),
+  z.object({ kind: z.literal("cordon"), node: NodeName, on: z.boolean() }).strict(),
+  z.object({ kind: z.literal("drain"), node: NodeName, bare: z.boolean(), emptyDir: z.boolean() }).strict(),
+]);
+export type Action = z.infer<typeof Action>;
+export type ActionKind = Action["kind"];
+/**
+ * A review's SHA-256, as hex, over what main keeps and what main sent for the card: the requests, the diff, the risks,
+ * the title, the facts, the plan and whether main's dialog asks. Apply must name it. It ties Apply to the review main
+ * answered; it can't prove what the window drew.
+ */
+export const ActionDigest = z.string().regex(/^[0-9a-f]{64}$/, "not a digest");
+/** What the diff doesn't say (D142): a fixed sentence of main's, with checked names only. */
+export type ActionFact = { tone: "info" | "warn" | "bad"; code: string; text: string };
+/**
+ * A dry run of your action: the edit review's fields, with main's title and facts. `native`: Apply asks in main's own
+ * dialog first (bulk and wide deletes). `digest`: what Apply must name.
+ */
+export type ActionReview = EditReview & {
+  title?: string;
+  facts?: ActionFact[];
+  native?: true;
+  digest?: string;
+  /** A drain's plan (D150, D151): what would be evicted, what blocks, what stays, and the cluster's own dry runs. */
+  plan?: DrainPlan;
+  /**
+   * D153: a development build that wasn't told it may write to this cluster's nodes. The review is built from reads
+   * only (no dry run to the node, no dry-run eviction) and has no id: there is nothing to apply.
+   */
+  previewOnly?: true;
+  /** Pods where the cluster's dry run and Landlens's reading disagree (the row shows the cluster's answer). */
+  disagree?: number;
+  /**
+   * A drain's two ticks as main reviewed them (security review of part 2, M2): in the digest, named in main's dialog,
+   * and the sheet enables Apply only while its boxes say the same.
+   */
+  ticks?: { bare: boolean; emptyDir: boolean };
+};
+export type ActionOutcome = "applied" | "conflict" | "failed" | "gone";
+export type ActionResult = { target: string; outcome: ActionOutcome; message?: string };
+
+/**
+ * Drain (wave 8 part 2, D150–D152). A pod on the node: what a drain does with it, and why it is blocked if it is.
+ * `evict`: evicted through the eviction API. `daemonset` and `mirror`: skipped (they would come straight back).
+ * `finished`: Succeeded or Failed, evicted without a budget check. `terminating`: already going, left alone.
+ */
+export type DrainClass = "evict" | "daemonset" | "mirror" | "finished" | "terminating";
+export type DrainBlock = "budget" | "many-budgets" | "needs-bare" | "needs-emptydir";
+export type DrainPod = {
+  namespace: string;
+  name: string;
+  uid: string;
+  owner?: { kind: string; name: string };
+  class: DrainClass;
+  /** No controller owner: nothing recreates it. */
+  bare: boolean;
+  /** The names of its emptyDir volumes. */
+  emptyDir: string[];
+  /** The PodDisruptionBudgets whose selector matches it: one with what it allows now, or several by name. */
+  budget?: { name: string; allowed: number } | { many: string[] };
+  blocked?: DrainBlock;
+  /** The API server's answer to a dry-run eviction (D151): 2xx would go; 429 a budget; 403 your role. */
+  dry?: { status: number; reason?: "budget" | "forbidden" | "other" };
+  /** Its DaemonSet is gone (security review of part 2, L12): nothing recreates it, so it is evicted as a bare pod. */
+  orphan?: true;
+};
+export type DrainPlan = {
+  node: string;
+  cordoned: boolean;
+  pods: DrainPod[];
+  counts: { evict: number; blocked: number; skipped: number };
+  /** Why the plan may be incomplete (past the caps, or budgets that couldn't be listed): Apply stays off. */
+  partial?: string;
+};
+export type DrainPodState = "waiting" | "evicting" | "evicted" | "gone" | "blocked" | "failed";
+/** A drain's run (D152), pushed on `action:progress` to the window that started it, at most four times a second. */
+export type DrainProgress = {
+  run: string;
+  node: string;
+  state: "cordoning" | "evicting" | "done" | "stopped" | "timed-out" | "failed";
+  pods: { namespace: string; name: string; state: DrainPodState; note?: string }[];
+  /** When the run started (ms since the epoch), for the elapsed time. */
+  startedAt: number;
+  /** A run that ended before any eviction, or stopped evicting: why, in a fixed sentence. */
+  note?: string;
+  /** Each push's number in its run: the window keeps the highest it has seen (security review of part 2, M1). */
+  seq: number;
+  /** At the end, read again (M3): whether the node is still cordoned. */
+  cordoned?: boolean;
+  /** At the end, read again (M3): pods a drain would evict that arrived after the preview and are still on the node. */
+  arrived?: number;
+};
+/** A window's drain on a cluster (M4): its latest state and the plan it runs, so the window can re-attach to it. */
+export type DrainRun = { progress: DrainProgress; plan: DrainPlan; ended: boolean };
+/** One kept row per action the person applied (D147): names and closed words only, never a diff, a message or a value. */
+export type ActionLogEntry = {
+  id: string;
+  at: string;
+  context: string;
+  /** The first 16 hex digits of the SHA-256 of the cluster's API server address, as family-sent.json keeps it. */
+  server: string;
+  who: "you";
+  action: "scale" | "restart" | "delete" | "trigger" | "suspend" | "resume" | "cordon" | "uncordon" | "drain" | "reveal" | "copy";
+  kind: string;
+  /** The kind's group and resource, so a row opens its own kind (security review of part 1, L8). */
+  group?: string;
+  resource?: string;
+  namespace?: string;
+  names: string[];
+  key?: string;
+  detail?: string;
+  /** `sent`: written before the requests went (M3) and not answered yet; a row left so by a crash stays `sent`. */
+  outcome: "sent" | "applied" | "partial" | "failed" | "conflict" | "cancelled" | "stopped";
+};
 
 /** Port-forward (wave 4, part 3). A local port is 1024 or above; a remote one any TCP port. */
 export const LocalPort = z.number().int().min(1024).max(65535);
@@ -951,6 +1085,26 @@ export const channels = {
   "edit:create": z.object({ handle: Handle, namespace: NamespaceName.optional(), yaml: z.string().max(512 * 1024) }),
   "edit:apply": z.object({ handle: Handle, id: EditId }),
   "edit:discard": z.object({ id: EditId }),
+  // Your actions (docs/workbench.md#your-actions, D144): the window names an action and its targets; main builds,
+  // dry-runs and keeps every request; Apply names the review's id and digest and nothing else. Strict.
+  "action:review": z.object({ handle: Handle, action: Action }).strict(),
+  "action:apply": z.object({ handle: Handle, id: EditId, digest: ActionDigest }).strict(),
+  "action:discard": z.object({ id: EditId }).strict(),
+  /** Stop a drain's run (D152): no new eviction is sent; those in flight finish; the node stays cordoned. */
+  "action:stop": z.object({ run: EditId }).strict(),
+  /** This window's drains on this cluster, running and lately ended, with their latest state (M1, M4). */
+  "action:runs": z.object({ handle: Handle }).strict(),
+  /** The connected cluster's rows: its context and its API server's hash both match (security review, L7). */
+  "action:log": z.object({ handle: Handle, limit: z.number().int().min(1).max(200).optional() }).strict(),
+  // Secret values (wave 8 part 4, D161–D168; docs/workbench.md#secrets-and-certificates): main's own dialog unlocks
+  // one Secret for this window; a reveal answers one key's value to this window only; a copy goes to the clipboard
+  // from main and never to the window; certificates are public halves only. Strict.
+  "secret:unlock": z.object({ handle: Handle, secret: SecretRef }).strict(),
+  /** No `secret`: every unlock this window holds. */
+  "secret:lock": z.object({ handle: Handle, secret: SecretRef.optional() }).strict(),
+  "secret:reveal": z.object({ handle: Handle, secret: SecretRef, key: SecretKey }).strict(),
+  "secret:copy": z.object({ handle: Handle, secret: SecretRef, key: SecretKey, as: z.enum(["text", "base64"]).optional() }).strict(),
+  "secret:certs": z.object({ handle: Handle, secret: SecretRef }).strict(),
   "forward:list": z.object({}),
   /** The local port to offer for a remote one (free now). */
   "forward:suggest": z.object({ port: RemotePort }),
@@ -1118,6 +1272,19 @@ export type Responses = {
   "edit:create": EditReview;
   "edit:apply": { results: string[] };
   "edit:discard": { ok: true };
+  "action:review": ActionReview;
+  /** A drain answers with its run at once (D152); its progress comes on `action:progress`. */
+  "action:apply": { results: ActionResult[] } | { run: string };
+  "action:discard": { ok: true };
+  "action:stop": { ok: true };
+  "action:runs": { runs: DrainRun[] };
+  "action:log": { entries: ActionLogEntry[] };
+  /** `left`: milliseconds until the unlock ends, by main's clock. */
+  "secret:unlock": { unlocked: true; until: string; left: number };
+  "secret:lock": { ok: true };
+  "secret:reveal": Revealed;
+  "secret:copy": { copied: true; clearsIn: number };
+  "secret:certs": { certs: CertDetail[]; skipped?: string };
   "forward:list": ForwardsPush;
   "forward:suggest": { port: number };
   "forward:check": { free: boolean; next?: number };
@@ -1396,6 +1563,33 @@ export type CertFact = {
   selfSigned: boolean;
   unreadable?: true;
 };
+/**
+ * One certificate of a Secret, for the drawer's certificate panel (wave 8 part 4, D167): public material only, from
+ * `tls.crt` and `ca.crt`; `tls.key` and every other key are never decoded. Names are the certificate's own text.
+ */
+export type CertDetail = {
+  key: "tls.crt" | "ca.crt";
+  /** Its place in the key's PEM: 0 is the first (the leaf, in `tls.crt`). */
+  index: number;
+  subject: string;
+  issuer: string;
+  sans: string[];
+  notBefore: string;
+  notAfter: string;
+  /** Hex, at most 64 characters. */
+  serial: string;
+  /** The SHA-256 fingerprint, hex. */
+  sha256: string;
+  ca: boolean;
+  selfSigned: boolean;
+  publicKey?: { type: "rsa" | "ec" | "ed25519" | "other"; bits?: number; curve?: string };
+  unreadable?: true;
+};
+/** One Secret value, to the window that unlocked it (D164): text when it is UTF-8 and at most 64 KiB, else only its size. */
+export type Revealed =
+  | { kind: "text"; text: string; bytes: number }
+  | { kind: "binary"; bytes: number }
+  | { kind: "large"; bytes: number };
 export type ProblemEvent = { at: string; reason: string; message: string; count: number };
 /** Small, structured evidence: what the row, the drawer and the agent's brief read. No env, labels or annotations. */
 export type ProblemFacts = {
@@ -1514,7 +1708,9 @@ export type ChangeVerb = "create" | "update" | "patch" | "delete";
 /** Why a change deserves a second look; the dock shows these as tags, the loud ones first. */
 export type ChangeRisk =
   | "deletes" | "rbac" | "namespace" | "cluster-scoped" | "reads-secret" | "privileged" | "host-access"
-  | "service-account" | "new-workload" | "scales-to-zero" | "changes-image" | "restarts-pods";
+  | "service-account" | "new-workload" | "scales-to-zero" | "changes-image" | "restarts-pods"
+  /** Wave 8 part 2 (drain): pods are evicted; data goes with a pod (emptyDir) or a volume. */
+  | "evicts-pods" | "loses-data";
 /** One line of a unified diff; "…" stands for a run of unchanged lines (its text says how many). */
 export type DiffLine = { t: " " | "+" | "-" | "…"; text: string; oldNo?: number; newNo?: number };
 export type ChangeOperation = {
@@ -1586,7 +1782,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
-  "family:update",
+  "family:update", "action:progress",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

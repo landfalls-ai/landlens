@@ -17,6 +17,7 @@ import type { Current } from "./Sidebar";
 import { parseQuery, score, VERBS, verbsFor, type Target, type Verb } from "./paletteRules";
 import { matchProblems } from "./problemRules";
 import { clicklandScope } from "./clickland";
+import { presetsFor, type PresetId } from "./askPresets";
 
 export type { Target, Verb };
 
@@ -30,9 +31,11 @@ export type Commands = {
   openDock: () => void;
   showForwards: () => void;
   showProblems: () => void;
+  /** Recent actions (wave 8, D147). */
+  showActions: () => void;
 };
 
-type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Kinds" | "Clusters" | "Commands" | "Containers";
+type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Kinds" | "Clusters" | "Commands" | "Containers" | "Ask Claude";
 type Row = { key: string; group: Group; label: string; hint?: string; icon: LucideIcon; mono?: boolean; run: () => void; tab?: () => void };
 const PER_GROUP = 6;
 
@@ -100,7 +103,8 @@ export function JumpPalette(props: {
   onOpenSubject: (p: Problem) => void;
   onPick: (c: Current) => void;
   onOpen: (t: Target) => void;
-  onAct: (t: Target, verb: Verb, container?: string) => void;
+  /** `preset`: a preset ask (D159), from Tab on an "Ask Claude about" row. */
+  onAct: (t: Target, verb: Verb, container?: string, preset?: PresetId) => void;
   onSwitch: (context: string) => void;
   /** Open in Clickland (D118), for a pod or a workload, while a console address is set: a Tab action. */
   onOpenClickland?: (t: Target) => void;
@@ -117,7 +121,8 @@ export function JumpPalette(props: {
   const [at, setAt] = useState(0);
   // Tab on an object: its actions; Tab on a pod's shell or logs row: its containers.
   const [switching, setSwitching] = useState(false);
-  const [focus, setFocus] = useState<{ t: Target; from: string; containers?: { verb: Verb; list: { name: string; running: boolean; why?: string }[] } }>();
+  // Tab on an "Ask Claude about" row: the kind's preset asks (D159).
+  const [focus, setFocus] = useState<{ t: Target; from: string; containers?: { verb: Verb; list: { name: string; running: boolean; why?: string }[] }; presets?: true }>();
   // Tab on a problem: Open, Ask Claude, Open <Kind>.
   const [pfocus, setPfocus] = useState<{ p: Problem; from: string }>();
   const input = useRef<HTMLInputElement>(null);
@@ -144,7 +149,7 @@ export function JumpPalette(props: {
     f();
   };
   const openObject = (t: Target) => done(() => (remember(props.context, { k: "object", t }), props.onOpen(t)));
-  const act = (t: Target, verb: Verb, container?: string) => done(() => (remember(props.context, { k: "object", t }), props.onAct(t, verb, container)));
+  const act = (t: Target, verb: Verb, container?: string, preset?: PresetId) => done(() => (remember(props.context, { k: "object", t }), props.onAct(t, verb, container, preset)));
   const pickKind = (n: NavItem) => done(() => (remember(props.context, { k: "kind", key: `${n.type.group}/${n.type.resource}` }), props.onPick(n)));
 
   /** A pod's containers, for Tab on its shell or logs row. */
@@ -167,6 +172,7 @@ export function JumpPalette(props: {
     icon: VERBS[verb].icon,
     run: () => act(t, verb),
     ...(t.kind === "Pod" && (verb === "shell" || verb === "logs") ? { tab: () => containers(t, verb) } : {}),
+    ...(verb === "ask" && presetsFor(t).length ? { tab: () => (setFocus({ t, from: q, presets: true }), setQ(""), setAt(0)) } : {}),
   });
   /** Open in Clickland, for a pod or a workload, when a console address is set (D118). */
   const clicklandRow = (t: Target): Row[] => {
@@ -206,6 +212,7 @@ export function JumpPalette(props: {
     { key: "c:create", group: "Commands", label: "Create from YAML", icon: FilePlus2, run: () => done(props.commands.createYaml) },
     { key: "c:forwards", group: "Commands", label: "Show port forwards", icon: ArrowRightLeft, run: () => done(props.commands.showForwards) },
     { key: "c:problems", group: "Commands", label: "Show problems", icon: Stethoscope, run: () => done(props.commands.showProblems) },
+    { key: "c:actions", group: "Commands", label: "Recent actions", icon: History, run: () => done(props.commands.showActions) },
     { key: "c:dock", group: "Commands", label: "Ask Claude", hint: `${MOD}J`, icon: Sparkles, run: () => done(props.commands.openDock) },
     { key: "c:sidebar", group: "Commands", label: "Toggle sidebar", hint: `${MOD}B`, icon: PanelLeft, run: () => done(props.commands.toggleSidebar) },
     { key: "c:fold", group: "Commands", label: "Fold all sections", hint: "sidebar", icon: FoldVertical, run: () => done(props.commands.foldSections) },
@@ -230,6 +237,12 @@ export function JumpPalette(props: {
       return cs.filter((c) => !text || c.name.toLowerCase().includes(text)).map((c): Row => ({
         key: `c:${c.name}`, group: "Containers", label: `${v === "shell" ? "Open shell in" : "Logs of"} ${c.name}`, hint: c.why ?? (c.running ? focus.t.name : "not running"), icon: VERBS[v].icon, mono: true,
         run: () => (c.running ? act(focus.t, v, c.name) : undefined),
+      }));
+    }
+    if (focus?.presets) {
+      const t = focus.t;
+      return presetsFor(t).filter((p) => !text || p.label.toLowerCase().includes(text)).map((p): Row => ({
+        key: `ps:${p.id}`, group: "Ask Claude", label: p.label, hint: t.name, icon: Sparkles, run: () => act(t, "ask", undefined, p.id),
       }));
     }
     if (pfocus) {
@@ -285,13 +298,14 @@ export function JumpPalette(props: {
   const back = () => {
     if (pfocus) return setPfocus(undefined), setQ(pfocus.from);
     if (focus?.containers) return setFocus({ t: focus.t, from: focus.from }), setQ("");
+    if (focus?.presets) return setFocus(undefined), setQ(focus.from);
     if (focus) return setFocus(undefined), setQ(focus.from);
     if (switching) return setSwitching(false);
     props.onClose();
   };
 
   const parsed = parseQuery(q);
-  const placeholder = pfocus ? `Actions for ${pfocus.p.name}…` : focus?.containers ? `Container in ${focus.t.name}…` : focus ? `Actions for ${focus.t.name}…` : switching ? "Switch to a cluster…" : "Search objects, kinds, problems and actions…";
+  const placeholder = pfocus ? `Actions for ${pfocus.p.name}…` : focus?.containers ? `Container in ${focus.t.name}…` : focus?.presets ? `Ask Claude about ${focus.t.name}…` : focus ? `Actions for ${focus.t.name}…` : switching ? "Switch to a cluster…" : "Search objects, kinds, problems and actions…";
   const empty = parsed.problems && !pfocus && !props.problems.length ? props.problemsEmpty : index.loading && !rows.length ? "Reading names…" : pfocus || focus || switching || parsed.commands || parsed.verb || q.trim() ? `Nothing matches “${q.trim()}”` : "Type to search";
 
   let last: Group | undefined;

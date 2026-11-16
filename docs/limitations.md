@@ -10,8 +10,13 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   a change waiting when Landlens quits is gone (nothing was applied). The audit trail and History's count of applied
   changes stay.
 - **The approval card is the renderer's.** A compromised renderer could approve a change it was shown; the renderer
-  is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. A native confirmation
-  for danger changes is not built.
+  is sandboxed with a strict CSP, and main takes an approval only for a change it is holding. Main's own native
+  dialog asks only before your widest actions (a delete of several objects, of any cluster-scoped kind, of a claim
+  whose volume goes with it or a workload of 10 pods or more; a restart of more than 3; a drain; and any apply once a
+  window has had more than 3 objects changed in a minute; wave 8). Below that budget other danger (a cordon
+  included), and the agent's changes, keep the card's second click: a taken-over page can still make up to 3
+  card-approved changes a minute. The digest Apply names is main's own over the card it answered; it can't prove what
+  the window drew.
 - **Dry runs trust the API server.** An aggregated API server that ignored `dryRun` would apply at the dry run. The
   agent's commands in the "/" menu are Claude Code's own (with no settings loaded, its built-ins), sent as messages.
 - **Claude Code is the only agent.** Its sandbox fences only Claude Code; another ACP agent (Codex, Gemini CLI) would
@@ -49,7 +54,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
   guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
 - **The sidebar is 232px wide, always** ([design.md](design.md#layout)): its sections fold (D139), but it has no drag
-  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 8) moves both
+  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 13) moves both
   to a settings file.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
@@ -65,15 +70,66 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   On the Problems page, **Open full logs** opens the pod's Logs tab on its current run (choose Previous there), ⌘K's
   recent items don't keep problems. The agent sees certificates only for namespaces a Landlens window is showing (the
 person's check reads them), and Ask Claude sends one problem at a time.
+- **Secret values** (wave 8 part 4, [security.md](security.md#secret-values)): a revealed value is in the page's memory
+  for up to 30 s (a JavaScript string can't be wiped; the garbage collector frees it later) and on your screen, where
+  a screen recorder or someone beside you sees it. A copy is on the system clipboard for 30 s: a clipboard manager
+  that ignores the markers (or any app reading the pasteboard) may keep it; macOS's Universal Clipboard may send it to
+  your other devices, where the 30 s clear doesn't reach; a crash or force quit leaves it there (only a normal quit
+  clears it). Windows's formats (no monitors, history or cloud sync) are set but untested on Windows. **On Linux**
+  there is no marker, and the agent's shell may well read the clipboard through the X11 or Wayland socket (the
+  sandbox there denies reads under your home only; not tested): treat Copy as visible to the agent there. Main
+  receives the whole Secret to serve one key, and every TLS Secret's drawer reads it on open (the API has no field
+  projection); it keeps only the key asked for. Any key can be revealed, `tls.key` included. The guard on prompts
+  knows a value as it was shown or copied (line ends as LF, NFC, trimmed or not), for as long as Landlens runs (the
+  newest 500): not encoded (base64, URL, JSON escapes), split across messages, changed or retyped with a slip, not
+  under 8 characters, and not pasted into a terminal, a YAML edit or a Landflow input; and a revealed value of 8 or
+  more characters that is also an everyday word (`postgres1`) refuses any message holding it until Landlens quits.
+  Secrets can't be edited or created; the certificate panel reads `tls.crt` and `ca.crt` only (not a PEM under
+  another key, not cert-manager `Certificate`s) and doesn't check that the key matches.
+- **Tables** (wave 8 part 3): columns can be hidden but not resized or reordered; what tables remember is in
+  `localStorage`, read again before each choice is written, but a window already open doesn't see another's choice
+  until it makes one of its own. Namespaces are kept per cluster (context and server), so choices made before that
+  are forgotten once. Under several namespaces the Overview shows the whole cluster (it says so), and past eight
+  namespaces an account that can't list across them sees the first eight only (named in the status bar's title and
+  the popover). A selection is cleared when you change kind or namespaces, and holds only rows the table shows: a
+  row that leaves the filter or the status segment leaves it (a bulk never takes a row you can't see). "Ask Claude
+  about these N" sends names and one-token status words only, so Claude reads anything more with its own tools, and
+  a session limited to some namespaces isn't sent a selection that reaches outside them (it is dropped whole, not
+  trimmed to the session's namespaces); presets are a fixed list (none of your own yet).
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
+- **Your actions are one object at a time** (wave 8 part 1): the menu, the drawer and ⌘K act on the object in
+  front of you, and a table's selection (part 3) takes Restart and Delete only, at most 50, one kind in one list;
+  a Secret can be deleted (its review shows keys and sizes) and its values revealed or copied one key at a time
+  (part 4), but not edited.
+  Recent actions keeps no diff and no undo; Rollback, a Helm rollback and an action on several clusters are later
+  waves (10, 12). A card's facts are read at review and can be up to 15 minutes old at Apply; lists stop at 500 (the
+  card says so). The action log is a convenience record on this computer, not evidence: anything running as you can
+  edit `actions.json` (a file over 4 MB is moved aside); a row left *Sent* means Landlens stopped before the answer.
+  If the log can't be written, actions are refused. "Ask Claude first" isn't offered differently to a session limited
+  to some namespaces: the text from outside them is held back in the dock, not sent.
+- **Cordon and drain are preview only in a development build** (wave 8 part 2, D153), on every cluster, OrbStack
+  included: the front door refuses every node write and every eviction, from any path (your actions, the YAML editor,
+  the agent's change cards, kube-mcp, kubectl in Landlens's terminals), unless `LANDLENS_NODE_WRITES` names the
+  cluster as `<context>@<host>:<port>`. A packaged app's rule allows every cluster. A pod's plain DELETE isn't a node
+  write, so it isn't refused by this guard (`kubectl drain` itself stops at its refused cordon). **No real drain has run live**: the run is tested against an in-memory
+  API (`fake-api.ts`) and OrbStack sees reads and dry-run evictions of the scenario's pods only (its one node is
+  shared with the siblings); a test on a throwaway two-node `kind` cluster is the person's call (spec, open question
+  2); the re-attach UI's e2e stubs main's run channels. **The agent has no cordon or drain tool**: it can explain a
+  plan (Ask Claude), the person runs it. A drain doesn't follow a pod's replacement to see it scheduled elsewhere, and
+  doesn't wait for a PodDisruptionBudget whose status is behind its spec (the API answers 429 and the run retries).
+  Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
+  main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
+  only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
-- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 8).
+- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 13).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
   both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
   front-door requests ([mcp.md](mcp.md)), but the agent's own kubectl requests and the IDE's are still kept in
-  memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls).
+  memory and not shown, and nothing is kept across restarts (the call log holds the last 500 calls). Your own
+  actions (wave 8) are kept: Recent actions lists the newest 500 per machine, but not your YAML edits, shells or
+  forwards, and not the agent's applied changes (they stay in its sessions); one audit page for both is a roadmap row.
 - **MCP servers** are remote and streamable HTTP only: no stdio servers, no OAuth (a header you paste), and a session
   gets the servers on for its cluster, with their tool lists, when it starts. MCP App views can't write to the
   conversation (`ui/message`), change the model's context, read resources or go fullscreen; they run without Geist
@@ -156,7 +212,8 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Applied row and no flash of the row. Templates are fixed.
   An edit is one object; a leading-zero number like `0600` is refused rather than guessed (YAML 1.1 and 1.2 differ),
   so such values need `0o600` or quotes. A review lasts 15 minutes and a window keeps at most 20. The Apply guard
-  (no card-wide Enter, key presses ignored for half a second) is renderer behaviour, checked in e2e only by a click.
+  (no card-wide Enter, key presses ignored for half a second, never a repeated key) is renderer behaviour, checked in
+  e2e (a fresh card's Enter, and Enter held from the menu with Apply focused).
 - **Port-forward** ([workbench.md](workbench.md#port-forward)) is TCP only. A Service forward goes through one pod,
   not spread across them as the Service would. The pod is checked every 5 seconds, so a connection in the seconds
   after its pod goes can fail. A WebSocket can't half-close, so a client that half-closes waits for the pod's answer

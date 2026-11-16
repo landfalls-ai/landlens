@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chooseNamespace } from "./e2e-helpers";
 
 const run = (process.env.LANDLENS_INTEGRATION ?? "").split(",").includes("orbstack");
 const shots = process.env.LANDLENS_SHOTS;
@@ -54,7 +55,7 @@ describe.runIf(run)("the workbench on OrbStack", () => {
 
   it("follows a pod's log in the drawer", async () => {
     await page.getByRole("button", { name: "Pods", exact: true }).click();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
     const row = page.locator(".tr", { hasText: "shop-web" }).first();
     await row.waitFor({ timeout: 30_000 });
     await row.click();
@@ -153,8 +154,11 @@ describe.runIf(run)("the workbench on OrbStack", () => {
 
     await page.setViewportSize({ width: 1024, height: 700 });
     await page.getByRole("button", { name: "Pods", exact: true }).click();
+    // With the panel open the table shows a few rows and renders only those: find it by name.
+    await page.getByRole("searchbox", { name: "Filter by name" }).fill("shop-web");
     await page.locator(".tr", { hasText: "shop-web" }).first().click();
     await shot(page, "w4-10-1024");
+    await page.getByRole("searchbox", { name: "Filter by name" }).fill("");
     await page.setViewportSize({ width: 1440, height: 880 });
   }, 60_000);
 });

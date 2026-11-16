@@ -4,8 +4,9 @@ import type { AddressInfo } from "node:net";
 import { connect } from "node:tls";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FrontDoor, type AuditEntry } from "../src/frontdoor.js";
-import { agentReadOnlyPolicy } from "../src/policy.js";
+import { FrontDoor, NODE_WRITES_OFF, nodeWrite, type AuditEntry } from "../src/frontdoor.js";
+import { agentApprovedPolicy, agentReadOnlyPolicy } from "../src/policy.js";
+import { ChangeBroker, type Send } from "../src/changes.js";
 import { loopbackCert } from "../src/sidecar.js";
 
 const SIDECAR = resolve(__dirname, "../../../sidecar/kube-proxy/bin/landlens-kube-proxy");
@@ -224,6 +225,56 @@ describe("FrontDoor", () => {
   });
 });
 
+describe("FrontDoor: an object token (wave 8 part 4, D162)", () => {
+  const SECRET_PATH = "/api/v1/namespaces/landlens-dev/secrets/hands-secret";
+  const MARK = "LLMARK-frontdoor-object-token-test-0000";
+  const policy = { access: "object" as const, object: { group: "", resource: "secrets", namespace: "landlens-dev", name: "hands-secret" } };
+
+  it("lets one GET of its object through, unscrubbed, and is unknown after it", async () => {
+    sidecar.removeAllListeners("request");
+    sidecar.on("request", (req, res) => {
+      seen.push(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ kind: "Secret", metadata: { name: "hands-secret", namespace: "landlens-dev", uid: "u1" }, data: { password: Buffer.from(MARK).toString("base64") } }));
+    });
+    const token = door.issueToken({ label: "you · orbstack · secret landlens-dev/hands-secret", policy, clusters: [HANDLE] });
+    const first = await call(`/c/${HANDLE}${SECRET_PATH}`, token);
+    expect(first.status).toBe(200);
+    expect(Buffer.from((await first.json()).data.password, "base64").toString()).toBe(MARK);
+    const second = await call(`/c/${HANDLE}${SECRET_PATH}`, token);
+    expect(second.status).toBe(401);
+    expect(seen).toHaveLength(1);
+    // The audit names the Secret and its policy, and holds nothing of its body.
+    const mine = audit.filter((e) => e.label.includes("hands-secret"));
+    expect(mine[0]).toMatchObject({ method: "GET", path: SECRET_PATH, allowed: true, status: 200, access: "object" });
+    expect(JSON.stringify(audit)).not.toContain(MARK);
+    expect(JSON.stringify(audit)).not.toContain(Buffer.from(MARK).toString("base64"));
+  });
+
+  it("refuses another object, a list, a watch and a write, and these don't use it up", async () => {
+    const token = door.issueToken({ label: "you · secret", policy, clusters: [HANDLE] });
+    for (const [m, p] of [["GET", "/api/v1/namespaces/landlens-dev/secrets/other"], ["GET", "/api/v1/namespaces/landlens-dev/secrets"], ["GET", `${SECRET_PATH}?watch=1`], ["DELETE", SECRET_PATH], ["GET", "/version"]] as const) {
+      expect((await call(`/c/${HANDLE}${p}`, token, m)).status, `${m} ${p}`).toBe(403);
+    }
+    expect(seen).toHaveLength(0);
+    expect((await call(`/c/${HANDLE}${SECRET_PATH}`, token)).status).toBe(200);
+  });
+
+  it("opens no upgraded connection", async () => {
+    const token = door.issueToken({ label: "you · secret", policy, clusters: [HANDLE] });
+    const res = await new Promise<string>((resolve) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
+        s.write(`GET /c/${HANDLE}${SECRET_PATH} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      });
+      let buf = "";
+      s.on("data", (d) => (buf += d));
+      s.on("close", () => resolve(buf));
+    });
+    expect(res).toMatch(/^HTTP\/1.1 403/);
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe("FrontDoor scrubbing for agent tokens", () => {
   /** What the fake cluster answers next: content type, body (string or chunks), extra headers. */
   let answer: { type: string; body: string | string[]; headers?: Record<string, string> };
@@ -314,5 +365,125 @@ describe("FrontDoor scrubbing for agent tokens", () => {
     const ide = d.issueToken({ label: "ide", policy: { access: "full" }, clusters: [H] });
     const r = await get("/api/v1/namespaces/x/pods/a", ide);
     expect(r.body).toContain("hunter2");
+  });
+});
+
+// D153 in the front door (security review of wave 8 part 2, M5, L8): a development build sends no node write and no
+// eviction, dry run or not, through any token (your actions, the YAML editor, the agent's broker and its dry runs,
+// kube-mcp, kubectl in a terminal), unless the rule names the cluster by context and API server.
+describe("FrontDoor: node writes (D153)", () => {
+  let s: Server;
+  let reached: string[];
+  let d: FrontDoor;
+  const H = "clusterNNNN1";
+  const SERVER = "https://127.0.0.1:26443";
+  async function open(opts: ConstructorParameters<typeof FrontDoor>[2], upstream: { context?: string; server?: string } = { context: "kind-x", server: SERVER }) {
+    reached = [];
+    s = createServer((req, res) => {
+      reached.push(`${req.method} ${req.url}`);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(req.method === "GET" && req.url === "/api/v1/nodes/node-1"
+        ? JSON.stringify({ apiVersion: "v1", kind: "Node", metadata: { name: "node-1", uid: "n1", resourceVersion: "5" }, spec: {} })
+        : "{}");
+    });
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    d = new FrontDoor(tls, () => {}, opts);
+    await d.start();
+    d.addCluster(H, { url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`, secret: SECRET, ...upstream });
+  }
+  afterEach(async () => {
+    await d?.stop();
+    s?.closeAllConnections();
+    await new Promise((r) => s?.close(r));
+  });
+  const send = (method: string, path: string, token: string) =>
+    new Promise<{ status: number; body: string }>((ok, fail) => {
+      // A fresh connection each: the door answers a refusal without reading the body.
+      const req = httpsRequest(d.url + `/c/${H}` + path, { method, agent: false, ca: tls.ca, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }, (res) => {
+        let body = "";
+        res.setEncoding("utf8").on("data", (x) => (body += x)).on("end", () => ok({ status: res.statusCode!, body }));
+      });
+      req.on("error", fail);
+      req.end(method === "GET" || method === "DELETE" ? undefined : "{}");
+    });
+  const WRITES: [string, string][] = [
+    ["PATCH", "/api/v1/nodes/node-1"], ["PATCH", "/api/v1/nodes/node-1?dryRun=All"], ["PUT", "/api/v1/nodes/node-1"],
+    ["PATCH", "/api/v1/nodes/node-1/status"], ["DELETE", "/api/v1/nodes/node-1"], ["DELETE", "/api/v1/nodes"], ["POST", "/api/v1/nodes"],
+    ["POST", "/api/v1/nodes/node-1/proxy/x"],
+    ["POST", "/api/v1/namespaces/a/pods/b/eviction"], ["POST", "/api/v1/namespaces/a/pods/b/eviction?dryRun=All"],
+  ];
+
+  it("with no rule: refused for every token, full access and the agent's approved one included; nothing is proxied; reads pass", async () => {
+    await open({});
+    for (const policy of [{ access: "full" as const }, agentApprovedPolicy()]) {
+      const t = d.issueToken({ label: "you", policy, clusters: [H] });
+      for (const [m, p] of WRITES) {
+        const r = await send(m, p, t);
+        expect([m, p, r.status]).toEqual([m, p, 403]);
+        expect(JSON.parse(r.body).message).toBe(`Landlens: ${NODE_WRITES_OFF}`);
+      }
+    }
+    expect(reached).toEqual([]);
+    const ide = d.issueToken({ label: "ide", policy: { access: "full" }, clusters: [H] });
+    const g = await send("GET", "/api/v1/nodes/node-1", ide); expect(g.status).toBe(200);
+    // Not a node write: another kind named "nodes", a config map named "eviction".
+    expect((await send("PATCH", "/apis/apps/v1/namespaces/a/deployments/nodes", ide)).status).toBe(200);
+    expect((await send("DELETE", "/api/v1/namespaces/a/configmaps/eviction-notes", ide)).status).toBe(200);
+    expect(reached).toEqual(["GET /api/v1/nodes/node-1", "PATCH /apis/apps/v1/namespaces/a/deployments/nodes", "DELETE /api/v1/namespaces/a/configmaps/eviction-notes"]);
+  });
+
+  it("with a rule: only the cluster it names by context and server; a cluster opened without them gets none", async () => {
+    const seenBy: { context: string; server: string }[] = [];
+    const rule = (c: { context: string; server: string }) => (seenBy.push(c), c.context === "kind-x" && c.server === SERVER);
+    await open({ nodeWrites: rule });
+    const t = d.issueToken({ label: "you", policy: { access: "full" }, clusters: [H] });
+    expect((await send("PATCH", "/api/v1/nodes/node-1", t)).status).toBe(200);
+    expect(seenBy).toEqual([{ context: "kind-x", server: SERVER }]);
+    await d.stop();
+    s.closeAllConnections();
+    await new Promise((r) => s.close(r));
+    await open({ nodeWrites: rule }, { context: "kind-x", server: "https://10.0.0.9:6443" });
+    const t2 = d.issueToken({ label: "you", policy: { access: "full" }, clusters: [H] });
+    expect((await send("PATCH", "/api/v1/nodes/node-1", t2)).status).toBe(403);
+    await d.stop();
+    s.closeAllConnections();
+    await new Promise((r) => s.close(r));
+    await open({ nodeWrites: () => true }, {});
+    const t3 = d.issueToken({ label: "you", policy: { access: "full" }, clusters: [H] });
+    expect((await send("POST", "/api/v1/namespaces/a/pods/b/eviction", t3)).status).toBe(403);
+    expect(reached).toEqual([]);
+  });
+
+  it("the agent's change broker: a nodes patch is refused at its dry run, before you are asked; nothing reaches the node", async () => {
+    await open({});
+    const token = d.issueToken({ label: "agent approved", policy: agentApprovedPolicy(), clusters: [H] });
+    const send: Send = (r) => new Promise((ok, fail) => {
+      const req = httpsRequest(d.url + `/c/${H}` + r.path, {
+        method: r.method, agent: false, ca: tls.ca,
+        headers: { Authorization: `Bearer ${token}`, ...(r.contentType ? { "Content-Type": r.contentType } : {}), ...(r.body !== undefined ? { "Content-Length": String(Buffer.byteLength(r.body)) } : {}) },
+      }, (res) => {
+        let text = "";
+        res.setEncoding("utf8").on("data", (x) => (text += x)).on("end", () => ok({ status: res.statusCode!, text, warnings: [] }));
+      });
+      req.on("error", fail);
+      req.end(r.body);
+    });
+    let asked = 0;
+    const broker = new ChangeBroker({ session: "s1", send, ask: async () => (asked++, { decision: "approve" }), update: () => {} });
+    const out = await broker.propose({
+      tool: "patch", title: "Cordon node-1", reason: "asked to",
+      operations: [{ verb: "patch", patchType: "merge", type: { group: "", version: "v1", resource: "nodes", kind: "Node", namespaced: false }, name: "node-1", body: { spec: { unschedulable: true } } }],
+    });
+    expect(out).toMatchObject({ state: "failed", stage: "dry-run" });
+    expect(asked).toBe(0);
+    expect(reached.filter((x) => !x.startsWith("GET "))).toEqual([]);
+  });
+
+  it("nodeWrite: every write and eviction, however spelled; reads are not", () => {
+    for (const [m, p] of WRITES) expect([m, p, nodeWrite({ method: m, path: p })]).toEqual([m, p, true]);
+    expect(nodeWrite({ method: "patch", path: "//api/v1//nodes/x" })).toBe(true);
+    for (const [m, p] of [["GET", "/api/v1/nodes/n"], ["HEAD", "/api/v1/nodes"], ["GET", "/api/v1/watch/nodes"], ["POST", "/api/v1/namespaces/a/pods"]]) {
+      expect([m, p, nodeWrite({ method: m!, path: p! })]).toEqual([m, p, false]);
+    }
   });
 });

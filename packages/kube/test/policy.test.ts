@@ -208,3 +208,34 @@ describe("the approval broker's write policy", () => {
     expect(allowed({ access: "forward", pod: { namespace: "shop", name: "web-1" } }, "GET", "/api/v1/namespaces/shop/pods/web-1/portforward?ports=8080")).toBe(false);
   });
 });
+
+describe("the object policy (wave 8 part 4, D162)", () => {
+  const one: Policy = { access: "object", object: { group: "", resource: "secrets", namespace: "landlens-dev", name: "hands-secret" } };
+  it("allows one GET of exactly that object", () => {
+    expect(allowed(one, "GET", "/api/v1/namespaces/landlens-dev/secrets/hands-secret")).toBe(true);
+  });
+  it("refuses another name, namespace, kind or group, a list, a watch, a subresource, any write, any non-resource path", () => {
+    for (const [m, p] of [
+      ["GET", "/api/v1/namespaces/landlens-dev/secrets/other"],
+      ["GET", "/api/v1/namespaces/default/secrets/hands-secret"],
+      ["GET", "/api/v1/namespaces/landlens-dev/configmaps/hands-secret"],
+      ["GET", "/apis/example.com/v1/namespaces/landlens-dev/secrets/hands-secret"],
+      ["GET", "/api/v1/secrets/hands-secret"],
+      ["GET", "/api/v1/namespaces/landlens-dev/secrets"],
+      ["GET", "/api/v1/secrets"],
+      ["GET", "/api/v1/namespaces/landlens-dev/secrets/hands-secret?watch=1"],
+      ["GET", "/api/v1/watch/namespaces/landlens-dev/secrets/hands-secret"],
+      ["GET", "/api/v1/namespaces/landlens-dev/secrets/hands-secret/status"],
+      ["PATCH", "/api/v1/namespaces/landlens-dev/secrets/hands-secret"],
+      ["PUT", "/api/v1/namespaces/landlens-dev/secrets/hands-secret"],
+      ["DELETE", "/api/v1/namespaces/landlens-dev/secrets/hands-secret"],
+      ["POST", "/api/v1/namespaces/landlens-dev/secrets"],
+      ["GET", "/version"],
+      ["GET", "/api"],
+    ] as const) expect(allowed(one, m, p), `${m} ${p}`).toBe(false);
+  });
+  it("refuses everything without its object, and a denied resource stays denied", () => {
+    expect(allowed({ access: "object" }, "GET", "/api/v1/namespaces/landlens-dev/secrets/hands-secret")).toBe(false);
+    expect(allowed({ ...one, deniedResources: ["secrets"] }, "GET", "/api/v1/namespaces/landlens-dev/secrets/hands-secret")).toBe(false);
+  });
+});

@@ -2,7 +2,7 @@
 // names of the certificates in `tls.crt`. The key, the PEM and every other value of the Secret are never decoded,
 // copied, cached or passed on; the window and the agent get a CertFact.
 import { X509Certificate } from "node:crypto";
-import type { CertFact } from "@landlens/contracts";
+import type { CertDetail, CertFact } from "@landlens/contracts";
 import { apiPath, KubeError, type KubeClient } from "./client.js";
 import type { CertInput } from "./doctor.js";
 
@@ -107,6 +107,78 @@ export function certFacts(secret: { data?: Record<string, unknown> } | undefined
     sans,
     selfSigned: leaf.subject === leaf.issuer,
   };
+}
+
+/**
+ * The certificate panel (wave 8 part 4, D167): the only keys read, the public halves. `tls.key`, and every other key,
+ * is never decoded, parsed or matched against a certificate: the private half never reaches this code's logic.
+ */
+export const CERT_KEYS = ["tls.crt", "ca.crt"] as const;
+export const CERT_DETAIL_LIMITS = { keyBytes: 256 * 1024, perKey: 8, total: 16 } as const;
+
+const hexOnly = (s: string, max: number) => (/^[0-9A-Fa-f:]*$/.test(s) ? s.replace(/:/g, "").toLowerCase().slice(0, max) : "");
+const iso = (s: string) => {
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? new Date(t).toISOString() : "";
+};
+const UNREADABLE_DETAIL = { subject: "", issuer: "", sans: [], notBefore: "", notAfter: "", serial: "", sha256: "", ca: false, selfSigned: false, unreadable: true as const };
+
+/** One PEM block as a CertDetail; a block X509Certificate can't read is `unreadable`, with nothing of its text. */
+function certDetail(key: CertDetail["key"], index: number, block: string): CertDetail {
+  try {
+    const c = new X509Certificate(block);
+    const k = c.publicKey;
+    const t = k.asymmetricKeyType;
+    const d = k.asymmetricKeyDetails ?? {};
+    const publicKey: CertDetail["publicKey"] = t === "rsa" || t === "rsa-pss"
+      ? { type: "rsa", ...(typeof d.modulusLength === "number" ? { bits: d.modulusLength } : {}) }
+      : t === "ec" ? { type: "ec", ...(typeof d.namedCurve === "string" && /^[A-Za-z0-9-]{1,32}$/.test(d.namedCurve) ? { curve: d.namedCurve } : {}) }
+      : t === "ed25519" ? { type: "ed25519", bits: 256 } : { type: "other" };
+    const notBefore = iso(c.validFrom);
+    const notAfter = iso(c.validTo);
+    if (!notBefore || !notAfter) return { key, index, ...UNREADABLE_DETAIL, sans: [] };
+    return {
+      key, index,
+      subject: cn(c.subject), issuer: cn(c.issuer),
+      sans: parseSans(c.subjectAltName ?? "").slice(0, CERT_LIMITS.sans).map(clean),
+      notBefore, notAfter,
+      serial: hexOnly(c.serialNumber, 64),
+      sha256: hexOnly(c.fingerprint256, 64),
+      ca: c.ca,
+      selfSigned: c.subject === c.issuer && c.checkIssued(c),
+      publicKey,
+    };
+  } catch {
+    return { key, index, ...UNREADABLE_DETAIL, sans: [] };
+  }
+}
+
+/**
+ * The certificates of a Secret, for the panel (D167): CERTIFICATE blocks in `tls.crt` and `ca.crt` only, at most 8 a
+ * key and 16 in all, a key over 256 KiB not read. Nothing else of the Secret is looked at; `skipped` says what was
+ * left out, in Landlens's words.
+ */
+export function certDetails(secret: { data?: Record<string, unknown> } | undefined): { certs: CertDetail[]; skipped?: string } {
+  const certs: CertDetail[] = [];
+  const skipped: string[] = [];
+  for (const key of CERT_KEYS) {
+    const b64 = secret?.data?.[key];
+    if (typeof b64 !== "string" || !b64) continue;
+    if (b64.length > Math.ceil((CERT_DETAIL_LIMITS.keyBytes * 4) / 3) + 4) {
+      skipped.push(`${key} is over 256 KiB and wasn't read.`);
+      continue;
+    }
+    const blocks = pemBlocks(Buffer.from(b64, "base64").toString("latin1"), CERT_DETAIL_LIMITS.perKey + 1);
+    if (blocks.length > CERT_DETAIL_LIMITS.perKey) skipped.push(`${key} holds more than ${CERT_DETAIL_LIMITS.perKey} certificates: the first ${CERT_DETAIL_LIMITS.perKey} are shown.`);
+    for (const [i, b] of blocks.slice(0, CERT_DETAIL_LIMITS.perKey).entries()) {
+      if (certs.length >= CERT_DETAIL_LIMITS.total) {
+        skipped.push(`More than ${CERT_DETAIL_LIMITS.total} certificates: the first ${CERT_DETAIL_LIMITS.total} are shown.`);
+        break;
+      }
+      certs.push(certDetail(key, i, b));
+    }
+  }
+  return { certs, ...(skipped.length ? { skipped: [...new Set(skipped)].join(" ") } : {}) };
 }
 
 const SECRETS = { group: "", version: "v1", resource: "secrets" };

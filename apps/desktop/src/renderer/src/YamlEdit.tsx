@@ -2,21 +2,20 @@
 // dry-runs exactly what Apply will send (only the fields you changed, with the version you started from) and shows
 // the live object against the dry run's result. If someone changes the object while you edit, your lines are moved
 // onto theirs; where you both changed a field, yours is kept and the banner says which.
-import type { ChangeOperation, ChangeRisk, ClusterInfo, EditOwner, EditProblem, EditReview, KubeObject, ResourceType } from "@landlens/contracts";
+import type { ChangeOperation, ClusterInfo, EditOwner, EditProblem, EditReview, KubeObject, ResourceType } from "@landlens/contracts";
 import { diffLines } from "@landlens/kube/diff";
 import { applyMergePatch, editable, mergePatch, overlaps, patchPaths } from "@landlens/kube/edit-yaml";
-import { Check, CircleX, Maximize2, Minimize2, Pencil, ShieldCheck, Sparkles, TriangleAlert, User, X } from "lucide-react";
+import { CircleX, Maximize2, Minimize2, Pencil, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parse, stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
 import { api, type ApiError } from "./api";
-import { Diff, ORDER, RISK } from "./ChangeCard";
+import { ReviewCard } from "./ReviewCard";
 import { CodeEditor, type CodeEditorHandle, type LineMark } from "./CodeEditor";
 import { setEditGuard } from "./editGuard";
 import { Ic, MOD } from "./icons";
 
 const toYaml = (o: unknown) => stringify(o, { lineWidth: 0 });
-const SHORT = 40;
 
 type Stage =
   | { s: "edit"; problems?: EditProblem[]; note?: string }
@@ -240,94 +239,4 @@ export function YamlEdit(props: {
     </div>
   );
   return wide ? <div className="palette-back" onMouseDown={(e) => e.target === e.currentTarget && setWide(false)}>{body}</div> : body;
-}
-
-/** The dry run, as a card of your own (D27): no iris ring, "Your edit", the diff, Apply or Back to editing. */
-export function ReviewCard(props: {
-  title: string;
-  review: EditReview;
-  owners?: EditOwner[];
-  applying: boolean;
-  applyRef: React.RefObject<HTMLButtonElement | null>;
-  onApply: () => void;
-  onBack: () => void;
-  onAsk?: () => void;
-}) {
-  const ops = props.review.operations ?? [];
-  const risks: ChangeRisk[] = ORDER.filter((r) => ops.some((o) => o.risk.includes(r)));
-  const danger = risks.some((r) => RISK[r].level === "danger");
-  const [confirm, setConfirm] = useState(false);
-  const [uncapped, setUncapped] = useState<Set<number>>(new Set());
-  const warnings = ops.flatMap((o) => o.warnings);
-  // Apply is a press of the Apply button itself (Enter on it, or a click), not Enter anywhere in the card, and not in
-  // the first half second, so a key meant for something else can't send it (security review, part 2, finding 2).
-  const shownAt = useRef(Date.now());
-  const capped = ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
-  const apply = (e: React.MouseEvent) => {
-    // A keyboard press (detail 0) in the first half second is a key meant for something else; a click is deliberate.
-    if (e.detail === 0 && Date.now() - shownAt.current < 500) return;
-    // The whole change is on screen before it can be sent.
-    if (capped) return setUncapped(new Set(ops.map((_, i) => i)));
-    if (danger && !confirm) return setConfirm(true);
-    props.onApply();
-  };
-  return (
-    <section className="change mine" aria-label="Review your edit"
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && !props.applying) (e.preventDefault(), e.stopPropagation(), props.onBack());
-      }}>
-      <div className="change-head">
-        <div className="change-eyebrow"><Ic icon={User} size={13} /><span>Your edit</span></div>
-        <h3 className="change-title">{props.title}</h3>
-      </div>
-      {risks.length ? (
-        <div className="change-risks" aria-label="Risks">
-          {risks.map((r) => <span key={r} className={`badge ${RISK[r].level === "danger" ? "bad" : "warn"}`} title={RISK[r].title}><Ic icon={RISK[r].icon} size={13} />{RISK[r].words}</span>)}
-        </div>
-      ) : null}
-      {props.owners?.length ? (
-        <div className="change-warn warn">
-          <Ic icon={TriangleAlert} size={13} />
-          <span>{props.owners.map((o) => <span key={o.path + o.manager} className="owner"><b className="mono">{o.path}</b> is managed by <b>{o.manager}</b>{o.line ? ` (line ${o.line})` : ""}. It may set it back. </span>)}</span>
-        </div>
-      ) : null}
-      {ops.map((op, i) => (
-        <div key={i} className="change-op">
-          {ops.length > 1 ? <div className="change-op-head mono"><span className="change-verb">{op.verb}</span> {op.kind} {op.namespace ? `${op.namespace}/` : ""}{op.name}</div> : null}
-          <Diff op={op} capped={op.diff.lines.length > SHORT && !uncapped.has(i)} create={op.verb === "create"} onUncap={() => setUncapped((s) => new Set(s).add(i))} />
-        </div>
-      ))}
-      {warnings.length ? (
-        <div className="change-warnings">
-          <span className="change-fact">The cluster's warnings, in its words:</span>
-          <ul>{warnings.slice(0, 5).map((w, i) => <li key={i}><Ic icon={TriangleAlert} size={12} />{w}</li>)}</ul>
-        </div>
-      ) : null}
-      <div className="change-foot">
-        <div className="change-fact"><Ic icon={ShieldCheck} size={12} />Dry run passed. Nothing has changed yet.</div>
-        {props.applying ? (
-          <div className="change-applying" role="status"><span className="spinner" />Applying…</div>
-        ) : confirm ? (
-          <div className="change-actions">
-            <span className="change-fact bad"><Ic icon={TriangleAlert} size={12} />{risks.filter((r) => RISK[r].level === "danger").map((r) => RISK[r].words).join(", ")}. Apply anyway?</span>
-            {/* Not focused, and Enter doesn't press it: the danger needs a deliberate click. */}
-            <button className="danger" onClick={props.onApply} onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}>Apply</button>
-            <button className="secondary" autoFocus onClick={() => setConfirm(false)}>Back</button>
-          </div>
-        ) : (
-          <div className="change-actions">
-            {capped ? (
-              <button ref={props.applyRef} className="primary" onClick={apply}>Show the whole change</button>
-            ) : danger ? (
-              <button ref={props.applyRef} className="danger" onClick={apply}><Ic icon={TriangleAlert} size={13} />Apply…</button>
-            ) : (
-              <button ref={props.applyRef} className="primary" onClick={apply}><Ic icon={Check} size={13} />Apply<kbd aria-hidden="true">↵</kbd></button>
-            )}
-            <button className="secondary" onClick={props.onBack}>Back to editing<kbd aria-hidden="true">esc</kbd></button>
-            {props.onAsk ? <button className="link-btn small" onClick={props.onAsk}><Ic icon={Sparkles} size={12} />Ask Claude to check it</button> : null}
-          </div>
-        )}
-      </div>
-    </section>
-  );
 }

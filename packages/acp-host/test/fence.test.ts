@@ -32,6 +32,22 @@ describe("the session fence", () => {
     expect(opts.sandbox.credentials.envVars.map((v) => v.name)).toContain("ANTHROPIC_API_KEY");
   });
 
+  // Wave 8 part 4 (M4 of its security review): a value Landlens copies sits on the system clipboard for 30 s, and the
+  // agent has a shell. On macOS the SDK's sandbox profile denies by default and its Mach allowlist has no pasteboard
+  // service; Apple Events are opt-in. Nothing here may opt in to any of it (fence.integration proves the result).
+  it("opens no way to the clipboard: no Apple Events, no extra Mach or XPC service, no Unix socket, no weaker sandbox", () => {
+    const keys = new Set<string>();
+    const walk = (o: unknown) => {
+      if (!o || typeof o !== "object") return;
+      for (const [k, v] of Object.entries(o)) (keys.add(k), walk(v));
+    };
+    walk(opts.sandbox);
+    for (const k of ["allowAppleEvents", "allowMachLookup", "allowUnixSockets", "allowAllUnixSockets", "enableWeakerNestedSandbox", "enableWeakerNetworkIsolation", "allowNestedUserNamespaces", "ignoreViolations", "excludedCommands"]) {
+      expect(keys.has(k), k).toBe(false);
+    }
+    expect(opts.settingSources).toEqual([]); // and no settings file of yours adds one
+  });
+
   it("denies credential reads and kubectl writes, never allows bypass, and allows only Landlens's own tools", () => {
     const { allow, deny, disableBypassPermissionsMode } = opts.settings.permissions;
     expect(allow).toEqual(["mcp__landlens-kube"]);

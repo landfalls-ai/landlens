@@ -197,13 +197,13 @@ describe.runIf(run)("the ⌘K search on OrbStack", () => {
     await expect.poll(() => page.locator(".drawer").getByRole("tab", { name: "Logs" }).getAttribute("aria-selected"), { timeout: 15_000 }).toBe("true");
   }, 60_000);
 
-  it("lists an object's actions on Tab, and a Secret's are only Ask Claude", async () => {
+  it("lists an object's actions on Tab, and a Secret's are only Ask Claude and Delete (wave 8), Delete last", async () => {
     await open("landlens-demo-auth");
     const row = dialog().getByRole("option", { name: /^landlens-demo-auth\s*Secret/ });
     await row.waitFor({ timeout: 15_000 });
     await row.hover();
     await input().press("Tab");
-    await expect.poll(options).toEqual([expect.stringMatching(/^Ask Claude about landlens-demo-auth/)]);
+    await expect.poll(options).toEqual([expect.stringMatching(/^Ask Claude about landlens-demo-auth/), expect.stringMatching(/^Delete landlens-demo-auth…/)]);
     await expect(dialog().getByRole("button", { name: "Back" }).innerText()).resolves.toContain("landlens-demo-auth");
     await input().press("Backspace");
     await expect.poll(options).toEqual(expect.arrayContaining([expect.stringMatching(/^landlens-demo-auth\s*Secret/)]));

@@ -15,6 +15,7 @@ import { promisify } from "node:util";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeLandfall, FakeLandflow, LF_KEY, TRIAGE_SECRET } from "../../../packages/connections/test/fake-family";
+import { chooseNamespace } from "./e2e-helpers";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -105,7 +106,7 @@ describe.runIf(run)("Landflow on a resource, against the fake Landflow", { timeo
     await page.getByRole("button", { name: /orbstack/ }).first().click();
     await page.getByRole("heading", { name: "Overview" }).waitFor({ timeout: 30_000 });
     await page.getByRole("complementary", { name: "Resources" }).getByRole("button", { name: "Problems", exact: true }).click();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
     await expect.poll(() => row("ledger-worker").count(), { timeout: 240_000, interval: 3000 }).toBe(1);
     await row("ledger-worker").click();
     await drawer().getByRole("button", { name: "Send to triage…" }).waitFor();

@@ -1,7 +1,9 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import { age, podReady, podRestarts, podStatus, type Tone } from "@landlens/kube/status";
-import { ArrowRight, Box, Check, ChevronRight, CircleX, Clock, Copy, ScrollText, Server, Sparkles, SquareTerminal, Workflow, X } from "lucide-react";
+import { ArrowRight, Box, Check, ChevronDown, ChevronRight, CircleX, Clock, Copy, Ellipsis, ScrollText, Server, Sparkles, SquareTerminal, Workflow, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { presetsFor, type PresetId } from "./askPresets";
+import { PresetMenu } from "./ObjectMenu";
 import { stringify } from "yaml";
 import type { AskContext } from "./AgentDock";
 import { api, type ApiError } from "./api";
@@ -21,6 +23,8 @@ import { PortLine, useCanForward } from "./Forwards";
 import type { ClusterInfo } from "@landlens/contracts";
 import { CRD, printerFacts } from "./custom";
 import { printerColumns, type PrinterColumn } from "./printer";
+import { SecretData } from "./SecretData";
+import { CertPanel } from "./CertPanel";
 
 type Tab = "overview" | "events" | "yaml" | "metrics" | "logs" | "traces";
 export type NavTarget = { kind: string; name: string; namespace?: string };
@@ -54,6 +58,10 @@ export function Details(props: {
   onOpenKind?: (group: string, resource: string) => void;
   /** Run a Landflow flow… on this object, while the Landflow key can list and run flows (wave 7 D125). */
   onFlow?: () => void;
+  /** A preset ask (wave 8 part 3, D159), from Ask Claude's caret: the main press stays today's plain ask. */
+  onPreset?: (id: PresetId) => void;
+  /** The object's menu at the ⋯ button (wave 8, D146): its actions, Ask Claude, Copy name, Delete…. */
+  onMenu?: (x: number, y: number) => void;
 }) {
   const { object: o, type, now } = props;
   const logs = logSourceOf(type.kind, o);
@@ -64,6 +72,8 @@ export function Details(props: {
   const [tab, setTab] = useState<Tab>("overview");
   const [logContainer, setLogContainer] = useState<string>();
   const [shellMenu, setShellMenu] = useState(false);
+  const [presetAt, setPresetAt] = useState<{ x: number; y: number }>();
+  const presets = props.onPreset ? presetsFor(type, props.tone) : [];
   const [editing, setEditing] = useState(false);
   const [applied, setApplied] = useState<string>();
   useEffect(() => (setEditing(false), setApplied(undefined)), [o.metadata.uid]);
@@ -138,14 +148,24 @@ export function Details(props: {
               onPick={(t) => (setShellMenu(false), props.onShell(t))} onClose={() => setShellMenu(false)} />
           ) : null}
           {isSecret(type) ? null : (
-            <button
-              className="ask-btn"
-              onClick={() => props.onAsk({
-                ref: { group: type.group, version: type.version, resource: type.resource, name: o.metadata.name, ...(o.metadata.namespace ? { namespace: o.metadata.namespace } : {}) },
-                label: `${type.kind} ${o.metadata.namespace ? `${o.metadata.namespace}/` : ""}${o.metadata.name}`,
-              })}
-            ><Ic icon={Sparkles} size={14} />Ask Claude</button>
+            <span className="ask-split">
+              <button
+                className="ask-btn"
+                onClick={() => props.onAsk({
+                  ref: { group: type.group, version: type.version, resource: type.resource, name: o.metadata.name, ...(o.metadata.namespace ? { namespace: o.metadata.namespace } : {}) },
+                  label: `${type.kind} ${o.metadata.namespace ? `${o.metadata.namespace}/` : ""}${o.metadata.name}`,
+                })}
+              ><Ic icon={Sparkles} size={14} />Ask Claude</button>
+              {presets.length ? (
+                <button className="ask-btn caret" aria-label="Preset asks" aria-haspopup="menu" aria-expanded={!!presetAt} title="Preset asks"
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setPresetAt((p) => (p ? undefined : { x: r.right - 220, y: r.bottom + 4 }));
+                  }}><Ic icon={ChevronDown} size={13} /></button>
+              ) : null}
+            </span>
           )}
+          {presetAt && props.onPreset ? <PresetMenu at={presetAt} type={type} {...(props.tone ? { tone: props.tone } : {})} onPick={props.onPreset} onClose={() => setPresetAt(undefined)} /> : null}
           {props.onFlow ? (
             <button className="icon-btn" aria-label="Run a Landflow flow…" title="Run a Landflow flow…" onClick={props.onFlow}><Ic icon={Workflow} size={15} /></button>
           ) : null}
@@ -158,6 +178,13 @@ export function Details(props: {
               setTimeout(() => setCopied(false), 1200);
             })}
           ><Ic icon={copied ? Check : Copy} size={15} /></button>
+          {props.onMenu ? (
+            <button className="icon-btn" aria-label="More actions" aria-haspopup="menu" title="More actions"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                props.onMenu!(r.right - 232, r.bottom + 4);
+              }}><Ic icon={Ellipsis} size={15} /></button>
+          ) : null}
           <button className="icon-btn" onClick={props.onClose} aria-label="Close details" title="Close (Esc)"><Ic icon={X} size={15} /></button>
         </div>
         <h2 className="drawer-title">{base}{hash ? <span className="hash">{hash}</span> : null}</h2>
@@ -184,7 +211,7 @@ export function Details(props: {
         {tab === "logs" && logs ? (
           <LogsView key={`${o.metadata.uid}`} handle={props.handle} source={{ ...logs, ...(logContainer ? { container: logContainer } : {}) }} place="drawer" onAsk={props.onAsk} onOpenInPanel={props.onLogsInPanel} />
         ) : null}
-        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
+        {tab === "overview" && <Overview o={view} {...(isSecret(type) ? { secret: o, handle: props.handle } : {})} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
           onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec}
           {...(props.printer?.length ? { printer: props.printer } : {})} {...(props.onOpenKind ? { onOpenKind: props.onOpenKind } : {})} />}
         {tab === "events" && <Events events={events} now={now} />}
@@ -220,8 +247,10 @@ function readyOf(o: KubeObject): string | undefined {
   return undefined;
 }
 
-function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster, printer, onOpenKind }: {
+function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster, printer, onOpenKind, secret, handle }: {
   o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void;
+  /** A Secret as main sent it (keys and sizes, never a value), for its Data and Certificates (wave 8 part 4). */
+  secret?: KubeObject; handle?: string;
   onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined; cluster: ClusterInfo;
   printer?: PrinterColumn[]; onOpenKind?: (group: string, resource: string) => void;
 }) {
@@ -271,6 +300,8 @@ function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster,
         <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
       {definition ? <Definition crd={o} {...(onOpenKind ? { onOpenKind } : {})} /> : null}
+      {secret && handle ? <SecretData key={secret.metadata.uid} handle={handle} object={secret} /> : null}
+      {secret && handle ? <CertPanel key={`c${secret.metadata.uid}`} handle={handle} object={secret} now={now} /> : null}
       {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} cluster={cluster} canForward={canForward} /> : null}
       {service ? <ServicePorts svc={o} cluster={cluster} canForward={canForward} /> : null}
       {conditions.length ? (

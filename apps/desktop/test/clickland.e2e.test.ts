@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CK_READ, FakeClickland } from "../../../packages/connections/test/fake-family";
+import { chooseNamespace } from "./e2e-helpers";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -78,7 +79,7 @@ async function openDeployment(page: Page, name: string) {
   await page.getByRole("button", { name: /orbstack/ }).first().click();
   await page.getByRole("heading", { name: "Overview" }).waitFor({ timeout: 30_000 });
   await page.getByRole("button", { name: "Deployments", exact: true }).click();
-  await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+  await chooseNamespace(page, "landlens-dev");
   const row = page.locator(".tr", { hasText: name }).first();
   await row.waitFor({ timeout: 30_000 });
   await row.click();
