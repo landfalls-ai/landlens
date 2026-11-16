@@ -12,6 +12,8 @@ import { GroupName, ObjectName, ResourceName, type ActionLogEntry } from "@landl
 import { z } from "zod";
 
 export const ACTION_LOG_MAX = 500;
+/** Of those, the most rows of Secret reveals and copies: they can't push the rows of applied actions out (L1). */
+export const ACTION_LOG_VALUE_MAX = 100;
 /** A file larger than this is treated as damaged and moved aside, unread (L6). */
 export const ACTION_LOG_BYTES = 4 * 1024 * 1024;
 const ACTIONS = ["scale", "restart", "delete", "trigger", "suspend", "resume", "cordon", "uncordon", "drain", "reveal", "copy"] as const;
@@ -118,17 +120,26 @@ export class ActionLog {
   /** A row made by logEntry; checked again, kept, written. */
   add(e: ActionLogEntry): ActionLogEntry {
     const checked = Entry.parse(e) as ActionLogEntry;
-    this.entries = [...this.entries, checked].slice(-ACTION_LOG_MAX);
+    let next = [...this.entries, checked];
+    // Reveals and copies keep their own newest 100: the oldest of them goes first (L1).
+    if (isValueRow(checked)) {
+      let over = next.filter(isValueRow).length - ACTION_LOG_VALUE_MAX;
+      if (over > 0) next = next.filter((r) => !(isValueRow(r) && over-- > 0));
+    }
+    this.entries = next.slice(-ACTION_LOG_MAX);
     this.write();
     return checked;
   }
 
-  /** A `sent` row's ending (M3): its outcome, and a closed detail; checked again, written. A row that's gone is left. */
-  settle(id: string, end: Pick<ActionLogEntry, "outcome"> & { detail?: string }): void {
+  /**
+   * A `sent` row's ending (M3): its outcome, and a closed detail; for a reveal or copy, the key once the Secret was seen
+   * to have it (L1). Checked again, written. A row that's gone is left.
+   */
+  settle(id: string, end: Pick<ActionLogEntry, "outcome"> & { detail?: string; key?: string }): void {
     const i = this.entries.findIndex((e) => e.id === id);
     if (i < 0) return;
     const { detail: _old, ...row } = this.entries[i]!;
-    const next = Entry.parse({ ...row, ...(end.detail !== undefined ? { detail: end.detail } : _old !== undefined ? { detail: _old } : {}), outcome: end.outcome }) as ActionLogEntry;
+    const next = Entry.parse({ ...row, ...(end.detail !== undefined ? { detail: end.detail } : _old !== undefined ? { detail: _old } : {}), ...(end.key !== undefined && isValueRow(row) ? { key: end.key } : {}), outcome: end.outcome }) as ActionLogEntry;
     this.entries = this.entries.map((e, n) => (n === i ? next : e));
     this.write();
   }
@@ -145,3 +156,5 @@ export class ActionLog {
     return this.failed;
   }
 }
+
+const isValueRow = (r: Pick<ActionLogEntry, "action">) => r.action === "reveal" || r.action === "copy";

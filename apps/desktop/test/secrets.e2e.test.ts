@@ -5,8 +5,10 @@
 //
 // What it proves: before a reveal the page and resource:get carry no value; the unlock dialog names the Secret and the
 // cluster; Reveal shows one key, which can't be selected or dragged out, and goes on Hide, after 30 s (the page's
-// clock), on a lost focus and on a tab change; Copy puts the value on the clipboard from main with macOS's concealed
-// marker, the window never has it, and main clears it after 30 s; a prompt holding the copied value is refused; the
+// clock), on a lost focus and on a tab change; an answer that comes after its row went or the window blurred is dropped
+// and isn't in the page's heap (M1 of the security review); a double click reads once (L8); Copy puts the value on the
+// clipboard from main with macOS's concealed marker, the window never has it, and main clears it after 30 s; a prompt
+// holding the copied value is refused and doesn't stay in the dock (L2); the
 // fake agent's every prompt and attachment, mcp:calls, localStorage and sessionStorage, and every file in the profile
 // (agent session folders included) lack the marker; the certificate panel shows the CN, expiry and issuer with no
 // private key text. Screenshots are taken only while nothing is revealed (w8p4-*, dark and light, $LANDLENS_SHOTS).
@@ -28,6 +30,7 @@ const TLS = "hands-reveal-tls";
 const MARK = `LLMARK-${randomBytes(24).toString("hex")}`.slice(0, 40);
 const B64 = Buffer.from(MARK).toString("base64");
 const CONCEALED = 'electron application/osclipboard;format="org.nspasteboard.ConcealedType"';
+const REFUSED = "That holds a Secret value Landlens showed or copied for you: it isn't sent to Claude.";
 
 describe.runIf(run)("Secret values and certificates on OrbStack", () => {
   let app: ElectronApplication;
@@ -44,6 +47,20 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
   const value = () => drawer().locator("pre.secret-value");
   const dock = () => page.getByRole("complementary", { name: "Claude Code" });
   const clipboardHolds = (text: string) => app.evaluate(async ({ clipboard }, t) => (await clipboard.readText()) === t, text);
+  /** Whether the page's JavaScript heap, after a full garbage collection, holds the text anywhere (a CDP heap snapshot). */
+  const inHeap = async (needle: string) => {
+    const cdp = await page.context().newCDPSession(page);
+    let snap = "";
+    cdp.on("HeapProfiler.addHeapSnapshotChunk", (e) => void (snap += e.chunk));
+    await cdp.send("HeapProfiler.enable");
+    await cdp.send("HeapProfiler.collectGarbage");
+    await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+    await cdp.detach();
+    expect(snap.length).toBeGreaterThan(100_000);
+    return snap.includes(needle);
+  };
+  /** The API server's host and port, as main's dialog names it. */
+  const serverHost = () => new URL(execFileSync("kubectl", ["config", "view", "--minify", "--context", "orbstack", "-o", "jsonpath={.clusters[0].cluster.server}"], { encoding: "utf8" })).host;
   const shot = async (name: string, dummy = false) => {
     if (!shots) return;
     // Never with the marker on screen; a value only when it is the dummy username.
@@ -140,7 +157,7 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
     await value().waitFor({ timeout: 20_000 });
     const q = (await asked()).at(-1)!;
     expect(q.message).toBe(`Show values of Secret landlens-dev/${OPAQUE}?`);
-    expect(q.detail).toBe("Values are shown to you only, for 30 seconds at a time. Claude never sees them. On orbstack.");
+    expect(q.detail).toBe(`Values are shown to you only, for 30 seconds at a time. Claude never sees them. On orbstack (${serverHost()}).`);
     expect(await value().textContent()).toBe(MARK);
     expect(await value().getAttribute("data-private")).toBe("");
     expect(await value().evaluate((el) => (globalThis as any).getComputedStyle(el).userSelect)).toBe("none");
@@ -208,7 +225,11 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
     await expect.poll(() => box.isEnabled({ timeout: 2_000 }).catch(() => false), { timeout: 90_000 }).toBe(true);
     await box.fill(`is this right? ${MARK}`);
     await box.press("Enter");
-    await dock().getByText("That is a Secret value Landlens copied for you: it isn't sent to Claude.").waitFor({ timeout: 20_000 });
+    await dock().getByText(REFUSED).waitFor({ timeout: 20_000 });
+    // The refused message doesn't stay in the dock (L2).
+    await dock().getByText("(not sent)").waitFor();
+    expect(await dock().innerText()).not.toContain(MARK);
+    expect(await page.content()).not.toContain(MARK);
     await box.fill("What is in landlens-dev?");
     await box.press("Enter");
     await dock().locator(".msg-agent", { hasText: "Everything I was asked about looks fine." }).last().waitFor({ timeout: 60_000 });
@@ -217,6 +238,68 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
 
     await expect.poll(() => clipboardHolds(""), { timeout: 40_000, interval: 1_000 }).toBe(true);
   }, 180_000);
+
+  it("an answer that comes after its row went (a tab change) or after a blur is dropped, and isn't in the page's heap (M1)", async () => {
+    // Main's answer to secret:reveal is held here until the test lets it go: the read happens, the answer waits.
+    await app.evaluate(({ ipcMain }) => {
+      const g = globalThis as unknown as { realReveal?: (...a: unknown[]) => Promise<unknown>; held: (() => void)[] };
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...a: unknown[]) => Promise<unknown>> })._invokeHandlers;
+      g.realReveal ??= handlers.get("secret:reveal");
+      g.held = [];
+      handlers.set("secret:reveal", async (...a: unknown[]) => {
+        const r = await g.realReveal!(...a);
+        await new Promise<void>((res) => g.held.push(res));
+        return r;
+      });
+    });
+    const held = () => app.evaluate(() => (globalThis as unknown as { held: unknown[] }).held.length);
+    const release = () => app.evaluate(() => void (globalThis as unknown as { held: (() => void)[] }).held.splice(0).forEach((r) => r()));
+    try {
+      expect(await inHeap(MARK)).toBe(false);
+      // The row goes while main answers: the tab changes (as a closed drawer, another object or a new resourceVersion).
+      await data().getByRole("button", { name: "Reveal password" }).click();
+      await expect.poll(held, { timeout: 20_000 }).toBe(1);
+      await drawer().getByRole("tab", { name: "YAML" }).click();
+      await release();
+      await page.waitForTimeout(500);
+      await drawer().getByRole("tab", { name: "Overview" }).click();
+      await data().waitFor();
+      expect(await value().count()).toBe(0);
+      expect(await page.content()).not.toContain(MARK);
+      expect(await inHeap(MARK)).toBe(false);
+      // The window loses focus while main answers: nothing is shown, then or later.
+      await data().getByRole("button", { name: "Reveal password" }).click();
+      await expect.poll(held, { timeout: 20_000 }).toBe(1);
+      await page.evaluate(() => (globalThis as any).dispatchEvent(new Event("blur")));
+      await release();
+      await page.waitForTimeout(500);
+      expect(await value().count()).toBe(0);
+      expect(await page.content()).not.toContain(MARK);
+      expect(await inHeap(MARK)).toBe(false);
+    } finally {
+      await release();
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as { realReveal: (...a: unknown[]) => Promise<unknown> };
+        (ipcMain as unknown as { _invokeHandlers: Map<string, unknown> })._invokeHandlers.set("secret:reveal", g.realReveal);
+      });
+    }
+  }, 90_000);
+
+  it("a double click on Reveal reads once: one action-log row (L8)", async () => {
+    type Row = { action: string; at: string };
+    const log = (): Promise<Row[]> => page.evaluate((h) => (globalThis as any).landlens.invoke("action:log", { handle: h, limit: 200 }).then((r: { entries: Row[] }) => r.entries), handle);
+    const rows = async () => (await log()).length;
+    // Room for two reads under main's 10 a minute, so a second read would show as a second row, not a refusal.
+    const values = (await log()).filter((e) => e.action === "reveal" || e.action === "copy");
+    if (values.length > 8) await page.waitForTimeout(Math.max(0, Date.parse(values[8]!.at) + 61_000 - Date.now()));
+    const before = await rows();
+    await data().getByRole("button", { name: "Reveal username" }).dblclick();
+    await value().waitFor();
+    await page.waitForTimeout(1_000);
+    expect(await rows()).toBe(before + 1);
+    await data().getByRole("button", { name: "Hide username" }).click();
+    await value().waitFor({ state: "detached" });
+  }, 150_000);
 
   it("the certificate panel: CN, expiry and issuer; no private key text on the page", async () => {
     await openSecret(TLS);

@@ -296,6 +296,7 @@ Checked live (`packages/acp-host/test/fence.integration.test.ts`, a real Claude 
 | `curl -x "$ALL_PROXY" https://example.com` | `Proxy CONNECT aborted` |
 | `kubectl get configmap orders-api-config -o yaml` | Worked, with `annotations: {}`: last-applied scrubbed by the front door |
 | WebFetch `https://example.com` | "I don't have a WebFetch tool" |
+| `pbpaste`, `osascript -e 'the clipboard as text'` (a dummy on the clipboard, as after Copy of a Secret value) | Exit code 1; AppleScript: `Connection invalid` for the HIServices XPC service. Nothing of the clipboard (macOS only, 16 Nov 2026) |
 
 ## Trying it
 

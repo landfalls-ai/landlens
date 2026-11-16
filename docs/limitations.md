@@ -73,11 +73,19 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **Secret values** (wave 8 part 4, [security.md](security.md#secret-values)): a revealed value is in the page's memory
   for up to 30 s (a JavaScript string can't be wiped; the garbage collector frees it later) and on your screen, where
   a screen recorder or someone beside you sees it. A copy is on the system clipboard for 30 s: a clipboard manager
-  that ignores the macOS concealed marker (or any app reading the pasteboard) may keep it; on Linux and Windows there
-  is no marker. Main receives the whole Secret to serve one key (the API has no field projection). Any key can be
-  revealed, `tls.key` included. A value you retype into the dock isn't recognised, only one Landlens copied. Secrets
-  can't be edited or created; the certificate panel reads `tls.crt` and `ca.crt` only (not a PEM under another key,
-  not cert-manager `Certificate`s) and doesn't check that the key matches.
+  that ignores the markers (or any app reading the pasteboard) may keep it; macOS's Universal Clipboard may send it to
+  your other devices, where the 30 s clear doesn't reach; a crash or force quit leaves it there (only a normal quit
+  clears it). Windows's formats (no monitors, history or cloud sync) are set but untested on Windows. **On Linux**
+  there is no marker, and the agent's shell may well read the clipboard through the X11 or Wayland socket (the
+  sandbox there denies reads under your home only; not tested): treat Copy as visible to the agent there. Main
+  receives the whole Secret to serve one key, and every TLS Secret's drawer reads it on open (the API has no field
+  projection); it keeps only the key asked for. Any key can be revealed, `tls.key` included. The guard on prompts
+  knows a value as it was shown or copied (line ends as LF, NFC, trimmed or not), for as long as Landlens runs (the
+  newest 500): not encoded (base64, URL, JSON escapes), split across messages, changed or retyped with a slip, not
+  under 8 characters, and not pasted into a terminal, a YAML edit or a Landflow input; and a revealed value of 8 or
+  more characters that is also an everyday word (`postgres1`) refuses any message holding it until Landlens quits.
+  Secrets can't be edited or created; the certificate panel reads `tls.crt` and `ca.crt` only (not a PEM under
+  another key, not cert-manager `Certificate`s) and doesn't check that the key matches.
 - **Tables** (wave 8 part 3): columns can be hidden but not resized or reordered; what tables remember is in
   `localStorage`, read again before each choice is written, but a window already open doesn't see another's choice
   until it makes one of its own. Namespaces are kept per cluster (context and server), so choices made before that

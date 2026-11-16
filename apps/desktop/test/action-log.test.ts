@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ACTION_LOG_BYTES, ACTION_LOG_MAX, ActionLog, logEntry, serverHash } from "../src/main/action-log";
+import { ACTION_LOG_BYTES, ACTION_LOG_MAX, ACTION_LOG_VALUE_MAX, ActionLog, logEntry, serverHash } from "../src/main/action-log";
 
 const base = { context: "orbstack", server: "https://127.0.0.1:26443", action: "scale" as const, kind: "Deployment", namespace: "landlens-dev", names: ["hands-web"], detail: "2 → 3 replicas", outcome: "applied" as const };
 
@@ -71,6 +71,25 @@ describe("the action log", () => {
     expect(() => log.settle(row.id, { outcome: "ok" as any })).toThrow();
     // Same context name, another cluster (a re-created kind cluster, a second kubeconfig).
     expect(log.list("orbstack", "https://127.0.0.1:9999")).toEqual([]);
+  });
+
+  it("reveals and copies keep their own newest 100: they can't push applied actions out; the key comes with the settle (part 4, L1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "al-"));
+    const log = new ActionLog(join(dir, "actions.json"));
+    for (let i = 0; i < 10; i++) log.add(logEntry({ ...base, names: [`app${i}`] }));
+    const value = { ...base, action: "reveal" as const, kind: "Secret", names: ["hands-secret"], detail: undefined, outcome: "sent" as const };
+    let last = "";
+    for (let i = 0; i < ACTION_LOG_MAX; i++) last = log.add(logEntry(value)).id;
+    const rows = new ActionLog(join(dir, "actions.json")).list("orbstack", base.server, 200);
+    expect(rows.filter((r) => r.action === "reveal")).toHaveLength(ACTION_LOG_VALUE_MAX);
+    expect(rows.filter((r) => r.action === "scale")).toHaveLength(10);
+    expect(rows[0]!.id).toBe(last);
+    // The key is written by the settle, on a reveal or copy row only.
+    log.settle(last, { outcome: "applied", key: "password" });
+    expect(log.list("orbstack", base.server, 1)[0]).toMatchObject({ outcome: "applied", key: "password" });
+    const scale = log.list("orbstack", base.server, 200).find((r) => r.action === "scale")!;
+    log.settle(scale.id, { outcome: "applied", key: "password" });
+    expect(log.list("orbstack", base.server, 200).find((r) => r.id === scale.id)!.key).toBeUndefined();
   });
 
   it("moves a file over 4 MB aside unread (L6)", () => {

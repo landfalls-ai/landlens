@@ -505,6 +505,12 @@ type is resolved in main and must be core `secrets`; the object must exist (its 
 body is dropped). An unlock ends at its time, when the window goes, reloads or loses its renderer, when the cluster
 stops, and on `secret:lock`. At most 5 unlocks a window. A page that was taken over can ask, but can't answer.
 
+*Amended after the security review (M3, M5, L4, L5):* the detail names the context without control or format
+characters and with the API server's host ("On orbstack (127.0.0.1:26443)."), and a first line for a ServiceAccount
+token, a bootstrap token or a registry credential. A window's epoch moves on each ending (a navigation, a dead
+renderer, Lock now, another cluster connected); an unlock whose dialog was up across one unlocks nothing. A window may
+ask 6 times a minute; after a Cancel the next ask waits 5 s, after two in a row 30 s, before main reads or asks.
+
 **D164. Reveal: one key, to the window that unlocked it.** `secret:reveal { handle; ref; key }` (key: 1–253 of
 `[-._a-zA-Z0-9]`, Kubernetes's rule for Secret keys) → main checks the unlock (window, cluster, `uid`), reads the
 Secret once with a D162 token, checks the `uid` is still the unlocked one, takes `data[key]`, decodes it, drops the
@@ -522,6 +528,10 @@ can't read Secrets in landlens-dev.", "That key is gone.", "It changed since you
 the API's text or a parse error's. 10 reveals a minute a window (then 429). One action-log row per reveal: the
 Secret's name and the key's name, never a value or a length.
 
+*Amended after the security review (M1, M5, L1, L8):* main keeps only `data[key]` as the answer is parsed; the row is
+written without the key, which the settle adds only when the Secret had it, and reveals and copies keep their own
+newest 100 rows of the log's 500. A cluster that went is "That cluster isn't connected.".
+
 **D165. Copy never crosses to the window.** `secret:copy { handle; ref; key; as?: "text" | "base64" }` → main does
 the same read and writes the value to the system clipboard itself (`electron.clipboard.writeText`), answering
 `{ copied: true; clearsIn: 30 }`. It keeps only the SHA-256 of what it wrote; 30 s later, and when Landlens quits, it
@@ -530,6 +540,11 @@ macOS the write also carries the `org.nspasteboard.ConcealedType` marker so clip
 can set it alongside the text **[check]** (`clipboard.writeBuffer` in the built app; if it replaces the text, the
 marker is dropped and `limitations.md` says clipboard history may keep the value). Copy needs the unlock, like
 reveal. The window shows "Copied. Clears in 30 s" with a countdown, and never has the value.
+
+*Amended after the security review (L6, L7):* on Windows the same write carries
+`ExcludeClipboardContentFromMonitorProcessing`, and `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard` as
+a DWORD 0. Before reading the clipboard back (at 30 s and at quit), main checks its marker is still there, so it never
+reads another app's copy.
 
 **D166. In the window.** A Secret's drawer Overview gains a **Data** section (`SecretData.tsx`): one row per key in
 mono, its size, and two buttons, **Copy** (`Copy`) and **Reveal** (`Eye`). The first press of either asks to unlock
@@ -551,6 +566,12 @@ mono, its size, and two buttons, **Copy** (`Copy`) and **Reveal** (`Eye`). The f
 - A role that can't `get secrets` in the namespace (asked once through `cluster:access`) gets both buttons disabled
   with the reason. Helm release Secrets (`type: helm.sh/release.v1`) show "Helm's release record: open it under Helm"
   and no Reveal (64 KiB cap aside, its value is a gzip of the whole release).
+- *Amended after the security review (M1, M2, L2, L3, L8):* each reveal takes a ticket; Hide, the row's unmount, a
+  blur or a hidden window while main reads move it on, and an answer for an ended reveal is dropped before anything
+  holds it. One reveal or copy at a time a row. Spaces other than U+0020 and trailing whitespace are drawn as escapes.
+  Main's guard (D168) knows every value revealed or copied for as long as Landlens runs, as fingerprints (length,
+  rolling hash, SHA-256 of the CRLF→LF, NFC form and of it trimmed; nothing under 8 characters), and refuses a prompt,
+  a note, or a brain title or summary holding one; the dock replaces a refused message with "(not sent)".
 
 Editing or creating Secret values stays out (`edits.ts` refusals unchanged): a later wave, with its own review.
 
@@ -583,6 +604,9 @@ ISRG Root X1" when the Secret holds one. All of it is text from a certificate an
 shown as text nodes, never in a sentence of Landlens's. The agent gets nothing new: certificate facts reach it only
 through the doctor's existing path.
 
+*Amended after the security review (M5):* main keeps only `tls.crt` and `ca.crt` of the answer as it is parsed, and a
+window may read certificates 30 times a minute.
+
 **D168. Where a value must never be, and the test for each.** One marker value (`LLMARK-…`, 40 characters) is put
 in `hands-secret` and searched for:
 
@@ -597,6 +621,9 @@ in `hands-secret` and searched for:
 | Telemetry, Clickland | no record is built for reveal or copy; `landlens.actions` takes only closed words | `telemetry-main.test.ts`: with telemetry on, the queue and the fake collector after a reveal hold no marker and no record naming the Secret |
 | Another window, another Secret, an expired unlock | the unlock's owner, `uid`, cluster and time | `secrets-main.test.ts` |
 | The clipboard, 30 s after Copy | the hash check | `secrets-main.test.ts` with a fake clipboard: cleared when unchanged, left when the person copied something else; `secrets.e2e` reads `clipboard.readText()` in main |
+| The page's heap, after a reveal that ended while main read (security review, M1) | the reveal's ticket | `secrets.e2e`: main's answer held past a tab change, then past a blur: nothing shown, and a CDP heap snapshot after a full GC has no marker |
+| A prompt, a note or a brain summary, any time after a reveal or copy (M2) | the fingerprints | `secrets-main.test.ts`: 31 s on, trimmed, CRLF as LF, NFC, a reveal; a 3-character value refuses nothing |
+| The agent's shell, through the clipboard (M4) | Claude Code's macOS sandbox profile; no opt-in in the fence | `fence.test.ts`; `fence.integration.test.ts` (`pbpaste`, `osascript`: nothing) |
 
 Each rule is taken out once to see its test fail, as in wave 7.
 

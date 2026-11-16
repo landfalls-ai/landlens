@@ -20,6 +20,8 @@ export type { AskContext } from "./quotes";
 import { inSession, quoteHead, sendable, withQuotes, type AskContext } from "./quotes";
 export { withQuotes };
 
+/** Main's sentences for a message holding a Secret value or attaching a Secret (secrets.ts SECRET_TEXT). */
+const REFUSED_VALUE = new Set(["That holds a Secret value Landlens showed or copied for you: it isn't sent to Claude.", "Secrets aren't sent to Claude."]);
 const SUGGESTIONS = ["What's wrong in this cluster right now?", "Which pods restarted in the last hour, and why?"];
 
 /** How the dock opens its session: a new one, or one from history (replayed). */
@@ -311,7 +313,8 @@ export function AgentDock(props: {
     // Quoted text from outside a namespace-limited session's namespaces stays here (L11, M1 of part 3's review).
     // Nothing about a Secret goes (D166).
     const context = sendable(props.context, info?.namespaces);
-    setItems((xs) => [...xs, { type: "user", text, context }]);
+    const item = { type: "user" as const, text, context };
+    setItems((xs) => [...xs, item]);
     setDraft("");
     props.onContextChange([]);
     setBusy(true);
@@ -321,7 +324,9 @@ export function AgentDock(props: {
       if (r.stopReason === "cancelled") setItems((xs) => [...xs, { type: "note", text: "Stopped." }]);
       else if (r.stopReason !== "end_turn") setItems((xs) => [...xs, { type: "note", text: `Ended: ${r.stopReason}` }]);
     } catch (e) {
-      setItems((xs) => [...xs, { type: "note", text: (e as ApiError).message, tone: "bad" }]);
+      const err = e as ApiError;
+      // A message main refused for holding a Secret value doesn't stay on screen or in the dock's state (L2).
+      setItems((xs) => [...xs.map((x) => (x === item && err.status === 400 && REFUSED_VALUE.has(err.message) ? { ...item, text: "(not sent)", context: [] } : x)), { type: "note", text: err.message, tone: "bad" }]);
     } finally {
       setBusy(false);
     }

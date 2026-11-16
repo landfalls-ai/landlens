@@ -18,7 +18,7 @@ import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { ActionService, nodeWritesFrom, quitQuestion } from "./actions";
 import { ActionLog } from "./action-log";
-import { CONCEALED, SecretService } from "./secrets";
+import { clipboardFormats, clipboardMarker, SecretService } from "./secrets";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
@@ -300,12 +300,17 @@ async function start() {
     nodeWrites,
   });
   // Secret values (wave 8 part 4, D161–D168): one key to the window that unlocked it, or to the clipboard from main
-  // with macOS's concealed marker in the same write; cleared after 30 s, and at quit, if the clipboard still holds it.
+  // with the platform's markers in the same write (macOS's concealed type; Windows's no-monitor, no-history, no-cloud);
+  // cleared after 30 s, and at quit, if the clipboard still holds it (read only while the marker is still there).
   const secrets = new SecretService({
     clusters, frontDoor,
     log: actionLog,
     clipboard: {
-      write: (text) => clipboard.write([new ClipboardItem({ "text/plain": text, ...(process.platform === "darwin" ? { [CONCEALED]: "" } : {}) })]),
+      write: (text) => clipboard.write([new ClipboardItem(clipboardFormats(process.platform, text))]),
+      marked: async () => {
+        const f = clipboardMarker(process.platform);
+        return f ? clipboard.has(f) : true;
+      },
       readText: () => clipboard.readText(),
       clear: () => clipboard.clear(),
     },

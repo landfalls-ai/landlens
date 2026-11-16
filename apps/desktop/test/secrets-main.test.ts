@@ -25,8 +25,14 @@ vi.mock("@landlens/kube-mcp", () => ({
     return o ? { status: 200, text: JSON.stringify(o), warnings: [] } : { status: 404, text: JSON.stringify({ kind: "Status", message: `secrets "${r.path}" not found` }), warnings: [] };
   },
 }));
+// certDetails is the real one, watched: what main hands it is what main kept of the Secret.
+const certInput: unknown[] = [];
+vi.mock("@landlens/kube", async (orig) => {
+  const real = await orig<typeof import("@landlens/kube")>();
+  return { ...real, certDetails: (x: Parameters<typeof real.certDetails>[0]) => (certInput.push(x), real.certDetails(x)) };
+});
 import { ActionLog } from "../src/main/action-log";
-import { CLEAR_MS, MAX_UNLOCKS, SECRET_TEXT, SecretService, UNLOCK_MS, VALUE_READS } from "../src/main/secrets";
+import { CANCEL_PAUSE_MS, CANCELS_PAUSE_MS, CERT_READS, CLEAR_MS, CONCEALED, clipboardFormats, clipboardMarker, MAX_UNLOCKS, oneLine, SECRET_TEXT, SecretService, UNLOCK_ASKS, UNLOCK_MS, VALUE_READS, WIN_EXCLUDE, WIN_NO_CLOUD, WIN_NO_HISTORY } from "../src/main/secrets";
 
 const PATH = "/api/v1/namespaces/landlens-dev/secrets/hands-secret";
 const b64 = (s: string | Buffer) => Buffer.from(s).toString("base64");
@@ -45,7 +51,7 @@ function window() {
 }
 
 const logged: string[] = [];
-function setup(o: { now?: () => number; log?: any } = {}) {
+function setup(o: { now?: () => number; log?: any; context?: string } = {}) {
   sent.length = 0;
   answer = undefined;
   secrets = { [PATH]: secret() };
@@ -55,7 +61,7 @@ function setup(o: { now?: () => number; log?: any } = {}) {
   const revoke = vi.fn();
   let gone: (h: string) => void = () => {};
   const clusters = {
-    get: (h: string) => (h === "h1234567" || h === "h7654321" ? { info: { context: h === "h1234567" ? "orbstack" : "other", server: "https://127.0.0.1:26443" } } : (() => { throw Object.assign(new Error("not connected"), { status: 404 }); })()),
+    get: (h: string) => (h === "h1234567" || h === "h7654321" ? { info: { context: h === "h1234567" ? (o.context ?? "orbstack") : "other", server: "https://127.0.0.1:26443" } } : (() => { throw Object.assign(new Error(`cluster ${h} is not connected`), { status: 404 }); })()),
     onGone: (f: (h: string) => void) => (gone = f),
   };
   const rows: any[] = [];
@@ -67,7 +73,17 @@ function setup(o: { now?: () => number; log?: any } = {}) {
     },
   };
   let board = "";
-  const clipboard = { writes: [] as string[], write: vi.fn(async (t: string) => void (clipboard.writes.push(t), (board = t))), readText: vi.fn(async () => board), clear: vi.fn(() => void (board = "")), set: (t: string) => void (board = t), get: () => board };
+  /** Whether the clipboard still carries main's marker: another app's copy (set) takes it away. */
+  let mark = false;
+  const clipboard = {
+    writes: [] as string[],
+    write: vi.fn(async (t: string) => void (clipboard.writes.push(t), (board = t), (mark = true))),
+    marked: vi.fn(async () => mark),
+    readText: vi.fn(async () => board),
+    clear: vi.fn(() => void ((board = ""), (mark = false))),
+    set: (t: string) => void ((board = t), (mark = false)),
+    get: () => board,
+  };
   const svc = new SecretService({ clusters: clusters as any, frontDoor: { issueToken: issue, revokeToken: revoke, clusterUrl: () => "https://127.0.0.1:1/c/h", certificate: "" } as any, log, clipboard, ...(o.now ? { now: o.now } : {}) });
   const yes = vi.fn(async () => true);
   const no = vi.fn(async () => false);
@@ -94,15 +110,17 @@ describe("unlock (D163)", () => {
     expect(grants).toEqual([{ label: "you · orbstack · secret landlens-dev/hands-secret", policy: { access: "object", object: { group: "", resource: "secrets", namespace: "landlens-dev", name: "hands-secret" } }, clusters: ["h1234567"] }]);
     expect(revoke).toHaveBeenCalledTimes(1);
     expect(sent).toEqual([{ method: "GET", path: PATH, token: "1".repeat(64) }]);
-    expect(yes).toHaveBeenCalledWith({ message: "Show values of Secret landlens-dev/hands-secret?", detail: "Values are shown to you only, for 30 seconds at a time. Claude never sees them. On orbstack.", yes: "Show values" });
+    expect(yes).toHaveBeenCalledWith({ message: "Show values of Secret landlens-dev/hands-secret?", detail: "Values are shown to you only, for 30 seconds at a time. Claude never sees them. On orbstack (127.0.0.1:26443).", yes: "Show values" });
     expect(JSON.stringify(r)).not.toContain(MARK);
   });
 
   it("Cancel unlocks nothing; a missing Secret or a 403 is a fixed sentence and asks nothing", async () => {
-    const { svc, no, yes } = setup();
+    let now = 1_000_000;
+    const { svc, no, yes } = setup({ now: () => now });
     const wc = window();
     await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, no)).rejects.toMatchObject({ status: 409, message: SECRET_TEXT.cancelled });
     await expect(svc.reveal(req("password"), wc)).rejects.toMatchObject({ status: 403, message: SECRET_TEXT.locked });
+    now += CANCEL_PAUSE_MS;
     answer = () => ({ status: 403, text: JSON.stringify({ kind: "Status", message: `secrets is forbidden: ${MARK}` }) });
     await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).rejects.toMatchObject({ status: 403, message: "You can't read Secrets in landlens-dev." });
     answer = undefined;
@@ -111,7 +129,8 @@ describe("unlock (D163)", () => {
   });
 
   it("refuses a Helm release record, a second dialog in the same window, and a sixth Secret", async () => {
-    const { svc, yes } = setup();
+    let now = 1_000_000;
+    const { svc, yes } = setup({ now: () => now });
     const wc = window();
     secrets[PATH] = secret({ type: "helm.sh/release.v1" });
     await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).rejects.toMatchObject({ status: 400, message: SECRET_TEXT.helm });
@@ -129,7 +148,8 @@ describe("unlock (D163)", () => {
     }
     secrets["/api/v1/namespaces/landlens-dev/secrets/s9"] = { ...secret({ uid: "u-s9" }), metadata: { name: "s9", namespace: "landlens-dev", uid: "u-s9" } };
     await expect(svc.unlock({ handle: "h1234567", secret: { namespace: "landlens-dev", name: "s9" } }, wc, yes)).rejects.toMatchObject({ status: 429, message: SECRET_TEXT.tooMany });
-    // Unlocking one already unlocked again is not a sixth.
+    // Unlocking one already unlocked again is not a sixth (a minute on, past the asks' limit).
+    now += 61_000;
     await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).resolves.toMatchObject({ unlocked: true });
   });
 
@@ -138,6 +158,83 @@ describe("unlock (D163)", () => {
     const wc = window();
     const confirm = vi.fn(async () => (wc.destroyed = true, wc.emit("destroyed"), true));
     await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, confirm)).rejects.toMatchObject({ status: 410 });
+  });
+
+  it("a reload, a dead renderer, a locked window or another cluster connected while the dialog was up: Yes unlocks nothing (M3)", async () => {
+    for (const during of [
+      (_s: any, wc: any) => wc.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false }),
+      (_s: any, wc: any) => wc.emit("render-process-gone"),
+      (s: any, wc: any) => s.svc.lockWindow(wc), // cluster:connect calls this
+      (s: any, wc: any) => s.svc.lock({ handle: "h1234567" }, wc),
+    ]) {
+      const s = setup();
+      const wc = window();
+      const confirm = vi.fn(async () => (during(s, wc), true));
+      await expect(s.svc.unlock({ handle: "h1234567", secret: ref }, wc, confirm)).rejects.toMatchObject({ status: 410, message: SECRET_TEXT.windowGone });
+      await expect(s.svc.reveal(req("password"), wc)).rejects.toMatchObject({ status: 403, message: SECRET_TEXT.locked });
+      // The next dialog, on the reloaded page, works.
+      await expect(s.svc.unlock({ handle: "h1234567", secret: ref }, wc, s.yes)).resolves.toMatchObject({ unlocked: true });
+    }
+  });
+
+  it("at most 6 asks a minute a window, a 5 s pause after a Cancel and 30 s after two in a row (M5)", async () => {
+    let now = 2_000_000;
+    const { svc, yes, no } = setup({ now: () => now });
+    const wc = window();
+    for (let i = 0; i < UNLOCK_ASKS; i++) await svc.unlock({ handle: "h1234567", secret: ref }, wc, yes);
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).rejects.toMatchObject({ status: 429, message: SECRET_TEXT.asks });
+    expect(yes).toHaveBeenCalledTimes(UNLOCK_ASKS);
+    const reads = sent.length;
+    now += 60_001;
+    // A Cancel: the next ask waits 5 s, without a read or a dialog.
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, no)).rejects.toMatchObject({ status: 409 });
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).rejects.toMatchObject({ status: 429, message: SECRET_TEXT.paused });
+    expect(sent.length).toBe(reads + 1);
+    now += CANCEL_PAUSE_MS;
+    // A second Cancel in a row: 30 s.
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, no)).rejects.toMatchObject({ status: 409 });
+    now += CANCEL_PAUSE_MS;
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).rejects.toMatchObject({ status: 429, message: SECRET_TEXT.paused });
+    now += CANCELS_PAUSE_MS - CANCEL_PAUSE_MS;
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).resolves.toMatchObject({ unlocked: true });
+    // Yes ends the run of Cancels: one more Cancel is 5 s again. Another window has its own count.
+    now += 60_001;
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, no)).rejects.toMatchObject({ status: 409 });
+    now += CANCEL_PAUSE_MS;
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, wc, yes)).resolves.toMatchObject({ unlocked: true });
+    await expect(svc.unlock({ handle: "h1234567", secret: ref }, window(), yes)).resolves.toMatchObject({ unlocked: true });
+  });
+
+  it("the dialog takes bidi and zero-width characters out of the context's name and shows the API server's host (L4)", async () => {
+    const { svc, yes } = setup({ context: "prod\u202Egnits\u200B-\u2066x\u2069\u0007" });
+    await svc.unlock({ handle: "h1234567", secret: ref }, window(), yes);
+    const detail = (yes.mock.calls[0] as any)[0].detail as string;
+    expect(detail).toBe("Values are shown to you only, for 30 seconds at a time. Claude never sees them. On prodgnits-x? (127.0.0.1:26443).");
+    expect(detail).not.toMatch(/[\p{Cf}\p{Cc}]/u);
+    expect(oneLine("a\u2028b\u202Dc")).toBe("abc");
+  });
+
+  it("the dialog says when the Secret is a ServiceAccount token, a bootstrap token or a registry credential (L5)", async () => {
+    for (const [type, line] of [
+      ["kubernetes.io/service-account-token", "A ServiceAccount token: it signs in to this cluster."],
+      ["bootstrap.kubernetes.io/token", "A bootstrap token: it joins machines to this cluster."],
+      ["kubernetes.io/dockerconfigjson", "A registry credential: it signs in to an image registry."],
+      ["kubernetes.io/dockercfg", "A registry credential: it signs in to an image registry."],
+    ]) {
+      const { svc, yes } = setup();
+      secrets[PATH] = secret({ type });
+      await svc.unlock({ handle: "h1234567", secret: ref }, window(), yes);
+      expect((yes.mock.calls[0] as any)[0].detail).toBe(`${line}\nValues are shown to you only, for 30 seconds at a time. Claude never sees them. On orbstack (127.0.0.1:26443).`);
+    }
+  });
+
+  it("a cluster that went is main's own sentence, never the manager's (L8)", async () => {
+    const { svc, yes } = setup();
+    const wc = window();
+    const e = await svc.unlock({ handle: "h0000000", secret: ref }, wc, yes).catch((x) => x);
+    expect(e).toMatchObject({ status: 404, message: SECRET_TEXT.noCluster });
+    await expect(svc.certs({ handle: "h0000000", secret: ref }, wc)).rejects.toMatchObject({ status: 404, message: SECRET_TEXT.noCluster });
+    expect(yes).not.toHaveBeenCalled();
   });
 });
 
@@ -239,7 +336,7 @@ describe("reveal (D164)", () => {
     await expect(svc.reveal(req("username"), wc)).resolves.toMatchObject({ kind: "text" });
   });
 
-  it("one action-log row per reveal and copy: the Secret and the key, never a value or a length; a log that can't take it reads nothing", async () => {
+  it("one action-log row per reveal and copy: the Secret, and the key only once the Secret had it, never a value or a length; a log that can't take it reads nothing", async () => {
     const { svc, wc, rows } = await unlocked();
     await svc.reveal(req("password"), wc);
     await svc.copy(req("password"), wc);
@@ -247,18 +344,21 @@ describe("reveal (D164)", () => {
     expect(rows.map((r) => [r.action, r.kind, r.namespace, r.names, r.key, r.outcome, r.detail])).toEqual([
       ["reveal", "Secret", "landlens-dev", ["hands-secret"], "password", "applied", undefined],
       ["copy", "Secret", "landlens-dev", ["hands-secret"], "password", "applied", undefined],
-      ["reveal", "Secret", "landlens-dev", ["hands-secret"], "missing", "failed", undefined],
+      // A key the Secret doesn't have isn't written (L1): the window can't park its own text in the log.
+      ["reveal", "Secret", "landlens-dev", ["hands-secret"], undefined, "failed", undefined],
     ]);
     expect(JSON.stringify(rows)).not.toMatch(new RegExp(`${MARK}|${b64(MARK)}|bytes`));
-    for (const r of rows) expect(Object.keys(r).sort()).toEqual(["action", "at", "context", "group", "id", "key", "kind", "names", "namespace", "outcome", "resource", "server", "who"]);
+    for (const r of rows.slice(0, 2)) expect(Object.keys(r).sort()).toEqual(["action", "at", "context", "group", "id", "key", "kind", "names", "namespace", "outcome", "resource", "server", "who"]);
     // The real log file too.
     const dir = (await import("node:fs")).mkdtempSync(join((await import("node:os")).tmpdir(), "landlens-secrets-log-"));
     const file = join(dir, "actions.json");
     const real = await unlocked({ log: new ActionLog(file) });
     await real.svc.reveal(req("password"), real.wc);
     await real.svc.copy(req("password"), real.wc);
+    await real.svc.reveal(req("aGlkZGVuLWJ5LXRoZS1wYWdl"), real.wc).catch(() => {});
     const text = readFileSync(file, "utf8");
     expect(text).toContain('"key": "password"');
+    expect(text).not.toContain("aGlkZGVuLWJ5LXRoZS1wYWdl");
     expect(text).not.toContain(MARK);
     expect(text).not.toContain(b64(MARK));
     // A log that can't take the row: nothing is read.
@@ -319,18 +419,81 @@ describe("copy (D165)", () => {
     expect(d.clipboard.clear).not.toHaveBeenCalled();
   });
 
-  it("the copied value isn't sent to Claude while the clipboard holds it", async () => {
+  it("a value revealed or copied isn't sent to Claude, from the first copy on, whatever the clipboard holds since (M2)", async () => {
     const { svc, wc, clipboard } = await unlocked();
-    await svc.refuseCopied([`look at ${MARK}`]); // nothing copied yet
+    await svc.refuseValues([`look at ${MARK}`]); // nothing revealed or copied yet
     await svc.copy(req("password"), wc);
-    await expect(svc.refuseCopied([`please check ${MARK} for me`])).rejects.toMatchObject({ status: 400, message: SECRET_TEXT.inPrompt });
-    await expect(svc.refuseCopied([undefined, "hello"])).resolves.toBeUndefined();
+    await expect(svc.refuseValues([`please check ${MARK} for me`])).rejects.toMatchObject({ status: 400, message: SECRET_TEXT.inPrompt });
+    await expect(svc.refuseValues([undefined, "hello"])).resolves.toBeUndefined();
     await expect(svc.refusePrompt({ text: `is ${MARK} right?` })).rejects.toMatchObject({ status: 400 });
+    // The person copied something else since, or the 30 s cleared it: still refused, and the clipboard isn't read.
     clipboard.set("something else");
-    await expect(svc.refuseCopied([`please check ${MARK}`])).resolves.toBeUndefined();
+    clipboard.readText.mockClear();
+    await expect(svc.refuseValues([`please check ${MARK}`])).rejects.toMatchObject({ status: 400 });
+    expect(clipboard.readText).not.toHaveBeenCalled();
     // No Secret is attached to a prompt, whatever the window sends.
     await expect(svc.refusePrompt({ text: "hi", context: [{ group: "", resource: "secrets" }] })).rejects.toMatchObject({ status: 400, message: SECRET_TEXT.secretRef });
     await expect(svc.refusePrompt({ text: "hi", context: [{ group: "", resource: "configmaps" }] })).resolves.toBeUndefined();
+  });
+
+  it("the guard: 31 s after the copy, a trailing newline trimmed, CRLF pasted as LF, NFC, a reveal; short values refuse nothing (M2)", async () => {
+    vi.useFakeTimers();
+    const { svc, wc } = await unlocked();
+    secrets[PATH] = secret({ data: {
+      file: b64("db-pass-from-file-7f3a\n"), crlf: b64("line-one-abc\r\nline-two-def\r\n"), nfd: b64("cafe\u0301-latte-secret"), shown: b64("revealed-only-9c1e"), short: b64("1a2"),
+    } });
+    await svc.copy(req("file"), wc);
+    await vi.advanceTimersByTimeAsync(CLEAR_MS + 1_000);
+    // A note trimmed in the window: the value without its newline.
+    await expect(svc.refuseValues(["approve: db-pass-from-file-7f3a"])).rejects.toMatchObject({ status: 400, message: SECRET_TEXT.inPrompt });
+    // A value with CRLF as a text box gives it back (LF), inside a longer prompt; and with CR alone.
+    await svc.copy(req("crlf"), wc);
+    await expect(svc.refuseValues(["see\nline-one-abc\nline-two-def\nplease"])).rejects.toMatchObject({ status: 400 });
+    await expect(svc.refuseValues(["see line-one-abc\r\nline-two-def ok"])).rejects.toMatchObject({ status: 400 });
+    await expect(svc.refuseValues(["see line-one-abc\rline-two-def"])).rejects.toMatchObject({ status: 400 });
+    // The same letters composed differently (NFD in the Secret, NFC in the prompt, and the other way).
+    await svc.copy(req("nfd"), wc);
+    await expect(svc.refuseValues(["is caf\u00e9-latte-secret right"])).rejects.toMatchObject({ status: 400 });
+    // A value only revealed, never copied, is refused too (someone retypes it exactly, or pastes it from elsewhere).
+    await svc.reveal(req("shown"), wc);
+    await expect(svc.refuseValues(["x revealed-only-9c1e y"])).rejects.toMatchObject({ status: 400 });
+    // A 3-character value refuses nothing; text that only shares a prefix passes.
+    await svc.copy(req("short"), wc);
+    await expect(svc.refuseValues(["1a2 1a2 1a2", "db-pass-from-file-7f3", "line-one-abc line-two-def", "revealed-only-9c1"])).resolves.toBeUndefined();
+  });
+
+  it("the guard finds a value anywhere in a 20,000-character prompt, quickly", async () => {
+    const { svc, wc } = await unlocked();
+    secrets[PATH] = secret({ data: { long: b64("k".repeat(3000) + "-tail-value"), mid: b64("needle-0123456789") } });
+    await svc.copy(req("long"), wc);
+    await svc.copy(req("mid"), wc);
+    const filler = "lorem ipsum ".repeat(1700);
+    const t = performance.now();
+    await expect(svc.refuseValues([filler + "needle-0123456789" + filler.slice(0, 50)])).rejects.toMatchObject({ status: 400 });
+    await expect(svc.refuseValues([filler + "k".repeat(3000) + "-tail-valu"])).resolves.toBeUndefined();
+    await expect(svc.refuseValues([filler.slice(0, 100) + "k".repeat(3000) + "-tail-value" + filler.slice(0, 5000)])).rejects.toMatchObject({ status: 400 });
+    expect(performance.now() - t).toBeLessThan(500);
+  });
+
+  it("the clipboard is read back only while main's marker is still on it (L7)", async () => {
+    vi.useFakeTimers();
+    const { svc, wc, clipboard } = await unlocked();
+    await svc.copy(req("password"), wc);
+    clipboard.set("another app's copy");
+    clipboard.readText.mockClear();
+    await vi.advanceTimersByTimeAsync(CLEAR_MS + 10);
+    expect(clipboard.marked).toHaveBeenCalled();
+    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(clipboard.clear).not.toHaveBeenCalled();
+  });
+
+  it("one write carries the platform's markers: macOS concealed; Windows no monitor, no history, no cloud (L6)", async () => {
+    expect(Object.keys(clipboardFormats("darwin", "v"))).toEqual(["text/plain", CONCEALED]);
+    const win = clipboardFormats("win32", "v");
+    expect(Object.keys(win)).toEqual(["text/plain", WIN_EXCLUDE, WIN_NO_HISTORY, WIN_NO_CLOUD]);
+    for (const f of [WIN_NO_HISTORY, WIN_NO_CLOUD]) expect([...new Uint8Array(await (win[f] as Blob).arrayBuffer())]).toEqual([0, 0, 0, 0]);
+    expect(clipboardFormats("linux", "v")).toEqual({ "text/plain": "v" });
+    expect([clipboardMarker("darwin"), clipboardMarker("win32"), clipboardMarker("linux")]).toEqual([CONCEALED, WIN_EXCLUDE, undefined]);
   });
 });
 
@@ -340,11 +503,30 @@ describe("certificates (D167)", () => {
     const dir = join(__dirname, "../../../packages/kube/test/fixtures/doctor");
     const leaf = readFileSync(join(dir, "leaf.crt"), "utf8");
     secrets[PATH] = secret({ type: "kubernetes.io/tls", data: { "tls.crt": b64(leaf), "tls.key": b64(`-----BEGIN PRIVATE KEY-----\n${MARK}\n-----END PRIVATE KEY-----\n`), password: b64(MARK) } });
-    const r = await svc.certs({ handle: "h1234567", secret: ref });
+    const r = await svc.certs({ handle: "h1234567", secret: ref }, window());
     expect(r.certs.map((c) => c.subject)).toEqual(["shop.example.test"]);
     expect(JSON.stringify(r)).not.toMatch(new RegExp(`${MARK}|PRIVATE`));
     expect(grants[0].policy).toEqual({ access: "object", object: { group: "", resource: "secrets", namespace: "landlens-dev", name: "hands-secret" } });
     answer = () => ({ status: 403, text: `nope ${MARK}` });
-    await expect(svc.certs({ handle: "h1234567", secret: ref })).rejects.toMatchObject({ status: 403, message: "You can't read Secrets in landlens-dev." });
+    await expect(svc.certs({ handle: "h1234567", secret: ref }, window())).rejects.toMatchObject({ status: 403, message: "You can't read Secrets in landlens-dev." });
+  });
+
+  it("keep only tls.crt and ca.crt of the answer, and 30 reads a minute a window (M5)", async () => {
+    let now = 3_000_000;
+    const { svc } = setup({ now: () => now });
+    secrets[PATH] = secret({ type: "kubernetes.io/tls", data: { "tls.crt": b64("x"), "ca.crt": b64("y"), "tls.key": b64(MARK), password: b64(MARK) } });
+    certInput.length = 0;
+    const wc = window();
+    await svc.certs({ handle: "h1234567", secret: ref }, wc);
+    expect(certInput).toHaveLength(1);
+    expect(Object.keys((certInput[0] as { data: object }).data).sort()).toEqual(["ca.crt", "tls.crt"]);
+    expect(JSON.stringify(certInput)).not.toContain(b64(MARK));
+    for (let i = 1; i < CERT_READS; i++) await svc.certs({ handle: "h1234567", secret: ref }, wc);
+    const reads = sent.length;
+    await expect(svc.certs({ handle: "h1234567", secret: ref }, wc)).rejects.toMatchObject({ status: 429, message: SECRET_TEXT.certRate });
+    expect(sent.length).toBe(reads);
+    await expect(svc.certs({ handle: "h1234567", secret: ref }, window())).resolves.toBeDefined();
+    now += 60_001;
+    await expect(svc.certs({ handle: "h1234567", secret: ref }, wc)).resolves.toBeDefined();
   });
 });

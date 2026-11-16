@@ -135,7 +135,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       return { ok: true };
     },
     "agent:start": ({ handle, namespaces }) => agent.start(handle, namespaces),
-    // No Secret is attached, and no value Landlens copied is sent (wave 8 part 4, D168): the dock, a quote, a paste.
+    // No Secret is attached, and no value Landlens revealed or copied is sent (wave 8 part 4, D168): the dock, a quote, a paste.
     "agent:prompt": async ({ session, text, context }) => {
       await secrets.refusePrompt({ text, ...(context ? { context } : {}) });
       return agent.prompt(session, text, context);
@@ -144,7 +144,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "agent:mode": async ({ session, mode }) => (await agent.setMode(session, mode), { ok: true }),
     "agent:config": async ({ session, config, value }) => (await agent.setConfig(session, config, value), { ok: true }),
     "agent:answer": async ({ request, option }) => (agent.answer(request, option), { ok: true }),
-    "agent:decide": async ({ change, decision, note }) => (await secrets.refuseCopied([note]), agent.decide(change, decision, note), { ok: true }),
+    "agent:decide": async ({ change, decision, note }) => (await secrets.refuseValues([note]), agent.decide(change, decision, note), { ok: true }),
     "agent:history": async ({ context }) => ({ sessions: agent.history(context) }),
     "agent:resume": async ({ handle, session }) => agent.resume(handle, session),
     "agent:forget": async ({ session }) => (await agent.forget(session), { ok: true }),
@@ -246,7 +246,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "brain:ask": ({ sheet }, event) => report.brain.ask(sheet, event.sender),
     "brain:cancel": ({ sheet }, event) => report.brain.cancel(sheet, event.sender),
     // Team or org: main's own dialog shows the text and who will see it (review of part 5, M4).
-    "brain:send": async (req, event) => (await secrets.refuseCopied([req.title, req.summary]), report.brain.send(req, event.sender, nativeConfirm(event))),
+    "brain:send": async (req, event) => (await secrets.refuseValues([req.title, req.summary]), report.brain.send(req, event.sender, nativeConfirm(event))),
     "brain:remove": ({ session }) => report.brain.remove(session),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
@@ -289,7 +289,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "secret:lock": async (r, event) => (secrets.lock(r, event.sender), { ok: true }),
     "secret:reveal": (r, event) => secrets.reveal(r, event.sender),
     "secret:copy": (r, event) => secrets.copy(r, event.sender),
-    "secret:certs": (r) => secrets.certs(r),
+    "secret:certs": (r, event) => secrets.certs(r, event.sender),
     // Port-forwards belong to the app, not a window (docs/workbench.md#port-forward).
     "forward:list": async () => ({ forwards: forwards.list() }),
     "forward:suggest": ({ port }) => forwards.suggest(port),

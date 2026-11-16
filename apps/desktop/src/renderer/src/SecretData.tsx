@@ -8,6 +8,11 @@
 // the drawer closes or changes object or tab (unmount), when the Secret's resourceVersion changes (the row's key), on
 // lock and on disconnect; one value is shown at a time. It can't be selected, copied, cut or dragged out of the page:
 // Copy goes through main to the clipboard and never brings the value here.
+//
+// An answer is stored only if its reveal is still the current one (M1 of the security review): each reveal takes a
+// ticket, and Hide, the row going (unmount: the drawer closed, another object or tab, a new resourceVersion), a blur
+// or a hidden window while main is reading all move it on, so a late answer is dropped, never written to a ref, and
+// the module's `hideShown` points only at a mounted row's hide. One reveal or copy at a time a row (L8).
 import type { KubeObject, Revealed } from "@landlens/contracts";
 import { Copy, Eye, EyeOff, Lock, LockOpen, TriangleAlert } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -151,8 +156,15 @@ function SecretValue(p: {
   const [error, setError] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
   const hideRef = useRef<() => void>(() => {});
+  /** Mounted: an answer for a row that has gone is dropped. */
+  const alive = useRef(true);
+  /** The reveal in flight: anything that ends it moves this on, and its answer is then dropped. */
+  const ticket = useRef(0);
+  /** A reveal or copy waiting on main: a second press does nothing (L8). */
+  const pending = useRef(false);
 
   const hide = () => {
+    ticket.current++;
     value.current = undefined;
     if (pre.current) pre.current.textContent = "";
     setShown(undefined);
@@ -181,9 +193,14 @@ function SecretValue(p: {
       document.removeEventListener("visibilitychange", vis);
     };
   }, [shown]);
-  useEffect(() => () => {
-    value.current = undefined;
-    if (hideShown === hideRef.current) hideShown = undefined;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      ticket.current++;
+      value.current = undefined;
+      if (hideShown === hideRef.current) hideShown = undefined;
+    };
   }, []);
   // The lock ends: what is shown goes.
   useEffect(() => {
@@ -198,40 +215,66 @@ function SecretValue(p: {
 
   const reveal = async () => {
     if (shown) return hide();
+    if (pending.current) return;
+    pending.current = true;
     setError(undefined);
-    if (!(await p.ensure())) return;
-    hideShown?.();
     try {
-      const ask = () => api.invoke("secret:reveal", { handle: p.handle, secret: p.secret, key: p.name });
-      // Main's unlock ended (a reload, its time) though this window's chip still showed it: ask main's dialog again.
-      const r = await ask().catch(async (e: ApiError) => {
-        if (e.status === 403 && e.message === LOCKED && (await p.ensure(true))) return ask();
-        throw e;
-      });
+      if (!(await p.ensure())) return;
+      hideShown?.();
+      const mine = ++ticket.current;
+      // A blur or a hidden window while main reads ends this reveal: the value would land in a window you've left.
+      const drop = () => {
+        if (ticket.current === mine) ticket.current++;
+      };
+      const vis = () => document.visibilityState === "hidden" && drop();
+      window.addEventListener("blur", drop);
+      document.addEventListener("visibilitychange", vis);
+      let r: Revealed;
+      try {
+        const ask = () => api.invoke("secret:reveal", { handle: p.handle, secret: p.secret, key: p.name });
+        // Main's unlock ended (a reload, its time) though this window's chip still showed it: ask main's dialog again.
+        r = await ask().catch(async (e: ApiError) => {
+          if (e.status === 403 && e.message === LOCKED && (await p.ensure(true))) return ask();
+          throw e;
+        });
+      } finally {
+        window.removeEventListener("blur", drop);
+        document.removeEventListener("visibilitychange", vis);
+      }
+      // Its row gone, hidden, blurred, or another reveal since: the answer is dropped, never stored (M1).
+      if (!alive.current || ticket.current !== mine || document.visibilityState === "hidden") return;
       if (r.kind === "text") value.current = r.text;
       hideShown = hideRef.current;
       setShown({ kind: r.kind, bytes: r.bytes, at: Date.now() });
       setNow(Date.now());
     } catch (e) {
-      setError((e as ApiError).message);
+      if (alive.current) setError((e as ApiError).message);
+    } finally {
+      pending.current = false;
     }
   };
   const copy = async (as?: "base64") => {
+    if (pending.current) return;
+    pending.current = true;
     setError(undefined);
-    if (!(await p.ensure())) return;
     try {
+      if (!(await p.ensure())) return;
       const ask = () => api.invoke("secret:copy", { handle: p.handle, secret: p.secret, key: p.name, ...(as ? { as } : {}) });
       await ask().catch(async (e: ApiError) => {
         if (e.status === 403 && e.message === LOCKED && (await p.ensure(true))) return ask();
         throw e;
       });
+      if (!alive.current) return;
       setBase64(false);
       setCopied(Date.now());
       setNow(Date.now());
     } catch (e) {
+      if (!alive.current) return;
       const err = e as ApiError;
       if (err.status === 415) setBase64(true);
       setError(err.message);
+    } finally {
+      pending.current = false;
     }
   };
 

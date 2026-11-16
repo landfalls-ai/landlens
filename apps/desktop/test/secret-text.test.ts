@@ -11,6 +11,16 @@ describe("visibleValue", () => {
     expect(visibleValue("a\u2028b\uFEFF")).toBe("a\\u{2028}b\\u{FEFF}");
     expect(visibleValue("plain é ✓")).toBe("plain é ✓");
   });
+
+  it("draws every space but the plain one, and trailing spaces, tabs and line breaks, as escapes (L3)", () => {
+    // No-break, en, em, thin, narrow no-break and ideographic spaces look like a plain one or like nothing.
+    expect(visibleValue("a\u00A0b\u2002c\u2003d\u2009e\u202Ff\u3000g h")).toBe("a\\u{00A0}b\\u{2002}c\\u{2003}d\\u{2009}e\\u{202F}f\\u{3000}g h");
+    // Two values that differ only at the end don't look the same.
+    expect(visibleValue("hunter22\n")).toBe("hunter22\\u{000A}");
+    expect(visibleValue("hunter22 ")).toBe("hunter22\\u{0020}");
+    expect(visibleValue("hunter22")).toBe("hunter22");
+    expect(visibleValue("a\nb \t\n")).toBe("a\nb\\u{0020}\\u{0009}\\u{000A}");
+  });
 });
 
 describe("sizes, the clock and expiry", () => {

@@ -127,6 +127,12 @@ Departures from the spec, and why:
 
 - [x] Reveal per key by the person only, copy through main, the certificate panel (16 Nov 2026;
   [workbench.md](../../workbench.md#secrets-and-certificates), [security.md](../../security.md#secret-values)).
+- [x] Fable's security review of part 4 fixed (no High, 5 Medium, 8 Low; 16 Nov 2026;
+  [security.md](../../security.md#secret-values)): D163–D168 amended in [spec.md](spec.md). M1 a late reveal answer
+  is dropped (a ticket per reveal); M2 the guard's fingerprints, for the run; M3 the window's epoch across the dialog;
+  M4 the fence opts in to no clipboard path (unit) and the agent's `pbpaste` gets nothing (live), Linux a limitation;
+  M5 6 asks a minute, pauses after Cancel, 30 certificate reads a minute, only the keys asked for kept; L1–L8 as
+  listed in [history.md](../../history.md).
 - **[check] settled**: Electron 45's clipboard is async and W3C-like (no `writeText`/`writeBuffer` on the main
   module's sync API as in older Electron). `clipboard.write([new ClipboardItem({ "text/plain": value,
   'electron application/osclipboard;format="org.nspasteboard.ConcealedType"': "" })])` writes the text and the
@@ -141,8 +147,9 @@ Departures:
   so state would hold the value past Hide.
 - **The `object` token is single-use**: the front door forgets it after its one GET, and main revokes it as well.
 - **Helm release records are refused** in main (they hold a whole release, base64 and gzip), with a pointer to Helm.
-- **Main guards prompts**: while the clipboard holds a value main copied, a dock message, a change's note or a brain
-  summary containing it is refused; a prompt that attaches a Secret is refused too.
+- **Main guards prompts**: a dock message, a change's note or a brain title or summary holding a value Landlens
+  revealed or copied in this run (by fingerprint, normalised; since the security review, M2) is refused; a prompt
+  that attaches a Secret is refused too.
 - **Reveal and copy share one budget** (10 a minute a window); a window holds at most 5 unlocks and one dialog at a time.
 - **The unlock answer carries `left`** (milliseconds), and the window remembers each unlock's end by
   handle/namespace/name (a time only) so the chip survives the drawer closing; a reveal main refuses as locked asks
