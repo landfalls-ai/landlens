@@ -1,13 +1,13 @@
 // One sidebar: the cluster switcher, the jump row, and the resource nav. Folds to a 52px rail of icons when the
 // drawer and the dock both want room (or on ⌘B). Every labelled block of the nav folds (D139, navState.ts).
-import type { ClusterInfo, KubeContext, Problem } from "@landlens/contracts";
-import { Check, ChevronDown, ChevronsUpDown, Cloud, PanelLeft, Search, Shapes, Star, type LucideIcon } from "lucide-react";
+import type { ClusterInfo, KubeContext, Problem, SavedViewSummary } from "@landlens/contracts";
+import { Bookmark, Check, ChevronDown, ChevronsUpDown, Cloud, List, PanelLeft, Search, Shapes, Star, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { Badge } from "./health";
 import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import {
-  allSections, badgeWords, CLOUD, isOpen, loadNavFolds, NAV_KEY, navGroupsKey, PINNED, rollUp, setAll, shownRows, storeNavFolds, WORKSPACE, WORKSPACE_PAGES,
+  allSections, badgeWords, CLOUD, isOpen, VIEWS_FOLD, loadNavFolds, NAV_KEY, navGroupsKey, PINNED, rollUp, setAll, shownRows, storeNavFolds, WORKSPACE, WORKSPACE_PAGES,
   type NavFolds,
 } from "./navState";
 import { clusterTile } from "./present";
@@ -71,6 +71,12 @@ export function Sidebar(props: {
   /** Kinds pinned under Agent (D39), by navKey. */
   pins: string[];
   onPin: (key: string) => void;
+  /** Saved views this cluster may open (D216), newest first: names only. */
+  savedViews?: SavedViewSummary[];
+  /** The saved view on the Views page now. */
+  openView?: string;
+  onOpenView?: (id: string) => void;
+  onAllViews?: () => void;
 }) {
   const { cluster, rail, nav } = props;
   const uid = useId();
@@ -308,6 +314,49 @@ export function Sidebar(props: {
 
   // The blocks, in order. Overview and Problems stay above them, so folding everything never hides the total.
   const workspaceRows = WORKSPACE_PAGES.map(([page, label]) => pageRow(page, label));
+  // Saved views under Views (D216): at most 12, newest first, then All views…; the sub-list folds as `Views`.
+  const saved = props.savedViews ?? [];
+  const viewsOpen = isOpen(nav.folds, VIEWS_FOLD);
+  const savedRow = (v: SavedViewSummary): Row => {
+    const on = props.current === "views" && props.openView === v.id;
+    return {
+      key: `view:${v.id}`, active: on,
+      draw: () => (
+        <div key={`view:${v.id}`} className="nav-row nav-sub">
+          <button className={"nav-item" + (on ? " on" : "")} aria-current={on ? "page" : undefined} title={`${v.name}${v.scope === "any" ? " · any cluster" : ""}`} onClick={() => props.onOpenView?.(v.id)}>
+            <Ic icon={Bookmark} size={13} />
+            <span className="nav-label">{v.name}</span>
+          </button>
+        </div>
+      ),
+      fly: () => flyRow(`view:${v.id}`, v.name, Bookmark, on, () => props.onOpenView?.(v.id)),
+    };
+  };
+  const savedRows: Row[] = saved.length
+    ? [
+        {
+          key: "views-fold", active: false,
+          draw: () => (
+            <button key="views-fold" className={"nav-subsec" + (viewsOpen ? "" : " closed")} aria-expanded={viewsOpen} data-sec={VIEWS_FOLD}
+              title={`${viewsOpen ? "Fold" : "Unfold"} saved views`} onClick={() => nav.setSections([VIEWS_FOLD], !viewsOpen)}>
+              <span className="nav-sec-label">Saved views<span className="count">{saved.length}</span></span>
+              <Ic icon={ChevronDown} size={12} />
+            </button>
+          ),
+          fly: () => null,
+        },
+        ...(viewsOpen ? saved.slice(0, 12).map(savedRow) : saved.slice(0, 12).map(savedRow).filter((r) => r.active)),
+        ...(viewsOpen ? [{
+          key: "views-all", active: false,
+          draw: () => (
+            <div key="views-all" className="nav-row nav-sub">
+              <button className="nav-item" onClick={props.onAllViews}><Ic icon={List} size={13} /><span className="nav-label">All views…</span></button>
+            </div>
+          ),
+          fly: () => null,
+        }] : []),
+      ]
+    : [];
   const pinnedRows = pinned.map((n) => kindRow(n, "pin:"));
   const cloudRows = [pageRow("gcp", "Google Cloud")];
   const rowsOf = (s: string, items: NavItem[]) => [...items.map((n) => kindRow(n)), ...(s === "Workloads" ? [pageRow("helm", "Helm releases")] : [])];
@@ -380,7 +429,7 @@ export function Sidebar(props: {
           </>
         ) : (
           <>
-            {section(WORKSPACE, WORKSPACE, workspaceRows)}
+            {section(WORKSPACE, WORKSPACE, [...workspaceRows.slice(0, 1), ...savedRows, ...workspaceRows.slice(1)])}
             {pinnedRows.length ? section(PINNED, PINNED, pinnedRows) : null}
             {section(CLOUD, CLOUD, cloudRows)}
             {props.navError ? <p className="small tone-bad">{props.navError}</p> : null}

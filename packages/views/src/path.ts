@@ -121,3 +121,19 @@ export function readPath(obj: unknown, p: ParsedPath, ctx: ReadContext = {}): Ce
   const joined = values.map((v) => (typeof v === "number" && !Number.isFinite(v) ? "" : String(v))).join(", ");
   return cellText(more ? `${joined}, …` : joined);
 }
+
+/**
+ * The value a path names in plain JSON (a tool source's `rows`: the list in its answer), own properties only; a
+ * computed name or `[*]` names none. Undefined when there is nothing there.
+ */
+export function readRaw(obj: unknown, p: ParsedPath): unknown {
+  if ("computed" in p) return undefined;
+  let o: unknown = obj;
+  for (const s of p.segments) {
+    if ("all" in s) return undefined;
+    if ("index" in s) o = Array.isArray(o) && s.index < o.length ? o[s.index] : undefined;
+    else o = own(o, s.key);
+    if (o === undefined) return undefined;
+  }
+  return o;
+}

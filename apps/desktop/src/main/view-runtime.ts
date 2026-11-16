@@ -11,9 +11,10 @@
 // source a second, and nothing read for a version, a parameter or a view that has since changed is ever delivered.
 import { randomBytes } from "node:crypto";
 import {
-  FAILURE_LINE, Handle, type HelmRelease, type DoctorReport, type KubeObject, type MetricsSeries, NamespaceName, RowRef,
-  type ResourceType, type SourceData, ViewId,
+  type ClicklandLogs, type ClicklandRange, type ClicklandScope, type ClicklandTraces, FAILURE_LINE, FAMILY_NOTES, type FamilyInfo, Handle, type HelmRelease, type DoctorReport,
+  type KubeObject, type MetricsSeries, NamespaceName, RowRef, type ResourceType, type SourceData, type ViewSourceState, ViewId,
 } from "@landlens/contracts";
+import type { GcpReader } from "@landlens/gcp-mcp";
 import {
   agentReadOnlyPolicy, apiPath, type ClusterManager, followLogs, type FrontDoor, frontDoorFetch, KubeClient, KubeError,
   KEY_LINES, keyState, key as typeKey, type KeyState, ResourceWatcher, WatchBudget, type WatcherEvent, type LogLine,
@@ -22,7 +23,7 @@ import { missingChecks } from "@landlens/kube/checks";
 import { quantity } from "@landlens/metrics";
 import {
   BASE_KEEP, cellText, checkTimes, computed, deliver, EVENT_FIELDS, JoinTooBig, type Keep, keepFor, keepKey, LIST_FIELDS,
-  logLines, mergeKeep, narrowLimits, objectRows, ownerEntry, parseDocument, parseFields, plainRows, project, runPipe, SENTENCES,
+  CONNECTION_KINDS, logLines, mergeKeep, narrowLimits, objectRows, ownerEntry, parseDocument, parsePath, parseFields, plainRows, project, readPath, readRaw, runPipe, SENTENCES, toCell,
   usesWorkload, VIEW_LIMITS, VIEW_TIMES, type ParsedPath, type Row, type Source, type ViewDocument, type ViewLimits,
   type ViewTimes,
 } from "@landlens/views";
@@ -42,6 +43,26 @@ export type ViewRuntimeDeps = {
   helm?: (handle: string, namespace?: string) => Promise<{ releases: HelmRelease[]; unreadable: number }>;
   /** Usage over time, as a Claude session's `metrics` reads it (sessionSeries, no Google grant); `read` is the view's token. */
   metrics?: (handle: string, req: MetricsReq, read: (path: string) => Promise<any>) => Promise<MetricsSeries>;
+  /**
+   * Part 4 (D212): Google Cloud as a Claude session on this cluster reads it (GcpService.agentReader, the person's grant,
+   * chosen projects only, the view's namespaces as the session's limit), or undefined while Claude may not read it.
+   * Asked at every run of a source, so a grant turned off stops the next read.
+   */
+  gcp?: (handle: string, namespaces?: string[]) => Promise<GcpReader | undefined>;
+  /**
+   * Part 4 (D212): Clickland's logs and traces of this cluster (ClicklandHistory, the IDE's own client, its key in main),
+   * only while Clickland is connected with Tools for Claude and Reads run without asking on (`on`, asked at every run).
+   */
+  clickland?: {
+    on(): boolean;
+    logs(req: { handle: string; scope: ClicklandScope; range: ClicklandRange; filter?: string; errors?: boolean }): Promise<ClicklandLogs>;
+    traces(req: { handle: string; scope: ClicklandScope; range: ClicklandRange; errors?: boolean }): Promise<ClicklandTraces>;
+  };
+  /**
+   * Part 4 (D212): a gateway server's read, through the view's own gateway session (`view · <context>`, origin "view"):
+   * run only when it is a read this cluster's Claude sessions run without asking, checked at every call.
+   */
+  tool?: (handle: string, server: string, tool: string, args: Record<string, unknown>) => Promise<ToolAnswer>;
   /** The view's client through the front door; tests give an in-memory API. */
   client?: (url: string, token: string, certificate: string) => KubeClient;
   push: (p: ViewPush) => void;
@@ -52,6 +73,15 @@ export type ViewRuntimeDeps = {
 };
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
+/** A connection source's refusal: its state and one of D222's sentences (never the connection's own text). */
+const refusal = (state: ViewSourceState, message: string, status = state === "error" ? 502 : 403) => Object.assign(new Error(message), { status, state });
+
+/** What a tool source's read answers (McpService.viewRead): the result's text, or why it didn't run. */
+export type ToolAnswer = { text: string } | { off: string } | { error: string };
+/** What a connection's poll delivers: rows, maybe log lines or a series, and what was left out. */
+type ConnRead = { rows: Row[]; notes: string[]; truncated?: boolean; series?: MetricsSeries; lines?: SourceData["lines"] };
+/** A tool's answer, at most this many characters, is parsed (D212). */
+export const TOOL_TEXT_MAX = 100_000;
 
 // Every argument is checked as an IPC request would be (part 2 puts these behind channels).
 const OpenRequest = z.object({
@@ -64,7 +94,7 @@ const Params = z.record(z.string().regex(/^[a-z][a-z0-9-]{0,30}$/), z.string().m
 
 // ---- feeds: the reads behind sources -------------------------------------------------------------------------------
 
-type FeedState = { status: "loading" | "ok" | "error" | "fatal"; code?: number; message?: string };
+type FeedState = { status: "loading" | "ok" | "error" | "fatal"; code?: number; message?: string; state?: ViewSourceState };
 
 interface Feed {
   readonly key: string;
@@ -145,8 +175,8 @@ class PollFeed<T> implements Feed {
       this.state = { status: "ok" };
     } catch (err) {
       if (run !== this.run || this.stopped) return;
-      const e = err as { status?: number; message?: string };
-      this.state = { status: e.status === 401 || e.status === 403 || e.status === 404 ? "fatal" : "error", code: e.status ?? 0, message: e.message ?? String(err) };
+      const e = err as { status?: number; message?: string; state?: ViewSourceState };
+      this.state = { status: e.status === 401 || e.status === 403 || e.status === 404 ? "fatal" : "error", code: e.status ?? 0, message: e.message ?? String(err), ...(e.state ? { state: e.state } : {}) };
     } finally {
       if (run === this.run) this.busy = false;
     }
@@ -848,7 +878,229 @@ export class ViewRuntime {
         }
         return;
       }
+      // Part 4 (D212): each read only where a Claude session on this cluster could read it without asking, asked again
+      // at every run (a poll: Google Cloud every 5 minutes, Clickland every 30 s, a tool every 2 minutes).
+      case "gcp.resources":
+      case "gcp.clusters":
+      case "gcp.alerts":
+      case "gcp.recommendations":
+      case "gcp.metrics": {
+        if (!this.deps.gcp) return void (run.refused = { state: "off", message: SENTENCES.connectionOff("Google Cloud") });
+        const key = `g|${JSON.stringify(s)}|${JSON.stringify(v.namespaces ?? [])}`;
+        run.feeds.push(want(key, () => new PollFeed(key, () => this.readGcp(v, s), this.T.gcp, changed(key))));
+        return;
+      }
+      case "clickland.logs":
+      case "clickland.traces": {
+        if (!this.deps.clickland) return void (run.refused = { state: "off", message: SENTENCES.connectionOff("Clickland") });
+        const ns = this.namespacesOf(v, s.namespace);
+        if ("refused" in ns) return void (run.refused = { state: "forbidden", message: ns.refused });
+        if (!("list" in ns) || ns.list.length !== 1) return void (run.refused = { state: "error", message: SENTENCES.noAnswer });
+        const namespace = ns.list[0]!;
+        const key = `c|${JSON.stringify({ ...s, namespace })}`;
+        run.feeds.push(want(key, () => new PollFeed(key, () => this.readClickland(v, s, namespace), this.T.clickland, changed(key))));
+        return;
+      }
+      case "tool": {
+        if (!this.deps.tool) return void (run.refused = { state: "off", message: SENTENCES.toolNotFree(s.server, s.tool) });
+        const key = `x|${JSON.stringify(s)}`;
+        run.feeds.push(want(key, () => new PollFeed(key, () => this.readTool(v, s), this.T.tool, changed(key))));
+        return;
+      }
     }
+  }
+
+  /**
+   * A Google Cloud source's read (D212): the reader is asked for at every run (none while the person's grant is off or
+   * gcloud isn't ready), the project must be one the person let Claude read, and a limited view sees only its
+   * namespaces' alerts and no cluster-wide usage, as a session limited to them would (D195). Rows are cells; anything
+   * that fails is one of D222's fixed sentences, never Google's text.
+   */
+  private async readGcp(v: View, s: Extract<Source, { kind: `gcp.${string}` }>): Promise<ConnRead> {
+    const reader = await this.deps.gcp!(v.handle, v.namespaces).catch(() => undefined);
+    if (!reader) throw refusal("off", SENTENCES.connectionOff("Google Cloud"));
+    const project = s.kind === "gcp.metrics" ? s.cluster.split("_")[1]! : s.project;
+    if (project !== undefined) {
+      const chosen = await reader.projects().then((ps) => ps.map((p) => p.id), () => [] as string[]);
+      if (!chosen.includes(project)) throw refusal("off", SENTENCES.gcpProject(project));
+    }
+    const g = <T>(p: Promise<T>): Promise<T> => p.catch((e: { status?: number }) => {
+      throw e?.status === 403 ? refusal("off", SENTENCES.connectionOff("Google Cloud")) : refusal("error", SENTENCES.connectionFailed("Google Cloud"));
+    });
+    const ms = (iso: string | undefined) => {
+      const t = iso ? Date.parse(iso) : NaN;
+      return Number.isFinite(t) ? t : null;
+    };
+    const t = (x: string | undefined, max = 300) => (typeof x === "string" && x ? cellText(x, max) : null);
+    const notes: string[] = [];
+    switch (s.kind) {
+      case "gcp.resources": {
+        const r = await g(reader.resources({ project: s.project, ...(s.assetType ? { assetType: s.assetType } : {}), ...(s.query ? { query: s.query } : {}) }));
+        if (r.error) throw refusal("error", SENTENCES.connectionFailed("Google Cloud"));
+        if (r.cut) notes.push(SENTENCES.watchCut(r.items.length));
+        const rows = r.items.slice(0, this.L.watchObjects).map((x): Row => ({
+          name: t(x.name, 1000), assetType: t(x.assetType, 200), displayName: t(x.displayName), location: t(x.location, 100), state: t(x.state, 64),
+          createTime: ms(x.createTime), updateTime: ms(x.updateTime),
+          labels: x.labels ? cellText(Object.entries(x.labels).slice(0, 20).map(([k, val]) => `${k}=${val}`).join(", "), 1000) : null,
+        }));
+        return { rows, notes, truncated: r.cut };
+      }
+      case "gcp.clusters": {
+        const r = await g(reader.clusters());
+        const cs = r.clusters.filter((c) => !s.project || c.project === s.project);
+        if (r.errors.some((e) => !s.project || e.project === s.project)) notes.push(SENTENCES.connectionFailed("Some projects' GKE clusters"));
+        const rows = cs.map((c): Row => ({
+          context: t(c.context, 200), name: t(c.name, 64), project: t(c.project, 64), location: t(c.location, 64), status: t(c.status, 64),
+          version: t(c.version, 64), connected: reader.connected(c.context),
+        }));
+        return { rows, notes, truncated: notes.length > 0 };
+      }
+      case "gcp.alerts": {
+        const r = await g(reader.alerts(s.project));
+        const limits = new Map<string | undefined, Promise<string[] | undefined>>();
+        const ctxOf = (a: (typeof r.items)[number]) => (a.cluster ? `gke_${s.project}_${a.cluster.location}_${a.cluster.name}` : undefined);
+        const rows: Row[] = [];
+        let outside = 0;
+        for (const a of r.items) {
+          const ctx = ctxOf(a);
+          if (s.cluster && ctx !== s.cluster) continue;
+          if (a.kube) {
+            // D195, as gcp_alerts: a Kubernetes alert on a cluster this view's session is (or may be) on, only with a
+            // namespace of its own limit; one whose namespace can't be told is hidden from a limited view there.
+            if (!limits.has(ctx)) limits.set(ctx, reader.limit(ctx).catch(() => v.namespaces));
+            const limit = await limits.get(ctx);
+            if (limit?.length && !(a.namespace && limit.includes(a.namespace))) {
+              outside++;
+              continue;
+            }
+          }
+          const sub = a.subject;
+          rows.push({
+            id: t(a.id, 128), severity: a.severity, policy: t(a.policy || "Unnamed alert policy", 120), opened: ms(a.opened), resource: t(a.resourceType, 64),
+            cluster: ctx ? cellText(ctx, 200) : null, namespace: t(a.namespace, 63),
+            subject: sub ? cellText(sub.kind === "Pod" ? `${sub.namespace}/${sub.name}` : sub.name, 300) : null, metric: t(a.metric, 200),
+            _tone: a.severity === "critical" || a.severity === "error" ? "bad" : a.severity === "warning" ? "warn" : "muted",
+          });
+        }
+        if (outside) notes.push(SENTENCES.gcpOutside(outside));
+        if (r.cut || r.unreadable || r.unplaced) notes.push(SENTENCES.watchCut(r.items.length));
+        return { rows, notes, truncated: notes.length > 0 };
+      }
+      case "gcp.recommendations": {
+        const r = await g(reader.advice(s.project, s.cluster));
+        const rows: Row[] = [];
+        let failed = 0;
+        for (const c of r.clusters) {
+          if (c.error !== undefined) {
+            failed++;
+            continue;
+          }
+          for (const x of c.items) {
+            rows.push({
+              cluster: t(c.cluster.context, 200), severity: x.severity, subtype: t(x.subtype, 80), category: x.category, priority: x.priority ?? null,
+              description: t(x.description), action: t(x.action), refreshed: ms(x.refreshed),
+              _tone: x.severity === "critical" || x.severity === "high" ? "bad" : x.severity === "medium" ? "warn" : "muted",
+            });
+          }
+        }
+        if (failed || r.errors.length) notes.push(SENTENCES.connectionFailed(`${failed + r.errors.length} of Google's lists`));
+        if (r.more || r.clusters.some((c) => c.cut)) notes.push(SENTENCES.watchCut(rows.length));
+        return { rows, notes, truncated: notes.length > 0 };
+      }
+      case "gcp.metrics": {
+        // D195, as gcp_metrics: a limited view reads only its namespaces, never the whole cluster or a node.
+        const limit = await reader.limit(s.cluster).catch(() => v.namespaces);
+        const ns = s.namespace === undefined ? undefined : typeof s.namespace === "string" ? s.namespace : (Object.hasOwn(v.params, s.namespace.param) ? v.params[s.namespace.param] : undefined);
+        if (limit?.length && (s.scope === "cluster" || s.scope === "node" || !ns || !limit.includes(ns))) throw refusal("forbidden", SENTENCES.gcpScope(limit));
+        const r = await g(reader.metrics({ cluster: s.cluster, scope: s.scope, range: s.range, ...(ns ? { namespace: ns } : {}), ...(s.name ? { name: s.name } : {}) }));
+        return { rows: [], notes, series: r.series };
+      }
+    }
+  }
+
+  /**
+   * A Clickland source's read (D212): only while Clickland is connected with Tools for Claude and Reads run without
+   * asking on, scoped to this cluster and the view's namespace as the drawer's tabs are (ClicklandHistory: the object
+   * must be in the cluster or the doctor's report, and log lines only for a person the cluster lets read pods/log).
+   */
+  private async readClickland(v: View, s: Extract<Source, { kind: `clickland.${string}` }>, namespace: string): Promise<ConnRead> {
+    const cl = this.deps.clickland!;
+    if (!cl.on()) throw refusal("off", SENTENCES.connectionOff("Clickland"));
+    const scope: ClicklandScope = s.pod
+      ? { kind: "pod", namespace, name: s.pod, ...(s.kind === "clickland.logs" && s.container ? { container: s.container } : {}) }
+      : { kind: s.workload!.kind.toLowerCase() as "deployment" | "statefulset" | "daemonset", namespace, name: s.workload!.name };
+    const asked = <T>(p: Promise<T>): Promise<T> => p.catch((e: { status?: number }) => {
+      if (e?.status === 403) throw refusal("forbidden", SENTENCES.clicklandLogsRbac);
+      if (e?.status === 404) throw refusal("unknown", SENTENCES.clicklandUnknown, 404);
+      throw refusal("error", SENTENCES.connectionFailed("Clickland"));
+    });
+    const unavailable = (u: { code: string }): never => {
+      throw u.code === "clickland-off" ? refusal("off", SENTENCES.connectionOff("Clickland")) : refusal("error", SENTENCES.connectionFailed("Clickland"));
+    };
+    if (s.kind === "clickland.logs") {
+      const r = await asked(cl.logs({ handle: v.handle, scope, range: s.range, ...(s.filter ? { filter: s.filter } : {}), ...(s.errorsOnly ? { errors: true } : {}) }));
+      if ("unavailable" in r) return unavailable(r.unavailable);
+      // Newest first from Clickland; a log reads oldest first.
+      const kept = r.rows.slice(0, this.L.logLines).reverse();
+      const failing = (x: { severity?: string }) => /^(error|fatal|critical|crit|emerg|alert)$/i.test(x.severity ?? "");
+      const rows = kept.map((x): Row => ({
+        at: Number.isFinite(Date.parse(x.at)) ? Date.parse(x.at) : null, body: cellText(x.body), severity: x.severity ? cellText(x.severity, 20) : null,
+        pod: x.pod ? cellText(x.pod, 253) : null, container: x.container ? cellText(x.container, 63) : null, service: x.service ? cellText(x.service, 120) : null,
+        ...(failing(x) ? { _tone: "bad" as const } : {}),
+      }));
+      const lines = kept.map((x, i) => ({ n: i + 1, text: cellText(x.body), failure: failing(x) }));
+      return { rows, notes: r.cut || r.next ? [SENTENCES.logOlder] : [], truncated: !!(r.cut || r.next), lines };
+    }
+    const r = await asked(cl.traces({ handle: v.handle, scope, range: s.range, ...(s.errorsOnly ? { errors: true } : {}) }));
+    if ("unavailable" in r) return unavailable(r.unavailable);
+    const rows = r.traces.slice(0, this.L.rows).map((x): Row => ({
+      id: cellText(x.id, 64), name: cellText(x.name, 300), service: cellText(x.service, 120), at: Number.isFinite(Date.parse(x.at)) ? Date.parse(x.at) : null,
+      ms: finite(x.ms), error: !!x.error, ...(x.error ? { _tone: "bad" as const } : {}),
+    }));
+    return { rows, notes: r.scoped ? [] : [SENTENCES.clicklandUnscoped], truncated: false };
+  }
+
+  /**
+   * A tool source's read (D212): main's gateway session for views runs it only when it is one of this cluster's
+   * sessions' pre-allowed reads, checked at the call. Its text (at most 100,000 characters) is JSON with the rows at
+   * `rows`, or one row `{ text }`. Every string is a cell.
+   */
+  private async readTool(v: View, s: Extract<Source, { kind: "tool" }>): Promise<ConnRead> {
+    const a = await this.deps.tool!(v.handle, s.server, s.tool, { ...(s.arguments ?? {}) }).catch(() => ({ error: "" }) as ToolAnswer);
+    if ("off" in a) throw refusal("off", a.off);
+    if ("error" in a) throw refusal("error", SENTENCES.toolFailed(s.server, s.tool));
+    const text = a.text.slice(0, TOOL_TEXT_MAX);
+    const one = (note: string): ConnRead => ({ rows: [{ text: cellText(text) }], notes: [note], truncated: a.text.length > TOOL_TEXT_MAX });
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return one(SENTENCES.toolText);
+    }
+    let list: unknown = json;
+    if (s.rows) {
+      const p = parsePath(s.rows);
+      list = "error" in p ? undefined : readRaw(json, p);
+    }
+    if (!Array.isArray(list)) return one(SENTENCES.toolNoRows);
+    const fields = s.fields ? parseFields(s.fields) : undefined;
+    const rows = list.slice(0, this.L.watchObjects).map((item): Row => {
+      if (fields) return Object.fromEntries(fields.map(([k, p]) => [k, "computed" in p ? null : readPath(item, p)]));
+      // Without fields: the item's own scalar fields whose names are field names (at most the fields limit), or its text.
+      if (!item || typeof item !== "object" || Array.isArray(item)) return { value: toCell(item) };
+      const row: Row = {};
+      let n = 0;
+      for (const k of Object.keys(item)) {
+        if (n >= this.L.fields) break;
+        if (!/^[a-z][A-Za-z0-9_]{0,40}$/.test(k) || INHERITED_KEYS.has(k)) continue;
+        const c = toCell((item as Record<string, unknown>)[k]);
+        if (c === null && (item as Record<string, unknown>)[k] !== null) continue;
+        row[k] = c;
+        n++;
+      }
+      return row;
+    });
+    return { rows, notes: list.length > this.L.watchObjects ? [SENTENCES.watchCut(this.L.watchObjects)] : [], truncated: list.length > this.L.watchObjects };
   }
 
   /** metrics-server's usage now, read with the view's token. */
@@ -1021,6 +1273,18 @@ export class ViewRuntime {
         truncated = true;
         notes.push(SENTENCES.helmUnreadable(unreadable));
       }
+    } else if (CONNECTION_KINDS.has(src.kind)) {
+      // Part 4: a connection's rows (or a series, or log lines), through the document's fields when it names them.
+      // A read that failed shows its sentence and no rows: never the last rows under a connection that is off now.
+      if (erred) return done({ ...this.failure(v, s, erred.state), rows: [], total: 0, truncated: false }, false);
+      const r = (feeds[0] as PollFeed<ConnRead> | undefined)?.value;
+      if (r) {
+        base = src.kind === "tool" ? r.rows : plainRows(r.rows, "fields" in src && src.fields ? parseFields(src.fields) : undefined);
+        series = r.series;
+        lines = r.lines;
+        if (r.truncated) truncated = true;
+        notes.push(...r.notes);
+      }
     } else if (src.kind === "kube.logs") {
       const f = feeds[0] as LogFeed | undefined;
       const kept = f?.lines ?? [];
@@ -1062,13 +1326,15 @@ export class ViewRuntime {
       state = "error";
       notes.unshift(this.failure(v, s, erred.state).message!);
     }
-    done({ state, ...(notes.length ? { message: notes.join(" ") } : {}), rows: out.rows, total: out.total, truncated, ...(series ? { series } : {}) }, !erred && !truncated && state === "ok", piped);
+    done({ state, ...(notes.length ? { message: notes.join(" ") } : {}), rows: out.rows, total: out.total, truncated, ...(series ? { series } : {}), ...(lines ? { lines } : {}) }, !erred && !truncated && state === "ok", piped);
   }
 
   /** D222's sentence for a failed read. */
   private failure(v: View, s: SourceRun, st: FeedState): Pick<SourceData, "state" | "message"> {
     const what = s.type ? typeKey(s.type.resource, s.type.group) : s.source.kind === "kube.top" ? `${s.source.of}.metrics.k8s.io` : s.source.kind === "helm.releases" ? "Helm releases" : s.source.kind === "kube.logs" ? "pods/log" : "pods";
     const code = st.code ?? 0;
+    // A connection's refusal carries its own state and one of D222's sentences (readGcp, readClickland, readTool).
+    if (CONNECTION_KINDS.has(s.source.kind)) return st.state && st.message ? { state: st.state, message: st.message } : { state: "error", message: SENTENCES.connectionFailed(s.id) };
     if (s.source.kind === "kube.top" && code === 404) return { state: "unavailable", message: SENTENCES.noMetricsServer };
     if (code === 403) {
       // The front door's own refusal (its message starts "Landlens:"): the view's scope; else the cluster's RBAC.
@@ -1122,6 +1388,8 @@ export class ViewRuntime {
 }
 
 const OWNERS_UNREAD = "ReplicaSets or Jobs couldn't be read, so a pod's workload may stop at them.";
+/** Keys a tool row never takes: every name an object inherits (part 1's review, L5). */
+const INHERITED_KEYS: ReadonlySet<string> = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 
 /** Sources in an order where each comes after the sources it joins. */
 function joinOrder(sources: ReadonlyMap<string, SourceRun>): string[] {
@@ -1181,3 +1449,10 @@ export function helmRows(releases: readonly HelmRelease[]): { rows: Row[]; dropp
   }
   return { rows, dropped };
 }
+
+/**
+ * Whether a view may read Clickland now (D212): its reads run without asking in a Claude session (D110–D111):
+ * connected, Tools for Claude, Reads run without asking, its listing accepted and unchanged, its name not taken.
+ */
+export const clicklandReadsFree = (i: FamilyInfo): boolean =>
+  i.state === "ready" && i.toSessions && i.readsAuto && !!i.tools && !i.drift && (!i.note || i.note === FAMILY_NOTES.moved);

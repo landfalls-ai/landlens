@@ -4,7 +4,7 @@
 // (Claude's last line and a composer), and the dock opens beside the view with ⌘J. Undo and Redo are the person's
 // (D214); "How Claude built this" says what each source reads, with whose access, and the requests behind it (D223).
 import type { AgentUpdate, ClusterInfo, ResourceType, RowRef, SourceData, ViewAuditEntry, ViewIntent, ViewState } from "@landlens/contracts";
-import { ArrowUp, ChevronDown, CircleX, Code, MessageSquare, Plus, Redo2, ScrollText, Undo2, X } from "lucide-react";
+import { ArrowUp, Bookmark, ChevronDown, CircleX, Code, Copy, Download, List, MessageSquare, Plus, Redo2, ScrollText, ShieldAlert, Undo2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { ObjectTarget } from "./app-host";
@@ -14,7 +14,10 @@ import type { RowHands } from "./blocks/hands";
 import { SelectionBar } from "./TablePickers";
 import { oneKind, refKey, refLabel, selectionActions } from "./viewBlocks";
 import { ViewBlock, type BlockDoc } from "./ViewGrid";
-import { chosenBy, resourceRef, useView, viewOn, viewStore } from "./viewStore";
+import { chosenBy, refreshSaved, resourceRef, useView, viewOn, viewStore } from "./viewStore";
+import { NAMESPACE_CHOICE, SaveViewSheet } from "./SaveViewSheet";
+import { ViewsList } from "./ViewsList";
+import { viewExamples } from "./viewExamples";
 
 type Doc = { title: string; params?: { name: string; type: string; label?: string; options?: string[]; default?: string }[]; sources: Record<string, Record<string, unknown>>; blocks: BlockDoc[] };
 
@@ -54,12 +57,18 @@ function useSessionLines(session: string | undefined) {
 
 const toolWords = (t: string) => t.replace(/^mcp__landlens-(views|kube)__/, "").replace(/_/g, " ");
 
-function Composer(props: { placeholder: string; onSend: (text: string) => void; busy?: boolean; big?: boolean; label: string; chip?: { title: string; clear: () => void }; objects?: { label: string; clear: () => void }[] }) {
+function Composer(props: { placeholder: string; onSend: (text: string) => void; busy?: boolean; big?: boolean; label: string; chip?: { title: string; clear: () => void }; objects?: { label: string; clear: () => void }[]; fill?: { text: string; n: number } }) {
   const [text, setText] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (props.big) box.current?.focus();
   }, [props.big]);
+  // An example chip fills the composer (D224): nothing is sent until the person sends it.
+  useEffect(() => {
+    if (!props.fill) return;
+    setText(props.fill.text);
+    box.current?.focus();
+  }, [props.fill?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const send = () => {
     if (!text.trim() || props.busy) return;
     props.onSend(text.trim());
@@ -96,6 +105,15 @@ function Composer(props: { placeholder: string; onSend: (text: string) => void; 
 }
 
 /** "How Claude built this" (D223): each source in words and as Claude wrote it, its state, whose access, the requests. */
+/** A connection's source says whose text it is (D212), as main's line to Claude does (`sourceLine`). */
+function fromLine(s: Record<string, unknown>): string | undefined {
+  const kind = String(s.kind);
+  if (kind.startsWith("gcp.")) return "From Google Cloud: data from your projects.";
+  if (kind.startsWith("clickland.")) return "From Clickland: content written by your workloads.";
+  if (kind === "tool") return `From ${s.server === "github" ? "GitHub" : s.server === "linear" ? "Linear" : String(s.server)}: content written by other people.`;
+  return undefined;
+}
+
 function Disclosure(props: { state: ViewState; data: (s: string) => SourceData | undefined; onClose: () => void }) {
   const doc = props.state.document as Doc;
   const [audit, setAudit] = useState<{ label: string; entries: ViewAuditEntry[] }>();
@@ -113,10 +131,23 @@ function Disclosure(props: { state: ViewState; data: (s: string) => SourceData |
       case "metrics.series": return `Usage over time (${String(s.scope)}, ${String(s.range)})`;
       case "doctor.problems": return `Landlens's own check, problems in ${ns}`;
       case "helm.releases": return `Helm releases in ${ns}`;
+      case "gcp.resources": return `Google Cloud resources in ${String(s.project)}${s.assetType ? ` (${String(s.assetType)})` : ""}${s.query ? `, matching ${String(s.query)}` : ""}`;
+      case "gcp.clusters": return `GKE clusters${s.project ? ` in ${String(s.project)}` : " in the projects you let Claude read"}`;
+      case "gcp.alerts": return `Cloud Monitoring's open alerts in ${String(s.project)}`;
+      case "gcp.recommendations": return `Google's recommendations for ${String(s.project)}'s clusters`;
+      case "gcp.metrics": return `Cloud Monitoring usage (${String(s.scope)}, ${String(s.range)})`;
+      case "clickland.logs": return `Clickland's log of ${s.pod ? `pod ${String(s.pod)}` : "a workload"} in ${ns}, the last ${String(s.range)}`;
+      case "clickland.traces": return `Clickland's traces of ${s.pod ? `pod ${String(s.pod)}` : "a workload"} in ${ns}, the last ${String(s.range)}`;
+      case "tool": return `${String(s.server)} · ${String(s.tool)}, a read that runs without asking`;
       default: return id;
     }
   };
-  const whose = (kind: unknown) => (kind === "doctor.problems" || kind === "helm.releases" ? "Landlens's own check, as you" : "the view's read-only access, as you");
+  const whose = (kind: unknown) =>
+    kind === "doctor.problems" || kind === "helm.releases" ? "Landlens's own check, as you"
+      : String(kind).startsWith("gcp.") ? "Google Cloud as Claude reads it (your grant, your chosen projects)"
+        : String(kind).startsWith("clickland.") ? "Clickland's key, kept in Landlens, scoped to this cluster"
+          : kind === "tool" ? "the gateway's view session (only a read Claude runs without asking)"
+            : "the view's read-only access, as you";
   const steps = (s: Record<string, unknown>) => (Array.isArray(s.pipe) ? s.pipe.map((p) => Object.keys(p as object)[0]).join(", then ") : "");
   const app = doc.blocks.filter((b) => b.type === "app") as (BlockDoc & { html: string; css?: string; js?: string })[];
   return (
@@ -131,13 +162,17 @@ function Disclosure(props: { state: ViewState; data: (s: string) => SourceData |
       <div className="drawer-body">
         <h3>Sources</h3>
         {Object.entries(doc.sources).map(([id, s]) => {
-          const st = props.state.sources[id];
+          // The live data's own state first (each push), the view's summary only before a push (part 4: a connection
+          // that goes off says so here at once, not at the next version).
+          const live = props.data(id);
+          const st = live ? { state: live.state, rows: live.rows.length, total: live.total, at: live.at, message: live.message } : props.state.sources[id];
           return (
             <div key={id} className="vd-source">
               <div className="vd-source-head"><span className="mono">{id}</span><span className="dim small">{st ? `${st.state} · ${st.rows} ${st.rows === 1 ? "row" : "rows"}${st.total > st.rows ? ` of ${st.total}` : ""}` : "not read yet"}</span></div>
               <p>{words(id, s)}</p>
               {steps(s) ? <p className="dim small">Then: {steps(s)}</p> : null}
               <p className="dim small">Read with {whose(s.kind)}.{st?.at ? ` Changed ${new Date(st.at).toLocaleTimeString()}.` : ""}</p>
+              {fromLine(s) ? <p className="small dim">{fromLine(s)}</p> : null}
               {st?.message ? <p className="small">{st.message}</p> : null}
               <details><summary className="small">As Claude wrote it</summary><pre className="vd-json">{JSON.stringify(s, null, 2)}</pre></details>
             </div>
@@ -170,7 +205,7 @@ function Disclosure(props: { state: ViewState; data: (s: string) => SourceData |
             </li>
           ))}
         </ol>
-        <button className="secondary small" onClick={() => void copyText(JSON.stringify(props.state.document, null, 2))}>Copy document</button>
+        <button className="secondary small" onClick={() => void copyText(JSON.stringify(props.state.document, null, 2))}><Ic icon={Copy} size={13} />Copy document</button>
       </div>
     </aside>
   );
@@ -203,13 +238,17 @@ export function ViewsPage(props: {
    */
   onIntent: (i: ViewIntent, block: string) => boolean;
   now: number;
+  /** The cluster's namespaces (the import's picker). */
+  namespaces: string[];
+  /** The doctor's problems now (an example chip says how many, D224). */
+  problems?: number;
 }) {
   // Only a view of the cluster connected now (security review of part 3, H1): the Workspace closes any other.
   const snap = viewOn(useView(), props.cluster.handle);
   const v = snap.view;
   const st = v?.state;
   const doc = st?.document as Doc | undefined;
-  const session = st?.session ?? v?.session.session;
+  const session = st?.session || v?.session?.session;
   const { tools, line } = useSessionLines(session);
   const [disclose, setDisclose] = useState(false);
   const [refusedOpen, setRefusedOpen] = useState(false);
@@ -217,6 +256,20 @@ export function ViewsPage(props: {
   // "About <block>" names a block of the version shown when it was chosen: another version drops the chip (L6).
   useEffect(() => setAbout((a) => (a && a.version !== st?.version ? undefined : a)), [st?.version]);
   const [menu, setMenu] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<{ tone: "ok" | "bad"; text: string }>();
+  // A note is about the view it was said on: another view starts without it.
+  useEffect(() => setNote(undefined), [v?.id]);
+  const [fill, setFill] = useState<{ text: string; n: number }>();
+  // What the example chips need (D224): a usage source here, and Google Cloud reads on. Read once per cluster.
+  const [has, setHas] = useState<{ metrics: boolean; gcpReads: boolean }>({ metrics: false, gcpReads: false });
+  useEffect(() => {
+    let live = true;
+    void api.invoke("metrics:series", { handle: props.cluster.handle, scope: "cluster", range: "1h" }).then((r) => live && setHas((h) => ({ ...h, metrics: r.source !== "none" })), () => {});
+    void api.invoke("gcp:status", {}).then((g) => live && setHas((h) => ({ ...h, gcpReads: !!g.agentRead && (g.agentProjects?.length ?? 0) > 0 })), () => {});
+    return () => void (live = false);
+  }, [props.cluster.handle]);
+  const examples = viewExamples({ ...has, ...(props.problems !== undefined ? { problems: props.problems } : {}) });
   const page = useRef<HTMLDivElement>(null);
   const data = (s: string) => viewStore.data(s);
   const sel = v?.selection;
@@ -257,6 +310,11 @@ export function ViewsPage(props: {
       const t = e.target as HTMLElement | null;
       // Esc clears the selection before anything else (D156), outside a field, the dock, a menu or a dialog.
       if (e.key === "Escape" && viewStore.get().view?.selection && !t?.closest("input, textarea, select, .dock, .menu, .dialog, .drawer")) return viewStore.select([]);
+      // ⌘S saves the view (D216), from anywhere on the page but the dock.
+      if (st?.version && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "s" && !t?.closest(".dock, .dialog")) {
+        e.preventDefault();
+        return setSaving(true);
+      }
       if (!st || !(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.altKey) return;
       if (t?.closest("input, textarea, select, [contenteditable], .dock")) return;
       const to = e.shiftKey ? redoTo(st) : undoTo(st);
@@ -277,8 +335,12 @@ export function ViewsPage(props: {
         <div className="views-blank">
           <h2>Describe what you want to see on {props.cluster.context}.</h2>
           <p className="dim">Claude builds a live view from what this cluster has. It reads with a view's own read-only access: never Secrets, and it can't change anything.</p>
-          <Composer big label="What do you want to see?" placeholder="Pods that restarted today, worst first" onSend={(t) => void viewStore.start(props.cluster.handle, t)} />
+          <Composer big label="What do you want to see?" placeholder="Pods that restarted today, worst first" onSend={(t) => void viewStore.start(props.cluster.handle, t)} {...(fill ? { fill } : {})} />
+          <div className="views-examples" role="group" aria-label="Examples">
+            {examples.map((x) => <button key={x.id} className="chip-btn small" onClick={() => setFill({ text: x.text, n: (fill?.n ?? 0) + 1 })}>{x.label}</button>)}
+          </div>
           {snap.error ? <p className="tone-bad small" role="alert">{snap.error}</p> : null}
+          <ViewsList handle={props.cluster.handle} context={props.cluster.context} namespaces={props.namespaces} />
         </div>
       </div>
     );
@@ -318,7 +380,7 @@ export function ViewsPage(props: {
   const single = blocks.length === 1;
   const fillHeight = Math.max(240, props.height - 48 - 56 - (props.dockOpen ? 0 : 64) - 24);
   return (
-    <div className={"views-page has-view" + (props.dockOpen ? "" : " with-strip")} ref={page} tabIndex={-1}>
+    <div className={"views-page has-view" + (props.dockOpen ? "" : " with-strip")} ref={page} tabIndex={-1} data-view={v?.id}>
       <header className="view-head">
         <div className="view-title">
           <h2>{doc.title}</h2>
@@ -340,19 +402,28 @@ export function ViewsPage(props: {
           </label>
         ))}
         <span className="grow" />
+        {/* The actions stay together, at the right, when a narrow window wraps the head (part 4). */}
+        <div className="view-actions">
         <button className="icon-btn" aria-label="Undo" title="Undo (⌘Z)" disabled={!st.canUndo} onClick={() => { const to = undoTo(st); if (to !== undefined) void viewStore.version(to); }}><Ic icon={Undo2} size={15} /></button>
         <button className="icon-btn" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!st.canRedo} onClick={() => { const to = redoTo(st); if (to !== undefined) void viewStore.version(to); }}><Ic icon={Redo2} size={15} /></button>
         <button className="secondary small" onClick={() => setDisclose((d) => !d)} aria-expanded={disclose}><Ic icon={ScrollText} size={13} />How Claude built this</button>
+        <button className="secondary small" title="Save this view (⌘S)" onClick={() => setSaving(true)}><Ic icon={Bookmark} size={13} />{st.saved ? "Saved" : "Save"}</button>
         <div className="menu-wrap">
           <button className="icon-btn" aria-label="More" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}><Ic icon={ChevronDown} size={15} /></button>
           {menu ? (
             <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
               <button role="menuitem" onClick={() => (setMenu(false), void viewStore.close())}><Ic icon={Plus} size={13} />New view</button>
+              <button role="menuitem" onClick={() => (setMenu(false), void api.invoke("views:export", { view: v!.id }).then((r) => r.written && setNote({ tone: "ok", text: "Exported." }), (e: Error) => setNote({ tone: "bad", text: e.message })))}><Ic icon={Download} size={13} />Export…</button>
+              {st.saved ? <button role="menuitem" onClick={() => (setMenu(false), void api.invoke("views:duplicate", { saved: st.saved!.id }).then((d) => (void refreshSaved(props.cluster.handle), setNote({ tone: "ok", text: `Saved a copy: ${d.name}.` })), (e: Error) => setNote({ tone: "bad", text: e.message })))}><Ic icon={Copy} size={13} />Duplicate</button> : null}
+              <button role="menuitem" onClick={() => (setMenu(false), viewStore.showList(true))}><Ic icon={List} size={13} />Saved views…</button>
             </div>
           ) : null}
         </div>
+        </div>
       </header>
       {st.refused ? <RefusedRow refused={st.refused} open={refusedOpen} onToggle={() => setRefusedOpen((o) => !o)} /> : null}
+      {note ? <p className={`view-note small tone-${note.tone}`} role={note.tone === "bad" ? "alert" : "status"}>{note.text}<button className="icon-btn sm" aria-label="Dismiss" onClick={() => setNote(undefined)}><Ic icon={X} size={12} /></button></p> : null}
+      {st.appsHeld ? <HeldBanner state={st} /> : null}
       {sel ? (
         <div className={"view-selection" + (by === "block" ? " by-block" : "")} role="region" aria-label="Chosen rows">
           {by === "block" ? (
@@ -371,7 +442,7 @@ export function ViewsPage(props: {
       <div className={"view-grid" + (single ? " single" : "")}>
         {blocks.map((b, i) => (
           <ViewBlock key={`${st.version}-${i}`} view={v!.id} version={st.version} b={b} i={i} data={data} single={single} height={fillHeight}
-            hands={hands} onIntent={intent} now={props.now}
+            hands={hands} onIntent={intent} now={props.now} held={!!st.appsHeld}
             onOpenObject={props.onOpenObject} onAsk={(block, title) => (setAbout({ block, title, version: st.version }), props.onFoldDock())} />
         ))}
       </div>
@@ -390,6 +461,38 @@ export function ViewsPage(props: {
         </div>
       ) : null}
       {disclose ? <Disclosure state={st} data={data} onClose={() => setDisclose(false)} /> : null}
+      {saving ? (
+        <SaveViewSheet state={st} onClose={() => setSaving(false)} onSaved={() => (void refreshSaved(props.cluster.handle), setNote({ tone: "ok", text: "Saved. It is in the sidebar under Views." }))}
+          onChoice={() => void viewStore.send(NAMESPACE_CHOICE).catch(() => {})} />
+      ) : null}
+      {snap.list ? (
+        <div className="palette-back" onMouseDown={(e) => e.target === e.currentTarget && viewStore.showList(false)}>
+          <div className="dialog views-list-sheet" role="dialog" aria-modal="true" aria-label="Saved views" onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), viewStore.showList(false))}>
+            <ViewsList handle={props.cluster.handle} context={props.cluster.context} namespaces={props.namespaces} onClose={() => viewStore.showList(false)} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * An imported view's banner (D217): its custom blocks were written by someone else and wait. Run custom blocks asks in
+ * main's native dialog, which names them and what they read; only its yes lets them run.
+ */
+function HeldBanner(props: { state: ViewState }) {
+  const doc = props.state.document as Doc;
+  const apps = doc.blocks.filter((b) => b.type === "app");
+  const [error, setError] = useState<string>();
+  return (
+    <div className="notice warn view-held" role="note" aria-label="Custom blocks from a file">
+      <Ic icon={ShieldAlert} size={15} />
+      <div className="notice-body">
+        <strong>This view came from a file. It has {apps.length} custom {apps.length === 1 ? "block" : "blocks"} (Claude didn't build {apps.length === 1 ? "it" : "them"} here).</strong>
+        <span className="small">They run in a sandbox with no network and read only this view's sources. Its tables and charts already show.</span>
+        {error ? <span className="small tone-bad">{error}</span> : null}
+      </div>
+      <button className="secondary small" onClick={() => void api.invoke("views:trust-apps", { view: props.state.id }).catch((e: Error) => setError(e.message))}>Run custom blocks</button>
     </div>
   );
 }

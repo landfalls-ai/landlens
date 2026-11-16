@@ -32,17 +32,17 @@ describe("the view document (D206)", () => {
     expect(issues(small({ sources: { pods: { kind: "kube.list", resource: "pods", pipe: [{ limit: 5, sort: [] }] } } }))[0]).toMatch(/^\/sources\/pods\/pipe\/0: a step is an object with exactly one of/);
   });
 
-  it("refuses a source kind it doesn't know (part 4's are not in part 1)", () => {
-    expect(issues(small({ sources: { g: { kind: "gcp.resources", project: "p" } } }))).toEqual(["/sources/g/kind: not a known kind"]);
-    expect(issues(small({ sources: { t: { kind: "tool", server: "github", tool: "x" } } }))).toEqual(["/sources/t/kind: not a known kind"]);
+  it("refuses a source kind it doesn't know", () => {
+    expect(issues(small({ sources: { g: { kind: "gcp.secrets", project: "my-project" } } }))).toEqual(["/sources/g/kind: not a known kind"]);
+    expect(issues(small({ sources: { t: { kind: "http", url: "https://x" } } }))).toEqual(["/sources/t/kind: not a known kind"]);
   });
 
   it("refuses a block on the wrong kind of source", () => {
     const d = full();
-    expect(issues({ ...d, blocks: [{ type: "logs", source: "pods" }] })).toEqual(["/blocks/0/source: a logs block needs a kube.logs source"]);
+    expect(issues({ ...d, blocks: [{ type: "logs", source: "pods" }] })).toEqual(["/blocks/0/source: a logs block needs a kube.logs or clickland.logs source"]);
     expect(issues({ ...d, blocks: [{ type: "problems", source: "pods" }] })).toEqual(["/blocks/0/source: a problems block needs a doctor.problems source"]);
     expect(issues({ ...d, blocks: [{ type: "table", source: "logs", columns: [{ field: "x" }] }] })).toEqual(["/blocks/0/source: a kube.logs source is shown by a logs block"]);
-    expect(issues({ ...d, blocks: [{ type: "chart", source: "pods", kind: "line", y: ["restarts"] }] })).toEqual(["/blocks/0/x: required (only a metrics.series chart is over time without one)"]);
+    expect(issues({ ...d, blocks: [{ type: "chart", source: "pods", kind: "line", y: ["restarts"] }] })).toEqual(["/blocks/0/x: required (only a metrics.series or gcp.metrics chart is over time without one)"]);
     expect(issues({ ...d, blocks: [{ type: "table", source: "nope", columns: [{ field: "x" }] }] })).toEqual(["/blocks/0/source: no such source"]);
     expect(issues({ ...d, blocks: [{ type: "app", id: "a", uses: ["nope"], html: "" }] })).toEqual(["/blocks/0/uses/0: no such source"]);
   });

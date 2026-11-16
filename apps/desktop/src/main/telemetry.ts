@@ -25,7 +25,7 @@ const hex = (bytes: number) => randomBytes(bytes).toString("hex");
 const SERVER_NAMES = new Set(["landlens-kube", "landlens-gcp", "github", "linear", "clickland", "landflow", "landfall"]);
 export const serverOf = (server: string) => (SERVER_NAMES.has(server) ? server : "remote");
 const GATE = { read: "auto", asked: "asked", autonomous: "autonomous", preview: "asked" } as const;
-const WHO = { agent: "agent", app: "view", you: "you" } as const;
+const WHO = { agent: "agent", app: "view", you: "you", view: "view" } as const;
 const OUTCOME: Partial<Record<AgentChange["state"], "approved" | "rejected" | "failed" | "expired">> = { applied: "approved", rejected: "rejected", failed: "failed", expired: "expired", withdrawn: "expired" };
 
 export type TelemetryDeps = {
@@ -347,6 +347,11 @@ export class TelemetryService {
   /** One of your actions ended (wave 8, D147): counted by the action and its outcome, both closed words. */
   action(a: { action: string; outcome: string }) {
     this.count("landlens.actions", { action: a.action, outcome: a.outcome });
+  }
+
+  /** Views on demand (wave 10 part 4): a view Claude rendered, a patch it applied, a view you saved. Counts only. */
+  view(what: "rendered" | "patched" | "saved") {
+    this.count(`landlens.views.${what}`, {});
   }
 
   /** A front-door request, counted by the token's policy and whether it was let through. */

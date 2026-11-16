@@ -1,0 +1,67 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "the test's deployments, any namespace the view may read",
+      "document": {
+        "schema": 1,
+        "title": "Deployments of the views test",
+        "params": [
+          {
+            "name": "ns",
+            "type": "namespace",
+            "label": "Namespace",
+            "default": "landlens-dev"
+          }
+        ],
+        "sources": {
+          "deps": {
+            "kind": "kube.list",
+            "resource": "deployments",
+            "group": "apps",
+            "namespace": {
+              "param": "ns"
+            },
+            "labelSelector": "app=views-e2e-saved",
+            "fields": {
+              "name": "$name",
+              "ready": "$ready",
+              "age": "$age"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "blocks": [
+          {
+            "type": "table",
+            "source": "deps",
+            "title": "Deployments",
+            "columns": [
+              {
+                "field": "name",
+                "header": "Name"
+              },
+              {
+                "field": "ready",
+                "header": "Ready"
+              },
+              {
+                "field": "age",
+                "header": "Age",
+                "format": "age"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

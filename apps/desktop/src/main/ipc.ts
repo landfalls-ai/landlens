@@ -296,6 +296,18 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "views:intent": async ({ frame, url }) => viewsOf(views).intent(frame, url),
     "views:audit": async ({ view }) => viewsOf(views).auditOf(view),
     "views:link": async ({ view, block, url }) => ({ opened: await viewsOf(views).link(view, block, url) }),
+    // Saved views and files (wave 10 part 4, D216, D217): a view opens only on its own cluster; files go through main's
+    // dialogs, and an imported view's custom blocks run only after main's native yes.
+    "views:list": async ({ handle }) => viewsOf(views).list(handle),
+    "views:open": async ({ handle, saved }) => viewsOf(views).open(handle, saved),
+    "views:save": async ({ view, name, scope }) => viewsOf(views).save({ view, name, scope }),
+    "views:rename": async ({ saved, name }) => viewsOf(views).rename(saved, name),
+    "views:duplicate": async ({ saved }) => viewsOf(views).duplicate(saved),
+    "views:remove": async ({ saved }) => (viewsOf(views).remove(saved), { ok: true as const }),
+    "views:export": (req) => viewsOf(views).exportView(req),
+    "views:import": ({ handle, namespaces }) => viewsOf(views).importView({ handle, ...(namespaces ? { namespaces } : {}) }),
+    "views:trust-apps": ({ view }) => viewsOf(views).trustApps(view),
+    "views:tweak": async ({ view, block, sort, widths }) => viewsOf(views).tweak({ view, block, ...(sort !== undefined ? { sort } : {}), ...(widths ? { widths } : {}) }),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

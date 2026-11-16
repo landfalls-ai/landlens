@@ -72,6 +72,10 @@ export const VIEW_TIMES = {
   /** The doctor has no push of its own; its report is asked this often (it caches 2 s itself). */
   doctor: 15_000,
   helm: 60_000,
+  /** Part 4 (D210): Google Cloud every 5 minutes, Clickland every 30 s, a gateway tool every 2 minutes. */
+  gcp: 300_000,
+  clickland: 30_000,
+  tool: 120_000,
   /** Events age out of `sinceMinutes` on this tick even when nothing changes. */
   eventsTick: 60_000,
   /** A workload's pods, read again for `kube.logs`. */

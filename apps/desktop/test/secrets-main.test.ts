@@ -32,7 +32,7 @@ vi.mock("@landlens/kube", async (orig) => {
   return { ...real, certDetails: (x: Parameters<typeof real.certDetails>[0]) => (certInput.push(x), real.certDetails(x)) };
 });
 import { ActionLog } from "../src/main/action-log";
-import { CANCEL_PAUSE_MS, CANCELS_PAUSE_MS, CERT_READS, CLEAR_MS, CONCEALED, clipboardFormats, clipboardMarker, MAX_UNLOCKS, oneLine, SECRET_TEXT, SecretService, UNLOCK_ASKS, UNLOCK_MS, VALUE_READS, WIN_EXCLUDE, WIN_NO_CLOUD, WIN_NO_HISTORY } from "../src/main/secrets";
+import { CANCEL_PAUSE_MS, CANCELS_PAUSE_MS, CERT_READS, CLEAR_MS, CONCEALED, clipboardFormats, clipboardMarker, MAX_UNLOCKS, oneLine, SECRET_TEXT, SecretService, testClipboardOn, UNLOCK_ASKS, UNLOCK_MS, VALUE_READS, WIN_EXCLUDE, WIN_NO_CLOUD, WIN_NO_HISTORY } from "../src/main/secrets";
 
 const PATH = "/api/v1/namespaces/landlens-dev/secrets/hands-secret";
 const b64 = (s: string | Buffer) => Buffer.from(s).toString("base64");
@@ -528,5 +528,14 @@ describe("certificates (D167)", () => {
     await expect(svc.certs({ handle: "h1234567", secret: ref }, window())).resolves.toBeDefined();
     now += 60_001;
     await expect(svc.certs({ handle: "h1234567", secret: ref }, wc)).resolves.toBeDefined();
+  });
+});
+
+describe("the e2e tests' clipboard (wave 10 part 4)", () => {
+  it("is used only by an unpackaged build with LANDLENS_TEST_CLIPBOARD=1: a packaged build always writes the real one", () => {
+    expect(testClipboardOn(false, { LANDLENS_TEST_CLIPBOARD: "1" })).toBe(true);
+    expect(testClipboardOn(true, { LANDLENS_TEST_CLIPBOARD: "1" })).toBe(false);
+    expect(testClipboardOn(false, {})).toBe(false);
+    expect(testClipboardOn(false, { LANDLENS_TEST_CLIPBOARD: "true" })).toBe(false);
   });
 });

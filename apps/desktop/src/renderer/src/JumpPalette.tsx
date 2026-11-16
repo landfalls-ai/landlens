@@ -37,7 +37,7 @@ export type Commands = {
   showAlerts?: () => void;
 };
 
-type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Kinds" | "Clusters" | "Commands" | "Containers" | "Ask Claude";
+type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Views" | "Kinds" | "Clusters" | "Commands" | "Containers" | "Ask Claude";
 type Row = { key: string; group: Group; label: string; hint?: string; icon: LucideIcon; mono?: boolean; run: () => void; tab?: () => void };
 const PER_GROUP = 6;
 
@@ -117,6 +117,8 @@ export function JumpPalette(props: {
   commands: Commands;
   /** The Google Cloud rows the page last read (one project), found by name; no new read. */
   gcp?: { project: string; items: GcpResource[]; onOpen: (project: string, r: GcpResource) => void };
+  /** Saved views this cluster may open (D216): names only, "View: <name>". */
+  views?: { items: { id: string; name: string; scope: "cluster" | "any" }[]; onOpen: (id: string) => void };
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -188,6 +190,9 @@ export function JumpPalette(props: {
     const flow = props.onFlow;
     return flow ? [{ key: `lf:${keyOf(t)}`, group: "Actions", label: "Run a Landflow flow…", hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: Workflow, run: () => done(() => flow(t, problem)) }] : [];
   };
+  const viewRow = (v: { id: string; name: string; scope: "cluster" | "any" }): Row => ({
+    key: `v:${v.id}`, group: "Views", label: `View: ${v.name}`, hint: v.scope === "any" ? "Any cluster" : "This cluster", icon: kindIcon("views"), run: () => done(() => props.views!.onOpen(v.id)),
+  });
   const objectRow = (t: Target, group: Group = "Objects"): Row => ({
     key: `o:${keyOf(t)}`, group, label: t.name, hint: `${t.kind}${t.namespace ? ` · ${t.namespace}` : ""}`, icon: kindIcon(t.resource), mono: true,
     run: () => openObject(t),
@@ -201,6 +206,7 @@ export function JumpPalette(props: {
   });
   const pages: { key: string; label: string; resource: string; go: () => void }[] = [
     { key: "overview", label: "Overview", resource: "overview", go: () => done(() => props.onPick("overview")) },
+    { key: "views", label: "Views", resource: "views", go: () => done(() => props.onPick("views")) },
     { key: "problems", label: "Problems", resource: "problems", go: () => done(() => props.onPick("problems")) },
     { key: "helm", label: "Helm releases", resource: "helm", go: () => done(() => props.onPick("helm")) },
     { key: "connections", label: "Connections", resource: "connections", go: () => done(() => props.onPick("connections")) },
@@ -275,7 +281,7 @@ export function JumpPalette(props: {
       }).slice(0, PER_GROUP);
       const acts = props.open ? verbsFor(props.open).map((v) => actionRow(props.open!, v)) : [];
       const kinds = [...pages.map((p): Row => ({ key: `p:${p.key}`, group: "Kinds", label: p.label, hint: "Page", icon: kindIcon(p.resource), run: p.go }))];
-      return [...acts, ...rec, ...kinds];
+      return [...acts, ...rec, ...(props.views?.items ?? []).slice(0, PER_GROUP).map(viewRow), ...kinds];
     }
     const actions = rank(commands, (r) => r.label).slice(0, PER_GROUP).map((r) => ({ ...r, group: "Actions" as Group }));
     const probs = matchProblems(props.problems, text, PER_GROUP).map(problemRow);
@@ -291,8 +297,9 @@ export function JumpPalette(props: {
     ];
     const ks = rank(kinds, (k) => k.name, (k) => k.alt ?? "").slice(0, PER_GROUP).map((k) => k.row);
     const cls = rank(props.contexts ?? [], (c) => c.name).slice(0, PER_GROUP).map(clusterRow);
-    return [...actions, ...probs, ...objs, ...clouds, ...ks, ...cls];
-  }, [q, focus, pfocus, switching, objects, recent, props.nav, props.contexts, props.open, props.problems, props.gcp]); // eslint-disable-line react-hooks/exhaustive-deps
+    const vs = rank(props.views?.items ?? [], (v) => v.name, () => "view").slice(0, PER_GROUP).map(viewRow);
+    return [...actions, ...probs, ...objs, ...clouds, ...vs, ...ks, ...cls];
+  }, [q, focus, pfocus, switching, objects, recent, props.nav, props.contexts, props.open, props.problems, props.gcp, props.views]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setAt(0), [q, focus, pfocus, switching]);
   useEffect(() => {

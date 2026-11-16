@@ -17,9 +17,10 @@ export function TableBlock(props: { view: string; block: string; b: BlockDoc; d:
   const { b, d, hands } = props;
   const rows = d?.rows ?? [];
   const objects = useMemo(() => rowObjects(rows, b.columns?.[0]?.field), [rows, b.columns]);
-  const columns = useMemo(() => tableColumns(b.columns ?? []), [b.columns]);
-  const [box, width] = useWidth<HTMLDivElement>();
   const [tweak, setTweak] = useTweak(props.view, props.block);
+  // The person's column widths (D214), kept with the saved view; Claude's width otherwise.
+  const columns = useMemo(() => tableColumns(b.columns ?? []).map((c) => (tweak.widths?.[c.id] ? { ...c, width: `${tweak.widths[c.id]}px` } : c)), [b.columns, tweak.widths]);
+  const [box, width] = useWidth<HTMLDivElement>();
   // A sort on a column the shown version no longer has is Claude's order again.
   const sort: Sort = tweakSort(tweak.sort, columns);
   const acts = b.rowActions !== false;
@@ -41,6 +42,7 @@ export function TableBlock(props: { view: string; block: string; b: BlockDoc; d:
         empty={{ title: d && d.state !== "ok" && d.state !== "loading" ? "Nothing to show" : "No rows" }}
         sort={sort}
         onSort={(s) => setTweak({ ...tweak, sort: s })}
+        onResize={(id, px) => setTweak({ ...tweak, widths: { ...(tweak.widths ?? {}), [id]: px } })}
         toneOf={(o) => rowOf(o)._tone}
         onSelect={(o) => {
           const r = rowOf(o)._ref;

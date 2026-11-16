@@ -221,8 +221,15 @@ DNS prefetch switch, electron mocked). Part 3 adds `packages/views/test/intent.t
 `view-blocks.test.ts` (the native blocks' rules); a fixture's `"__SHOWN__"` becomes the version the fake agent last
 heard (a patch's base). It makes and removes the Deployments `views-e2e` and `views-e2e-log` (busybox, a line a second)
 and a ConfigMap in `landlens-dev`. With `LANDLENS_INTEGRATION=orbstack,claude`, `-t "live: Claude"` asks your own
-Claude for a view of `landlens-dev` in native blocks and, with `LANDLENS_SHOTS`, writes what it built to
-`w10p3-live-view.json`.
+Claude for a view of `landlens-dev` in native blocks, saves it, and, with `LANDLENS_SHOTS`, writes what it built to
+`w10p3-live-view.json` (the document read from a stubbed clipboard in the page and over `views:get`, never your
+clipboard). Part 4 adds `packages/views/test/part4.test.ts` (the connection kinds, view files, `literalNames`, tweaks,
+a rows path) and in desktop `views-saved.test.ts` (the store, save, open, export, import, the custom-block hold),
+`view-connections.test.ts` (Google Cloud, Clickland and tool sources against fakes), `view-examples.test.ts`; the
+gateway's `providers.test.ts` and `family.test.ts` cover origin `"view"`. Its e2e describes run in apps of their own:
+saved views across a restart (`saved-pods`, the Deployment `views-e2e-saved`), Export and Import with main's dialogs
+stubbed (`fixtures/shared-view.landlens-view.json`), and `connections` against `FakeGcp` (`LANDLENS_GCP_ENDPOINT`,
+the fake gcloud) and the fake GitHub (`LANDLENS_GITHUB_ENDPOINT`, a pasted token).
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
@@ -233,6 +240,7 @@ unpackaged build reads:
 | Variable | What |
 |---|---|
 | `LANDLENS_FAMILY_HTTP_HOSTS` | comma-separated host names (each `^[a-z0-9.-]{1,253}$`, at most 20) a sibling's address may reach over plain http, such as `landflow-host.landflow-dev.svc.cluster.local` for the local Landflow. Without it, plain http goes only to `127.0.0.1`, `localhost` and `[::1]` |
+| `LANDLENS_TEST_CLIPBOARD` | `1`: Secrets' Copy writes to a clipboard in main's memory (`globalThis.landlensTestClipboard`) instead of the system's, for `secrets.e2e` (wave 10 part 4); unpackaged builds only |
 | `LANDLENS_ACP_AGENT` | an ACP agent's `.js` or `.mjs` script run in place of claude-agent-acp (wave 7 part 5's e2e uses `test/fixtures/fake-acp-agent.mjs`: no Claude Code runs) |
 
 A packaged app reads none: forward the service in Landlens and use `http://127.0.0.1:<port>`. The e2e: `pnpm -s

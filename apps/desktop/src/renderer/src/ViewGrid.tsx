@@ -33,6 +33,8 @@ export function ViewBlock(props: {
   view: string; version: number; b: BlockDoc; i: number; data: (source: string) => SourceData | undefined;
   hands: RowHands; onOpenObject: (t: ObjectTarget) => void; onIntent: (i: ViewIntent, block: string) => boolean;
   onAsk: (block: string, title: string) => void; single: boolean; height: number; now: number;
+  /** An imported view's custom blocks wait for Run custom blocks (D217): no frame is opened, nothing of it runs. */
+  held?: boolean;
 }) {
   const { b } = props;
   const key = blockKey(b, props.i);
@@ -65,7 +67,9 @@ export function ViewBlock(props: {
           ) : null}
         </header>
       ) : null}
-      {b.type === "app" ? (
+      {b.type === "app" && props.held ? (
+        <div className="vb-held small dim" role="note">A custom block from a file: it runs only after you choose Run custom blocks above.</div>
+      ) : b.type === "app" ? (
         <AppFrame
           block={{ view: props.view, block: b.id!, uses: b.uses ?? [], version: props.version, ...(b.fill && props.single ? { fill: props.height } : {}) }}
           onOpenObject={props.onOpenObject}

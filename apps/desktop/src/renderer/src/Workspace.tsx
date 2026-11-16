@@ -16,7 +16,7 @@ import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
 import { ViewsPage } from "./ViewsPage";
-import { resourceRef, useView, viewOn, viewStore } from "./viewStore";
+import { resourceRef, useSavedViews, useView, viewOn, viewStore } from "./viewStore";
 import { bulkOffered, chipOf, refKey } from "./viewBlocks";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
@@ -216,11 +216,14 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const helmSel = helmPage && helmPick ? helm.releases?.find((r) => r.namespace === helmPick.namespace && r.name === helmPick.name) : undefined;
   const agentPage = current === "agent";
   const viewsPage = current === "views";
+  // Saved views for the sidebar and ⌘K (D216): names only, this cluster's and every "any" view.
+  const savedViews = useSavedViews(cluster.handle);
   const viewInfo = viewSnap.view;
   // On the Views page the dock is the view's; elsewhere, the ordinary one.
   const dockShown = viewsPage ? viewDock && !!viewInfo : dock;
   // The view's session asks the person something: its dock opens, on the Views page, so the question is seen.
-  const viewSession = viewInfo?.state?.session ?? viewInfo?.session.session;
+  const viewSession = viewInfo?.state?.session || viewInfo?.session?.session;
+  const viewSessionInfo = viewInfo?.state?.info ?? viewInfo?.session;
   useEffect(() => viewStore.onPermission((p) => p.session === viewSession && setViewDock(true)), [viewSession]);
   const nsWatch = useWatch({ handle: cluster.handle, group: "", version: "v1", resource: "namespaces" });
   const scoped = list?.type.namespaced && namespace ? namespace : undefined;
@@ -678,6 +681,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         onJump={() => setJump(true)}
         pins={pins}
         onPin={togglePin}
+        savedViews={savedViews}
+        {...(viewInfo?.state?.saved ? { openView: viewInfo.state.saved.id } : {})}
+        onOpenView={(id) => (pick("views"), void viewStore.open(cluster.handle, id))}
+        onAllViews={() => (pick("views"), viewStore.showList(true))}
       />
       <main className="main" ref={main}>
         <Toolbar
@@ -699,7 +706,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         />
         {viewsPage ? (
           <ViewsPage cluster={cluster} dockOpen={dockShown} onOpenDock={() => setViewDock(true)} onFoldDock={() => setViewDock(false)} onOpenObject={go} height={width.height}
-            hands={viewHands} typeOf={typeOfRef} onBulk={viewBulk} onIntent={viewIntent} now={now} />
+            hands={viewHands} typeOf={typeOfRef} onBulk={viewBulk} onIntent={viewIntent} now={now} namespaces={nsList} {...(health.health ? { problems: health.health.problems.length } : {})} />
         ) : mcp ? (
           <McpPage
             handle={cluster.handle}
@@ -955,7 +962,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
       <Bench bench={bench} cluster={cluster} onAsk={ask} appHeight={width.height} />
-      {viewInfo && viewSession ? (
+      {viewInfo && viewSession && viewSessionInfo ? (
         // The view's session, bound (D213): mounted from its start, so it hears every turn and every question, and
         // shown only on the Views page while you have it open; folded, the page's strip carries the chat.
         <div className="dock-holder" hidden={!(viewsPage && viewDock)}>
@@ -968,7 +975,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             onActivity={() => {}}
             onOpenObject={go}
             bound={{
-              info: { ...viewInfo.session, session: viewSession },
+              info: { ...viewSessionInfo, session: viewSession },
               ask: viewInfo.state?.ask ?? viewInfo.ask,
               busy: viewInfo.state?.busy ?? true,
               send: (text, refs) => viewStore.send(text, refs),
@@ -1039,6 +1046,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         <JumpPalette
           handle={cluster.handle}
           context={cluster.context}
+          views={{ items: savedViews, onOpen: (id) => (pick("views"), void viewStore.open(cluster.handle, id)) }}
           {...(contexts ? { contexts } : {})}
           nav={nav}
           current={current}

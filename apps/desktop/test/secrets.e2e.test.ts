@@ -7,8 +7,9 @@
 // cluster; Reveal shows one key, which can't be selected or dragged out, and goes on Hide, after 30 s (the page's
 // clock), on a lost focus and on a tab change; an answer that comes after its row went or the window blurred is dropped
 // and isn't in the page's heap (M1 of the security review); a double click reads once (L8); Copy puts the value on the
-// clipboard from main with macOS's concealed marker, the window never has it, and main clears it after 30 s; a prompt
-// holding the copied value is refused and doesn't stay in the dock (L2); the
+// clipboard from main with macOS's concealed marker (here the test build's clipboard in memory, never the person's),
+// the window never has it, and main clears it after 30 s; a prompt holding the copied value is refused and doesn't stay
+// in the dock (L2); the
 // fake agent's every prompt and attachment, mcp:calls, localStorage and sessionStorage, and every file in the profile
 // (agent session folders included) lack the marker; the certificate panel shows the CN, expiry and issuer with no
 // private key text. Screenshots are taken only while nothing is revealed (w8p4-*, dark and light, $LANDLENS_SHOTS).
@@ -38,7 +39,6 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
   let userData: string;
   /** tls.key's base64, in 40-character runs: none may reach the page, a file or a prompt. */
   let keyRuns: string[] = [];
-  let savedClipboard = "";
   /** A second connection of orbstack, made by the test before the window's own, for resource:get. */
   let handle = "";
   const asked = () => app.evaluate(() => (globalThis as unknown as { asked: { message: string; detail: string }[] }).asked);
@@ -46,7 +46,10 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
   const data = () => drawer().getByRole("region", { name: "Data" });
   const value = () => drawer().locator("pre.secret-value");
   const dock = () => page.getByRole("complementary", { name: "Claude Code" });
-  const clipboardHolds = (text: string) => app.evaluate(async ({ clipboard }, t) => (await clipboard.readText()) === t, text);
+  // Main's clipboard in this run is the test build's, in memory (LANDLENS_TEST_CLIPBOARD): the person's own clipboard is
+  // never read or written by a test (wave 10 part 4). The formats are the ones main would write (clipboardFormats).
+  const testClip = () => app.evaluate(() => (globalThis as unknown as { landlensTestClipboard: { text: string; formats: string[] } }).landlensTestClipboard);
+  const clipboardHolds = async (text: string) => (await testClip()).text === text;
   /** Whether the page's JavaScript heap, after a full garbage collection, holds the text anywhere (a CDP heap snapshot). */
   const inHeap = async (needle: string) => {
     const cdp = await page.context().newCDPSession(page);
@@ -106,7 +109,7 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
     app = await electron.launch({
       executablePath: require("electron") as unknown as string,
       args: [resolve(__dirname, "..")],
-      env: { ...process.env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: userData, LANDLENS_ACP_AGENT: resolve(__dirname, "fixtures/fake-acp-agent.mjs") },
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: userData, LANDLENS_ACP_AGENT: resolve(__dirname, "fixtures/fake-acp-agent.mjs"), LANDLENS_TEST_CLIPBOARD: "1" },
     });
     // Main's own dialog is answered here, never by the window: each question kept; yes unless a test says no.
     await app.evaluate(({ dialog }) => {
@@ -119,7 +122,6 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
         return { response: g.yes ? 0 : 1, checkboxChecked: false };
       };
     });
-    savedClipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
     page = await app.firstWindow();
     await page.setViewportSize({ width: 1024, height: 700 });
     await page.getByRole("button", { name: /orbstack/ }).first().waitFor({ timeout: 30_000 });
@@ -131,7 +133,6 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
   }, 180_000);
 
   afterAll(async () => {
-    if (app) await app.evaluate(({ clipboard }, t) => clipboard.writeText(t), savedClipboard).catch(() => {});
     await app?.close();
     if (run) kubectl("delete", "secret", OPAQUE, TLS, "--ignore-not-found", "--wait=false");
   }, 60_000);
@@ -215,7 +216,7 @@ describe.runIf(run)("Secret values and certificates on OrbStack", () => {
     await data().getByRole("button", { name: "Copy password" }).click();
     await data().getByRole("status").filter({ hasText: /^Copied\. Clears in \d+ s$/ }).waitFor({ timeout: 10_000 });
     expect(await clipboardHolds(MARK)).toBe(true);
-    if (process.platform === "darwin") expect(await app.evaluate(({ clipboard }, f) => clipboard.has(f), CONCEALED)).toBe(true);
+    if (process.platform === "darwin") expect((await testClip()).formats).toContain(CONCEALED);
     expect(await page.content()).not.toContain(MARK);
     await shot("03-copied");
 

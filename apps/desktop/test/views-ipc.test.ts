@@ -16,6 +16,9 @@ const anything: any = new Proxy(function () {}, { get: (_t, k) => (k === "then" 
 
 const calls: { channel: string; req: unknown }[] = [];
 const views: any = {
+  save: async (req: unknown) => (calls.push({ channel: "save", req }), {}),
+  importView: async (req: unknown) => (calls.push({ channel: "import", req }), {}),
+  exportView: async (req: unknown) => (calls.push({ channel: "export", req }), { written: false }),
   start: async (req: unknown) => (calls.push({ channel: "start", req }), { view: "0123456789abcdef", session: {} }),
   prompt: async (req: unknown) => (calls.push({ channel: "prompt", req }), { stopReason: "end_turn" }),
 };
@@ -55,5 +58,31 @@ describe("views:start and views:prompt", () => {
   it("refuse a block's frame calling anything through mcp:app-call's shape, and a request from outside the app", async () => {
     await expect(handles.get("views:start")!({ senderFrame: { url: "https://example.com" } }, { handle: "handle-01", text: "x" })).rejects.toThrow(/not from Landlens/);
     await expect(invoke("views:app-call", { frame: "a".repeat(32), name: "list_resources;rm", arguments: {} })).rejects.toThrow(/bad request/);
+  });
+});
+
+describe("saved views and view files (part 4, D216, D217)", () => {
+  it("take ids, a name and a scope only: the window never hands main a document, a path, a context or a session", async () => {
+    calls.length = 0;
+    const view = "0123456789abcdef";
+    for (const [channel, req] of [
+      ["views:save", { view, name: "Restarts", scope: "cluster", document: { schema: 1 } }],
+      ["views:save", { view, name: "Restarts", scope: "cluster", context: "prod" }],
+      ["views:save", { view, name: "Restarts", scope: "everywhere" }],
+      ["views:save", { view, name: "a\nb", scope: "any" }],
+      ["views:save", { view, name: "x".repeat(61), scope: "any" }],
+      ["views:import", { handle: "handle-01", path: "/etc/passwd" }],
+      ["views:import", { handle: "handle-01", document: { schema: 1 } }],
+      ["views:export", { view, path: "/tmp/x.json" }],
+      ["views:export", { view, saved: view }],
+      ["views:open", { handle: "handle-01", saved: view, session: "s" }],
+      ["views:tweak", { view, block: "block-0", filter: "x" }],
+      ["views:tweak", { view, block: "block-0", widths: { name: 9999 } }],
+    ] as const) await expect(invoke(channel, req), `${channel} ${JSON.stringify(req)}`).rejects.toThrow(/bad request/);
+    expect(calls).toEqual([]);
+    await invoke("views:save", { view, name: "Restarts", scope: "cluster" });
+    await invoke("views:import", { handle: "handle-01", namespaces: ["shop"] });
+    await invoke("views:export", { view });
+    expect(calls.map((c) => c.channel)).toEqual(["save", "import", "export"]);
   });
 });

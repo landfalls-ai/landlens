@@ -54,6 +54,11 @@ export function ResourceTable(props: {
   selection?: { uids: ReadonlySet<string>; onChange: (uids: Set<string>) => void };
   /** A row's tone when it isn't read from Status or Ready (a view's rows carry their own, wave 10 part 3). */
   toneOf?: (o: KubeObject) => Tone | undefined;
+  /**
+   * A column's width, dragged by its header's right edge (a view's table, wave 10 part 4, D214): the caller keeps it.
+   * Without it the headers have no handle.
+   */
+  onResize?: (id: string, px: number) => void;
 }) {
   const { items, now, selection } = props;
   const [ownSort, setOwnSort] = useState<Sort>({ id: "name", dir: 1 });
@@ -113,7 +118,9 @@ export function ResourceTable(props: {
     }
   }, [items, props.columns, now]);
 
-  const widths = [...(selection ? ["28px"] : []), ...columns.map((c) => c.width ?? "minmax(100px, 1fr)")];
+  // A width being dragged shows at once; the caller hears it when the drag ends.
+  const [dragging, setDragging] = useState<{ id: string; px: number }>();
+  const widths = [...(selection ? ["28px"] : []), ...columns.map((c) => (dragging?.id === c.id ? `${dragging.px}px` : c.width ?? "minmax(100px, 1fr)"))];
   const template: CSSProperties = { gridTemplateColumns: widths.join(" ") };
   // The narrowest the columns can go; below that the table scrolls sideways instead of clipping columns.
   const minWidth = widths.reduce((sum, w) => sum + Number(/(\d+)px/.exec(w)?.[1] ?? 100), 0) + 28;
@@ -172,6 +179,28 @@ export function ResourceTable(props: {
               >
                 {c.label || <span className="sr-only">{c.id === "status-icon" ? "Status" : c.id}</span>}
                 {on ? <Ic icon={sort.dir === 1 ? ArrowUp : ArrowDown} size={11} /> : null}
+                {props.onResize && c.id !== "status-icon" ? (
+                  <span className="th-resize" aria-hidden="true" title="Drag to widen or narrow"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const th = e.currentTarget.parentElement as HTMLElement;
+                      const x0 = e.clientX;
+                      const w0 = th.getBoundingClientRect().width;
+                      const at = (x: number) => Math.round(Math.max(60, Math.min(600, w0 + x - x0)));
+                      let last = at(x0);
+                      const move = (ev: PointerEvent) => setDragging({ id: c.id, px: (last = at(ev.clientX)) });
+                      const up = () => {
+                        window.removeEventListener("pointermove", move);
+                        window.removeEventListener("pointerup", up);
+                        setDragging(undefined);
+                        props.onResize?.(c.id, last);
+                      };
+                      window.addEventListener("pointermove", move);
+                      window.addEventListener("pointerup", up);
+                    }} />
+                ) : null}
               </button>
             );
           })}

@@ -3,8 +3,8 @@
 // every change goes through a views:* channel and comes back as a views:state push; a data push carries the version it
 // belongs to, and one for another version is dropped (part 1's review). Outside React, so the page and the dock share
 // it and it outlives a move to another page; useView() reads it.
-import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ResourceRef, RowRef, SourceData, ViewDataPush, ViewState } from "@landlens/contracts";
-import { useState, useSyncExternalStore } from "react";
+import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ResourceRef, RowRef, SavedViewSummary, SourceData, ViewDataPush, ViewState, ViewTweak } from "@landlens/contracts";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Sort } from "./tableState";
 import { api } from "./api";
 import { refKey } from "./viewBlocks";
@@ -12,7 +12,8 @@ import { refKey } from "./viewBlocks";
 export type ViewSnapshot = {
   /** The working view, its state and its session, once views:start answered. */
   view?: {
-    id: string; session: AgentSessionInfo; ask: string; state?: ViewState; data: Record<string, { version: number; data: SourceData }>;
+    /** The session, once one started: a saved view opens with none, and its first follow-up starts one (D216). */
+    id: string; session?: AgentSessionInfo; ask: string; state?: ViewState; data: Record<string, { version: number; data: SourceData }>;
     /**
      * The cluster the view reads (its handle when it started, and its context): the page shows it, and its rows act,
      * only while that cluster is the one connected (security review of part 3, H1).
@@ -32,6 +33,8 @@ export type ViewSnapshot = {
   };
   /** Sending the first ask (views:start hasn't answered), on this cluster. */
   starting?: string;
+  /** The saved views' list is open on the Views page (All views…). */
+  list?: boolean;
   startingOn?: string;
   error?: string;
 };
@@ -59,6 +62,7 @@ export const viewOn = (s: ViewSnapshot, handle: string): ViewSnapshot => ({
   ...(s.view && s.view.handle === handle ? { view: s.view } : {}),
   ...(s.starting && s.startingOn === handle ? { starting: s.starting, startingOn: handle } : {}),
   ...(s.error ? { error: s.error } : {}),
+  ...(s.list ? { list: true } : {}),
 });
 
 let snap: ViewSnapshot = {};
@@ -107,7 +111,10 @@ function wire() {
     if (s.closed) return set({ error: "The view closed: its cluster disconnected or its session's view was replaced. Ask again to build a new one." });
     // A new version's data starts empty: what the older one had isn't this one's.
     const data = Object.fromEntries(Object.entries(v.data).filter(([, d]) => d.version === s.version));
-    set({ ...snap, view: { ...v, state: s, data, session: s.session === v.session.session ? v.session : { ...v.session, session: s.session } } });
+    // The session's info is main's (a saved view's first follow-up starts one); the page keeps what it had otherwise.
+    const session = s.info ?? (v.session && s.session && s.session !== v.session.session ? { ...v.session, session: s.session } : v.session);
+    const { session: _old, ...rest } = v;
+    set({ ...snap, view: { ...rest, state: s, data, ...(session ? { session } : {}) } });
   });
   api.on("views:data", (p: ViewDataPush) => {
     const v = snap.view;
@@ -189,7 +196,8 @@ export const viewStore = {
   async send(text: string, context: ResourceRef[] = [], block?: { block: string; version: number }): Promise<{ stopReason: string } | undefined> {
     const v = snap.view;
     if (!v || !text.trim()) return undefined;
-    for (const l of askListeners) l(v.state?.session ?? v.session.session, text);
+    const session = v.state?.session || v.session?.session;
+    if (session) for (const l of askListeners) l(session, text);
     return api.invoke("views:prompt", { view: v.id, text, ...(context.length ? { context } : {}), ...(block ? { block: block.block, version: block.version } : {}) });
   },
 
@@ -212,6 +220,30 @@ export const viewStore = {
     const { selection: cur, ...rest } = v;
     const next = nextSelection(cur, refs, by, block);
     set({ ...snap, view: next ? { ...rest, selection: next } : rest });
+  },
+
+  /**
+   * Open a saved view on this cluster (D216): main checks its scope (a "cluster" view only on its own context and API
+   * server), mints its token and runs its sources; no session starts until a follow-up.
+   */
+  async open(handle: string, saved: string): Promise<void> {
+    wire();
+    bound ??= handle;
+    const old = snap.view?.id;
+    set({ starting: "Opening the view…", startingOn: handle });
+    if (old) void api.invoke("views:close", { view: old }).catch(() => {});
+    try {
+      const st = await api.invoke("views:open", { handle, saved });
+      if (bound !== handle) return void api.invoke("views:close", { view: st.id }).catch(() => {});
+      set({ view: { id: st.id, handle, context: st.context, ask: st.ask, state: st, data: {}, ...(st.info ? { session: st.info } : {}) } });
+    } catch (e) {
+      if (bound === handle) set({ error: (e as Error).message });
+    }
+  },
+
+  /** The saved views' list on the page (All views…). */
+  showList(on: boolean) {
+    set(on ? { ...snap, list: true } : (({ list: _l, ...rest }) => rest)(snap));
   },
 
   async version(to: number) {
@@ -244,13 +276,50 @@ export function useView(): ViewSnapshot {
 export const blockKey = (b: { type: string; id?: string }, i: number) => (b.type === "app" && b.id ? b.id : `block-${i}`);
 
 /**
- * The person's own tweaks to a block (D214: a table's sort), kept in the window per view and block until the view
- * closes; they change nothing in the document and nothing goes to Claude. Saving them with the view is part 4's.
+ * The person's own tweaks to a block (D214: a table's sort and column widths). Main keeps them with the working view and
+ * with its saved view (views:tweak); they change nothing in the document and nothing goes to Claude.
  */
-export type Tweak = { sort?: Sort };
+export type Tweak = { sort?: Sort; widths?: Record<string, number> };
 const tweaks = new Map<string, Tweak>();
+export const fromSaved = (t: ViewTweak | undefined): Tweak => ({
+  ...(t?.sort ? { sort: { id: t.sort.field, dir: t.sort.dir === "asc" ? 1 : -1 } } : {}),
+  ...(t?.widths ? { widths: { ...t.widths } } : {}),
+});
 export function useTweak(view: string, block: string): [Tweak, (t: Tweak) => void] {
   const key = `${view}/${block}`;
-  const [t, setT] = useState<Tweak>(() => tweaks.get(key) ?? {});
-  return [t, (n: Tweak) => (tweaks.set(key, n), setT(n))];
+  const [t, setT] = useState<Tweak>(() => tweaks.get(key) ?? fromSaved(snap.view?.id === view ? snap.view.state?.tweaks?.[block] : undefined));
+  return [t, (n: Tweak) => {
+    tweaks.set(key, n);
+    setT(n);
+    // A field name main takes (a view's column ids are its fields, perhaps with a trailing _); anything else stays here.
+    const ok = (f: string) => /^[a-z][A-Za-z0-9_]{0,40}$/.test(f);
+    const widths = Object.fromEntries(Object.entries(n.widths ?? {}).filter(([f, w]) => ok(f) && w >= 60 && w <= 600).map(([f, w]) => [f, Math.round(w)]));
+    void api.invoke("views:tweak", {
+      view, block, sort: n.sort && ok(n.sort.id) ? { field: n.sort.id, dir: n.sort.dir === 1 ? "asc" : "desc" } : null, ...(Object.keys(widths).length ? { widths } : {}),
+    }).catch(() => {});
+  }];
+}
+
+// ---- saved views (D216): names only, refreshed when one changes ------------------------------------------------------
+
+let saved: { handle: string; views: SavedViewSummary[] } | undefined;
+const savedListeners = new Set<() => void>();
+let savedAsk = 0;
+/** Read the saved views for this cluster again (after a save, rename, duplicate, delete or import). */
+export async function refreshSaved(handle: string): Promise<void> {
+  const n = ++savedAsk;
+  const r = await api.invoke("views:list", { handle }).catch(() => undefined);
+  if (n !== savedAsk || !r) return;
+  saved = { handle, views: r.views };
+  for (const l of savedListeners) l();
+}
+const savedGet = () => saved;
+const savedSub = (l: () => void) => (savedListeners.add(l), () => void savedListeners.delete(l));
+/** The saved views this cluster may open, newest first (D216). */
+export function useSavedViews(handle: string): SavedViewSummary[] {
+  const s = useSyncExternalStore(savedSub, savedGet);
+  useEffect(() => {
+    if (saved?.handle !== handle) void refreshSaved(handle);
+  }, [handle]);
+  return s?.handle === handle ? s.views : [];
 }

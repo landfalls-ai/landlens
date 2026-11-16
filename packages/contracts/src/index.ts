@@ -1235,7 +1235,27 @@ export type ViewState = {
    * a view never stays on screen, marked Live, after its cluster has gone (security review of wave 10 part 3, H1).
    */
   closed?: true;
+  /** The session's info (the dock's), once one started: a saved view opens with none (D216). */
+  info?: AgentSessionInfo;
+  /** The saved view this is (wave 10 part 4, D216). */
+  saved?: { id: string; name: string; scope: "cluster" | "any" };
+  /** Claude built it here, or it came from a file (D217). */
+  origin?: "claude" | "imported";
+  /** An imported view's custom blocks wait for Run custom blocks and main's dialog (D217). */
+  appsHeld?: boolean;
+  /** The person's sort and column widths per block (D214): never sent to Claude. */
+  tweaks?: Record<string, ViewTweak>;
 };
+/** A block's sort and column widths (D214), the person's own. */
+export type ViewTweak = { sort?: { field: string; dir: "asc" | "desc" }; widths?: Record<string, number> };
+/** A saved view as the sidebar, ⌘K and the list show it (D216): its name and scope, never its document. */
+export type SavedViewSummary = {
+  id: string; name: string; scope: "cluster" | "any"; context?: string; origin: "claude" | "imported"; savedAt: number;
+  /** Its custom (app) blocks, and whether they may run (Claude's, or an import the person said yes to). */
+  apps: number; appsTrusted: boolean;
+};
+const SavedViewName = z.string().min(1).max(60).regex(/^[^\u0000-\u001f\u007f\u2028\u2029]+$/, "one line");
+const ViewField = z.string().regex(/^[a-z][A-Za-z0-9_]{0,40}$/, "not a field");
 /** A source's new data for the page (D210), stamped with the view's version so the page drops a push of an older one. */
 export type ViewDataPush = { view: string; version: number; source: string; data: SourceData };
 /** A front-door request made with a view's token (the disclosure, D223). */
@@ -1467,6 +1487,21 @@ export const channels = {
   // A text block's Markdown link (security review of wave 10 part 3, L4): main finds it in the block and asks in its
   // own dialog, as for a frame's link; the address may be long here so that main, not the window, refuses it.
   "views:link": z.object({ view: ViewId, block: ViewPartId, url: z.string().min(1).max(10_000) }).strict(),
+  // Saved views and files (wave 10 part 4, D216, D217): the store is main's; files go through main's own dialogs.
+  "views:list": z.object({ handle: Handle }).strict(),
+  "views:open": z.object({ handle: Handle, saved: ViewId }).strict(),
+  "views:save": z.object({ view: ViewId, name: SavedViewName, scope: z.enum(["cluster", "any"]) }).strict(),
+  "views:rename": z.object({ saved: ViewId, name: SavedViewName }).strict(),
+  "views:duplicate": z.object({ saved: ViewId }).strict(),
+  "views:remove": z.object({ saved: ViewId }).strict(),
+  "views:export": z.union([z.object({ view: ViewId }).strict(), z.object({ saved: ViewId }).strict()]),
+  "views:import": z.object({ handle: Handle, namespaces: z.array(NamespaceName).min(1).max(20).optional() }).strict(),
+  "views:trust-apps": z.object({ view: ViewId }).strict(),
+  "views:tweak": z.object({
+    view: ViewId, block: z.string().regex(/^(block-\d{1,2}|[a-z][a-z0-9-]{0,30})$/),
+    sort: z.object({ field: ViewField, dir: z.enum(["asc", "desc"]) }).strict().nullable().optional(),
+    widths: z.record(ViewField, z.number().int().min(60).max(600)).optional(),
+  }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1621,6 +1656,16 @@ export type Responses = {
   "views:intent": { intent?: ViewIntent };
   "views:audit": { label: string; entries: ViewAuditEntry[] };
   "views:link": { opened: boolean };
+  "views:list": { views: SavedViewSummary[]; elsewhere: number };
+  "views:open": ViewState;
+  "views:save": ViewState;
+  "views:rename": SavedViewSummary;
+  "views:duplicate": SavedViewSummary;
+  "views:remove": { ok: true };
+  "views:export": { written: boolean };
+  "views:import": { saved?: SavedViewSummary; issues?: string[] };
+  "views:trust-apps": { trusted: boolean };
+  "views:tweak": { ok: true };
 };
 
 /** A tool as the MCP page shows it. */
@@ -1694,7 +1739,8 @@ export type McpCall = {
   label: string;
   server: string;
   tool: string;
-  origin: "agent" | "app" | "you";
+  /** Who asked: the agent, an app's view, you (Preview), or a view's tool source on the Views page (wave 10 part 4). */
+  origin: "agent" | "app" | "you" | "view";
   /** Scrubbed like a tool result. */
   args: unknown;
   startedAt: number;

@@ -45,10 +45,15 @@ export type Ask = {
 /** The longest view link the dialog shows whole (review of wave 10 part 2, M2); a longer one is refused. */
 export const VIEW_LINK_SHOWN = 500;
 
+/** What a view's tool source hears (ViewRuntime's ToolAnswer): the result's text, or why it didn't run, in D222's words. */
+export type ViewToolAnswer = { text: string } | { off: string } | { error: string };
+
 export class McpService {
   readonly gateway: McpGateway;
   readonly views = new AppViews();
   private readonly consoles = new Map<string, Promise<{ session: GatewaySession; revoke(): void }>>(); // handle → yours
+  /** The Views page's gateway sessions (wave 10 part 4, D212), handle → `view · <context>`, origin "view". */
+  private readonly viewSessions = new Map<string, Promise<GatewaySession>>();
   /** What each sibling was for sessions at its last push, so a push that changes nothing leaves Preview open (L6). */
   private readonly familyWas = new Map<Sibling, string>();
   private builtinTools: Promise<McpServerInfo["tools"]> | undefined;
@@ -104,7 +109,79 @@ export class McpService {
       ...(deps.pushAutonomy ? { onAutonomy: deps.pushAutonomy } : {}),
     });
     this.gateway.log.subscribe(deps.push);
-    deps.clusters.onGone((handle) => void this.closeConsole(handle));
+    deps.clusters.onGone((handle) => (void this.closeConsole(handle), void this.closeViewSessions(handle)));
+  }
+
+  /**
+   * A view's tool source (wave 10 part 4, D212): one call through the cluster's view session, `view · <context>`, with
+   * origin "view". It runs only when it is a read this cluster's Claude sessions run without asking (the gateway checks
+   * the session's pre-allowed set at the call); Landlens's own servers have their own source kinds. The answer is the
+   * result's text for the view's runtime, which keeps it as cells; every refusal is a fixed sentence.
+   */
+  async viewRead(handle: string, server: string, tool: string, args: Record<string, unknown>): Promise<ViewToolAnswer> {
+    if (isBuiltin(server) || server.startsWith("landlens")) return { off: `${server} isn't a server a tool source reads: use its own source kinds.` };
+    const s = await this.viewSession(handle);
+    if (!s.upstreams.has(server)) return { off: `${server} isn't connected for this cluster's Claude sessions.` };
+    if (!s.allow.includes(`mcp__${server}__${tool}`)) return { off: `${server} · ${tool} isn't a read that runs without asking.` };
+    const r = (await s.call(server, tool, args, "view")) as McpToolResult;
+    if (r.isError) {
+      const why = r.content.find((c): c is { type: "text"; text: string } => (c as { type?: string }).type === "text")?.text ?? "";
+      // The gateway's own refusal (it changed since the check above): off; the server's error: an error.
+      return /^Landlens: /.test(why) ? { off: `${server} · ${tool} isn't a read that runs without asking.` } : { error: "failed" };
+    }
+    const text = r.content.flatMap((c) => ((c as { type?: string }).type === "text" ? [String((c as { text?: unknown }).text ?? "")] : [])).join("\n");
+    return { text: text || (r.structuredContent ? JSON.stringify(r.structuredContent) : "") };
+  }
+
+  /**
+   * Google Cloud for a view (D212): the reader a Claude session on this cluster with these namespaces would get (the
+   * person's grant, its chosen projects, the session's cluster for the namespace limit), or undefined while it is off.
+   */
+  async viewGcp(handle: string, namespaces?: string[]) {
+    let context: string;
+    try {
+      context = this.deps.clusters.get(handle).info.context;
+    } catch {
+      return undefined;
+    }
+    const g = await this.deps.gcp?.reader(this.sessionCluster(handle, context, namespaces)).catch(() => undefined);
+    return g;
+  }
+
+  /** The gateway reads a view's tool source may use on this cluster now (view_context's list): `server · tool`. */
+  async viewReads(handle: string): Promise<string[]> {
+    const s = await this.viewSession(handle).catch(() => undefined);
+    if (!s) return [];
+    return s.allow
+      .map((r) => /^mcp__([a-z][a-z0-9-]*)__(.+)$/.exec(r))
+      .filter((m): m is RegExpExecArray => !!m && !isBuiltin(m[1]!) && !m[1]!.startsWith("landlens") && s.upstreams.has(m[1]!))
+      .map((m) => `${m[1]} · ${m[2]}`)
+      .slice(0, 60);
+  }
+
+  private viewSession(handle: string): Promise<GatewaySession> {
+    let v = this.viewSessions.get(handle);
+    if (!v) {
+      v = (async () => {
+        const info = this.deps.clusters.get(handle).info;
+        // No cluster behind it (landlens-kube answers nothing here) and no built-ins: a view reads its cluster with its
+        // own token in the runtime, and Google Cloud through its own sources.
+        return this.gateway.open({ label: `view · ${info.context}`, context: info.context, origin: "view", cluster: stubCluster(), remotes: await this.remotesFor(info.context) });
+      })();
+      this.viewSessions.set(handle, v);
+      v.catch(() => this.viewSessions.delete(handle));
+    }
+    return v;
+  }
+
+  /** The view sessions end with the consoles: a connection, a sibling or a server changed, or the cluster went. */
+  private async closeViewSessions(handle?: string) {
+    for (const [h, p] of [...this.viewSessions]) {
+      if (handle && h !== handle) continue;
+      this.viewSessions.delete(h);
+      const s = await p.catch(() => undefined);
+      await s?.close();
+    }
   }
 
   start() {
@@ -113,6 +190,7 @@ export class McpService {
 
   async stop() {
     for (const h of [...this.consoles.keys()]) await this.closeConsole(h);
+    await this.closeViewSessions();
     await this.gateway.stop();
   }
 
@@ -203,6 +281,7 @@ export class McpService {
     this.gcpEpoch++;
     this.gateway.dropBuiltin(GCP_MCP_SERVER);
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
+    void this.closeViewSessions();
   }
 
   /**
@@ -253,6 +332,7 @@ export class McpService {
     if (!dropped && this.familyWas.get(info.sibling) === now) return;
     this.familyWas.set(info.sibling, now);
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
+    void this.closeViewSessions();
   }
 
   /** Whether an address is a signed-in sibling's origin, this machine's spellings (localhost, 127.0.0.1, [::1]) alike. */
@@ -284,6 +364,7 @@ export class McpService {
       return readsFree ? undefined : "reads";
     });
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
+    void this.closeViewSessions();
     // Autonomous ends with the connection as it was turned on: gone, read only, or its tools changed (D82).
     if (!served || info.mode === "read") this.gateway.stopAutonomy(info.provider, "you");
     else if (info.note === CONN_NOTES.drift) this.gateway.stopAutonomy(info.provider, "drift");
@@ -409,6 +490,7 @@ export class McpService {
   remove(id: string) {
     this.deps.store.remove(id);
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
+    void this.closeViewSessions();
   }
 
   // ---- calls and Preview -----------------------------------------------------------------------------------------
@@ -461,6 +543,8 @@ export class McpService {
   }
 
   private async closeConsole(handle: string) {
+    // A view session follows its cluster's Preview: opened again, as things are now, at its next read.
+    void this.closeViewSessions(handle);
     const c = this.consoles.get(handle);
     this.consoles.delete(handle);
     const s = await c?.catch(() => undefined);

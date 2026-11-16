@@ -352,7 +352,8 @@ do the same read **without asking**, checked each time the source runs:
   are not valid `server` values (their data has typed sources). The result's text (at most 100,000 characters) is
   parsed as JSON; `rows` names the array in it; without `rows`, or if it isn't JSON, the source yields one row
   `{ text }`. **[check]** GitHub's and Linear's read tools answer JSON as text: settle per tool with the local fakes
-  (`connections.e2e`), and list in `docs/views.md` the tools tried.
+  (`connections.e2e`), and list in `docs/views.md` the tools tried. *(Part 4: the fake answers text, so
+  `list_branches` is one row; the real servers' JSON is still to settle.)*
 - Text from a sibling or connection is drawn as text; in the "How Claude built this" panel the source carries the
   existing line ("From GitHub: content written by other people.").
 - A view's connection reads never touch a session's autonomy holds: the data goes to the page, not the conversation.
@@ -560,6 +561,9 @@ Telemetry (when on) counts views rendered, patched and saved and blocks by type;
 
 ## 9. Keeping views (part 4)
 
+Built 16 Nov 2026; where the build departs from this section, [tasks.md](tasks.md#part-4-keeping-views-and-the-connections)
+says so.
+
 **D216. Saved views live in main and in the sidebar.** `ViewStore` (`main/views-store.ts`): `userData/views.json`,
 mode 0600, written atomically, at most 200 entries:
 
@@ -569,7 +573,7 @@ type SavedView = {
   name: string;                     // ≤ 60, the person's
   document: ViewDocument; tweaks?: Tweaks; versions?: never;   // history is not kept across saves
   scope: { kind: "cluster"; context: string; server: string } | { kind: "any" };
-  namespaces?: string[];            // the building session's limit; kept for scope "cluster" only
+  namespaces?: string[];            // the building session's limit (scope "cluster"), or the picker's at import
   origin: "claude" | "imported"; appsTrusted?: boolean;        // D217
   savedAt: number;
 };

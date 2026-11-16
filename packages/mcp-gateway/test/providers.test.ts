@@ -94,7 +94,7 @@ describe("a provider on the gateway", () => {
   const spec = (o: Partial<RemoteSpec> = {}): RemoteSpec => ({
     name: "github", url: `${fake.origin}/mcp/`, headers: { Authorization: `Bearer ${TOKEN}` }, origins: [fake.origin], pin: halves.full, provider: rules(), ...o,
   });
-  const open = (remotes: RemoteSpec[], origin: "agent" | "you" = "agent") => gateway.open({ label: `agent · test`, context: "orbstack", origin, cluster, remotes });
+  const open = (remotes: RemoteSpec[], origin: "agent" | "you" | "view" = "agent") => gateway.open({ label: `agent · test`, context: "orbstack", origin, cluster, remotes });
   const connect = async (url: string, token: string) => {
     const c = new Client({ name: "claude-code-test", version: "0" });
     await c.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
@@ -191,6 +191,37 @@ describe("a provider on the gateway", () => {
     const w = await s.call("github", "create_branch", { owner: "a", repo: "b", branch: "x" }, "you");
     expect(w.isError).toBe(true);
     await s.close();
+  });
+
+  it("runs a view's tool source (origin view) only for a read the session runs without asking, and logs it as the view's", async () => {
+    const s = await open([spec()], "view");
+    const r = await s.call("github", "get_me", {}, "view");
+    expect(r.isError).toBeFalsy();
+    const logged = gateway.log.list().filter((c: McpCall) => c.origin === "view");
+    expect(logged.at(-1)).toMatchObject({ server: "github", tool: "get_me", origin: "view", status: "ok", gate: "read" });
+    // A write, a read main doesn't list, and landlens-kube: refused, never asked.
+    for (const [server, tool] of [["github", "create_branch"], ["github", "issue_write"], ["landlens-kube", "list_resources"]] as const) {
+      const w: any = await s.call(server, tool, {}, "view");
+      expect(w.isError).toBe(true);
+      expect(w.content[0].text).toMatch(/^Landlens: /);
+    }
+    // Each rule on its own, apart from the allow list: listed there by mistake, a builtin's tool and a write still
+    // don't run from a view.
+    s.allow.push("mcp__landlens-kube__list_resources", "mcp__github__create_branch");
+    for (const [server, tool] of [["landlens-kube", "list_resources"], ["github", "create_branch"]] as const) {
+      const w: any = await s.call(server, tool, { kind: "pods" }, "view");
+      expect(w.isError, `${server} ${tool}`).toBe(true);
+      expect(w.content[0].text).toMatch(/^Landlens: /);
+    }
+    await s.close();
+    // Reads without asking off: not even get_me.
+    const off = await open([spec({ provider: rules({ readsAuto: false }) })], "view");
+    expect((await off.call("github", "get_me", {}, "view")).isError).toBe(true);
+    await off.close();
+    // A session of another origin can't be called as a view.
+    const agent = await open([spec()]);
+    expect((await agent.call("github", "get_me", {}, "view")).isError).toBe(true);
+    await agent.close();
   });
 
   it("sends a connection's requests only to its origins: anything else is refused before it is asked", async () => {

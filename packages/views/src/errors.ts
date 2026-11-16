@@ -40,6 +40,19 @@ export const SENTENCES = {
   viewCut: "This view keeps too many objects in all, so some are left out: read fewer kinds or namespaces.",
   computeFailed: "Landlens couldn't work out this source's rows.",
   rowsTooBig: (shown: number) => `Only the first ${shown.toLocaleString("en-US")} rows fit: this source's rows hold too much text.`,
+  // Part 4 (D212): the connections' sources, in the same voice; nothing from the connection is in any of them.
+  connectionFailed: (name: string) => `${name} couldn't be read just now.`,
+  gcpProject: (project: string) => `${project} isn't one of the projects you let Claude read.`,
+  gcpScope: (limit: readonly string[]) => `This view can't read Google Cloud's data for the whole cluster: its session is limited to ${limit.join(", ")}.`,
+  gcpOutside: (n: number) => `${n} ${n === 1 ? "alert" : "alerts"} outside this view's namespaces ${n === 1 ? "isn't" : "aren't"} shown.`,
+  clicklandLogsRbac: "You can't read pods' logs in this namespace, so Landlens doesn't show them from Clickland.",
+  clicklandUnknown: "Landlens doesn't know that object in this cluster, so it doesn't ask Clickland about it.",
+  clicklandUnscoped: "Clickland's traces for this service aren't all tagged with this cluster and namespace; only those that are are shown.",
+  toolBuiltin: (server: string) => `${server} isn't a server a tool source reads: use its own source kinds.`,
+  toolNoServer: (server: string) => `${server} isn't connected for this cluster's Claude sessions.`,
+  toolFailed: (server: string, tool: string) => `${server} · ${tool} answered with an error.`,
+  toolText: "The tool's answer isn't JSON, so it is one row of text.",
+  toolNoRows: "The tool's answer has no list there, so it is one row of its text.",
 } as const;
 
 export type Issue = { pointer: string; message: string };
@@ -77,8 +90,11 @@ export function issueWords(issue: z.core.$ZodIssue): Issue[] {
       const where = d && issue.path[issue.path.length - 1] !== d ? `${at}/${d}` : at;
       return [{ pointer: where, message: d ? `not a known ${d}` : "doesn't match any allowed shape" }];
     }
-    case "invalid_key":
-      return [{ pointer: at, message: "not a valid name here" }];
+    case "invalid_key": {
+      // The key's own check said why (a tool argument naming a credential, say): its words when they are Landlens's.
+      const inner = (issue as { issues?: { message?: string }[] }).issues?.[0]?.message;
+      return [{ pointer: at, message: inner && /^(a view can't carry credentials|not an argument name)/.test(inner) ? inner : "not a valid name here" }];
+    }
     case "invalid_format":
     case "custom":
       return [{ pointer: at, message: issue.message }];

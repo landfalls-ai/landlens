@@ -3,7 +3,8 @@
 // control or invisible character, and the document is checked whole: blocks name sources that exist and are the right
 // kind, joins form no cycle, parameters exist and are the right type, and every limit of D225 holds. Views can't read
 // Secrets, and nothing here names a URL, a path, a query language string for the cluster, a verb or code to run in main.
-import { GroupName, MetricsRange, MetricsScope, NamespaceName, ObjectName, ResourceName, VersionName } from "@landlens/contracts";
+import { GcpAssetType, GcpProjectId, GroupName, McpServerName, McpToolName, MetricsRange, MetricsScope, NamespaceName, ObjectName, ResourceName, VersionName } from "@landlens/contracts";
+import { GKE_CONTEXT } from "@landlens/gcp";
 import { z } from "zod";
 import { issueWords, issuesOf, SENTENCES, type Issue } from "./errors.js";
 import { VIEW_LIMITS } from "./limits.js";
@@ -145,6 +146,24 @@ function relay(ctx: z.core.$RefinementCtx<unknown>, error: z.ZodError) {
 
 // ---- sources (D207) -----------------------------------------------------------------------------------------------
 
+/** A Cloud Asset query in a view: one line of text, at most 200 characters (D207). */
+const GcpQueryText = Text(200, { min: 1 });
+/** A GKE cluster's context, as gke_clusters lists it (gke_<project>_<location>_<name>). */
+const GkeContext = z.string().max(160).regex(GKE_CONTEXT, "not a GKE context (gke_<project>_<location>_<name>)");
+const ClicklandWorkload = z.object({ kind: z.enum(["Deployment", "StatefulSet", "DaemonSet"]), name: ObjectName }).strict();
+/**
+ * An argument's name may never say it carries a credential (part 4): a view is saved, exported and shared, so a token
+ * Claude (or a file) put in a tool call's arguments would travel with it. The tool reads with the connection's own key,
+ * which never leaves main.
+ */
+export const CREDENTIAL_KEY = /token|secret|passw|pwd|authori[sz]ation|api[-_]?key|apikey|cookie|credential|session|bearer|private[-_]?key/i;
+const ArgName = z.string().min(1).max(64).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "not an argument name")
+  .refine((k) => !INHERITED.has(k), "not an argument name Landlens allows")
+  .refine((k) => !CREDENTIAL_KEY.test(k), "a view can't carry credentials: name no token, key or password");
+const ToolArguments = z.record(ArgName, z.union([Text(500), z.number(), z.boolean()])).superRefine((r, ctx) => {
+  if (Object.keys(r).length > 12) ctx.addIssue({ code: "custom", message: "at most 12 entries" });
+});
+
 const fieldsAndPipe = {
   fields: z.record(Field, PathString).superRefine(count(1, VIEW_LIMITS.fields)).optional(),
   pipe: z.array(Step).max(VIEW_LIMITS.steps).optional(),
@@ -170,7 +189,33 @@ export const Source = z.discriminatedUnion("kind", [
   }).strict(),
   z.object({ kind: z.literal("doctor.problems"), namespace: Namespaces.optional(), ...fieldsAndPipe }).strict(),
   z.object({ kind: z.literal("helm.releases"), namespace: Namespaces.optional(), ...fieldsAndPipe }).strict(),
+  // Part 4 (D212): the connections, each read only where a Claude session on this cluster could read it without asking,
+  // checked at every run. Google Cloud under the person's grant (its chosen projects only); Clickland with its Tools for
+  // Claude and Reads run without asking on, scoped to this cluster; a gateway server's pre-allowed read.
+  z.object({ kind: z.literal("gcp.resources"), project: GcpProjectId, assetType: GcpAssetType.optional(), query: GcpQueryText.optional(), ...fieldsAndPipe }).strict(),
+  z.object({ kind: z.literal("gcp.clusters"), project: GcpProjectId.optional(), ...fieldsAndPipe }).strict(),
+  z.object({ kind: z.literal("gcp.alerts"), project: GcpProjectId, cluster: GkeContext.optional(), ...fieldsAndPipe }).strict(),
+  z.object({ kind: z.literal("gcp.recommendations"), project: GcpProjectId, cluster: GkeContext.optional(), ...fieldsAndPipe }).strict(),
+  z.object({
+    kind: z.literal("gcp.metrics"), cluster: GkeContext, scope: z.enum(["cluster", "node", "namespace", "pod"]), namespace: OneNamespace.optional(),
+    name: ObjectName.optional(), range: MetricsRange, ...fieldsAndPipe,
+  }).strict(),
+  z.object({
+    kind: z.literal("clickland.logs"), namespace: OneNamespace, pod: ObjectName.optional(), workload: ClicklandWorkload.optional(), container: ContainerName.optional(),
+    filter: Text(200).optional(), errorsOnly: z.boolean().optional(), range: MetricsRange, ...fieldsAndPipe,
+  }).strict(),
+  z.object({
+    kind: z.literal("clickland.traces"), namespace: OneNamespace, pod: ObjectName.optional(), workload: ClicklandWorkload.optional(),
+    errorsOnly: z.boolean().optional(), range: MetricsRange, ...fieldsAndPipe,
+  }).strict(),
+  z.object({
+    kind: z.literal("tool"), server: McpServerName, tool: McpToolName, arguments: ToolArguments.optional(), rows: PathString.optional(), ...fieldsAndPipe,
+  }).strict(),
 ]);
+
+/** The Google Cloud and Clickland source kinds, and every source kind that reads a connection rather than the cluster (D212). */
+export const GCP_KINDS = ["gcp.resources", "gcp.clusters", "gcp.alerts", "gcp.recommendations", "gcp.metrics"] as const;
+export const CONNECTION_KINDS: ReadonlySet<string> = new Set([...GCP_KINDS, "clickland.logs", "clickland.traces", "tool"]);
 
 // ---- blocks (D206) ------------------------------------------------------------------------------------------------
 
@@ -256,6 +301,8 @@ export const ViewDocument = DocumentShape.superRefine((d, ctx) => {
   if (apps.length > L.appBlocks) custom(ctx, ["blocks"], SENTENCES.overLimit("app blocks", apps.length, L.appBlocks));
   const logs = ids.filter((id) => d.sources[id]!.kind === "kube.logs");
   if (logs.length > L.logsSources) custom(ctx, ["sources"], SENTENCES.overLimit("kube.logs sources", logs.length, L.logsSources));
+  const tools = ids.filter((id) => d.sources[id]!.kind === "tool");
+  if (tools.length > L.toolSources) custom(ctx, ["sources"], SENTENCES.overLimit("tool sources", tools.length, L.toolSources));
 
   // Parameters: unique, and each reference names one of the right type.
   const params = new Map<string, Param>();
@@ -279,6 +326,18 @@ export const ViewDocument = DocumentShape.superRefine((d, ctx) => {
       if (!!s.pod === !!s.workload) custom(ctx, at, "a kube.logs source names a pod or a workload (one of them)");
     }
     if (s.kind === "kube.top" && s.of === "nodes" && s.namespace !== undefined) custom(ctx, [...at, "namespace"], "nodes have no namespace");
+    if (s.kind === "gcp.metrics") {
+      const needsNs = s.scope === "namespace" || s.scope === "pod";
+      const needsName = s.scope === "node" || s.scope === "pod";
+      if (needsNs && s.namespace === undefined) custom(ctx, [...at, "namespace"], "required");
+      if (!needsNs && s.namespace !== undefined) custom(ctx, [...at, "namespace"], `a ${s.scope} series has no namespace`);
+      if (needsName && s.name === undefined) custom(ctx, [...at, "name"], "required");
+      if (!needsName && s.name !== undefined) custom(ctx, [...at, "name"], `a ${s.scope} series has no name`);
+    }
+    if ((s.kind === "gcp.alerts" || s.kind === "gcp.recommendations") && s.cluster && s.cluster.split("_")[1] !== s.project) {
+      custom(ctx, [...at, "cluster"], "not a cluster of this project");
+    }
+    if ((s.kind === "clickland.logs" || s.kind === "clickland.traces") && !!s.pod === !!s.workload) custom(ctx, at, `a ${s.kind} source names a pod or a workload (one of them)`);
     if (s.kind === "metrics.series") {
       const needsNs = s.scope !== "cluster" && s.scope !== "node";
       const needsName = s.scope !== "cluster" && s.scope !== "namespace";
@@ -328,10 +387,10 @@ export const ViewDocument = DocumentShape.superRefine((d, ctx) => {
     }
     const src = Object.hasOwn(d.sources, b.source) ? d.sources[b.source] : undefined;
     if (!src) return custom(ctx, [...at, "source"], "no such source");
-    if (b.type === "logs" && src.kind !== "kube.logs") return custom(ctx, [...at, "source"], "a logs block needs a kube.logs source");
+    if (b.type === "logs" && src.kind !== "kube.logs" && src.kind !== "clickland.logs") return custom(ctx, [...at, "source"], "a logs block needs a kube.logs or clickland.logs source");
     if (b.type === "problems" && src.kind !== "doctor.problems") return custom(ctx, [...at, "source"], "a problems block needs a doctor.problems source");
     if (b.type !== "logs" && src.kind === "kube.logs") return custom(ctx, [...at, "source"], "a kube.logs source is shown by a logs block");
-    if (b.type === "chart" && src.kind !== "metrics.series" && !b.x) custom(ctx, [...at, "x"], "required (only a metrics.series chart is over time without one)");
+    if (b.type === "chart" && src.kind !== "metrics.series" && src.kind !== "gcp.metrics" && !b.x) custom(ctx, [...at, "x"], "required (only a metrics.series or gcp.metrics chart is over time without one)");
   });
 });
 

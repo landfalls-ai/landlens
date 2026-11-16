@@ -159,15 +159,15 @@ describe("what Claude gets back (D205, D215)", () => {
     expect(text(g)).not.toContain(INJECTION);
   });
 
-  it("view_context names the cluster and its kinds without Secrets, says a view has no Google grant, and carries the catalog", async () => {
+  it("view_context names the cluster and its kinds without Secrets, says which connections a view may read (none here), and carries the catalog", async () => {
     const { claude, text } = await started();
     const t = text(await claude.callTool({ name: "view_context", arguments: {} }));
     expect(t).toMatch(/^Cluster: orbstack /);
     const kinds = t.split("\n").find((l) => l.startsWith("Kinds here"))!;
     expect(kinds).toContain("pods");
     expect(kinds).not.toMatch(/\bsecrets\b/);
-    expect(t).toContain("never from Google Cloud Monitoring: a view has no Google grant");
-    expect(t).toContain("only this cluster");
+    expect(t).toContain("Google Cloud Monitoring's (gcp.metrics) only while Google Cloud is readable below");
+    expect(t).toContain("No connection is readable from a view now (Google Cloud, Clickland and the gateway's servers): only this cluster.");
     expect(t).toContain(VIEW_CATALOG);
     expect(t).not.toContain(INJECTION);
   });

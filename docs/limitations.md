@@ -121,13 +121,19 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
   main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
   only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
-- **Views on demand has its engine, page, blocks and actions, not yet saving** ([views.md](views.md), wave 10 parts
-  1–3): a view isn't kept: it lives in the window until **New view**, a reload or a disconnect, one at a time, with no
-  Save, Export or Duplicate, and your tweaks (a table's sort) last only as long (part 4: saved with the view, with
-  column widths, and example chips); a view's rows aren't listed in ⌘K (part 4); it reads only this cluster, never
-  Google Cloud, GitHub, Linear or a family service (part 4). A view shows what Claude could read, so env values show
-  as `<redacted>` and Secrets never appear; usage over time is never read from Cloud Monitoring (a view has no Google
-  grant); a workload's log follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
+- **Views on demand: what a view can't do yet** ([views.md](views.md), wave 10 parts 1–4). One view open at a time;
+  an unsaved one lives in the window until **New view**, a reload or a disconnect. Saved views keep the document and
+  your tweaks (sort, column widths), not the versions or the chat; reopening one starts no session, and a follow-up
+  starts a new one. A This-cluster view opens only on its own context at its own API server, so a renamed context or
+  a moved server needs it saved again; Any cluster is refused while the document names a literal namespace or object.
+  Rename, Duplicate and Delete are on the page's list, not the sidebar's rows; column widths take a pointer, not keys.
+  An imported file is saved for Any cluster and its custom blocks wait for your yes; its native blocks read what its
+  sources name within the view's access. A connection is read only where a Claude session could read it without
+  asking: Google Cloud under your grant (polled every 5 minutes), Clickland's logs and traces of one pod or workload
+  (every 30 s), a gateway read (every 2 minutes; GitHub's answers seen only through the fake, as text, so one row).
+  A view shows what Claude could read, so env values show as `<redacted>` and Secrets never appear; usage over time
+  comes from Cloud Monitoring only through a `gcp.metrics` source under your Google Cloud grant; a workload's log
+  follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
   A view row's object menu and drawer read the object as you when they open, so a row the view still shows that is
   already gone says so then. A selection holding any row a block chose never offers Delete, also after you tick more
   rows (untick the block's, or Clear and tick your own), and a frame can't start a delete or a drain at all: open the

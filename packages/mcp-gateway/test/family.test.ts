@@ -242,6 +242,27 @@ describe("the family on the gateway", () => {
     await s.close();
   });
 
+  it("runs a view's tool source on a sibling only while its listing is the accepted one and its reads run without asking", async () => {
+    const view = (remotes: RemoteSpec[]) => gateway.open({ label: "view · orbstack", context: "orbstack", origin: "view", cluster, remotes });
+    const on = await view([await clickland()]);
+    expect((await on.call("clickland", "count", {}, "view")).isError).toBeFalsy();
+    // Its own check, apart from the allow list: once the session's reads of the sibling aren't free, a view can't read.
+    on.readsFree.delete("clickland");
+    expect((await on.call("clickland", "count", {}, "view")).isError).toBe(true);
+    await on.close();
+    const off = await view([await clickland({ provider: { id: "clickland", readTools: new Set(FAMILY_READS.clickland), mode: "ask", readsAuto: false, views: true } })]);
+    expect((await off.call("clickland", "count", {}, "view")).isError).toBe(true);
+    await off.close();
+    ck.tools = [...CLICKLAND_TOOLS, { name: "export_everything", description: "new", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];
+    try {
+      const drift = await view([await clickland({ pin: "0".repeat(64) })]);
+      expect((await drift.call("clickland", "count", {}, "view")).isError).toBe(true);
+      await drift.close();
+    } finally {
+      ck.tools = [...CLICKLAND_TOOLS];
+    }
+  });
+
   it("asks for every tool when the listing isn't the accepted one (D111), and says so", async () => {
     const accepted = await clickland();
     ck.tools = [...CLICKLAND_TOOLS, { name: "export_everything", description: "new", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }];

@@ -7,11 +7,15 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Frame, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FakeProvider } from "../../../packages/connections/test/fake-provider";
+import { GH_TOKEN } from "../../../packages/connections/test/helpers";
+import { FakeGcp } from "../../../packages/gcp/test/fake-gcp";
+import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -62,6 +66,39 @@ async function shoot(page: Page, name: string, sizes: number[] = [1280, 1024]) {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.setViewportSize({ width: 1280, height: 800 });
 }
+
+/**
+ * The test build's clipboard (wave 10 part 4): Copy writes to the page's navigator.clipboard, stubbed here to keep the
+ * text in the page, so a test never reads or overwrites the person's own clipboard. Returns a reader for the last copy.
+ */
+async function stubClipboard(page: Page): Promise<() => Promise<string | undefined>> {
+  await page.evaluate(() => {
+    const g = globalThis as unknown as { copied?: string };
+    Object.defineProperty((globalThis as unknown as { navigator: object }).navigator, "clipboard", { configurable: true, value: { writeText: async (t: string) => void (g.copied = t), readText: async () => g.copied ?? "" } });
+    const d = (globalThis as unknown as { document: { execCommand: unknown } }).document;
+    d.execCommand = () => false;
+  });
+  return () => page.evaluate(() => (globalThis as unknown as { copied?: string }).copied);
+}
+
+/** Main's native dialogs, answered in main: the open and save paths the test gives, and each question kept. */
+async function stubDialogs(app: ElectronApplication) {
+  await app.evaluate(({ dialog }) => {
+    const g = globalThis as unknown as { asked: { message: string; detail: string }[]; yes: boolean; openPath?: string; savePath?: string };
+    g.asked = [];
+    g.yes = true;
+    dialog.showMessageBox = (async (...a: unknown[]) => {
+      const o = a.at(-1) as { message: string; detail?: string };
+      g.asked.push({ message: o.message, detail: o.detail ?? "" });
+      return { response: g.yes ? 0 : 1, checkboxChecked: false };
+    }) as typeof dialog.showMessageBox;
+    dialog.showOpenDialog = (async () => (g.openPath ? { canceled: false, filePaths: [g.openPath] } : { canceled: true, filePaths: [] })) as typeof dialog.showOpenDialog;
+    dialog.showSaveDialog = (async () => (g.savePath ? { canceled: false, filePath: g.savePath } : { canceled: true, filePath: "" })) as typeof dialog.showSaveDialog;
+  });
+}
+const setDialog = (app: ElectronApplication, k: "openPath" | "savePath" | "yes", v: string | boolean) =>
+  app.evaluate((_e, [key, val]) => void ((globalThis as unknown as Record<string, unknown>)[key as string] = val), [k, v] as const);
+const askedOf = (app: ElectronApplication) => app.evaluate(() => (globalThis as unknown as { asked: { message: string; detail: string }[] }).asked);
 
 const viewFrames = (page: Page): Frame[] => page.frames().filter((f) => f.url().startsWith("landlens-app://"));
 async function frameWith(page: Page, selector: string, timeout = 30_000): Promise<Frame> {
@@ -153,7 +190,9 @@ describe.runIf(run)("the Views page, with the fake agent, on OrbStack", { timeou
     const r = results();
     expect(r.map((x) => x.tool)).toEqual(["view_context", "render_view"]);
     expect(r[1].text).toMatch(/^View [0-9a-f]{16} v1 shown\.\npods: ok, 1 row\.\ntotal: ok, 1 row\.$/);
-    expect(r[0].text).toContain("never from Google Cloud Monitoring: a view has no Google grant");
+    // Part 4: Google Cloud Monitoring only while Google Cloud is readable; here nothing is connected.
+    expect(r[0].text).toContain("Google Cloud Monitoring's (gcp.metrics) only while Google Cloud is readable below");
+    expect(r[0].text).toContain("No connection is readable from a view now (Google Cloud, Clickland and the gateway's servers): only this cluster.");
     // Live: the test scales its own Deployment, and the row arrives with no prompt.
     const asked = prompts().length;
     kubectl("scale", `deploy/${DEPLOY}`, "--replicas=2");
@@ -549,6 +588,265 @@ describe.runIf(run)("a view and a cluster switch, on OrbStack named twice", { ti
   });
 });
 
+// Wave 10 part 4 (D216, D217): a view saved for this cluster outlives a restart and opens from the sidebar with no
+// session; ⌘K lists it by name; Export writes only the document, and an imported view's native blocks draw at once
+// while its custom block waits for main's own question. The blank page's example chips fill the composer.
+describe.runIf(run)("saved views and view files (part 4), with the fake agent, on OrbStack", { timeout: 120_000 }, () => {
+  const SAVED = `${DEPLOY}-saved`;
+  let app: ElectronApplication;
+  let page: Page;
+  const userData = mkdtempSync(join(tmpdir(), "landlens-e2e-views-saved-"));
+  const files = mkdtempSync(join(tmpdir(), "landlens-e2e-view-files-"));
+  const jsonl = (file: string): any[] => {
+    const p = join(userData, "agent-sessions", file);
+    return existsSync(p) ? readFileSync(p, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  };
+  const prompts = () => jsonl("fake-agent-prompts.jsonl");
+  const rowsOf = (block: string) => page.getByRole("region", { name: block, exact: true }).locator(".vb-rt .tr[role=row]");
+  const head = () => page.locator(".view-head");
+  const launch = async () => {
+    app = await electron.launch({
+      executablePath: require("electron") as unknown as string,
+      args: [resolve(__dirname, "..")],
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: userData, LANDLENS_ACP_AGENT: resolve(__dirname, "fixtures/fake-acp-agent.mjs") },
+    });
+    await stubDialogs(app);
+    page = await app.firstWindow();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("heading", { name: "Pick a cluster" }).waitFor();
+    await page.getByRole("button", { name: /orbstack/ }).first().click();
+    await page.getByRole("button", { name: "Views", exact: true }).waitFor({ timeout: 60_000 });
+  };
+
+  beforeAll(async () => {
+    kubectl("create", "deployment", SAVED, "--image=registry.k8s.io/pause:3.10", "--replicas=1");
+    kubectl("rollout", "status", `deploy/${SAVED}`, "--timeout=120s");
+    await launch();
+    await page.getByRole("button", { name: "Views", exact: true }).click();
+  }, 180_000);
+
+  afterAll(async () => {
+    await app?.close();
+    rmSync(files, { recursive: true, force: true });
+    try {
+      kubectl("delete", "deployment", SAVED, "--ignore-not-found", "--wait=false");
+    } catch {
+      // nothing to remove
+    }
+  }, 60_000);
+
+  it("P1. the blank page offers example chips that fill the composer, and sends nothing by itself", async () => {
+    await page.getByRole("heading", { name: /^Describe what you want to see on orbstack/ }).waitFor();
+    const chips = page.getByRole("group", { name: "Examples" }).getByRole("button");
+    await expect.poll(() => chips.count(), { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+    const box = page.getByRole("textbox", { name: "What do you want to see?" });
+    const before = prompts().length;
+    await chips.first().click();
+    await expect.poll(() => box.inputValue()).not.toBe("");
+    await page.waitForTimeout(800);
+    expect(prompts().length).toBe(before);
+    await shoot(page, "w10p4-01-blank-chips", [1280, 720]);
+  });
+
+  it("P2. saves a view for This cluster: the sheet, the sidebar, ⌘K, and a file of the person's own (0600) holding no session", async () => {
+    const box = page.getByRole("textbox", { name: "What do you want to see?" });
+    await box.fill("view-script: saved-pods");
+    await box.press("Enter");
+    await expect.poll(() => rowsOf("Deployments").count(), { timeout: 30_000 }).toBe(1);
+    await head().getByRole("button", { name: "Save", exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: "Save this view" });
+    await sheet.waitFor();
+    expect(await sheet.getByRole("radio", { name: "This cluster" }).getAttribute("aria-checked")).toBe("true");
+    await sheet.getByLabel("Name").fill("Test deployments");
+    await shoot(page, "w10p4-02-save-sheet", [1280, 720]);
+    await sheet.getByRole("button", { name: "Save", exact: true }).click();
+    await head().getByRole("button", { name: "Saved", exact: true }).waitFor();
+    const row = page.locator(".nav-sub").getByRole("button", { name: "Test deployments" });
+    await row.waitFor();
+    await shoot(page, "w10p4-03-saved-sidebar", [1280, 720]);
+    const file = join(userData, "views.json");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const kept = JSON.parse(readFileSync(file, "utf8")) as any[];
+    expect(kept).toHaveLength(1);
+    const allowed = ["document", "id", "name", "namespaces", "origin", "savedAt", "scope", "tweaks"];
+    expect(Object.keys(kept[0]).filter((k) => !allowed.includes(k))).toEqual([]);
+    expect(kept[0].scope.kind).toBe("cluster");
+    expect(JSON.stringify(kept)).not.toMatch(/session|token|rows/i);
+    // The name is the person's: it never went to Claude.
+    expect(JSON.stringify(prompts())).not.toContain("Test deployments");
+    // ⌘K: the saved view by name.
+    await page.keyboard.press("Meta+k");
+    await page.getByRole("combobox", { name: "Search" }).fill("Test dep");
+    const option = page.getByRole("option", { name: /View: Test deployments/ }).first();
+    await option.waitFor();
+    await shoot(page, "w10p4-04-jump", [1280]);
+    await page.keyboard.press("Escape");
+  });
+
+  it("P3. after a restart it opens from the sidebar, live, with no session; a follow-up starts one with the document attached", async () => {
+    await app.close();
+    await launch();
+    const before = prompts().length;
+    await page.locator(".nav-sub").getByRole("button", { name: "Test deployments" }).click();
+    await expect.poll(() => rowsOf("Deployments").count(), { timeout: 30_000 }).toBe(1);
+    expect(await head().locator(".view-cluster").innerText()).toBe("orbstack");
+    await head().getByRole("button", { name: "Saved", exact: true }).waitFor();
+    await page.waitForTimeout(1_500);
+    expect(prompts().length).toBe(before);
+    await shoot(page, "w10p4-05-reopened", [1280, 720]);
+    const box = page.getByRole("region", { name: "Chat with Claude" }).getByRole("textbox", { name: "Ask Claude" });
+    await box.fill("Which of these is oldest?");
+    await box.press("Enter");
+    await expect.poll(() => prompts().length, { timeout: 60_000 }).toBe(before + 1);
+    const sent = JSON.stringify(prompts().at(-1));
+    expect(sent).toContain("Which of these is oldest?");
+    expect(sent).toContain("Deployments of the views test");
+    expect(sent).not.toContain("Test deployments");
+  });
+
+  it("P4. Export writes the document and its name only, through main's dialog", async () => {
+    const out = join(files, "exported.landlens-view.json");
+    await setDialog(app, "savePath", out);
+    await head().getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Export…" }).click();
+    await page.getByRole("status").filter({ hasText: "Exported." }).waitFor();
+    const f = JSON.parse(readFileSync(out, "utf8"));
+    expect(Object.keys(f).sort()).toEqual(["document", "exportedAt", "landlensView", "name"]);
+    expect(f.name).toBe("Test deployments");
+    expect(JSON.stringify(f)).not.toMatch(/orbstack|https:\/\/|"rows"|token/i);
+  });
+
+  it("P5. Import refuses a file holding a token and saves nothing; a good file's native blocks draw and its custom block waits for main's question", async () => {
+    const bad = join(files, "bad.landlens-view.json");
+    const good = JSON.parse(readFileSync(resolve(__dirname, "fixtures/shared-view.landlens-view.json"), "utf8"));
+    writeFileSync(bad, JSON.stringify({ ...good, document: { ...good.document, title: `ghp_${"A".repeat(36)}` } }));
+    const savedBefore = (JSON.parse(readFileSync(join(userData, "views.json"), "utf8")) as unknown[]).length;
+    await head().getByRole("button", { name: "More" }).click();
+    await page.getByRole("menuitem", { name: "Saved views…" }).click();
+    const list = page.getByRole("dialog", { name: "Saved views" });
+    await list.getByRole("button", { name: "Import…" }).click();
+    await setDialog(app, "openPath", bad);
+    await list.getByRole("button", { name: "Choose a file…" }).click();
+    const alert = list.getByRole("alert");
+    await alert.waitFor();
+    expect(await alert.innerText()).toMatch(/\/document\/title: holds text that looks like a credential/);
+    await shoot(page, "w10p4-06-import-refused", [1280]);
+    expect((JSON.parse(readFileSync(join(userData, "views.json"), "utf8")) as unknown[]).length).toBe(savedBefore);
+
+    await setDialog(app, "openPath", resolve(__dirname, "fixtures/shared-view.landlens-view.json"));
+    await list.getByRole("button", { name: "Choose a file…" }).click();
+    await expect.poll(() => rowsOf("Deployments").count(), { timeout: 30_000 }).toBe(1);
+    const held = page.getByRole("note", { name: "Custom blocks from a file" });
+    await held.waitFor();
+    await page.waitForTimeout(1_000);
+    expect(viewFrames(page)).toHaveLength(0);
+    expect(await askedOf(app)).toHaveLength(0);
+    await shoot(page, "w10p4-07-imported-held", [1280, 720]);
+    // No, then yes: main asks, naming what the block reads; only a yes runs it.
+    await setDialog(app, "yes", false);
+    await held.getByRole("button", { name: "Run custom blocks" }).click();
+    await expect.poll(async () => (await askedOf(app)).length).toBe(1);
+    await page.waitForTimeout(800);
+    expect(viewFrames(page)).toHaveLength(0);
+    await setDialog(app, "yes", true);
+    await held.getByRole("button", { name: "Run custom blocks" }).click();
+    await expect.poll(async () => (await askedOf(app)).length).toBe(2);
+    const q = (await askedOf(app))[1]!;
+    expect(q.message).toMatch(/^Run 1 custom block from a view file\?/);
+    expect(q.detail).toContain("Count");
+    const f = await frameWith(page, "#n");
+    await expect.poll(() => f.locator("#n").innerText(), { timeout: 20_000 }).toBe("1 deployments");
+    await held.waitFor({ state: "detached" });
+    await shoot(page, "w10p4-08-imported-run", [1280]);
+    const kept = JSON.parse(readFileSync(join(userData, "views.json"), "utf8")) as any[];
+    const imp = kept.find((v) => v.origin === "imported");
+    expect(imp.scope).toEqual({ kind: "any" });
+    expect(imp.appsTrusted).toBe(true);
+  });
+});
+
+// Wave 10 part 4 (D207, D212): a view's Google Cloud source reads only under the person's grant (the fake Google), and
+// its GitHub source runs a read that runs unasked, through the gateway as a "view" call (the fake GitHub). No real
+// Google or GitHub call is made; the GitHub token stays in main.
+describe.runIf(run)("a view's connection sources (part 4), against the fakes, on OrbStack", { timeout: 120_000 }, () => {
+  let app: ElectronApplication;
+  let page: Page;
+  let gcp: FakeGcp;
+  let github: FakeProvider;
+  const sdk = sdkDir();
+  const userData = mkdtempSync(join(tmpdir(), "landlens-e2e-views-conn-"));
+  const invoke = (channel: string, req: unknown) =>
+    page.evaluate(([c, r]) => (globalThis as any).landlens.invoke(c as string, r).then((x: unknown) => ({ ok: x }), (e: Error) => ({ error: e.message })), [channel, req] as const);
+  const rowsOf = (block: string) => page.getByRole("region", { name: block, exact: true }).locator(".vb-rt .tr[role=row]");
+
+  beforeAll(async () => {
+    gcp = await new FakeGcp().start();
+    github = await new FakeProvider("github").start();
+    github.valid.add(GH_TOKEN);
+    // A yes to Claude's reading kept from before (the account and what it covers): views read under it, never more.
+    writeFileSync(join(userData, "gcp.json"), JSON.stringify({ projects: ["demo-shop"], agentRead: true, grant: { account: "person@example.com", projects: ["demo-shop"], covers: 2 }, confirmed: [] }), { mode: 0o600 });
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(LANDLENS_GCP_|LANDLENS_GCLOUD|CLOUDSDK_)/.test(k)) env[k] = v;
+    app = await electron.launch({
+      executablePath: require("electron") as unknown as string,
+      args: [resolve(__dirname, "..")],
+      env: {
+        ...env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: userData, LANDLENS_ACP_AGENT: resolve(__dirname, "fixtures/fake-acp-agent.mjs"),
+        LANDLENS_GCP_ENDPOINT: gcp.origin, LANDLENS_GCLOUD: FAKE_GCLOUD, CLOUDSDK_CONFIG: sdk, LANDLENS_GITHUB_ENDPOINT: github.origin,
+      },
+    });
+    await stubDialogs(app);
+    page = await app.firstWindow();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("heading", { name: "Pick a cluster" }).waitFor();
+    const r = await invoke("conn:token", { provider: "github", token: GH_TOKEN });
+    expect(r).not.toHaveProperty("error");
+    await page.getByRole("button", { name: /orbstack/ }).first().click();
+    await page.getByRole("button", { name: "Views", exact: true }).click();
+  }, 180_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await gcp?.stop();
+    await github?.stop();
+    rmSync(sdk, { recursive: true, force: true });
+  }, 60_000);
+
+  it("P6. Google Cloud rows under the grant, GitHub rows through the gateway as a view's read; reads off makes the source say so", async () => {
+    const box = page.getByRole("textbox", { name: "What do you want to see?" });
+    await box.fill("view-script: connections");
+    await box.press("Enter");
+    await expect.poll(() => rowsOf("Google Cloud resources").count(), { timeout: 60_000 }).toBeGreaterThan(3);
+    await expect.poll(() => rowsOf("Branches").count(), { timeout: 30_000 }).toBe(1);
+    expect(await rowsOf("Branches").first().innerText()).toContain("fake list_branches");
+    await shoot(page, "w10p4-09-connections", [1280, 720]);
+    // The gateway's audit says the read came from a view, and ran as a read (never asked).
+    const calls = (await invoke("mcp:calls", {})) as { ok: { calls: { origin?: string; server: string; tool: string; gate?: string }[] } };
+    const viewCalls = calls.ok.calls.filter((c) => c.origin === "view");
+    expect(viewCalls.map((c) => `${c.server}·${c.tool}`)).toContain("github·list_branches");
+    expect(viewCalls.every((c) => c.gate === "read")).toBe(true);
+    // The GitHub token never left main for the view: only the fake saw it.
+    expect(JSON.stringify(calls)).not.toContain(GH_TOKEN);
+    await page.getByRole("button", { name: "MCP", exact: true }).click();
+    await page.getByRole("tab", { name: /^Calls/ }).click();
+    await page.getByRole("list", { name: "MCP calls" }).getByText("from a view").first().waitFor({ timeout: 10_000 });
+    await shoot(page, "w10p4-10-mcp-view-origin", [1280]);
+    await page.getByRole("button", { name: "Views", exact: true }).click();
+    await expect.poll(() => rowsOf("Google Cloud resources").count(), { timeout: 30_000 }).toBeGreaterThan(3);
+
+    // Reading turned off: at the next read the source is off with its sentence, and no rows stay.
+    await invoke("gcp:agent-read", { on: false });
+    const id = await page.locator(".views-page[data-view]").getAttribute("data-view");
+    await page.waitForTimeout(5_200);
+    await invoke("views:refresh", { view: id });
+    await expect.poll(() => rowsOf("Google Cloud resources").count(), { timeout: 30_000 }).toBe(0);
+    await page.getByRole("button", { name: "How Claude built this" }).click();
+    const d = page.getByRole("complementary", { name: "How Claude built this" });
+    await expect.poll(() => d.innerText(), { timeout: 10_000 }).toMatch(/Google Cloud isn't readable by Claude right now/);
+    await shoot(page, "w10p4-11-gcp-off", [1280]);
+  });
+});
+
 // The live case: the person's own Claude Code (their login, through claude-agent-acp), asked for a view of
 // landlens-dev. Read-only: the session's writes ask, and the test answers no question but "allow once" for reads.
 // LANDLENS_INTEGRATION=orbstack,claude npx vitest run --no-file-parallelism test/views.e2e.test.ts -t "live: Claude"
@@ -592,17 +890,21 @@ describe.runIf(run && flags.includes("claude"))("the Views page with the person'
     await shoot(page, "w10p3-05-live", [1280]);
     await page.getByRole("button", { name: "How Claude built this" }).click();
     const d = page.getByRole("complementary", { name: "How Claude built this" });
+    // The copy goes to the page's stubbed clipboard (never the person's), and the document is read over IPC too.
+    const copied = await stubClipboard(page);
     await d.getByRole("button", { name: "Copy document" }).click();
-    // Wait for the copy itself: read too early, the clipboard still holds whatever was there before.
     let doc: any;
     await expect.poll(async () => {
       try {
-        doc = JSON.parse(await app.evaluate(({ clipboard }) => clipboard.readText()));
+        doc = JSON.parse((await copied()) ?? "");
       } catch {
         doc = undefined;
       }
       return doc?.schema;
     }, { timeout: 10_000 }).toBe(1);
+    const id = await page.locator(".views-page[data-view]").getAttribute("data-view");
+    const got = await page.evaluate((v) => (globalThis as any).landlens.invoke("views:get", { view: v }), id);
+    expect(got.document).toEqual(doc);
     await shoot(page, "w10p3-06-live-disclosure", [1280]);
     const summary = {
       title: doc.title, asked,
@@ -615,5 +917,15 @@ describe.runIf(run && flags.includes("claude"))("the Views page with the person'
     if (shots) writeFileSync(resolve(shots, "w10p3-live-view.json"), JSON.stringify({ summary, document: doc }, null, 2));
     expect(Object.values(doc.sources as Record<string, any>).every((s) => s.resource !== "secrets")).toBe(true);
     expect(summary.states.some((s) => /ok · \d+ rows?/.test(s))).toBe(true);
+
+    // Part 4: save it for this cluster; it is in the sidebar, and its name never went to Claude.
+    await d.getByRole("button", { name: "Close" }).click();
+    await page.locator(".view-head").getByRole("button", { name: "Save", exact: true }).click();
+    const sheet = page.getByRole("dialog", { name: "Save this view" });
+    await sheet.getByLabel("Name").fill("Live: landlens-dev pods");
+    await sheet.getByRole("button", { name: "Save", exact: true }).click();
+    await page.locator(".view-head").getByRole("button", { name: "Saved", exact: true }).waitFor();
+    await page.locator(".nav-sub").getByRole("button", { name: "Live: landlens-dev pods" }).waitFor();
+    await shoot(page, "w10p4-live-saved", [1280]);
   });
 });

@@ -60,7 +60,8 @@ export type SessionInit = {
   /** "agent 3 · orbstack", "you · orbstack". */
   label: string;
   context: string;
-  origin: "agent" | "you";
+  /** "view": the Views page's tool sources (wave 10 part 4, D212): pre-allowed reads only, never landlens-kube. */
+  origin: "agent" | "you" | "view";
   /** The session's cluster, through the front door with its own token. */
   cluster: AgentCluster;
   /** The remote servers turned on for this cluster, with their headers. */
@@ -229,7 +230,7 @@ export class GatewaySession {
   }
 
   /** Call a tool as an app's view or as you; the agent's calls come in over HTTP. */
-  call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you", onCall?: (id: string) => void): Promise<CallToolResult> {
+  call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you" | "view", onCall?: (id: string) => void): Promise<CallToolResult> {
     return this.gateway.run(this, server, tool, args, origin, onCall ? { onCall } : {});
   }
 
@@ -643,6 +644,17 @@ export class McpGateway {
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
       }
       if (!isBuiltin(server)) this.log.gate(id, free ? "read" : "asked");
+    } else if (origin === "view") {
+      // A view's tool source (wave 10 part 4, D212): only a read this cluster's Claude sessions run without asking (the
+      // same listing pin and vendor read list: the session's pre-allowed set, as it stands at this call), with no
+      // question ever; Landlens's own servers have their own source kinds. Nothing here holds a session's autonomy:
+      // the data goes to the page, not to a conversation.
+      const notFree = `${server} · ${tool} isn't a read that runs without asking.`;
+      if (s.init.origin !== "view") return refuse(notFree);
+      if (isBuiltin(server)) return refuse(`${server}'s data has its own source kinds in a view.`);
+      if (!offered || !readOnly || !modelMayCall(t) || !s.allow.includes(`mcp__${server}__${tool}`)) return refuse(notFree);
+      if (provider && isSibling(provider.id) && !s.readsFree.has(server)) return refuse(notFree);
+      this.log.gate(id, "read");
     } else if (!offered) {
       return refuse(unoffered);
     } else if (!readOnly) {
