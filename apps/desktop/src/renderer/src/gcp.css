@@ -103,3 +103,63 @@
 .cards-label .dim { font-weight: 400; color: var(--ink-3); }
 .cl-tile.gke { --g1: #6FA8F5; --g2: #2F6FD0; }
 .cluster-option .dim.small { font-weight: 400; }
+
+/* "Google suggests" on the Overview (wave 9, D178): GKE's recommender for this cluster. Google's text is plain text. */
+.gs .gs-cloud { color: var(--accent); }
+.gs-where { color: var(--ink-3); font-size: var(--t-12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.gs-list { padding-top: 4px; }
+.gs-item + .gs-item { margin-top: 1px; }
+.gs-row { align-items: flex-start; }
+.gs-row > .badge { margin-top: 1px; min-width: 84px; }
+.gs-row .chev { margin-top: 3px; flex: none; }
+.gs-desc { color: var(--ink); line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.gs-item.open .gs-desc { display: block; }
+.gs-meta { margin-top: 2px; color: var(--ink-3); font-size: var(--t-12); }
+.gs-detail { margin: 2px 10px 10px 106px; padding: 10px 12px; border-radius: var(--r-3); background: var(--bg-1); box-shadow: inset 0 0 0 1px var(--line); display: grid; gap: 8px; min-width: 0; }
+.gs-detail h4 { margin: 0; font-size: var(--t-12); font-weight: 600; color: var(--ink-2); }
+.gs-detail p { margin: 0; color: var(--ink-2); line-height: 1.45; overflow-wrap: anywhere; }
+.gs-priority { color: var(--ink-3); }
+.gs-source { color: var(--ink-3) !important; font-size: var(--t-12); }
+.gs-apis { width: 100%; border-collapse: collapse; font-size: var(--t-12); table-layout: fixed; }
+.gs-apis th { text-align: left; font-weight: 500; color: var(--ink-3); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+.gs-apis th:nth-child(2) { width: 92px; }
+.gs-apis td { vertical-align: top; padding: 6px 8px 6px 0; color: var(--ink-2); }
+.gs-apis tr + tr td { border-top: 1px solid var(--line); }
+.gs-api, .gs-agent { word-break: break-all; }
+.gs-callers { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.gs-notice { margin: 12px; }
+.gs-cut { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px 12px; color: var(--ink-2); font-size: var(--t-12); line-height: 1.45; }
+.gs-cut .ic { flex: none; margin-top: 1px; }
+.gs-notice code { font-size: var(--t-12); background: var(--bg-3); padding: 0 4px; border-radius: 4px; word-break: break-all; }
+.gs-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 4px; color: var(--ink-3); font-size: var(--t-12); }
+.gs-hint .ic { flex: none; }
+@container main (max-width: 1000px) {
+  .gs-detail { margin-left: 10px; }
+  .gs-apis th:nth-child(2) { width: 70px; }
+}
+
+/* Cloud Monitoring's alerts (wave 9 part 3, D188): the Problems page's third section, its drawer, the Overview's line. */
+.pb-gcp .pb-cloud { color: var(--accent); }
+.pb-sec-where { margin-left: 4px; color: var(--ink-3); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pb-alert .kind-tile:not(.bad):not(.warn) { color: var(--accent); }
+.pb-alert-detail { display: flex; min-width: 0; white-space: nowrap; }
+.pb-alert-detail > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pb-alert-detail > span:first-child { flex: none; max-width: 60%; }
+.pb-none { display: flex; align-items: center; gap: 7px; margin: 6px 10px; color: var(--ink-2); font-size: var(--t-12); }
+.pb-none .ic { flex: none; }
+.pb-others { margin: 6px 10px 0; }
+.al-policy { display: grid; gap: 8px; margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.al-policy h3 { margin: 0; font-size: var(--t-12); color: var(--ink-2); }
+.al-policy h4 { margin: 0; font-size: var(--t-12); font-weight: 500; color: var(--ink-3); }
+.al-policy p { margin: 0; overflow-wrap: anywhere; }
+.al-conditions { margin: 0; padding-left: 18px; display: grid; gap: 3px; color: var(--ink-2); overflow-wrap: anywhere; }
+.al-doc { padding: 10px 12px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); display: grid; gap: 6px; }
+.al-doc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--ink-3); font-size: var(--t-12); }
+.al-doc-head .al-cut { padding: 0 6px; border-radius: 999px; background: var(--bg-3); white-space: nowrap; }
+.al-doc-text { color: var(--ink-2); line-height: 1.45; white-space: normal; }
+.ov-alerts { display: flex; align-items: center; gap: 6px; margin: 2px 4px 6px; font-size: var(--t-12); }
+.ov-alerts.tone-warn .ic { color: var(--warn-text); }
+.ov-alerts.tone-muted { color: var(--ink-3); }
+.verdict-alerts { display: flex; align-items: center; gap: 6px; font-size: var(--t-12); }
+.gs-ask { justify-self: start; }
+@container main (max-width: 720px) { .pb-sec-where { display: none; } }

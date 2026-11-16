@@ -13,8 +13,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,9 +45,63 @@ const minSecretLen = 32
 
 // Ready is the one JSON line written to stdout once the sidecar listens.
 type Ready struct {
-	Listening string `json:"listening"`
-	Context   string `json:"context"`
-	Server    string `json:"server"`
+	Listening string   `json:"listening"`
+	Context   string   `json:"context"`
+	Server    string   `json:"server"`
+	TLS       ReadyTLS `json:"tls"`
+}
+
+// ReadyTLS says whom the sidecar trusts to be the cluster (security review of wave 9 part 1, M1): Landlens ties a
+// context of your own to a GKE cluster only when this CA is the one Google lists for it and TLS is verified.
+type ReadyTLS struct {
+	// CA is the hex SHA-256 of the DER bytes of every CERTIFICATE block of the CA the context trusts
+	// (certificate-authority-data, else the certificate-authority file), in order; "" when it names none (the
+	// system roots).
+	CA string `json:"ca"`
+	// Insecure: insecure-skip-tls-verify is set.
+	Insecure bool `json:"insecure"`
+	// ServerName: tls-server-name is set (the name checked on the certificate isn't the address's).
+	ServerName bool `json:"serverName"`
+	// Proxy: proxy-url is set.
+	Proxy bool `json:"proxy"`
+}
+
+// readyTLS reports cfg's trust as ReadyTLS. The CA is read the way client-go's transport reads it: the data when set,
+// else the file.
+func readyTLS(cfg *rest.Config) (ReadyTLS, error) {
+	out := ReadyTLS{
+		Insecure:   cfg.TLSClientConfig.Insecure,
+		ServerName: cfg.TLSClientConfig.ServerName != "",
+		Proxy:      cfg.Proxy != nil,
+	}
+	data := cfg.TLSClientConfig.CAData
+	if len(data) == 0 && cfg.TLSClientConfig.CAFile != "" {
+		b, err := os.ReadFile(cfg.TLSClientConfig.CAFile)
+		if err != nil {
+			return out, fmt.Errorf("reading the cluster's CA: %w", err)
+		}
+		data = b
+	}
+	if len(data) > 0 {
+		out.CA = caFingerprint(data)
+	}
+	return out, nil
+}
+
+// caFingerprint is the hex SHA-256 of the DER bytes of every CERTIFICATE block in a PEM text, in order.
+func caFingerprint(pemData []byte) string {
+	h := sha256.New()
+	for remaining := pemData; ; {
+		var block *pem.Block
+		block, remaining = pem.Decode(remaining)
+		if block == nil {
+			break
+		}
+		if block.Type == "CERTIFICATE" {
+			h.Write(block.Bytes)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func main() {
@@ -90,7 +147,11 @@ func run() error {
 	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
-	ready, _ := json.Marshal(Ready{Listening: ln.Addr().String(), Context: *contextName, Server: cfg.Host})
+	trust, err := readyTLS(cfg)
+	if err != nil {
+		return err
+	}
+	ready, _ := json.Marshal(Ready{Listening: ln.Addr().String(), Context: *contextName, Server: cfg.Host, TLS: trust})
 	fmt.Println(string(ready))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

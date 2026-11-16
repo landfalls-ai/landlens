@@ -1,8 +1,11 @@
 // The landing page: is this cluster healthy? One verdict, four tiles, the worst five problems (the Problems page has
 // them all), the recent warnings, and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
+// On a GKE cluster of a chosen project, Google's own suggestions sit under the two columns (wave 9, D178), and Cloud
+// Monitoring's open alerts get a line under the Problems panel's head and beside "All clear" (D188).
 import type { ClusterHealth, HealthEvent, HealthProblem, MetricsRange, MetricsSeries } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
-import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Layers, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
+import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Cloud, Layers, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
+import type { GkeAdvice } from "@landlens/contracts";
 import { useState, type ReactNode } from "react";
 import { Ic, iconOfKind, kindIcon } from "./icons";
 import { plural } from "./health";
@@ -13,6 +16,9 @@ import { useMetrics } from "./metrics";
 import { Usage } from "./Usage";
 import { ChecksStrip } from "./Problems";
 import { missingChecks } from "@landlens/kube/checks";
+import type { GoogleView } from "./googleView";
+import { GoogleHint, GoogleSuggests } from "./GoogleSuggests";
+import { overviewAlerts, verdictAlerts } from "./googleRules";
 
 /** The Overview shows the worst few; the Problems page has them all. */
 const OV_PROBLEMS = 5;
@@ -36,10 +42,20 @@ export function Overview(props: {
   onAskProblem: (p: HealthProblem) => void;
   onSeeAll: () => void;
   onAskAll: () => void;
+  /** The Google Cloud page (a GKE-looking cluster's project isn't chosen). */
+  onOpenGcp: () => void;
+  /** Google's view of this cluster (the workspace's one hook, D177). */
+  google: GoogleView;
+  /** Problems with only Cloud Monitoring's alerts (D188). */
+  onOpenAlerts: () => void;
+  /** Ask Claude about one of Google's suggestions (D189). */
+  onAskAdvice: (a: GkeAdvice) => void;
 }) {
   const { health: h, now } = props;
   const [range, setRange] = useState<MetricsRange>("1h");
   const usage = useMetrics({ handle: props.handle, scope: "cluster" }, range, props.metricsVersion);
+  const google = props.google;
+  const alertsLine = overviewAlerts(google.view);
   if (!h && props.error && props.error.status === 403 && !props.scoped && props.onNamespace) {
     return <div className="ov"><NamespaceNeeded message={props.error.message} onNamespace={props.onNamespace} /></div>;
   }
@@ -62,7 +78,7 @@ export function Overview(props: {
   return (
     <div className="ov">
       {props.several ? <div className="chip ov-scope" role="note"><Ic icon={Layers} size={12} />{props.several} namespaces selected: this page shows the whole cluster</div> : null}
-      <Verdict h={h} onAsk={props.onAskAll} />
+      <Verdict h={h} onAsk={props.onAskAll} alerts={verdictAlerts(google.view, google.reading)} />
       <ChecksStrip h={h} />
       <div className="tiles">
         {h.nodes ? (
@@ -113,6 +129,12 @@ export function Overview(props: {
       <div className="ov-cols">
         <section className="panel" aria-label="Problems">
           <header className="panel-head"><h3>Problems</h3><span className="count-badge">{h.problems.length}</span><span className="grow" /><button className="link-btn small" onClick={props.onSeeAll}>Open Problems</button></header>
+          {alertsLine ? (
+            <p className={`ov-alerts tone-${alertsLine.tone}`} role="note">
+              <Ic icon={Cloud} size={13} />
+              <button className="link-btn small" onClick={props.onOpenAlerts}>{alertsLine.text}</button>
+            </p>
+          ) : null}
           {h.problems.length ? (
             <>
               <ul className="ov-list">{h.problems.slice(0, OV_PROBLEMS).map((x) => <ProblemRow key={x.id} p={x} onOpen={props.onOpenProblem} onAsk={props.onAskProblem} />)}</ul>
@@ -131,13 +153,15 @@ export function Overview(props: {
           )}
         </section>
       </div>
+      <GoogleSuggests g={google} now={now} onAsk={props.onAskAdvice} />
       <Usage state={usage} range={range} onRange={setRange} onSettings={props.onSettings} />
       {h.nodes ? <Nodes nodes={h.nodes.items} usage={usage.data?.source === "none" ? undefined : usage.data} /> : null}
+      <GoogleHint g={google} onOpenGcp={props.onOpenGcp} />
     </div>
   );
 }
 
-function Verdict({ h, onAsk }: { h: ClusterHealth; onAsk: () => void }) {
+function Verdict({ h, onAsk, alerts }: { h: ClusterHealth; onAsk: () => void; alerts?: string }) {
   const bad = h.problems.filter((p) => p.tone === "bad");
   const warn = h.problems.filter((p) => p.tone === "warn");
   if (!h.problems.length) {
@@ -149,6 +173,7 @@ function Verdict({ h, onAsk }: { h: ClusterHealth; onAsk: () => void }) {
         <div className="verdict-text">
           <h2>{skipped ? "No problems found, but some checks were skipped" : "All clear"}</h2>
           <p>{plural(h.pods.running, "pod")} running{h.nodes ? ` on ${plural(h.nodes.total, "node")}` : ""}.</p>
+          {alerts ? <p className="verdict-alerts"><Ic icon={Cloud} size={13} />{alerts}</p> : null}
         </div>
       </section>
     );

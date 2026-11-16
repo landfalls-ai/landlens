@@ -2,11 +2,15 @@
 // cluster:health, which main works out as you; the drawer's Logs tab asks main for the one problem's evidence
 // (doctor:evidence), by its id only. Text written by workloads (event and termination messages, log lines) is shown
 // as text, never as markup.
-import type { ClusterHealth, DoctorEvidence, LandflowSent, Problem } from "@landlens/contracts";
+//
+// On a GKE cluster of a chosen project a third section, "From Cloud Monitoring", lists Google's open alerts on the
+// cluster (wave 9 part 3, D188), from main's gcp:cluster-view. They are Google's judgment, not the doctor's: the counts
+// the sidebar, the status bar and Pods show stay the doctor's. Their text (a policy's name) is shown as text.
+import type { ClusterHealth, DoctorEvidence, GcpAlert, LandflowSent, Problem } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
 import { missingChecks } from "@landlens/kube/checks";
 import {
-  CircleCheck, CircleX, Clock, Database, Info, Lock, ScrollText, Siren, Sparkles, SquareArrowOutUpRight, Stethoscope, TriangleAlert, X,
+  BellRing, CircleCheck, CircleX, Clock, Cloud, Database, Info, Lock, ScrollText, Siren, Sparkles, SquareArrowOutUpRight, Stethoscope, TriangleAlert, X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, type ApiError } from "./api";
@@ -14,7 +18,9 @@ import type { NavTarget } from "./Details";
 import { Ic, iconOfKind } from "./icons";
 import { plural } from "./health";
 import { openInLandflow } from "./landflow";
-import { classCounts, filterProblems, hasLogs, sections, subjectOf, type HeldProblem, type Severity } from "./problemRules";
+import { alertInNamespaces, classCounts, filterAlerts, filterProblems, hasLogs, sections, subjectOf, type HeldProblem, type Severity } from "./problemRules";
+import type { GoogleView } from "./googleView";
+import { ALERT_BADGE, alertCount, alertNotes, alertOthers, alertsOf, alertsPartial, alertSubjectLine, NO_ALERTS, openFor, policyName } from "./googleRules";
 import type { ProblemClass } from "@landlens/contracts";
 
 const when = (iso: string | undefined, now: number) => {
@@ -23,9 +29,12 @@ const when = (iso: string | undefined, now: number) => {
 };
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** One sentence per check the doctor couldn't make (D56), so "no problems" never reads as "all clear". */
-export function ChecksStrip({ h }: { h: ClusterHealth }) {
-  const missing = missingChecks(h.checks);
+/**
+ * One sentence per check the doctor couldn't make (D56), so "no problems" never reads as "all clear"; and, on the
+ * Problems page, Cloud Monitoring's alerts that weren't read or were only partly read (D188).
+ */
+export function ChecksStrip({ h, extra = [] }: { h: ClusterHealth; extra?: string[] }) {
+  const missing = [...missingChecks(h.checks), ...extra];
   if (!missing.length) return null;
   return (
     <div className="notice pb-checks" role="status">
@@ -57,8 +66,19 @@ export function ProblemsPage(props: {
   sent?: Map<string, LandflowSent>;
   /** Send to triage…, while Landflow's triage webhook is set up (D122). */
   onTriage?: (p: Problem) => void;
+  /** Google's view of this cluster (D188): its open alerts make the third section. */
+  google?: GoogleView;
+  /** The namespaces chosen (none: all); an alert shows only in its own namespace, or in all (D188). */
+  namespaces?: string[];
+  /** The alert in the drawer, by id. */
+  alertSelected?: string;
+  onAlertSelect?: (a: GcpAlert) => void;
+  onAlertAsk?: (a: GcpAlert) => void;
+  onAlertOpen?: (a: GcpAlert) => void;
 }) {
   const { health: h, now } = props;
+  const view = props.google?.view;
+  const namespaces = props.namespaces ?? [];
   const [cls, setCls] = useState<ProblemClass>();
   const [inTriage, setInTriage] = useState(false);
   const sent = props.sent;
@@ -73,6 +93,18 @@ export function ProblemsPage(props: {
     if (inTriage && !triaged) setInTriage(false);
   }, [inTriage, triaged]);
   const chips = useMemo(() => classCounts(all, props.severity), [all, props.severity]);
+  // Cloud Monitoring's alerts (D188): those of the chosen namespaces count on the segment; the section shows what the
+  // segment, the chips and the toolbar's words leave.
+  const alerts = alertsOf(view);
+  const inScope = useMemo(() => (alerts?.items ?? []).filter((a) => alertInNamespaces(a, namespaces)), [alerts, namespaces]);
+  const outside = (alerts?.items.length ?? 0) - inScope.length;
+  const shownAlerts = useMemo(() => filterAlerts(alerts?.items ?? [], { severity: props.severity, text: props.text, namespaces, doctorOnly: !!cls || inTriage }), [alerts, props.severity, props.text, namespaces, cls, inTriage]);
+  const alertSeg = !!alerts && (inScope.length > 0 || alertsPartial(view));
+  const alertSection = !!alerts && (props.severity === "all" || props.severity === "alerts") && !cls && !inTriage;
+  // The Alerts segment leaves when its alerts do (once the view has been read).
+  useEffect(() => {
+    if (props.severity === "alerts" && view && !alertSeg) props.onSeverity("all");
+  }, [props.severity, view, alertSeg]); // eslint-disable-line react-hooks/exhaustive-deps
   // A chip whose class has gone (or that the severity hides) stops filtering.
   useEffect(() => {
     if (cls && !chips.some((c) => c.cls === cls)) setCls(undefined);
@@ -94,8 +126,10 @@ export function ProblemsPage(props: {
   if (!h) return <div className="pb" aria-busy="true" aria-label="Loading problems">{[0, 1, 2].map((i) => <div key={i} className="skel" style={{ height: 52, borderRadius: 10, margin: "12px 16px" }} />)}</div>;
 
   const bad = all.filter((p) => p.tone === "bad").length;
-  const counts: Record<Severity, number> = { all: all.length, bad, warn: all.length - bad };
+  // The doctor's counts: alerts are on their own segment, never in these (D188).
+  const counts: Record<Exclude<Severity, "alerts">, number> = { all: all.length, bad, warn: all.length - bad };
   const filtered = !!(cls || inTriage || props.text.trim() || props.severity !== "all");
+  const clear = () => (setCls(undefined), setInTriage(false), props.onSeverity("all"), props.onClearText());
 
   /** ↑/↓ move between rows, Enter opens the drawer, `a` asks Claude, `t` sends to triage. */
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -105,6 +139,13 @@ export function ProblemsPage(props: {
       e.preventDefault();
       const rows = [...(list.current?.querySelectorAll<HTMLElement>(".pb-row") ?? [])];
       rows[Math.max(0, Math.min(rows.length - 1, rows.indexOf(row) + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
+      return;
+    }
+    if (row.dataset.alert !== undefined) {
+      const a = shownAlerts.find((x) => x.id === row.dataset.alert);
+      if (!a || e.target !== row) return;
+      if (e.key === "Enter" || e.key === " ") (e.preventDefault(), props.onAlertSelect?.(a));
+      else if (e.key === "a") (e.preventDefault(), props.onAlertAsk?.(a));
       return;
     }
     const p = shown.find((x) => x.id === row.dataset.id);
@@ -124,6 +165,12 @@ export function ProblemsPage(props: {
               <span>{word}</span> <b>{counts[v]}</b>
             </button>
           ))}
+          {alertSeg ? (
+            <button className={props.severity === "alerts" ? "on" : ""} aria-pressed={props.severity === "alerts"} onClick={() => props.onSeverity("alerts")}>
+              <Ic icon={Cloud} size={12} />
+              <span>Alerts</span> <b>{alertCount(inScope.length, view)}</b>
+            </button>
+          ) : null}
         </div>
         {chips.length > 1 || cls || triaged ? (
           <div className="chips pb-chips" role="group" aria-label="Kind of problem">
@@ -146,28 +193,82 @@ export function ProblemsPage(props: {
           <div className="notice-body"><strong>Couldn't check again; this is what was read {when(h.at, now) ?? "earlier"}.</strong><p>{props.stale}</p></div>
         </div>
       ) : null}
-      <ChecksStrip h={h} />
-      {!all.length ? (
-        <div className="ov-empty pb-empty"><Ic icon={CircleCheck} size={22} /><span>No problems found</span><span className="dim small">Checked {when(h.at, now) ?? "just now"}.</span></div>
-      ) : !shown.length ? (
-        <div className="ov-empty pb-empty">
-          <span>No problems match</span>
-          {filtered ? <button className="secondary" onClick={() => (setCls(undefined), setInTriage(false), props.onSeverity("all"), props.onClearText())}>Clear filters</button> : null}
-        </div>
-      ) : (
-        <div className="pb-list" ref={list} onKeyDown={onKey}>
-          {sections(shown).map((s) => (
-            <section key={s.tone} className="pb-sec" aria-label={s.label}>
-              <h3 className="pb-sec-head"><Ic icon={s.tone === "bad" ? CircleX : TriangleAlert} size={13} className={`tone-${s.tone}`} />{s.label}<span className="count-badge">{s.items.length}</span></h3>
+      <ChecksStrip h={h} extra={alertNotes(view)} />
+      <div className="pb-list" ref={list} onKeyDown={onKey}>
+        {props.severity === "alerts" ? null : !all.length ? (
+          <div className="ov-empty pb-empty"><Ic icon={CircleCheck} size={22} /><span>No problems found</span><span className="dim small">Checked {when(h.at, now) ?? "just now"}.</span></div>
+        ) : !shown.length ? (
+          <div className="ov-empty pb-empty">
+            <span>No problems match</span>
+            {filtered ? <button className="secondary" onClick={clear}>Clear filters</button> : null}
+          </div>
+        ) : (
+          <>
+            {sections(shown).map((s) => (
+              <section key={s.tone} className="pb-sec" aria-label={s.label}>
+                <h3 className="pb-sec-head"><Ic icon={s.tone === "bad" ? CircleX : TriangleAlert} size={13} className={`tone-${s.tone}`} />{s.label}<span className="count-badge">{s.items.length}</span></h3>
+                <ul className="ov-list">
+                  {s.items.map((p) => <ProblemRow key={p.id} p={p} now={now} on={p.id === props.selected} sent={sent?.get(p.id)} onSelect={props.onSelect} onAsk={props.onAsk} onOpen={props.onOpen} {...(props.onTriage ? { onTriage: props.onTriage } : {})} />)}
+                </ul>
+              </section>
+            ))}
+            {h.cut ? <p className="small dim pb-cut">Showing the first 500.</p> : null}
+          </>
+        )}
+        {alertSection && view?.gke ? (
+          <section className="pb-sec pb-gcp" aria-label="From Cloud Monitoring">
+            <h3 className="pb-sec-head">
+              <Ic icon={Cloud} size={13} className="pb-cloud" />From Cloud Monitoring<span className="count-badge">{alertCount(shownAlerts.length, view)}</span>
+              <span className="pb-sec-where">{view.cluster.project} · Google's alerts, not Landlens's checks</span>
+            </h3>
+            {shownAlerts.length ? (
               <ul className="ov-list">
-                {s.items.map((p) => <ProblemRow key={p.id} p={p} now={now} on={p.id === props.selected} sent={sent?.get(p.id)} onSelect={props.onSelect} onAsk={props.onAsk} onOpen={props.onOpen} {...(props.onTriage ? { onTriage: props.onTriage } : {})} />)}
+                {shownAlerts.map((a) => <AlertRow key={a.id} a={a} now={now} on={a.id === props.alertSelected} onSelect={props.onAlertSelect} onAsk={props.onAlertAsk} onOpen={props.onAlertOpen} />)}
               </ul>
-            </section>
-          ))}
-          {h.cut ? <p className="small dim pb-cut">Showing the first 500.</p> : null}
-        </div>
-      )}
+            ) : inScope.length ? (
+              <div className="ov-empty pb-empty">
+                <span>No alerts match</span>
+                {filtered ? <button className="secondary" onClick={clear}>Clear filters</button> : null}
+              </div>
+            ) : alertsPartial(view) ? (
+              <p className="pb-none tone-warn" role="note"><Ic icon={Info} size={14} />Some of Cloud Monitoring's alerts weren't read (above), so this cluster may have open alerts.</p>
+            ) : (
+              <p className="pb-none" role="note"><Ic icon={CircleCheck} size={14} className="tone-ok" />{NO_ALERTS}{outside ? " in the chosen namespaces" : ""}</p>
+            )}
+            {alertOthers(view, outside).map((line) => <p key={line} className="small dim pb-others">{line}</p>)}
+          </section>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+/**
+ * One of Cloud Monitoring's open alerts (D188): its policy's name, what it is on, its metric, how long it has been open,
+ * its severity as a word (none when Google gave none Landlens knows), and Ask and Open on hover, focus or selection.
+ */
+function AlertRow({ a, now, on, onSelect, onAsk, onOpen }: {
+  a: GcpAlert; now: number; on: boolean; onSelect?: (a: GcpAlert) => void; onAsk?: (a: GcpAlert) => void; onOpen?: (a: GcpAlert) => void;
+}) {
+  const b = ALERT_BADGE[a.severity];
+  const open = openFor(a.opened, now);
+  return (
+    <li className={"ov-row pb-row pb-alert" + (on ? " on" : "")} tabIndex={0} role="button" data-alert={a.id} aria-current={on ? "true" : undefined}
+      aria-label={`Cloud Monitoring alert: ${policyName(a)}. ${alertSubjectLine(a)}`}
+      onClick={() => onSelect?.(a)}>
+      <span className={`kind-tile sm ${b?.tone ?? ""}`}><Ic icon={BellRing} size={14} /></span>
+      <div className="ov-main">
+        <div className="ov-name"><span className="pb-title">{policyName(a)}</span></div>
+        <div className="ov-detail pb-alert-detail">
+          <span>{alertSubjectLine(a)}</span>
+          {a.metric ? <span className="mono dim" title={a.metric}> · {a.metric}</span> : null}
+        </div>
+      </div>
+      {open ? <span className="ev-meta pb-since" title={a.opened}>open {open}</span> : null}
+      {b ? <span className={`badge ${b.tone}`}><Ic icon={b.tone === "bad" ? CircleX : Clock} size={13} />{b.word}</span> : null}
+      {onAsk ? <button className="ghost-btn" tabIndex={-1} onClick={(e) => (e.stopPropagation(), onAsk(a))} aria-label={`Ask Claude about the alert ${policyName(a)}`} title="Ask Claude (a)"><Ic icon={Sparkles} size={13} />Ask</button> : null}
+      {onOpen && a.subject ? <button className="ghost-btn" tabIndex={-1} onClick={(e) => (e.stopPropagation(), onOpen(a))} aria-label={`Open ${a.subject.kind} ${a.subject.name}`} title={`Open the ${a.subject.kind}`}><Ic icon={SquareArrowOutUpRight} size={13} />Open</button> : null}
+    </li>
   );
 }
 

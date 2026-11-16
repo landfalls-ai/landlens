@@ -104,3 +104,60 @@ describe("⌘K and problems (D61)", () => {
     expect(matchProblems(report, "zzz", 6)).toEqual([]);
   });
 });
+
+// Wave 9 part 3 (D188): Cloud Monitoring's alerts in the Problems page's third section.
+import type { GcpAlert } from "@landlens/contracts";
+import { alertInNamespaces, filterAlerts, holdAlert } from "../src/renderer/src/problemRules";
+
+const A = (id: string, over: Partial<GcpAlert> = {}): GcpAlert => ({
+  id, opened: "2026-11-16T11:18:00.000Z", policy: `Policy ${id}`, severity: "warning", resourceType: "k8s_pod", metric: "kubernetes.io/pod/x",
+  subject: { kind: "Pod", namespace: "shop", name: `pod-${id}` }, ...over,
+});
+
+describe("Cloud Monitoring's alerts on the Problems page (D188)", () => {
+  const pod = A("a");
+  const other = A("b", { subject: { kind: "Pod", namespace: "landlens-dev", name: "web" } });
+  const node = A("c", { resourceType: "k8s_node", subject: { kind: "Node", name: "gke-node-1" }, policy: "Node memory" });
+  const all = [pod, other, node];
+
+  it("All and Alerts show them; Failing, To watch, a doctor's class chip or In triage hide them", () => {
+    const f = { text: "", namespaces: [] };
+    expect(filterAlerts(all, { ...f, severity: "all" })).toEqual(all);
+    expect(filterAlerts(all, { ...f, severity: "alerts" })).toEqual(all);
+    expect(filterAlerts(all, { ...f, severity: "bad" })).toEqual([]);
+    expect(filterAlerts(all, { ...f, severity: "warn" })).toEqual([]);
+    expect(filterAlerts(all, { ...f, severity: "all", doctorOnly: true })).toEqual([]);
+  });
+
+  it("the namespace rule: a subject's namespace shows only when chosen; a node's or the cluster's only in all", () => {
+    expect(filterAlerts(all, { severity: "all", text: "", namespaces: ["shop"] })).toEqual([pod]);
+    expect(alertInNamespaces(node, [])).toBe(true);
+    expect(alertInNamespaces(node, ["shop"])).toBe(false);
+    const { subject: _, ...bare } = pod;
+    expect(alertInNamespaces(bare, ["shop"])).toBe(false);
+  });
+
+  it("the toolbar's words match the policy, the subject and the metric", () => {
+    expect(filterAlerts(all, { severity: "all", text: "memory", namespaces: [] })).toEqual([node]);
+    expect(filterAlerts(all, { severity: "all", text: "landlens-dev web", namespaces: [] })).toEqual([other]);
+    expect(filterAlerts(all, { severity: "all", text: "kubernetes.io/pod", namespaces: [] })).toEqual(all);
+  });
+
+  it("the doctor's counts never include alerts: the Alerts segment matches no problem", () => {
+    const ps = [P({ class: "crashloop", name: "a" }), P({ class: "pending", name: "b", tone: "warn" })];
+    expect(filterProblems(ps, { severity: "alerts", text: "" })).toEqual([]);
+    expect(classCounts(ps, "alerts")).toEqual([]);
+  });
+
+  it("the drawer's alert is kept when it leaves the view, with when", () => {
+    const held = holdAlert({ id: "a", last: pod }, [pod, other], 1);
+    expect(held).toEqual({ id: "a", last: pod });
+    const gone = holdAlert(held, [other], 5);
+    expect(gone).toEqual({ id: "a", last: pod, goneAt: 5 });
+    expect(holdAlert(gone, [other], 9)).toBe(gone);
+    // Back again: open, no longer gone.
+    expect(holdAlert(gone, [pod], 10)).toEqual({ id: "a", last: pod });
+    // Not read (an error): kept as it is.
+    expect(holdAlert(gone, undefined, 11)).toBe(gone);
+  });
+});

@@ -5,7 +5,7 @@
 import type { GcpResource, KubeContext, KubeObject, Problem, SearchEntry } from "@landlens/contracts";
 import { resourceLabel, serviceIcon, shortType } from "./GcpPage";
 import {
-  ArrowRightLeft, Box, ChevronRight, CornerDownLeft, FilePlus2, FoldVertical, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
+  ArrowRightLeft, BellRing, Box, ChevronRight, CornerDownLeft, FilePlus2, FoldVertical, History, Layers, PanelBottom, PanelLeft, Plug, RefreshCw,
   CircleX, ExternalLink, Search, Siren, Sparkles, SquareArrowOutUpRight, SquareTerminal, Stethoscope, TriangleAlert, UnfoldVertical, Workflow, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,6 +33,8 @@ export type Commands = {
   showProblems: () => void;
   /** Recent actions (wave 8, D147). */
   showActions: () => void;
+  /** Problems with only Cloud Monitoring's alerts (wave 9, D188): only on a GKE cluster of a chosen project. */
+  showAlerts?: () => void;
 };
 
 type Group = "Recent" | "Actions" | "Problems" | "Objects" | "Google Cloud" | "Kinds" | "Clusters" | "Commands" | "Containers" | "Ask Claude";
@@ -212,6 +214,7 @@ export function JumpPalette(props: {
     { key: "c:create", group: "Commands", label: "Create from YAML", icon: FilePlus2, run: () => done(props.commands.createYaml) },
     { key: "c:forwards", group: "Commands", label: "Show port forwards", icon: ArrowRightLeft, run: () => done(props.commands.showForwards) },
     { key: "c:problems", group: "Commands", label: "Show problems", icon: Stethoscope, run: () => done(props.commands.showProblems) },
+    ...(props.commands.showAlerts ? [{ key: "c:alerts", group: "Commands" as Group, label: "Show Cloud Monitoring alerts", icon: BellRing, run: () => done(props.commands.showAlerts!) }] : []),
     { key: "c:actions", group: "Commands", label: "Recent actions", icon: History, run: () => done(props.commands.showActions) },
     { key: "c:dock", group: "Commands", label: "Ask Claude", hint: `${MOD}J`, icon: Sparkles, run: () => done(props.commands.openDock) },
     { key: "c:sidebar", group: "Commands", label: "Toggle sidebar", hint: `${MOD}B`, icon: PanelLeft, run: () => done(props.commands.toggleSidebar) },

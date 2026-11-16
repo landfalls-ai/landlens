@@ -30,16 +30,20 @@ export function normalized(s: string): string {
   return s.replace(ESC, "").replace(CONTROLS, "").replace(BIDI, "").replace(/`{17,}/g, "`".repeat(16));
 }
 
-export class SiblingText {
+/**
+ * One store per kind of outside text: the siblings' (Sibling), and Google Cloud's ("gcp", review of wave 9 part 3, L3:
+ * alert policies' text and Google's suggestions, which main served in Google's view).
+ */
+export class SiblingText<K extends string = Sibling> {
   /** Normalized body → its sibling, oldest first. */
-  private readonly bodies = new Map<string, Sibling>();
+  private readonly bodies = new Map<string, K>();
   /** Bodies by their first 16 characters, for one pass over a question. */
   private readonly byHead = new Map<string, Set<string>>();
-  private readonly times = new Map<string, Sibling>();
+  private readonly times = new Map<string, K>();
   private chars = 0;
 
   /** Text main is about to send the window: each row's time and body. */
-  served(sibling: Sibling, rows: { at?: string; body: string }[]) {
+  served(sibling: K, rows: { at?: string; body: string }[]) {
     for (const r of rows) {
       if (r.at) {
         this.times.delete(r.at);
@@ -68,8 +72,8 @@ export class SiblingText {
   }
 
   /** The siblings whose text the question quotes. */
-  found(question: string): Set<Sibling> {
-    const out = new Set<Sibling>();
+  found(question: string): Set<K> {
+    const out = new Set<K>();
     for (const m of question.matchAll(TIME)) {
       const s = this.times.get(m[0]);
       if (s) out.add(s);

@@ -22,7 +22,8 @@ import { clipboardFormats, clipboardMarker, SecretService } from "./secrets";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
-import { gcpMode, GcpService } from "./gcp";
+import { connectedOf, gcpMode, GcpService } from "./gcp";
+import { cloudMonitoringSource, sessionSeries } from "./metrics-source";
 import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
 import { FamilySentStore } from "@landlens/connections";
@@ -79,6 +80,9 @@ async function start() {
   let history: ClicklandHistory | undefined;
   // What main sent the window from Clickland, so a question that quotes it holds autonomy (review of part 3, M2).
   const siblingText = new SiblingText();
+  // What main sent the window of Google's view that someone outside wrote (alert policies, suggestions): a question
+  // that quotes it holds autonomy too (security review of wave 9 part 3, L3).
+  const gcpText = new SiblingText<"gcp">();
   const doctor = new DoctorService({ clusters, hub, history: (handle, q) => history?.lastLines(handle, q) ?? Promise.resolve(undefined) });
   let win: BrowserWindow | undefined;
   const send = (channel: string, payload: unknown) => {
@@ -94,11 +98,16 @@ async function start() {
       return { context: c.info.context, get: (path) => c.client.json(path), ask: (path) => c.client.jsonCapped(path, { maxBytes: 8 * 1048576, timeoutMs: 10_000 }) };
     },
     prometheus: { chosen: (context) => prometheus.chosen(context) },
+    // Cloud Monitoring for a GKE cluster of a project you chose (wave 9, D182–D183): which cluster it is is GcpService's
+    // answer alone (D173), from the handle; the page can't name a source or a project. Not GKE: nothing is said.
+    cloudMonitoring: (handle, o) => cloudMonitoringSource(gcp, clusters, gkeHandles)(handle, o),
   });
+  /** Clusters connected through Landlens's GKE kubeconfig, by handle (ipc.ts adds them; a context of yours isn't one). */
+  const gkeHandles = new Set<string>();
   // For the metrics tool: `read` is the session's own front-door token (its policy, scrubbing and audit), so what the
-  // series reads from the cluster is read as the session. The usage numbers are Clickland's or the shared sampler's.
-  const series = (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">, read?: (path: string) => Promise<any>) =>
-    metrics.series({ handle, ...r }, read ? { read } : {});
+  // series reads from the cluster is read as the session. The usage numbers are Clickland's, Prometheus's, the shared
+  // sampler's, or Cloud Monitoring's only for a project of the session's Google grant, holding its autonomy first (D194).
+  const series = sessionSeries(metrics);
   const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
   // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
   const connections = new ConnectionsService({
@@ -186,6 +195,7 @@ async function start() {
     log: (l) => console.log(l),
     // gcloud's account changed: the grant to Claude ends, and landlens-gcp leaves open sessions at once (part 5, M3).
     onAgentOff: () => mcp?.gcpOff(),
+    served: (texts) => gcpText.served("gcp", texts.map((body) => ({ body }))),
   });
   mcp = new McpService({
     store: mcpStore,
@@ -193,7 +203,19 @@ async function start() {
     // Clickland, Landflow and Landfall (D107): served after the connections when Tools for Claude is on.
     family,
     // landlens-gcp (D93): read-only Google Cloud tools for sessions, when you turned "Claude can read" on.
-    gcp: { reader: () => gcp.agentReader((context) => clusters.list().some((c) => c.context === context)) },
+    // `session` is the session's own cluster, for the namespace limit (D195); `line` is cluster_overview's (D194).
+    gcp: {
+      reader: (session) => gcp.agentReader((context) => clusters.list().some((c) => c.context === context), session),
+      // A session's kube tools ask at each call which of its projects it may still read (security review of part 4, M1).
+      projectsNow: (start) => gcp.agentProjectsNow(start),
+      line: (handle, projects, namespaces) => {
+        try {
+          return gcp.heldLine(connectedOf(clusters, gkeHandles, handle), projects, namespaces);
+        } catch {
+          return undefined; // the cluster has gone: no line
+        }
+      },
+    },
     clickland: settings,
     frontDoor,
     clusters,
@@ -232,6 +254,7 @@ async function start() {
   }) as ConstructorParameters<typeof AgentService>[0]["push"];
   const agent = new AgentService({
     siblingText,
+    gcpText,
     frontDoor,
     clusters,
     sessionsDir: join(app.getPath("userData"), "agent-sessions"),
@@ -317,7 +340,7 @@ async function start() {
   });
   liveDrains = () => actions.liveRuns();
   endDrains = () => actions.quit();
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets);
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets, gkeHandles);
   const service = mcp;
   shutdown = async () => {
     await secrets.quit();

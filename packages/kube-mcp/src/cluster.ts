@@ -25,6 +25,11 @@ export type AgentCluster = {
    */
   certs?(namespaces?: string[]): Promise<{ state: DoctorCheckState; certs?: CertInput[] }>;
   /**
+   * cluster_overview's line from Google's view of this GKE cluster (wave 9 part 4, D194): only in a session with the
+   * grant for its project, only from what main already holds (counts and fixed words), else undefined.
+   */
+  google?(): string | undefined;
+  /**
    * Propose a change: Landlens's approval broker dry-runs it, asks the person and applies it only on their yes. Only
    * there in sessions main gives write tools to. `signal` withdraws it (the call was cancelled).
    */
@@ -48,6 +53,7 @@ export function frontDoorCluster(opts: {
    */
   metrics?: (req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read: (path: string) => Promise<any>) => Promise<MetricsSeries>;
   certs?: AgentCluster["certs"];
+  google?: AgentCluster["google"];
   /** Tags every request for the front door's audit (see withCall). */
   callId?: string;
   propose?: AgentCluster["propose"];
@@ -58,6 +64,7 @@ export function frontDoorCluster(opts: {
     ...(opts.namespaces ? { namespaces: opts.namespaces } : {}),
     ...(opts.propose ? { propose: opts.propose } : {}),
     ...(opts.certs ? { certs: opts.certs } : {}),
+    ...(opts.google ? { google: opts.google } : {}),
     withCall: (callId) => frontDoorCluster({ ...opts, callId }),
     get: (path, accept = "application/json") =>
       new Promise((resolve, reject) => {

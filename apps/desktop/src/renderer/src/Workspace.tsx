@@ -1,6 +1,6 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
-import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, HealthProblem, KubeContext, KubeObject, ResourceType } from "@landlens/contracts";
+import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, GcpAlert, GkeAdvice, HealthProblem, KubeContext, KubeObject, ResourceType } from "@landlens/contracts";
 import { CircleX, Lock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
@@ -10,7 +10,7 @@ import { Details, type NavTarget } from "./Details";
 import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
 import { JumpPalette, type Target, type Verb } from "./JumpPalette";
-import { PROMETHEUS_EVENT } from "./MetricsNotice";
+import { OPEN_GCP_EVENT, PROMETHEUS_EVENT } from "./MetricsNotice";
 import { ConnectionsPage } from "./ConnectionsPage";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
@@ -20,7 +20,10 @@ import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
 import { problemContext, PROBLEM_QUESTION } from "./doctorBrief";
 import { ProblemDrawer, ProblemsPage } from "./Problems";
-import { holdProblem, type HeldProblem, type Severity } from "./problemRules";
+import { holdAlert, holdProblem, type HeldAlert, type HeldProblem, type Severity } from "./problemRules";
+import { useGoogleView } from "./googleView";
+import { AlertDrawer } from "./AlertDrawer";
+import { ADVICE_QUESTION, adviceContext, ALERT_QUESTION, alertContext, alertsAt, alertsForDrawer, alertsOf, goneNote, latestOnly } from "./googleRules";
 import { missingChecks } from "@landlens/kube/checks";
 import { splitByShape } from "./present";
 import { ResourceTable, rowTone } from "./ResourceTable";
@@ -102,6 +105,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   // it leaves the report (D59).
   const [severity, setSeverity] = useState<Severity>("all");
   const [problemSel, setProblemSel] = useState<HeldProblem>();
+  // Cloud Monitoring's alert in the Problems page's drawer (wave 9 part 3, D188), held when it leaves the view.
+  const [alertSel, setAlertSel] = useState<HeldAlert>();
   const [reachError, setReachError] = useState<string>();
   // Choosing or dropping a found Prometheus (MetricsNotice): main checks it is still the one found, then every chart asks again.
   useEffect(() => {
@@ -187,6 +192,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const connPage = current === "connections";
   const helmPage = current === "helm";
   const gcpPage = current === "gcp";
+  // Google's view of this cluster (wave 9, D177, D188): read while the Overview or Problems shows it, every 60 s then.
+  const google = useGoogleView(cluster.handle, problemsPage || current === "overview", cluster.context);
+  /** The project an alert opened in the drawer was read in (M1: the drawer stays when the view isn't GKE's now). */
+  const alertProject = google.view?.gke ? { project: google.view.cluster.project } : {};
   const helmAll = useHelmList(cluster.handle, namespace, helmPage);
   // Several namespaces: Helm reads the whole cluster, shown for the chosen ones.
   const helm = useMemo(() => (several && helmAll.releases ? { ...helmAll, releases: helmAll.releases.filter((r) => namespaces.includes(r.namespace)) } : helmAll), [helmAll, several, namespaces]);
@@ -260,8 +269,15 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setMcpCall(undefined);
     setHelmPick(undefined);
     setProblemSel(undefined);
+    setAlertSel(undefined);
     setGcpPick(undefined);
     setStatus("all");
+  });
+  // A chart's "Open Google Cloud" (a GKE cluster whose project isn't chosen, wave 9 D184).
+  useEffect(() => {
+    const on = () => pick("gcp");
+    window.addEventListener(OPEN_GCP_EVENT, on);
+    return () => window.removeEventListener(OPEN_GCP_EVENT, on);
   });
   /** A Google Cloud resource from ⌘K: its project on the page, and its drawer. */
   const openGcp = (project: string, resource: GcpPick["resource"]) => leaveEdit(() => {
@@ -274,7 +290,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setGcpPick({ project, resource });
   });
   /** The Problems page, with a severity preset (the status bar) and a problem's drawer open (a row, ⌘K). */
-  const openProblems = (opts: { severity?: Severity; problem?: HealthProblem } = {}) => leaveEdit(() => {
+  const openProblems = (opts: { severity?: Severity; problem?: HealthProblem; alert?: GcpAlert } = {}) => leaveEdit(() => {
     setCurrent("problems");
     setSelectedNow(undefined);
     setMcpCall(undefined);
@@ -282,8 +298,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setStatus("all");
     if (opts.severity) setSeverity(opts.severity);
     if (opts.problem) setSeverity((s) => (s === "all" || s === opts.problem!.tone ? s : "all"));
+    if (opts.alert) setSeverity((s) => (s === "all" || s === "alerts" ? s : "all"));
     setProblemSel(opts.problem ? { id: opts.problem.id, last: opts.problem } : undefined);
+    setAlertSel(opts.alert ? { id: opts.alert.id, last: opts.alert, ...alertProject } : undefined);
   });
+  /** What an alert is on, opened in its list (a Pod, a Node or a Namespace). */
+  const openAlertSubject = (a: GcpAlert) => a.subject && go({ kind: a.subject.kind, name: a.subject.name, ...(a.subject.namespace && a.subject.kind === "Pod" ? { namespace: a.subject.namespace } : {}) });
   const openSubject = (p: HealthProblem) => go({ kind: p.kind, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) });
   const navItem = (resource: string) => nav.find((n) => n.type.resource === resource && (n.type.group === "" || n.type.group === "apps"));
   const go = (t: NavTarget) => {
@@ -416,11 +436,32 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setDock(true);
     setPrompt({ id: Date.now(), text: question });
   };
+  /**
+   * Ask Claude about one of Cloud Monitoring's alerts or Google's suggestions (D189): main's brief of it (gcp:cluster-item,
+   * the handle and the id only) as quoted data under its fixed head, one Google item at a time, and Landlens's question.
+   * Only the latest Ask lands (latestOnly, review of part 3, T3): an earlier one still reading never sends after it.
+   */
+  type GoogleItem = { kind: "alert"; a: GcpAlert } | { kind: "advice"; a: GkeAdvice };
+  const askItem = useRef<(item: GoogleItem, handle: string, brief: string | undefined) => void>(undefined);
+  askItem.current ??= latestOnly(
+    (item: GoogleItem, h: string, brief: string | undefined) =>
+      brief ? Promise.resolve({ item, brief }) : api.invoke("gcp:cluster-item", { handle: h, kind: item.kind, id: item.a.id }).then((r) => ({ item, brief: r.brief })),
+    {
+      value: ({ item, brief: text }) => {
+        const ctx = item.kind === "alert" ? alertContext(item.a, text) : adviceContext(item.a, text);
+        setAskContext((cs) => [...cs.filter((c) => c.kind !== "gcp-alert" && c.kind !== "gcp-advice"), ctx]);
+        setDock(true);
+        setPrompt({ id: Date.now(), text: item.kind === "alert" ? ALERT_QUESTION : ADVICE_QUESTION });
+      },
+      error: (err) => setReachError(`Google Cloud: ${(err as ApiError).message}`),
+    },
+  );
+  const askGoogle = (item: GoogleItem, brief?: string) => askItem.current!(item, cluster.handle, brief);
   const gkeContexts = useMemo(() => new Set((contexts ?? []).filter((c) => c.source === "gke").map((c) => c.name)), [contexts]);
 
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
   // the dock alone does, and the drawer floats over the table.
-  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && problemSel) || !!(gcpPage && gcpPick);
+  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && (problemSel || alertSel)) || !!(gcpPage && gcpPick);
   const narrow = width.app < 1280;
   const autoRail = dock && (drawer || narrow);
   const rail = userRail ?? autoRail;
@@ -478,6 +519,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && helmPick) setHelmPick(undefined);
       if (e.key === "Escape" && !jump && !typing && !t?.closest(".dock, .dialog, .cm-editor") && gcpPick) setGcpPick(undefined);
       if (e.key === "Escape" && !jump && !creating && !typing && !t?.closest(".dock, .drawer .logs") && problemSel) setProblemSel(undefined);
+      if (e.key === "Escape" && !jump && !creating && !typing && !t?.closest(".dock") && alertSel) setAlertSel(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -488,6 +530,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const h = useMemo(() => (hAll && several ? { ...hAll, problems: hAll.problems.filter((p) => !p.namespace || namespaces.includes(p.namespace)) } : hAll), [hAll, several, namespaces]);
   // Keep the drawer's problem current; when its id leaves the report, keep the last one with the time it went.
   useEffect(() => setProblemSel((held) => holdProblem(held, h?.problems, Date.now())), [h]);
+  // The same for the alert in the drawer, as Google's view is read again.
+  // A view that holds no list of this cluster's now (a failed read, Google's view unread, not GKE's) leaves it "not among
+  // the alerts read" (M1), never shown as still open.
+  useEffect(() => setAlertSel((held) => holdAlert(held, alertsForDrawer(google.view), Date.now())), [google.view]);
   const bad = h?.problems.filter((p) => p.tone === "bad").length ?? 0;
   const warn = (h?.problems.length ?? 0) - bad;
   const worst = h?.problems.find((p) => p.tone === "bad");
@@ -530,7 +576,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
           {...(!mcp && !agentPage && !connPage && !gcpPage && (!list || list.type.namespaced) ? { namespaces: {
-            list: nsList, value: namespaces, onChange: (ns: string[]) => leaveEdit(() => { setNamespaces(ns); setSelectedNow(undefined); setProblemSel(undefined); }),
+            list: nsList, value: namespaces, onChange: (ns: string[]) => leaveEdit(() => { setNamespaces(ns); setSelectedNow(undefined); setProblemSel(undefined); setAlertSel(undefined); }),
             ...(list ? { unwatched: [...(watch.left ?? []), ...(watch.refused ?? [])] } : {}),
           } } : {})}
           {...(list && !watch.error ? { columns: { all: columns.map((c) => ({ id: c.id, label: c.label })), hidden: [...hidden], onChange: (ids: string[]) => changeTables((s) => withHidden(s, kk, ids)) } } : {})}
@@ -581,13 +627,19 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             severity={severity}
             onSeverity={setSeverity}
             {...(problemSel ? { selected: problemSel.id } : {})}
-            onSelect={(p) => setProblemSel({ id: p.id, last: p })}
+            onSelect={(p) => (setAlertSel(undefined), setProblemSel({ id: p.id, last: p }))}
             onAsk={askProblem}
             onOpen={openSubject}
             onClearText={() => setFilter("")}
             {...(health.error && h ? { stale: health.error.message } : {})}
             sent={sent}
             {...(lf.triage ? { onTriage: setTriage } : {})}
+            google={google}
+            namespaces={namespaces}
+            {...(alertSel ? { alertSelected: alertSel.id } : {})}
+            onAlertSelect={(a) => (setProblemSel(undefined), setAlertSel({ id: a.id, last: a, ...alertProject }))}
+            onAlertAsk={(a) => askGoogle({ kind: "alert", a })}
+            onAlertOpen={openAlertSubject}
           />
         ) : !list ? (
           <Overview
@@ -613,6 +665,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
               setDock(true);
               setPrompt({ id: Date.now(), text: FIRST_QUESTION });
             }}
+            onOpenGcp={() => pick("gcp")}
+            google={google}
+            onOpenAlerts={() => openProblems({ severity: alertsOf(google.view)?.items.length ? "alerts" : "all" })}
+            onAskAdvice={(a) => askGoogle({ kind: "advice", a })}
           />
         ) : watch.error ? (
           <div className="notice" role="alert">
@@ -735,6 +791,21 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           />
         </Boundary>
       ) : null}
+      {problemsPage && alertSel && !problemSel && (google.view?.gke || alertSel.project) ? (
+        <Boundary what="this alert" resetKey={alertSel.id}>
+          <AlertDrawer
+            handle={cluster.handle}
+            project={google.view?.gke ? google.view.cluster.project : alertSel.project!}
+            held={alertSel}
+            {...(goneNote(alertSel, google.view) ? { note: goneNote(alertSel, google.view)! } : {})}
+            {...(alertsAt(google.view) ? { viewAt: alertsAt(google.view)! } : {})}
+            now={now}
+            onClose={() => setAlertSel(undefined)}
+            onAsk={(a, brief) => askGoogle({ kind: "alert", a }, brief)}
+            onOpen={openAlertSubject}
+          />
+        </Boundary>
+      ) : null}
       {gcpPage && gcpPick ? (
         <Boundary what="this resource" resetKey={gcpPick.resource.name}>
           <GcpDrawer key={gcpPick.resource.name} pick={gcpPick} onClose={() => setGcpPick(undefined)} onAsk={askGcp} gkeContexts={gkeContexts} onOpenCluster={switchTo} />
@@ -820,6 +891,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             showForwards: () => (bench.openForwards(), focusBench()),
             showProblems: () => openProblems(),
             showActions: () => setRecentOpen(true),
+            ...(google.view?.gke ? { showAlerts: () => openProblems({ severity: "alerts" }) } : {}),
           }}
           onClose={() => setJump(false)}
         />

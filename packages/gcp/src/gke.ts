@@ -5,7 +5,7 @@
 // is needed (not gke-gcloud-auth-plugin); client-go runs the plugin again on a 401.
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { randomBytes, X509Certificate } from "node:crypto";
+import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import type { GkeCluster } from "@landlens/contracts";
 import { stringify } from "yaml";
 import { z } from "zod";
@@ -30,8 +30,11 @@ const ClustersPage = z.object({
   }).passthrough()).optional(),
 }).passthrough();
 
-const NAME = /^[a-z]([-a-z0-9]{0,38}[a-z0-9])?$/;
-const LOCATION = /^[a-z]+-[a-z]+\d+(-[a-z])?$/;
+/** A GKE cluster name and location as Google names them (D173: the only shapes that reach a path). */
+export const GKE_NAME = /^[a-z]([-a-z0-9]{0,38}[a-z0-9])?$/;
+const NAME = GKE_NAME;
+export const GKE_LOCATION = /^[a-z]+-[a-z]+\d+(-[a-z])?$/;
+const LOCATION = GKE_LOCATION;
 
 /** gcloud's own context name for a GKE cluster: gke_<project>_<location>_<name>. */
 export const gkeContext = (project: string, location: string, name: string) => `gke_${project}_${location}_${name}`;
@@ -98,8 +101,25 @@ export function checkCa(ca: string | undefined): string | undefined {
   }
 }
 
-/** A GKE cluster as main keeps it: what the page gets, and the CA the kubeconfig needs (base64 PEM; not sent on). */
-export type GkeClusterFull = GkeCluster & { ca?: string };
+/**
+ * A CA's fingerprint as landlens-kube-proxy reports the CA a context trusts (its Ready line, review of wave 9 part 1
+ * M1): the hex SHA-256 of the DER bytes of every CERTIFICATE block of the PEM, in order. `ca` is base64 of the PEM, as
+ * Google lists it (masterAuth.clusterCaCertificate) and as `certificate-authority-data` carries it.
+ */
+export function caFingerprint(ca: string): string {
+  const pem = Buffer.from(ca, "base64").toString("latin1");
+  const ders = [...pem.matchAll(/-----BEGIN CERTIFICATE-----([A-Za-z0-9+/=\s]*?)-----END CERTIFICATE-----/g)].map((m) => Buffer.from(m[1]!.replace(/\s+/g, ""), "base64"));
+  return createHash("sha256").update(Buffer.concat(ders)).digest("hex");
+}
+
+/**
+ * A GKE cluster as main keeps it: what the page gets, the CA the kubeconfig needs (base64 PEM; not sent on), and its
+ * DNS endpoint when the listing has one beside the IP it opens (`dns`, checked as `endpoint` is; not sent on): a session
+ * connected at either address is on this cluster (security review of wave 9 part 4, M2).
+ */
+export type GkeClusterFull = GkeCluster & { ca?: string; dns?: string };
+/** A listed cluster as the page and the agent get it: no CA, no second address. */
+export const publicCluster = ({ ca: _ca, dns: _dns, ...c }: GkeClusterFull): GkeCluster => c;
 
 /**
  * The project's GKE clusters, at most 200; a cluster whose name or location isn't GKE's shape is left out, and one
@@ -128,6 +148,7 @@ export async function listClusters(client: GcpClient, project: string, o: { allo
       endpoint,
       context: gkeContext(project, location, c.name),
       ...(endpoint && endpoint === ip ? { ca } : {}),
+      ...(dns && !isIpEndpoint(dns) && dns !== endpoint ? { dns } : {}),
     });
     if (out.length >= MAX_CLUSTERS) break;
   }

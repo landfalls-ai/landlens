@@ -22,6 +22,7 @@ const CHANNELS: readonly Channel[] = [
   "telemetry:set", "telemetry:recent", "telemetry:open", "brain:draft", "brain:ask", "brain:cancel", "brain:send", "brain:remove",
   "agent:autonomy",
   "gcp:status", "gcp:projects", "gcp:choose", "gcp:agent-read", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
+  "gcp:cluster-view", "gcp:cluster-item",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",

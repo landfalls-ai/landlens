@@ -2,8 +2,9 @@
 
 CPU and memory over time, on the Overview and in the drawer. The owner's choice was **"Clickland, then live"**:
 Landlens reads history from Clickland when it is connected and answers; otherwise from the cluster's own Prometheus,
-if it has one; otherwise it samples metrics-server while a view is open; otherwise the chart says what is missing and
-how to fix it.
+if you chose it; otherwise, for a GKE cluster of a project you chose on the Google Cloud page, from Cloud Monitoring
+(wave 9 part 2); otherwise it samples metrics-server while a view is open; otherwise the chart says what is missing
+and how to fix it.
 
 With Clickland connected, the drawer also shows the log lines and traces Clickland keeps (wave 7 part 3, D115–D118):
 see [Logs and traces from Clickland](#logs-and-traces-from-clickland).
@@ -14,12 +15,13 @@ see [Logs and traces from Clickland](#logs-and-traces-from-clickland).
 |---|---|---|
 | **Clickland** | A key is stored, Clickland answers, honours metric filters, and has samples for this cluster's name | History for 1h, 6h or 24h: kubelet stats and cluster state every 30s (Clickland `docs/sources.md`), in 30s to 12 min steps |
 | **Prometheus** | Clickland isn't connected or fails, and the cluster has a Prometheus Landlens found and you chose ([below](#prometheus)) | History for 1h, 6h or 24h from its cAdvisor series, about 240 points (15 s to 6 min steps) |
-| **metrics-server** | Clickland and Prometheus aren't there or fail, and the cluster serves `metrics.k8s.io` | Live samples every 15s from when a view first asks, kept for an hour in a ring buffer; no history before that |
-| **none** | Neither | The reasons (one per source) and the fix: "Connect Clickland", or install metrics-server |
+| **Cloud Monitoring** | Neither answered, and the cluster is a GKE cluster of a project you chose ([below](#cloud-monitoring)) | History for 1h, 6h or 24h of GKE's system metrics, sampled every 60 s, in 60, 90 or 360 s steps |
+| **metrics-server** | None of those is there or answers, and the cluster serves `metrics.k8s.io` | Live samples every 15s from when a view first asks, kept for an hour in a ring buffer; no history before that |
+| **none** | Neither | The reasons (one per source) and the fix: "Connect Clickland", install metrics-server, or "Open Google Cloud" |
 
 Main decides per request (`MetricsService` in `packages/metrics/src/service.ts`) and returns the source and the
-reasons with the series, so the page always says where the numbers came from (a small "Clickland orbstack" or "Live
-from metrics-server, no history · Connect Clickland" line above each chart).
+reasons with the series, so the page always says where the numbers came from (a small "Clickland orbstack",
+"Cloud Monitoring shop-prod" or "Live from metrics-server, no history · Connect Clickland" line above each chart).
 
 A failure of Clickland is one of: not connected (no key), unreachable (no answer in 8s), refused key (401/403),
 failed (any other answer), no data for this cluster's name, or **ignores filters**. The last guards against a
@@ -63,6 +65,79 @@ On OrbStack, `deploy/scenarios/prometheus` runs a Prometheus in `landlens-dev` l
 It can't scrape the kubelet (that needs a cluster-wide role, and Landlens's tests write only in `landlens-dev`), so
 `up.mjs` writes the last 50 minutes of cAdvisor-shaped series for the landlens-demo chart's pods and the node, and an
 init container backfills them with `promtool`. The tests start it and remove it again.
+
+## Cloud Monitoring
+
+Wave 9 part 2 (spec D179–D184). For a GKE cluster, Google already keeps its CPU and memory: GKE's system metrics,
+sampled every 60 s, read through Cloud Monitoring's PromQL API (`GET /v1/projects/<project>/location/global/prometheus/api/v1/query_range`)
+as you, with the gcloud token Landlens already borrows ([gcp.md](gcp.md)). It is the third source: a Prometheus you
+chose stays ahead (you picked it, and it is finer), and a Prometheus only found is still offered beside it.
+
+**Which cluster.** Only a cluster `GcpService.gkeOf` says is a GKE cluster of a chosen project ([gcp.md](gcp.md#googles-view-of-a-cluster)):
+connected from Landlens's own GKE listing, or a context of yours with gcloud's name whose address and CA are the
+listing's. Anything else draws from metrics-server as before, and says nothing about Google. A GKE-shaped name of a
+project you haven't chosen says so ("This looks like a GKE cluster of …") with **Open Google Cloud**; a context of
+yours whose project's listing couldn't be read says that, with the sentence. The page can't ask for a source or name a
+project: `metrics:series` is unchanged, and main decides from the handle.
+
+**The queries**, fixed and built by Landlens (`packages/metrics/src/cloud-monitoring.ts`). With `S` =
+`project_id="<p>",location="<l>",cluster_name="<c>"` and `G` = `project_id,location,cluster_name`:
+
+| Scope | One series per | CPU (cores) | Memory (bytes) |
+|---|---|---|---|
+| Pod | container | `sum by (G,namespace_name,pod_name,container_name) (rate(kubernetes_io:container_cpu_core_usage_time{S,namespace_name,pod_name}[w]))` | `sum by (G,namespace_name,pod_name,container_name) (kubernetes_io:container_memory_used_bytes{S,namespace_name,pod_name,memory_type="non-evictable"})` |
+| Deployment, StatefulSet, DaemonSet | pod | as above by `namespace_name,pod_name`, with `pod_name=~"<its pods>"` | same |
+| Namespace | pod | as above by `namespace_name,pod_name`, the whole namespace | same |
+| Cluster | node | `sum by (G,node_name) (rate(kubernetes_io:node_cpu_core_usage_time{S}[w]))` | `sum by (G,node_name) (kubernetes_io:node_memory_used_bytes{S,memory_type="non-evictable"})` |
+| Node | node | the cluster's with `node_name` | same |
+| Cluster → Top namespaces | namespace | the container CPU query by `namespace_name` | the container memory query by `namespace_name` |
+
+The step is `max(60, range / 240)` seconds (60 s for 1h, 90 s for 6h, 360 s for 24h); the rate window `w` is twice
+the step, at least five minutes. Memory is the non-evictable part, the nearest Cloud Monitoring has to the working set
+the other sources draw. A workload's pods are read from its selector first; past 3,000 characters of names the query
+asks for the namespace and the answer is cut to the workload's pods. Requests, limits and allocatable come from the
+cluster, read first, with the reader listing the scope's pods: a reader who can't (the agent's namespace-limited
+token, a ServiceAccount of one namespace on the Overview) gets nothing from Google either, and the reason says
+"wasn't asked: reading this scope from the cluster failed (HTTP 403)". Names are Kubernetes names, checked again (a
+400 before anything is asked); the project, location and cluster come from main's listing, checked again against
+GKE's shapes. Nothing anyone types becomes PromQL.
+
+**The metrics-scope leak.** A PromQL query on project P answers for every project in P's metrics scope, and two
+projects can each hold a cluster of the same name in the same location. So every selector names all three of
+`project_id`, `location` and `cluster_name`, every aggregation keeps them, and the answer keeps a series only when it
+carries exactly this cluster's three values; a series missing one is dropped too. A pod's, a workload's and a
+namespace's queries keep `namespace_name` (a pod's `pod_name` too) the same way, so a matcher Google didn't honour
+can't draw another namespace's pod of the same name. If Google ever answered without the labels (by project number,
+under another name), nothing of it is drawn and the reason says "Cloud Monitoring (demo-shop) answered without this
+cluster's labels, so nothing of it is drawn."; metrics-server is next. More than 200 of the scope's series (counted
+after a workload's or node's own cut) draws 200 and says so ("Cloud Monitoring had more than 200 series for this
+scope; the first 200 are drawn.", in the source line's tooltip). On the Overview, Top namespaces failing alone leaves
+the nodes drawn from Cloud Monitoring, and the tooltip says "Top namespaces couldn't be read: …".
+
+**The reasons**, in the no-metrics notice and the live line's tooltip, and **Open Google Cloud** or **Copy command**
+beside them:
+
+| Code | Says |
+|---|---|
+| `cloud-monitoring-failed` | "Cloud Monitoring (demo-shop) didn't answer: <Google's error as Landlens's fixed sentence>", e.g. the API off (with its `gcloud services enable` command and Copy), the Monitoring Viewer role missing, or "Cloud Monitoring didn't accept Landlens's query." Google's own text, which echoes the query, is never shown or logged. Also an answer without this cluster's labels (above), "Cloud Monitoring is busy …" (more than 40 queries waiting), and, beside a drawn Overview, "Top namespaces couldn't be read: …" |
+| `cloud-monitoring-no-data` | "Cloud Monitoring has no GKE system metrics for shop-prod in demo-shop in the last hour." Asked only when a scope comes back empty: no node CPU for the whole cluster in the last hour (a no kept a minute, a yes five) means system metrics are off, and metrics-server is next. With node data, an empty scope is a new pod, and the chart says "no samples yet" as for any source |
+| `cloud-monitoring-not-chosen` | The hint, with Open Google Cloud |
+| `cloud-monitoring-not-granted` | The agent's `metrics` tool only: "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud. …". From wave 9 part 4 (D190, D194) a session reads Cloud Monitoring only for a project its Google grant had when it began and still has (checked before each query and before delivery; "Claude can read these projects", whose yes now names metrics), holding its autonomous GitHub and Linear writes before the first query; without it, its tool answers from metrics-server. Main decides it from the context's name and the session's projects before asking anything: a call it refuses makes no gcloud run and no Google request |
+| `cloud-monitoring-cut` | More than 200 series (above) |
+
+**Main** (`GcpService.promAsk`) hands `packages/metrics` a function, never the client or the token. Each answer is kept
+25 s under the project, the query, the step and the start in steps (at most 40, the oldest first, and those past
+25 s leave at the next ask), so the two charts of a view, the 30 s refresh and the agent don't each pay for one query.
+A 403 or 429 (the API off, the role missing, Google's rate limit) is kept a minute for the project and given again
+without asking, unless a Claude session's query got it (its own asks don't speak for your charts); no other failure is
+kept. Claude's sessions' queries together have at most 12 places in the line, and one session asks at most 30 times a
+minute through its `metrics` tool. Queries run four at once in their own slot with at most 40 waiting, only
+for a project still chosen, each with a 10 s limit and the client's 8 MB cap. An account change or a project taken
+out forgets the answers and the failures. Nothing is asked unless a chart asked.
+
+The source line reads "Cloud Monitoring shop-prod", its tooltip "Cloud Monitoring, GKE system metrics of shop-prod in
+demo-shop (us-central1), 60s steps", then its own reasons (a cut, Top namespaces that failed). The agent's `metrics` tool names it "Cloud Monitoring (GKE system metrics, 60 s
+samples)" and its memory "non-evictable".
 
 ## Setup
 
@@ -228,7 +303,10 @@ agent's `metrics` tool reads with the session's own token and repeats at most 40
 | `packages/metrics/src/clickland-series.ts` | A scope as Clickland queries, filtered on `k8s.cluster.name` and the scope's attributes |
 | `packages/metrics/src/sampler.ts`, `live-series.ts` | The metrics-server sampler and its ring buffer; a scope's series from samples and the cluster's specs |
 | `packages/metrics/src/prometheus.ts` | Finding a Prometheus, the scope's queries, the service-proxy path, `parseMatrix` (a matrix only; keys must be names, values finite, 200 series and 4,000 points) |
-| `packages/metrics/src/service.ts` | `MetricsService`: the source choice (Clickland, Prometheus, metrics-server), the Settings test |
+| `packages/metrics/src/cloud-monitoring.ts` | Cloud Monitoring: `gkeQueries` (the fixed queries), `parseGkeMatrixCut` (only this cluster's series; names, finite values, 200 series and 4,000 points), `cloudMonitoringSeries`, `gkeHasData` |
+| `packages/gcp/src/monitoring.ts` | `promRange`: query_range as the project, GET only, 10 s, a query at most 6,000 characters |
+| `packages/metrics/src/service.ts` | `MetricsService`: the source choice (Clickland, Prometheus, Cloud Monitoring, metrics-server), the agent's rule, the Settings test |
+| `apps/desktop/src/main/metrics-source.ts` | `cloudMonitoringSource` (the handle's own cluster through `gkeOf`, its reasons, `promAsk`) and `sessionSeries` (a session's tool reads Cloud Monitoring only for its grant's projects, holding first) |
 | `apps/desktop/src/main/clickland-settings.ts` | The settings file and the key in safeStorage |
 | `apps/desktop/src/renderer/src/charts/` | `TimeChart`, `Sparkline`, `Bars`, the pure helpers in `scale.ts` |
 | `apps/desktop/src/renderer/src/Usage.tsx`, `MetricsTab.tsx`, `MetricsNotice.tsx`, `ClicklandSettings.tsx`, `metrics.ts` | The Usage card, the drawer's tab, the notices, the dialog, the polling hook |
@@ -257,5 +335,16 @@ agent's `metrics` tool reads with the session's own token and repeats at most 40
   OrbStack, `prometheus.integration.test.ts` (the scenario found by its labels; the demo deployment per pod with its
   requests and limits; the pod, namespace and cluster scopes through `MetricsService`) and
   `apps/desktop/test/prometheus.e2e.test.ts` (the Overview's usage and a deployment's Metrics tab, named Prometheus).
+- Cloud Monitoring: `packages/gcp/test/monitoring.test.ts` (`promRange`'s path, parameters, project and 10 s; a
+  query too long refused first; a refused query's sentence without the query or Google's echo; the fake as a metrics
+  scope), `packages/metrics/test/cloud-monitoring.test.ts` (each scope's queries exactly; names refused before any
+  read or ask; the pod regex and its namespace fallback; against the leaking fake, only this cluster's series, with each
+  of the three matchers taken out in turn; a series missing a label dropped; the reader's list first; the 200 cut),
+  `service.test.ts` (the order, no-data, failures, the five-minute check, the agent's rule and hold),
+  `apps/desktop/test/gcp-service.test.ts` (`promAsk`: chosen projects only, the 25 s cache, four at once, the sentence
+  and log line, an account change), `metrics-source.test.ts`, and `gview.e2e.test.ts` on OrbStack against the fake
+  (a pod's Metrics tab and the Overview's Usage from "Cloud Monitoring shop-prod", the leaked cluster never drawn, an
+  unchosen project's reason and Open Google Cloud; screenshots `g9-p2-*`). Each safety rule was taken out once to see
+  its test fail.
 - e2e: the no-source state on OrbStack always; with `clickland` in `LANDLENS_INTEGRATION`, Connect Clickland through
   the dialog, the Usage card and a pod's Metrics tab in dark and light, a pod with no samples, a deployment.

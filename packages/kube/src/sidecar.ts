@@ -27,12 +27,29 @@ export type SidecarOptions = {
   log?: (line: string) => void;
 };
 
+/**
+ * Whom the sidecar trusts to be the cluster, from its Ready line (security review of wave 9 part 1, M1): `ca` is the
+ * hex SHA-256 of the DER of every certificate of the context's CA ("" for the system roots); the three flags say
+ * insecure-skip-tls-verify, tls-server-name and proxy-url are set.
+ */
+export type SidecarTls = { ca: string; insecure: boolean; serverName: boolean; proxy: boolean };
+
+/** The Ready line's `tls`, when it is that shape; undefined otherwise (an older sidecar), which counts as unknown. */
+export function readyTls(v: unknown): SidecarTls | undefined {
+  const t = v as Partial<SidecarTls> | null | undefined;
+  if (!t || typeof t !== "object" || typeof t.ca !== "string" || !/^([0-9a-f]{64})?$/.test(t.ca)) return undefined;
+  if (typeof t.insecure !== "boolean" || typeof t.serverName !== "boolean" || typeof t.proxy !== "boolean") return undefined;
+  return { ca: t.ca, insecure: t.insecure, serverName: t.serverName, proxy: t.proxy };
+}
+
 export type Sidecar = {
   /** http://127.0.0.1:<port> */
   url: string;
   /** Sent as X-Landlens-Sidecar on every request. Never leaves main. */
   secret: string;
   server: string;
+  /** Whom it trusts to be the cluster; undefined when its Ready line didn't say. */
+  tls?: SidecarTls;
   context: string;
   pid: number | undefined;
   stop(): Promise<void>;
@@ -61,7 +78,7 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
     opts.log?.(d.trimEnd());
   });
 
-  const ready = await new Promise<{ listening: string; server: string }>((resolve, reject) => {
+  const ready = await new Promise<{ listening: string; server: string; tls?: unknown }>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`landlens-kube-proxy for ${opts.context} did not start in time`));
@@ -88,10 +105,12 @@ export async function startSidecar(opts: SidecarOptions): Promise<Sidecar> {
     });
   });
 
+  const tls = readyTls(ready.tls);
   return {
     url: `http://${ready.listening}`,
     secret,
     server: ready.server,
+    ...(tls ? { tls } : {}),
     context: opts.context,
     pid: child.pid,
     exited,

@@ -2,6 +2,7 @@
 // searchAllResources, paged, capped and checked. Every answer is zod-checked; every string that reaches the page is
 // cut to 300 characters and stripped of control and format characters; a resource keeps at most 20 labels.
 import { GCP_MAX_RESOURCES, GCP_PAGE, GcpAssetType, GcpProjectId, GcpQuery, GcpResourceName, type GcpProject, type GcpResource, type GcpTypeCount } from "@landlens/contracts";
+import { redactText } from "@landlens/kube/redact";
 import { z } from "zod";
 import type { GcpClient } from "./client.js";
 import { GcpError, SENTENCES } from "./errors.js";
@@ -31,14 +32,34 @@ const SearchResult = z.object({
 }).passthrough();
 const SearchPage = z.object({ results: z.array(SearchResult).optional(), nextPageToken: str.optional() });
 
-/** Control and format characters (bidi overrides, zero-width) out, then at most `max` characters. */
+/**
+ * What `clean` takes out: control, format and line/paragraph-separator characters (bidi overrides, zero-width,
+ * U+2028/U+2029, and the astral ones: the tag block U+E0000–U+E007F, which a person can't see and a model reads, and
+ * musical format marks), by Unicode property with the `u` flag, so nothing outside the BMP slips past (review of wave 9
+ * part 1, L2). And the rest of the invisible carriers (review of part 3, L2): private-use and unassigned code points,
+ * lone surrogates, the variation selectors (U+FE00–FE0F and the 240 of U+E0100–E01EF: one per byte after any visible
+ * character is a published way to hide data), and the letters that render blank (the Hangul fillers U+115F, U+1160,
+ * U+3164 and U+FFA0, and the braille blank U+2800). An emoji loses its variation selector and keeps its picture.
+ */
+const INVISIBLE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}]/gu;
+
+/** Every invisible character out (INVISIBLE_CHARS), then at most `max` characters. */
 export function clean(s: string, max = 300): string {
-  // eslint-disable-next-line no-control-regex
-  const out = s.replace(/[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g, "");
+  const out = s.replace(INVISIBLE_CHARS, "");
   if (out.length <= max) return out;
   // Cut by code point, so a pair (an emoji) is never split into a lone surrogate (review of part 4, L4).
   const points = Array.from(out);
   return points.length > max ? `${points.slice(0, max - 1).join("")}…` : out;
+}
+
+/**
+ * Free text written by someone outside (a policy's name and documentation, a user agent, Google's descriptions) as one
+ * line for the page and the agent (wave 9 part 3, D189): every run of whitespace one space, control, format and
+ * line-separator characters out, credential shapes redacted, and only then cut to `max`, so a key across the cut is
+ * still taken whole (review of part 1, L3). Before the redaction it is held to 16,384 characters, far past any `max`.
+ */
+export function outsideText(s: string, max: number): string {
+  return clean(redactText(clean(s.replace(/\s+/g, " "), 16_384)).replace(/\s+/g, " ").trim(), max);
 }
 
 /** Control and format characters (bidi overrides, zero-width, line separators) a JSON text may carry in its strings. */

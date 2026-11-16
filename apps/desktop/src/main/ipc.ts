@@ -15,7 +15,7 @@ import type { WorkbenchService } from "./workbench";
 import { flowOwners, type ConnectionsService } from "./connections";
 import type { FamilyService } from "./family";
 import type { LandflowActions } from "./landflow";
-import type { GcpService } from "./gcp";
+import { connectedOf, type GcpService } from "./gcp";
 import type { TelemetryService } from "./telemetry";
 import type { BrainService } from "./brain";
 import { isAppUrl } from "./security";
@@ -25,14 +25,14 @@ import type { ActionService } from "./actions";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService, secrets: SecretService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService, secrets: SecretService, gkeHandles = new Set<string>()) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
   /** Windows that started a sign-in: when one goes, its sign-ins stop. */
   const flowOwner = flowOwners({ cancelFor: (owner) => (connections.cancelFor(owner), family.cancelFor(owner)) });
-  /** Clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name isn't one). */
-  const gkeHandles = new Set<string>();
+  // gkeHandles: clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name
+  // isn't one); main's metrics source reads the same set.
   clusters.onGone((handle) => gkeHandles.delete(handle));
 
   /** Main's own question, in a native dialog on the asking window: the renderer can't answer it (part 5, L3). */
@@ -262,6 +262,13 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "gcp:resources": (r) => gcp.resources(r),
     "gcp:resource": ({ project, name }) => gcp.resource(project, name),
     "gcp:clusters": () => gcp.clusters(),
+    // Google's view of a connected cluster (wave 9, D173–D177): the page names only the handle. Whether it is a GKE
+    // cluster of a chosen project is main's answer, from how it was connected and the address it was connected at.
+    // The sidecar's report of whom it trusts goes with it: an own context must verify TLS against the listed CA (M1).
+    "gcp:cluster-view": ({ handle, fresh }) => gcp.view(connectedOf(clusters, gkeHandles, handle), !!fresh),
+    // One alert's or suggestion's detail and Ask Claude's brief (wave 9 part 3, D187): a handle and an id, answered only
+    // for an id in that cluster's view now.
+    "gcp:cluster-item": ({ handle, kind, id }) => gcp.item(connectedOf(clusters, gkeHandles, handle), kind, id),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

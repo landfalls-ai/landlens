@@ -427,6 +427,17 @@ describe("autonomy on the gateway", () => {
     await s.close();
   });
 
+  it("wave 9 D194: main's own Cloud Monitoring read for a session (its kube metrics tool) holds the session's writes, on the session itself", async () => {
+    const { s, c } = await open("acp-w3");
+    gateway.setAutonomy("acp-w3", "github", true, scope);
+    const write = { ...IN, method: "create", title: "after a metrics read" };
+    expect((await gateway.autonomyCheck("acp-w3", "mcp__github__issue_write", write)).ok).toBe(true);
+    s.hold(WHY.gcp);
+    expect(await gateway.autonomyCheck("acp-w3", "mcp__github__issue_write", write)).toMatchObject({ ok: false, why: WHY.gcp });
+    await c.close();
+    await s.close();
+  });
+
   it("can't be turned on in a session whose listing isn't the accepted one, or for a connection it doesn't have", async () => {
     const { s, c } = await open("acp-a4", [spec({ pin: "0".repeat(64) })]);
     expect(gateway.autonomyStates("acp-a4")[0]!.blocked).toBe(AUTONOMY_DRIFT);

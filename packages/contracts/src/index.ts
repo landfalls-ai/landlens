@@ -732,7 +732,19 @@ export type GcpStatus = {
    * after that question isn't readable by Claude until main asks again (gcp:agent-read with on).
    */
   agentProjects?: string[];
+  /**
+   * Claude's reading was turned off because the grant was made before it covered metrics, alerts and GKE
+   * recommendations (wave 9 part 4, D190): the Connections card says so until it is turned on again (or off).
+   */
+  agentRegrant?: true;
 };
+/**
+ * What a "Claude can read these projects" yes covers (D190): 1 was resources and GKE clusters (wave 6); 2 adds Cloud
+ * Monitoring metrics, open alerts and GKE recommendations. A grant of another number is dropped at load and asks again.
+ */
+export const GCP_GRANT_COVERS = 2;
+/** What the yes of GCP_GRANT_COVERS covers, in the dialog's words. */
+export const GCP_GRANT_WORDS = "resources, GKE clusters, their Cloud Monitoring metrics and open alerts, and GKE recommendations";
 export type GcpProject = { id: string; name: string; number: string };
 /** One resource as Cloud Asset's search returns it: every string cut to 300 characters, at most 20 labels. */
 export type GcpResource = {
@@ -748,6 +760,96 @@ export type GcpResource = {
 };
 export type GcpTypeCount = { assetType: string; count: number };
 export type GkeCluster = { project: string; location: string; name: string; status: string; version: string; endpoint: string; context: string };
+/**
+ * A connected cluster that is a GKE cluster of a chosen project (wave 9, D173): main's answer, never the page's. `number`
+ * is the project's number (the recommender names clusters by it), when the project search gave it.
+ */
+export type GkeRef = { project: string; number?: string; location: string; name: string };
+/** One of Google's suggestions for a GKE cluster, from its diagnosis recommender (D176): Google's text, cleaned and cut. */
+export type GkeAdvice = {
+  /** The insight's last path segment. */
+  id: string;
+  /** Google's subtype, such as DEPRECATION_K8S_1_32_API or EXEC_PROBE_TIMEOUT; "OTHER" when it isn't that shape. */
+  subtype: string;
+  topic: "deprecation" | "other";
+  severity: "critical" | "high" | "medium" | "low" | "unknown";
+  category: "reliability" | "cost" | "security" | "performance" | "manageability" | "sustainability" | "unknown";
+  /** Google's sentence, at most 300 characters. */
+  description: string;
+  /** The associated recommendation's description, at most 300 characters. */
+  action?: string;
+  priority?: "P1" | "P2" | "P3" | "P4";
+  /** When Google last refreshed it (ISO). */
+  refreshed?: string;
+  /** For an API deprecation: the APIs still called and who calls them (a user agent is the caller's own text). */
+  apis?: { api: string; stops?: string; clients: { agent: string; requests?: number; last?: string }[] }[];
+};
+/**
+ * An open Cloud Monitoring alert on a cluster (D186; wave 9 part 3): Google's alert, its text cleaned, redacted and cut
+ * in main. Every name in `subject` is a Kubernetes name.
+ */
+export type GcpAlert = {
+  /** The last segment of the alert's name. */
+  id: string;
+  /** When it opened (ISO). */
+  opened: string;
+  /** The policy's display name, at most 120 characters; "" when it has none. Written by whoever made the policy. */
+  policy: string;
+  /** The policy's number, only when the policy is this project's (by id or number). */
+  policyId?: string;
+  /**
+   * The policy is named by a project number and Landlens couldn't read this project's number, so it can't tell whether
+   * the policy is this project's (review of part 3, L5): it isn't read, and the drawer says why.
+   */
+  policyUnknown?: true;
+  /** Google's word, or "none" for no word or one Landlens doesn't know ([check 2]: never guessed). */
+  severity: "critical" | "error" | "warning" | "none";
+  /** k8s_container, k8s_pod, k8s_node, k8s_cluster or prometheus_target. */
+  resourceType: string;
+  /** The metric's type, such as kubernetes.io/container/restart_count. */
+  metric?: string;
+  subject?: { kind: "Pod" | "Node" | "Namespace"; namespace?: string; name: string; container?: string };
+};
+/** The most open alerts of a project Landlens reads (one page of 1,000, D185), and the most one cluster shows (D186). */
+export const GCP_ALERTS_READ = 1000;
+export const GCP_ALERTS_SHOWN = 200;
+/**
+ * One alert's or suggestion's detail (D187): the brief Ask Claude quotes, and for an alert whose policy is this
+ * project's, the policy's conditions and documentation as plain text (or why they couldn't be read).
+ */
+export type GcpClusterItem = {
+  brief: string;
+  policy?: { conditions: string[]; documentation?: string; cut: boolean } | { error: string };
+};
+/**
+ * Google's view of a connected cluster (D177): whether it is a GKE cluster of a chosen project (with a hint when it
+ * looks like one of a project you haven't chosen), and if so Google's suggestions and open alerts, each failing alone
+ * into its fixed sentence.
+ */
+export type GcpClusterView =
+  /**
+   * Not a GKE cluster of a chosen project: with `hint` when it looks like one of a project you haven't chosen; with
+   * `unread` when it may be one but main couldn't check (gcloud signed out or missing, the GKE listing failed): then the
+   * pages say Google's view couldn't be read, never nothing (review of part 3, M1).
+   */
+  | { gke: false; hint?: string; unread?: string }
+  | {
+      gke: true;
+      cluster: { project: string; location: string; name: string };
+      /**
+       * `cut`: Google had more pages of the location's suggestions than Landlens reads, so this cluster may have more
+       * than `items` (review of part 1, M2); the panel then never says there are none.
+       */
+      advice: { items: GkeAdvice[]; cut: boolean; at: string } | { error: string };
+      /**
+       * This cluster's open alerts (D185–D186). `others`: open alerts of the project that don't name this cluster. `cut`:
+       * Google had more than the 1,000 read. `unreadable`: alerts of the answer Landlens couldn't read (an odd shape, or
+       * one of this cluster's with no id or opening time, or a state that is neither OPEN nor CLOSED); `over`: this
+       * cluster's beyond the 200 shown; `unplaced`: open alerts of the answer whose resource names no project (review of
+       * part 3, L1). Any of the last four means the list may be missing some, and nothing says "none".
+       */
+      alerts: { items: GcpAlert[]; others: number; cut: boolean; unreadable: number; over: number; unplaced: number; at: string } | { error: string };
+    };
 /** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
 export const GCP_MCP_SERVER = "landlens-gcp";
 /** What a GKE context needs said once before the first connect (D91); main asks it in a native dialog (part 5, L3). */
@@ -759,6 +861,11 @@ export type ClusterStatusEvent = { handle: string; context: string; state: "disc
 /** The most resources Landlens reads in one project (10 pages of 500), and the most one gcp:resources answer holds. */
 export const GCP_MAX_RESOURCES = 5000;
 export const GCP_PAGE = 500;
+/**
+ * The most rows of each of a location's two recommender lists Landlens reads (ten pages of 100; review of wave 9 part 1,
+ * M2). The lists hold every cluster of the location; past this a view says `cut`.
+ */
+export const GKE_ADVICE_READ = 1000;
 
 // The autonomous mode (docs/connections.md, D82–D84): per session, per connection, turned on in the dock, never
 // stored. It covers GitHub and Linear writes only; cluster writes always go through the approval broker.
@@ -1229,6 +1336,10 @@ export const channels = {
   "gcp:resources": z.object({ project: GcpProjectId, assetType: GcpAssetType.optional(), query: GcpQuery.optional(), offset: z.number().int().min(0).max(GCP_MAX_RESOURCES).optional() }),
   "gcp:resource": z.object({ project: GcpProjectId, name: GcpResourceName }),
   "gcp:clusters": z.object({}),
+  // Google's view of a connected cluster (wave 9, D177): only the handle; main finds the project, location and cluster.
+  "gcp:cluster-view": z.object({ handle: Handle, fresh: z.boolean().optional() }).strict(),
+  /** One alert's or suggestion's detail and brief (D187): only an id in that handle's current view is answered. */
+  "gcp:cluster-item": z.object({ handle: Handle, kind: z.enum(["alert", "advice"]), id: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/) }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1363,6 +1474,8 @@ export type Responses = {
   /** `brief`: what Ask Claude quotes (D94): the fields and the scrubbed JSON, at most 8,000 characters, built in main. */
   "gcp:resource": { resource: GcpResource; json?: string; cut: boolean; brief?: string };
   "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
+  "gcp:cluster-view": GcpClusterView;
+  "gcp:cluster-item": GcpClusterItem;
 };
 
 /** A tool as the MCP page shows it. */
@@ -1497,11 +1610,16 @@ export type MetricsReasonCode =
   | "clickland-no-cluster" // answers, but has nothing for this cluster's name
   | "prometheus-failed" // found in the cluster, but its answer couldn't be read
   | "prometheus-found" // found, but not chosen yet: anyone who can make a Service could pose as one
+  | "cloud-monitoring-failed" // a GKE cluster of a chosen project, but Cloud Monitoring didn't answer (wave 9 D182)
+  | "cloud-monitoring-no-data" // no GKE system metrics for the cluster's nodes in the last hour
+  | "cloud-monitoring-not-chosen" // GKE-shaped, but its project isn't chosen on the Google Cloud page
+  | "cloud-monitoring-not-granted" // the agent's call only: Claude may not read this cluster's project (D194)
+  | "cloud-monitoring-cut" // Cloud Monitoring answered more series than Landlens draws
   | "no-metrics-server"
   | "live-only"; // metrics-server: samples only since Landlens opened, at most an hour
 export type MetricsReason = { code: MetricsReasonCode; message: string };
 export type MetricsSeries = {
-  source: "clickland" | "prometheus" | "metrics-server" | "none";
+  source: "clickland" | "prometheus" | "cloud-monitoring" | "metrics-server" | "none";
   /** Why a better source wasn't used, and anything the reader should know about this one. */
   reasons: MetricsReason[];
   /** Seconds between points. */
@@ -1520,6 +1638,8 @@ export type MetricsSeries = {
   prometheus?: string;
   /** A Prometheus Landlens found but you haven't chosen, `namespace/name`: offered, not used. */
   prometheusFound?: string;
+  /** Cloud Monitoring: the GKE cluster whose system metrics answered (wave 9 D182). */
+  gke?: { project: string; location: string; name: string };
 };
 export type ClicklandSettings = {
   url: string;

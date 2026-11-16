@@ -153,10 +153,52 @@ person's check reads them), and Ask Claude sends one problem at a time.
   through any proxy the sidecar checks the proxy's address, not the cluster's. A development build opens only the
   fake's clusters unless `LANDLENS_GKE_REAL=1`. The list is read when the catalog is (Welcome, the switcher's menu),
   cached 60 s. A `gcp.json` from before this release asks again for each cluster and for Claude's tools.
+- **Google's view of a cluster (wave 9)** ([gcp.md](gcp.md#googles-view-of-a-cluster)): only GKE's
+  diagnosis recommender (API deprecations, exec probe timeouts, …), no cost or idle-resource recommenders; Landlens
+  never marks a suggestion done, claimed or dismissed (no writes); only the sentence is shown for subtypes other than
+  API deprecations. Claude reads them with part 4's tools (below), and Ask Claude quotes one alert or suggestion at a time. A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
+  counts only when its server is the address Google lists (an IP spelled as a DNS name, or the reverse, doesn't) and
+  it trusts the CA Google lists with TLS checked (a CA bundle holding more than the cluster's CA, an
+  `insecure-skip-tls-verify` or a `tls-server-name` doesn't). The first 1,000 rows of each of the location's lists are
+  read; past them the panel says this cluster may have more. Read when the Overview or Problems opens and every 60 s
+  while one is shown, kept 10 minutes. Nothing was checked against the real
+  Recommender API.
+- **Cloud Monitoring's alerts are the open ones only, read-only** ([gcp.md](gcp.md#googles-view-of-a-cluster)): the
+  newest 1,000 open alerts of the project (one page; past it the page says only those were read), and of those only
+  the ones whose resource names this cluster (`k8s_*` by `cluster_name`, `prometheus_target` by `cluster`); others
+  are counted, not listed (an open alert that names no project is counted as one that may be this cluster's, never
+  placed); at most 200 shown. No closed alerts and no alert's history, no snooze, acknowledge or close
+  (writes), no incidents, uptime checks, SLOs or dashboards, no Triage on an alert, and no alerts on the Google Cloud
+  page or in ⌘K's search (only the command). A policy's documentation is shown as its first 300 characters of plain
+  text (no Markdown, no links), with at most 5 conditions; a policy of another project of the metrics scope isn't read,
+  nor one named by a number while this project's number couldn't be read. Every invisible carrier Landlens knows of is
+  removed from Google's text (an emoji loses its variation selector; a code point newer than Node's Unicode goes).
+  Pasting a few words of a policy's documentation into a question with no quote head holds autonomy only when the
+  pasted text holds a whole value main served (16 characters or more), as for Clickland's lines.
+  A severity word Landlens doesn't know shows no badge. Alerts don't count in the sidebar's, the status bar's or the
+  Pods badge's numbers. Read every 60 s while the Overview or Problems is shown, so an alert can take a minute to
+  appear or go. Nothing was checked against the real Monitoring API ([check 2], [check 3]).
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
-  clusters and sessions; a project granted later is readable only in a new session.
+  clusters and sessions; a project granted later is readable only in a new session. A yes given before wave 9 is
+  dropped and asked again, since it didn't name metrics, alerts and recommendations.
+- **Claude's GKE tools (wave 9 part 4) are fixed reads** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
+  `gcp_metrics` has CPU and memory only, 60 s samples and non-evictable memory, no workload scopes (a workload's pods
+  need the connected cluster's `metrics`), and no queries or filters of the model's own; references come from Cloud
+  Monitoring's request, limit and allocatable gauges, which a cluster without them (or with system metrics off) lacks.
+  `gcp_alerts` lists open alerts only (no closed ones or history), the newest 1,000 read, at most 50 shown, and can't
+  snooze, acknowledge or close one; `gke_recommendations` is GKE's diagnosis recommender only, at most 10 clusters and
+  40 suggestions a call, and can't dismiss one. A namespace limit applies only on the session's own cluster (by name,
+  either listed address or its checked CA; every cluster when it can't be placed): another GKE cluster of the project is
+  read as the project grant allows. A limited session sees no Compute Engine VM's alert in any project, and an
+  alert with no Kubernetes label and a type Landlens doesn't know is shown to it (the label keys are unchecked). A
+  session's `metrics` asks Cloud Monitoring at most 30 times a minute, and sessions together hold 12 places in the
+  queries' line. `cluster_overview`'s line
+  is only as fresh as the last view of the Overview or Problems (10 minutes at most, and main's yes for the connection
+  under a minute old) and is absent otherwise. Once you turn reading off, a session that was open stays without
+  Google even if you turn it on again; start a new one. Nothing
+  was checked against real Google Cloud.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
   asking, and the scope is typed again each time; there is no default scope per connection. A resumed session is also
   held for good: its routine writes ask even with autonomous on, since Landlens can't see what its transcript read
@@ -231,9 +273,22 @@ person's check reads them), and Ask Claude sends one problem at a time.
   operator's labels, four well-known names), reached only through the API server's service proxy (no direct URL or
   bearer token), and asked only for cAdvisor's CPU and working-set series, which a Prometheus without the kubelet's
   cAdvisor job lacks; there is no setting to pick one. The OrbStack scenario's series are backfilled, not scraped.
-- **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is
-  refused. Without it, metrics-server gives live samples from when a view first asks, at most an hour, and only while
-  Landlens is open. OrbStack ships no metrics-server, so there it is Clickland or nothing.
+- **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`), a Prometheus you chose,
+  or, for a GKE cluster of a chosen project, Cloud Monitoring; an older Clickland is refused. Without one, metrics-server
+  gives live samples from when a view first asks, at most an hour, and only while Landlens is open. OrbStack ships no
+  metrics-server, so there it is Clickland or nothing.
+- **Cloud Monitoring** ([metrics.md](metrics.md#cloud-monitoring)) is GKE's system metrics only: CPU and memory, 60 s
+  resolution (90 s and 360 s steps at 6h and 24h), memory as the non-evictable part (not the console's "used", which
+  adds the evictable part); no restarts, network, volumes or the history of requests and limits; no dashboards, SLOs
+  or uptime checks. Only for a GKE cluster of a project you chose, and a context of your own only at the address and
+  CA Google lists; a cluster outside the chosen projects gets metrics-server. A chosen Prometheus stays ahead of it.
+  Claude's `metrics` tool reads it only under wave 9 part 4's grant, as it stands at each call (otherwise it answers from metrics-server and says why).
+  Whether the real API keeps `project_id`, `location` and `cluster_name` (and `namespace_name`, `pod_name`) through
+  `sum by` is unchecked ([check 1]: if not, the chart says Cloud Monitoring answered without this cluster's labels and
+  draws from metrics-server); nothing was checked against the real Monitoring API. A 403 or 429 is kept a minute, so
+  turning the API on or getting Monitoring Viewer shows within a minute. A session's `metrics` call on a context named
+  like a GKE cluster of a chosen project its grant doesn't cover is told "Cloud Monitoring may have this cluster's
+  history" from the name alone (main asks Google nothing for it).
 - **Requests and limits are drawn at their latest value**, not as they changed over the range (a rollout that changed
   them shows the new values across the whole chart).
 - **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten

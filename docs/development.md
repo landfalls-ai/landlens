@@ -137,7 +137,7 @@ build has Google Cloud off unless it reads one of:
 
 | Variable | What |
 |---|---|
-| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the three Google origins become this fake |
+| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the five Google origins become this fake |
 | `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the fake); otherwise it is looked up on the login PATH |
 | `LANDLENS_GCP_REAL=1` | an unpackaged build may reach the real Google Cloud with your gcloud; only the person sets it |
 | `LANDLENS_GKE_REAL=1` | with `LANDLENS_GCP_REAL=1` and no fake endpoint, an unpackaged build may also connect a real GKE cluster; without it, it opens only the fake's clusters on `127.x`. Only the person sets it, and never against a cluster during development (CLAUDE.md) |
@@ -149,6 +149,49 @@ native questions (connect a cloud cluster, let Claude read projects) are answere
 throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (read-only, deleted after) and points the fake's
 GKE cluster at OrbStack's API server; it never writes `~/.kube/config`. With `orbstack,claude` it also asks a live
 session one question about the fake Google Cloud, on your own Claude Code subscription.
+
+Wave 9 ([specs/009-google-view](specs/009-google-view/tasks.md)): `packages/gcp/test/client.test.ts` (five origins,
+GET only, a call's limits) and `recommender.test.ts` (GKE's suggestions for one cluster: ACTIVE, this cluster's only,
+the join, the cuts), more cases in `errors.test.ts`, the fake's recommender routes (`fake-gcp.ts`), and in
+`apps/desktop/test` the `gkeOf` and `clusterView` cases of `gcp-service.test.ts` and `google-rules.test.ts` (the
+panel's words, the cut line, the latest-only loader). The CA a context trusts is reported by the sidecar
+(`sidecar/kube-proxy/main_test.go`, `packages/kube/test/sidecar.test.ts`), and `gke.test.ts` pins the fingerprint both
+sides compute for the fake's CA. The e2e `test/gview.e2e.test.ts` (`LANDLENS_INTEGRATION=orbstack`, after `pnpm -s build`; screenshots
+`g9-*`, also at 1024×700) makes its own throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (deleted
+after) for case (a), and for case (b) writes a temporary kubeconfig (0600, in its own folder, removed after) that
+names OrbStack `gke_demo-shop_us-central1_shop-prod` and `gke_orbit-analytics_us-central1_shop-prod`, passed to the
+app as `KUBECONFIG`; it reads `~/.kube/config` only through `kubectl config view` and never writes it.
+Part 2 (Cloud Monitoring as a metrics source) adds `packages/gcp/test/monitoring.test.ts` (`promRange` and the fake as
+a metrics scope), `packages/metrics/test/cloud-monitoring.test.ts` (the queries and the leak filter against the fake,
+which `packages/metrics` imports from `packages/gcp/test`), Cloud Monitoring cases in `service.test.ts` and
+`gcp-service.test.ts`, `apps/desktop/test/metrics-source.test.ts`, a case in `packages/kube-mcp/test/server.test.ts`
+(the tool's words), and four cases in `gview.e2e.test.ts` (screenshots `g9-p2-*`), which read `landlens-dev`'s pods and
+OrbStack's nodes with `kubectl get` for the fake's model and write nothing more. Its security review's fixes add a
+"Fable's security review of part 2, fixed" block to `cloud-monitoring.test.ts`, `service.test.ts`,
+`metrics-source.test.ts` (T3 reads `src/main/index.ts` to check both wiring sites) and `gcp-service.test.ts` (M1 runs
+a real `GcpService` against the fake with a `kept` file, so nothing has read gcloud or Google before the session's
+call; the fake gcloud's `calls` file shows whether gcloud ran).
+Part 3 (Cloud Monitoring's alerts) adds `openAlerts`, `clusterAlerts` and `alertPolicy` cases to
+`packages/gcp/test/monitoring.test.ts`, `packages/gcp/test/briefs.test.ts` (the briefs Ask Claude quotes), the alerts
+half and `gcp:cluster-item` in `gcp-service.test.ts`, the alerts' words and Ask's contexts in `google-rules.test.ts`,
+the third section's rules in `problems.test.ts`, a `GCP_QUOTE` case in `agent-service.test.ts`, and three cases in
+`gview.e2e.test.ts` (b) (screenshots `g9-p3-*`), whose fake alerts name `landlens-dev`'s real pod and OrbStack's node
+and whose agent is played in main (`agent:start` and `agent:prompt` replaced, as in `landflow.e2e`). Its security
+review's fixes add a "Fable's security review of part 3, fixed" block to `gcp-service.test.ts` (M1's unread views, L1,
+L3's served text, L6's sweep, L7's undelivered reads with a slow fake) and one to `google-rules.test.ts` (the rules,
+`startViewPoll` with fake timers, and a source check that the drawer and Ask read through `latestOnly`), an L3 case in
+`agent-service.test.ts`, and L1, L2, L5, L6, T1 and T5 cases in `packages/gcp`'s `monitoring`, `assets` and `briefs`
+tests.
+Part 4 (Claude's tools) adds the three tools' cases to `packages/gcp-mcp/test/server.test.ts` (its reader runs
+`gkeAdvice`, `openAlerts`/`alertRows`, `alertPolicy` and `gkeProjectSeries` straight against the fake; a `limits`
+argument plays D195), `gkeProjectSeries` cases to `packages/metrics/test/cloud-monitoring.test.ts`, `alertRows` cases
+to `monitoring.test.ts`, a "Claude's Google tools" block to `gcp-service.test.ts` (D190's grant, the reader's new
+reads, D195's limit, D194's line), the session series with and without the grant to `metrics-source.test.ts`, the
+session's `google` to `mcp-main.test.ts`, the session hold to `mcp-gateway`'s `autonomy.test.ts`, the overview's line
+to `kube-mcp`'s `server.test.ts`, the prompt's words to `prompt.test.ts`, and case (c) to `gview.e2e.test.ts`
+(screenshots `g9-p4-*`): a kept pre-wave grant, the card's line, the dialog's words, the MCP page's eight tools,
+Preview of `cluster_overview`, and with `LANDLENS_INTEGRATION=orbstack,claude` a live session answering from
+`gcp_alerts`.
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
