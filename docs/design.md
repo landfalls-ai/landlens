@@ -144,6 +144,19 @@ all N) and Recent warnings; Nodes. It reads
   `cluster:health` every 10s through `useHealth`, which also feeds the sidebar badges and the status bar counts. Below
   the problems, **Usage** (CPU and memory against allocatable, top namespaces, a 1h/6h/24h switch), and a CPU and
   memory sparkline on each node row ([metrics.md](metrics.md)).
+- **Google suggests** (wave 9 part 1; `GoogleSuggests.tsx`, `googleRules.ts`, `googleView.ts`, `.gs-*` in `gcp.css`;
+  [gcp.md](gcp.md#googles-view-of-a-cluster)): on a GKE cluster of a chosen project, a `.panel` right after the
+  Problems and Recent warnings columns, full width (so one column at 1024×700). Head: the `Cloud` icon (15 px, accent),
+  "Google suggests", a `.count-badge`, "GKE · demo-shop · us-central1" in `--ink-3`, and a refresh `.icon-btn`
+  (a spinner while reading). Rows are `.ov-row.gs-row` (`role="button"`, `aria-expanded`): a `.badge` with icon and
+  word, never colour alone (`.bad` + `CircleX` for Critical and High, `.warn` + `Clock` for Medium, `.muted` +
+  `CircleDashed` for Low and Unknown; at least 84 px so the descriptions line up), Google's sentence clamped to two
+  lines, the meta line in `--ink-3` ("Deprecation · reliability · refreshed 2 days ago"), and a chevron. Enter, Space
+  or a click opens the row in place (`.gs-detail`, a `--bg-1` well indented under the sentence): "What Google
+  recommends", the APIs as a small fixed table (`.gs-apis`; the API and user agent in mono, breaking anywhere), and
+  the source line. Empty: `.ov-empty` "Google has no suggestions for this cluster."; a failure: a `.notice` with the
+  sentence, its command as `code`, and **Copy command**. On a GKE-looking cluster of an unchosen project, one quiet
+  `.gs-hint` line (`role="note"`) under Nodes with a **Open Google Cloud** `.link-btn`. No Ask yet (wave 9 part 3).
 - **Problems** (`Problems.tsx`, `problemRules.ts`; CSS `.pb-*` in `workbench.css`; [doctor.md](doctor.md#the-problems-page)):
   a `.seg` for severity and `.chip` buttons per kind of problem (the chosen one in accent), the skipped-checks
   `.notice`, then "Failing" and "To watch" sections of `.ov-row`s: tone-tinted kind tile, title in medium weight, the
@@ -421,6 +434,9 @@ Autonomous: buttons "GitHub · asks", "GitHub · autonomous <n>/20", "Turn on", 
 "GitHub autonomous" with fields "Repositories", "Default branch" (Linear: "Team key"); status "Autonomous" (the
 strip); region "Claude asks"; classes `.auto-chip`, `section.change`, `.change-done.rejected`. Badges and key hints inside buttons are `aria-hidden`,
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
+Google suggests (wave 9): region "Google suggests"; rows `.gs-row` with `aria-expanded`; the opened `.gs-detail`;
+button "Check Google's suggestions again"; the failure `role="alert"` with button "Copy command"; the hint is a
+`role="note"` with button "Open Google Cloud".
 Sidebar (D139): headers `.nav-sec[data-sec="<section>"]` with `aria-expanded` and `aria-controls`; groups named by
 section ("Workspace", "Pinned", "Cloud", "Workloads", …); in the rail a section is a button and its flyout a menu,
 both named by the section; `localStorage` key `landlens.nav.v1`.

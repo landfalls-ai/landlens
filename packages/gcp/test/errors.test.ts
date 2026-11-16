@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { searchProjects, searchResources } from "../src/assets.js";
 import { httpError, networkError, rawGcpError, reasonsOf, SENTENCES } from "../src/errors.js";
 import { listClusters } from "../src/gke.js";
+import { gkeAdvice } from "../src/recommender.js";
 import { FakeGcp } from "./fake-gcp.js";
 import { clientFor } from "./helpers.js";
 
@@ -70,6 +71,44 @@ describe("each failure's sentence", () => {
     expect(reasonsOf({ error: { status: "PERMISSION_DENIED", details: [{ reason: "SERVICE_DISABLED" }, { reason: "not a reason!" }], errors: [{ reason: "accessNotConfigured" }] } }))
       .toEqual(["PERMISSION_DENIED", "SERVICE_DISABLED", "accessNotConfigured"]);
     expect(httpError(500, undefined, "cloudasset", "demo-shop").message).toBe("Google answered HTTP 500.");
+  });
+});
+
+describe("Cloud Monitoring and the recommender (wave 9, D175)", () => {
+  const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
+
+  it("a disabled API names it and its command; a denied read names the role", async () => {
+    fake.fail.set("demo-shop", { status: 403, reason: "SERVICE_DISABLED", api: "recommender" });
+    expect((await failWith(() => gkeAdvice(clientFor(fake).client, shop))).message)
+      .toBe("The Recommender API is off in demo-shop. Turn it on: `gcloud services enable recommender.googleapis.com --project demo-shop`.");
+    fake.fail.set("demo-shop", { status: 403, api: "recommender" });
+    expect((await failWith(() => gkeAdvice(clientFor(fake).client, shop))).message)
+      .toBe("Your account can't read GKE recommendations in demo-shop (it needs GKE Diagnosis Recommender Viewer).");
+    expect(httpError(403, { error: { status: "PERMISSION_DENIED", details: [{ reason: "SERVICE_DISABLED" }] } }, "monitoring", "demo-shop").message)
+      .toBe("The Cloud Monitoring API is off in demo-shop. Turn it on: `gcloud services enable monitoring.googleapis.com --project demo-shop`.");
+    expect(httpError(403, { error: { status: "PERMISSION_DENIED" } }, "monitoring", "demo-shop").message)
+      .toBe("Your account can't read Cloud Monitoring in demo-shop (it needs Monitoring Viewer).");
+  });
+
+  it("a refused PromQL query is one fixed sentence; neither it nor the log line holds the echoed query", () => {
+    const marker = "MARKER_9f3c ya29.EchoedTokenShape_abcdefghijklmnop";
+    const body = { status: "error", errorType: "bad_data", error: `invalid parameter "query": 1:1: parse error near ${marker} sum by (project_id) (x{cluster_name="shop-prod"})` };
+    for (const status of [400, 422]) {
+      const e = httpError(status, body, "monitoring", "demo-shop");
+      expect(e.message).toBe("Cloud Monitoring didn't accept Landlens's query.");
+      expect(e.message).toBe(SENTENCES.query);
+      expect(rawGcpError(e)).toContain("bad_data");
+      expect(rawGcpError(e)).not.toMatch(/MARKER|ya29|cluster_name|parse error/);
+    }
+    // Only the PromQL API's 400 is that sentence; another API's is still "answered HTTP 400".
+    expect(httpError(400, body, "recommender", "demo-shop").message).toBe("Google answered HTTP 400.");
+  });
+
+  it("errorType reaches the log only in its shape", () => {
+    expect(reasonsOf({ status: "error", errorType: "bad_data", error: "x" })).toEqual(["bad_data"]);
+    expect(reasonsOf({ status: "error", errorType: "Bad Data ya29.abcdefghijklmnop", error: "x" })).toEqual([]);
+    expect(reasonsOf({ status: "error", errorType: "a".repeat(33) })).toEqual([]);
+    expect(reasonsOf({ status: "success", errorType: "bad_data" })).toEqual([]);
   });
 });
 

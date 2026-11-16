@@ -3,13 +3,15 @@
 // raw error goes to main's log, with credentials cut (`rawGcpError`).
 import { redactText } from "@landlens/kube/redact";
 
-/** The three APIs Landlens reads. */
-export type GcpApi = "cloudresourcemanager" | "cloudasset" | "container";
+/** The five APIs Landlens reads (D174). */
+export type GcpApi = "cloudresourcemanager" | "cloudasset" | "container" | "monitoring" | "recommender";
 
 const API_NAME: Record<GcpApi, string> = {
   cloudresourcemanager: "Cloud Resource Manager",
   cloudasset: "Cloud Asset",
   container: "Kubernetes Engine",
+  monitoring: "Cloud Monitoring",
+  recommender: "Recommender",
 };
 
 /** A Google call that failed: `message` is the sentence for the page; `status` the HTTP status (0: no answer). */
@@ -29,6 +31,8 @@ export const SENTENCES = {
   redirect: "Google redirected; Landlens doesn't follow redirects.",
   tooBig: "Google's answer was larger than Landlens reads (8 MB).",
   answer: "Google's answer wasn't what Landlens expected.",
+  /** A 400 or 422 from the PromQL API (D175): its own text echoes the query, so none of it is passed on. */
+  query: "Cloud Monitoring didn't accept Landlens's query.",
 } as const;
 
 /** The sentence for a disabled API in a project, with the command that turns it on. */
@@ -41,11 +45,19 @@ export function disabledSentence(api: GcpApi, project?: string): string {
 export function deniedSentence(api: GcpApi, project?: string): string {
   if (api === "cloudasset") return `Your account can't list resources in ${project} (it needs Cloud Asset Viewer).`;
   if (api === "container") return `Your account can't list GKE clusters in ${project} (it needs Kubernetes Engine Cluster Viewer).`;
+  if (api === "monitoring") return `Your account can't read Cloud Monitoring in ${project} (it needs Monitoring Viewer).`;
+  if (api === "recommender") return `Your account can't read GKE recommendations in ${project} (it needs GKE Diagnosis Recommender Viewer).`;
   return "Your account can't search projects.";
 }
 
-/** The `reason`s Google's error body names (google.rpc.ErrorInfo, and the older `errors[]`), as strings only. */
+/**
+ * The `reason`s Google's error body names (google.rpc.ErrorInfo, and the older `errors[]`), as strings only. The PromQL
+ * API answers in Prometheus's shape too (`{ status: "error", errorType, error }`): its `errorType` is taken when it is a
+ * short word (for the log only); its `error`, which echoes the query, never is (D175).
+ */
 export function reasonsOf(body: unknown): string[] {
+  const prom = body as { status?: unknown; errorType?: unknown } | undefined;
+  if (prom && typeof prom === "object" && prom.status === "error" && typeof prom.errorType === "string" && /^[a-z_]{1,32}$/.test(prom.errorType)) return [prom.errorType];
   const e = (body as { error?: { status?: unknown; details?: unknown; errors?: unknown } } | undefined)?.error;
   if (!e || typeof e !== "object") return [];
   const out: string[] = [];
@@ -67,6 +79,7 @@ export function httpError(status: number, body: unknown, api: GcpApi, project?: 
   const reasons = reasonsOf(body);
   const raw = `HTTP ${status} ${reasons.join(",")}`;
   if (status === 401) return new GcpError(401, SENTENCES.signIn, raw);
+  if (api === "monitoring" && (status === 400 || status === 422)) return new GcpError(status, SENTENCES.query, raw);
   if (status === 403 && reasons.some((r) => r === "SERVICE_DISABLED" || r === "accessNotConfigured")) return new GcpError(403, disabledSentence(api, project), raw);
   if (status === 403) return new GcpError(403, deniedSentence(api, project), raw);
   if (status === 429 || reasons.includes("RESOURCE_EXHAUSTED") || reasons.includes("RATE_LIMIT_EXCEEDED")) return new GcpError(429, SENTENCES.limited, raw);

@@ -5,8 +5,8 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { CLOUD_DECLINED } from "@landlens/contracts";
-import { gcpMode, GcpService, MAX_CACHED, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
+import { channels, CLOUD_DECLINED } from "@landlens/contracts";
+import { ADVICE_FAILED_TTL, ADVICE_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
 import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
@@ -17,6 +17,7 @@ beforeEach(() => {
   fake.requests.length = 0;
   fake.fail.clear();
   fake.slowMs = 0;
+  fake.advice.clear();
 });
 
 function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number; kept?: unknown; onAgentOff?: () => void } = {}) {
@@ -629,5 +630,145 @@ describe("Fable's security review of part 5, fixed", () => {
     await svc.status(true);
     await svc.gkeContexts();
     expect(gone).toHaveLength(3);
+  });
+});
+
+describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
+  const PROD = "gke_demo-shop_us-central1_shop-prod";
+  const at = (server: string, viaLandlens = false) => ({ context: PROD, server, viaLandlens });
+  const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
+
+  it("a cluster Landlens connected from its listing is GKE, at the listed address", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    // Not listed yet in this run: nothing.
+    expect(await svc.gkeOf(at("https://203.0.113.17", true))).toBeUndefined();
+    await svc.gkeContexts();
+    expect(await svc.gkeOf(at("https://203.0.113.17", true))).toEqual(shop);
+    // Connected somewhere the listing doesn't say: not this cluster.
+    expect(await svc.gkeOf(at("https://198.51.100.90", true))).toBeUndefined();
+  });
+
+  it("your own context is GKE only with gcloud's name for a chosen project and the listing's address", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    expect(await svc.gkeOf(at("https://203.0.113.17"))).toEqual(shop);
+    expect(await svc.gkeOf(at("https://203.0.113.17:443"))).toEqual(shop);
+    // The same name at another address is an ordinary cluster: it could otherwise draw another cluster's data.
+    expect(await svc.gkeOf(at("https://127.0.0.1:26443"))).toBeUndefined();
+    expect(await svc.gkeOf(at("https://203.0.113.17.evil.example"))).toBeUndefined();
+    expect(await svc.gkeOf(at("http://203.0.113.17"))).toBeUndefined();
+    expect(await svc.gkeOf(at("not a url"))).toBeUndefined();
+    // A name the listing doesn't have, or not GKE's shape at all.
+    expect(await svc.gkeOf({ context: "gke_demo-shop_us-central1_not-listed", server: "https://203.0.113.17", viaLandlens: false })).toBeUndefined();
+    expect(await svc.gkeOf({ context: "gke_demo-shop_europe-west1-b_shop-prod", server: "https://203.0.113.17", viaLandlens: false })).toBeUndefined();
+    fake.requests.length = 0;
+    expect(await svc.gkeOf({ context: "orbstack", server: "https://203.0.113.17", viaLandlens: false })).toBeUndefined();
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it("a GKE-shaped name of a project you haven't chosen gets the hint; signed out, off or a failed listing get nothing", async () => {
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop"]);
+    expect(await svc.gkeOf({ context: "gke_orbit-analytics_us-central1_shop-prod", server: "https://203.0.113.17", viaLandlens: false })).toEqual({
+      hint: "This looks like a GKE cluster of orbit-analytics. Choose that project on the Google Cloud page to see Google's metrics, alerts and suggestions for it.",
+    });
+    expect(await svc.view({ context: "gke_orbit-analytics_us-central1_shop-prod", server: "https://203.0.113.17", viaLandlens: false })).toEqual({ gke: false, hint: expect.stringMatching(/^This looks like a GKE cluster of orbit-analytics\./) });
+    expect(await svc.view({ context: "orbstack", server: "https://127.0.0.1:26443", viaLandlens: false })).toEqual({ gke: false });
+    // The listing fails: nothing, silently.
+    const failing = service();
+    await failing.svc.choose(["demo-shop"]);
+    fake.fail.set("demo-shop", { status: 403, api: "container" });
+    expect(await failing.svc.gkeOf(at("https://203.0.113.17"))).toBeUndefined();
+    fake.fail.clear();
+    // Signed out: nothing, and nothing asked.
+    writeFileSync(join(dir, "account"), "");
+    await svc.status(true);
+    fake.requests.length = 0;
+    expect(await svc.gkeOf(at("https://203.0.113.17"))).toBeUndefined();
+    expect(await svc.gkeOf({ context: "gke_orbit-analytics_us-central1_shop-prod", server: "https://203.0.113.17", viaLandlens: false })).toBeUndefined();
+    expect(fake.requests).toHaveLength(0);
+    expect(await service({ mode: { on: false } }).svc.gkeOf(at("https://203.0.113.17"))).toBeUndefined();
+  });
+
+  it("the view holds Google's suggestions for that cluster only, cached 10 minutes, and alerts empty until part 3", async () => {
+    let t = 1_000_000;
+    const { svc, logs } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    const v = await svc.view(at("https://203.0.113.17"));
+    if (!v.gke) throw new Error("not GKE");
+    expect(v.cluster).toEqual({ project: "demo-shop", location: "us-central1", name: "shop-prod" });
+    if ("error" in v.advice) throw new Error(v.advice.error);
+    expect(v.advice.items.map((a) => a.id)).toEqual(["deprecation-1-32", "exec-probe-timeout"]);
+    expect(v.alerts).toEqual({ items: [], others: 0, cut: false, at: expect.any(String) });
+    const asked = () => fake.hits("/insights").length;
+    expect(asked()).toBe(1);
+    // Cached: the next visit, and Check again within 10 s, ask nothing.
+    t += 5_000;
+    await svc.view(at("https://203.0.113.17"));
+    await svc.view(at("https://203.0.113.17"), true);
+    expect(asked()).toBe(1);
+    // Check again after 10 s reads now; then 10 minutes pass.
+    t += FRESH_EVERY;
+    await svc.view(at("https://203.0.113.17"), true);
+    expect(asked()).toBe(2);
+    t += ADVICE_TTL - 1;
+    await svc.view(at("https://203.0.113.17"));
+    expect(asked()).toBe(2);
+    t += 2;
+    await svc.view(at("https://203.0.113.17"));
+    expect(asked()).toBe(3);
+    // Two at once ask once.
+    t += ADVICE_TTL;
+    await Promise.all([svc.view(at("https://203.0.113.17")), svc.view(at("https://203.0.113.17"))]);
+    expect(asked()).toBe(4);
+    expect(logs.join("\n")).not.toContain(GCP_TOKEN);
+  });
+
+  it("a failing read is its sentence, kept a minute, with the raw error only in the log and no token anywhere", async () => {
+    let t = 1_000_000;
+    const { svc, logs } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    fake.fail.set("demo-shop", { status: 403, reason: "SERVICE_DISABLED", api: "recommender", message: `denied ${GCP_TOKEN}` });
+    const v = await svc.view(at("https://203.0.113.17"));
+    if (!v.gke) throw new Error("not GKE");
+    expect(v.advice).toEqual({ error: "The Recommender API is off in demo-shop. Turn it on: `gcloud services enable recommender.googleapis.com --project demo-shop`." });
+    // The other half stands on its own.
+    expect(v.alerts).toMatchObject({ items: [] });
+    expect(JSON.stringify(v)).not.toContain(GCP_TOKEN);
+    expect(logs.some((l) => l.startsWith("[gcp] recommender demo-shop/us-central1:"))).toBe(true);
+    expect(logs.join("\n")).not.toContain(GCP_TOKEN);
+    fake.fail.clear();
+    t += ADVICE_FAILED_TTL - 1;
+    expect(((await svc.view(at("https://203.0.113.17"))) as { advice: unknown }).advice).toHaveProperty("error");
+    t += 2;
+    expect(((await svc.view(at("https://203.0.113.17"))) as { advice: { items: unknown[] } }).advice.items).toHaveLength(2);
+  });
+
+  it("forgets the view when the account changes or the project is taken out", async () => {
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    await svc.view(at("https://203.0.113.17"));
+    const views = (svc as unknown as { advice: Map<string, unknown> }).advice;
+    expect([...views.keys()]).toEqual(["demo-shop/us-central1/shop-prod"]);
+    await svc.choose(["orbit-analytics"]);
+    expect(views.size).toBe(0);
+    await svc.choose(["demo-shop"]);
+    await svc.view(at("https://203.0.113.17"));
+    expect(views.size).toBe(1);
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    expect(views.size).toBe(0);
+    await expect(svc.clusterView({ project: "payments-core", location: "us-central1", name: "x" })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("the channel takes the handle only: the page can't name a project, a location or a cluster", () => {
+    const schema = channels["gcp:cluster-view"];
+    expect(schema.safeParse({ handle: "abcdefgh12345678" }).success).toBe(true);
+    expect(schema.safeParse({ handle: "abcdefgh12345678", fresh: true }).success).toBe(true);
+    for (const extra of [{ project: "orbit-analytics" }, { location: "us-central1" }, { cluster: "shop-prod" }, { context: "gke_x" }]) {
+      expect(schema.safeParse({ handle: "abcdefgh12345678", ...extra }).success).toBe(false);
+    }
+    expect(schema.safeParse({ handle: "../x" }).success).toBe(false);
   });
 });

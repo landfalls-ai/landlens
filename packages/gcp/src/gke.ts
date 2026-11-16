@@ -30,8 +30,11 @@ const ClustersPage = z.object({
   }).passthrough()).optional(),
 }).passthrough();
 
-const NAME = /^[a-z]([-a-z0-9]{0,38}[a-z0-9])?$/;
-const LOCATION = /^[a-z]+-[a-z]+\d+(-[a-z])?$/;
+/** A GKE cluster name and location as Google names them (D173: the only shapes that reach a path). */
+export const GKE_NAME = /^[a-z]([-a-z0-9]{0,38}[a-z0-9])?$/;
+const NAME = GKE_NAME;
+export const GKE_LOCATION = /^[a-z]+-[a-z]+\d+(-[a-z])?$/;
+const LOCATION = GKE_LOCATION;
 
 /** gcloud's own context name for a GKE cluster: gke_<project>_<location>_<name>. */
 export const gkeContext = (project: string, location: string, name: string) => `gke_${project}_${location}_${name}`;

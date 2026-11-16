@@ -137,7 +137,7 @@ build has Google Cloud off unless it reads one of:
 
 | Variable | What |
 |---|---|
-| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the three Google origins become this fake |
+| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the five Google origins become this fake |
 | `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the fake); otherwise it is looked up on the login PATH |
 | `LANDLENS_GCP_REAL=1` | an unpackaged build may reach the real Google Cloud with your gcloud; only the person sets it |
 | `LANDLENS_GKE_REAL=1` | with `LANDLENS_GCP_REAL=1` and no fake endpoint, an unpackaged build may also connect a real GKE cluster; without it, it opens only the fake's clusters on `127.x`. Only the person sets it, and never against a cluster during development (CLAUDE.md) |
@@ -149,6 +149,16 @@ native questions (connect a cloud cluster, let Claude read projects) are answere
 throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (read-only, deleted after) and points the fake's
 GKE cluster at OrbStack's API server; it never writes `~/.kube/config`. With `orbstack,claude` it also asks a live
 session one question about the fake Google Cloud, on your own Claude Code subscription.
+
+Wave 9 ([specs/009-google-view](specs/009-google-view/tasks.md)): `packages/gcp/test/client.test.ts` (five origins,
+GET only, a call's limits) and `recommender.test.ts` (GKE's suggestions for one cluster: ACTIVE, this cluster's only,
+the join, the cuts), more cases in `errors.test.ts`, the fake's recommender routes (`fake-gcp.ts`), and in
+`apps/desktop/test` the `gkeOf` and `clusterView` cases of `gcp-service.test.ts` and `google-rules.test.ts` (the
+panel's words). The e2e `test/gview.e2e.test.ts` (`LANDLENS_INTEGRATION=orbstack`, after `pnpm -s build`; screenshots
+`g9-*`, also at 1024×700) makes its own throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (deleted
+after) for case (a), and for case (b) writes a temporary kubeconfig (0600, in its own folder, removed after) that
+names OrbStack `gke_demo-shop_us-central1_shop-prod` and `gke_orbit-analytics_us-central1_shop-prod`, passed to the
+app as `KUBECONFIG`; it reads `~/.kube/config` only through `kubectl config view` and never writes it.
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

@@ -4,7 +4,9 @@ Landlens browses the resources of the Google Cloud projects you choose, read-onl
 sign-in and stores no Google credential. Wave 6 part 4, built 15 November 2026 (the spec's D85–D90, D92 and the fake
 of D97), browses; part 5, built the same day, puts the GKE clusters of those projects in the cluster catalog (D91),
 gives Claude read-only Google Cloud tools when you turn them on (D93, `landlens-gcp`) and adds **Ask Claude** and
-**Open in Landlens** to the drawer (D94). The security rules are in
+**Open in Landlens** to the drawer (D94). Wave 9 ("Google's view of this cluster",
+[specs/009-google-view](specs/009-google-view/spec.md)) part 1, built 16 November 2026 (D173–D178), shows Google's
+own suggestions for a connected GKE cluster on its Overview ([below](#googles-view-of-a-cluster)). The security rules are in
 [security.md](security.md#connections-and-google-cloud); GitHub and Linear are in [connections.md](connections.md).
 
 ## Signing in: gcloud's, not Landlens's
@@ -51,12 +53,15 @@ and the account, at most 500). Nothing else: no token or resource; the account i
 different sign-in asks again. `userData/gke/kubeconfig` (folder 0700,
 file 0600) is Landlens's own kubeconfig for the GKE clusters, below; it holds no token either. In memory, main keeps
 the project list for 5 minutes, each project's resources and the GKE clusters for 60 s, and **Read again** reads at
-once.
+once; Google's suggestions for each GKE cluster for 10 minutes (a failed read for one), at most 50 clusters, and
+**Check again** reads at once (at most once in 10 s).
 
 ## What Landlens asks Google
 
-Only GETs, to three origins (`packages/gcp/src/client.ts`), each with `Authorization: Bearer <token>`,
-`redirect: "error"`, a 15 s limit and a streamed cap of 8 MB a page. Requests about a project carry
+Only GETs, to five origins (`packages/gcp/src/client.ts`): Cloud Resource Manager, Cloud Asset and Kubernetes Engine,
+and from wave 9 Cloud Monitoring (`monitoring.googleapis.com`) and the Recommender (`recommender.googleapis.com`). Each
+request has `Authorization: Bearer <token>`, `redirect: "error"`, a 15 s limit and a streamed cap of 8 MB a page; a
+call may ask for less (the recommender asks for 10 s), never more. Requests about a project carry
 `X-Goog-User-Project: <that project>`, so they are billed to it rather than to gcloud's own client project, which has
 most APIs off; the project search carries none.
 
@@ -67,6 +72,8 @@ most APIs off; the project search carries none.
 | A query | the same call with your text as `query` | the same limits; at most 10 queries kept, 60 s each |
 | One resource | the same call with `query=name="<name>"`, `pageSize=1`, `readMask` plus `versionedResources` | the drawer's JSON is cut at 256 KB; Claude's copy and the brief are scrubbed from the whole resource first |
 | GKE clusters | `container.googleapis.com/v1/projects/<id>/locations/-/clusters` | at most 200 a project; the chosen projects only; cached 60 s; for the catalog and `gke_clusters` |
+| GKE insights (wave 9) | `recommender.googleapis.com/v1/projects/<id>/locations/<location>/insightTypes/google.container.DiagnosisInsight/insights`, `pageSize=100`, `filter=stateInfo.state = ACTIVE` | a connected GKE cluster of a chosen project only; at most 2 pages, 10 s each; kept 10 minutes with the recommendations |
+| GKE recommendations (wave 9) | `…/recommenders/google.container.DiagnosisRecommender/recommendations`, the same parameters | the same, read beside the insights |
 
 Cloud Asset has no count call for a search, so the types and their counts are made in main from the cached pages: one
 read of a project gives its types, counts and every page of its rows. Main reads only the projects you chose: any
@@ -95,7 +102,9 @@ which can echo anything. The raw error (the status and reasons) goes to main's l
 |---|---|
 | 401 | Google didn't accept gcloud's sign-in. Run `gcloud auth login`. |
 | 403 `SERVICE_DISABLED` | The Cloud Asset API is off in <project>. Turn it on: `gcloud services enable cloudasset.googleapis.com --project <project>`. (and the same for Kubernetes Engine and Cloud Resource Manager) |
-| 403 otherwise | Your account can't list resources in <project> (it needs Cloud Asset Viewer). / …can't list GKE clusters in <project> (it needs Kubernetes Engine Cluster Viewer). |
+| 403 otherwise | Your account can't list resources in <project> (it needs Cloud Asset Viewer). / …can't list GKE clusters in <project> (it needs Kubernetes Engine Cluster Viewer). / …can't read Cloud Monitoring in <project> (it needs Monitoring Viewer). / …can't read GKE recommendations in <project> (it needs GKE Diagnosis Recommender Viewer). |
+| 403 `SERVICE_DISABLED`, wave 9 | The Cloud Monitoring API is off in <project>. Turn it on: `gcloud services enable monitoring.googleapis.com --project <project>`. / The Recommender API is off in <project>. Turn it on: `gcloud services enable recommender.googleapis.com --project <project>`. |
+| 400 or 422 from Cloud Monitoring's PromQL API | Cloud Monitoring didn't accept Landlens's query. (Its own text echoes the query and is never passed on; Prometheus's `errorType` reaches the log only as a short word.) |
 | 429 | Google is limiting requests. Try again in a minute. |
 | 404 | Google found nothing for <project> (404). |
 | no answer | Google didn't answer in time. / Google's address doesn't resolve. Check your network. / Google's TLS certificate wasn't accepted. / Couldn't reach Google. |
@@ -170,6 +179,58 @@ An unpackaged build (`pnpm dev`, the e2e tests) opens only the fake's clusters o
 refused before any question unless you set `LANDLENS_GKE_REAL=1` beside `LANDLENS_GCP_REAL=1`, below. Everything after is as for any cluster: the same RBAC (yours, as
 gcloud's account), the same read-only agent and approved changes.
 
+## Google's view of a cluster
+
+Wave 9 ([specs/009-google-view](specs/009-google-view/spec.md)) shows what Google knows about a connected GKE cluster
+beside what the cluster says. Part 1 (D173–D178) is built: which cluster counts, and Google's suggestions on the
+Overview. Cloud Monitoring as a metrics source, its open alerts on the Problems page and Claude's tools for them are
+parts 2–4.
+
+**Which connected cluster is a GKE cluster of a chosen project** (D173) is main's answer, in one place
+(`GcpService.gkeOf`), never the page's:
+
+- A cluster Landlens connected from its own listing (Welcome's **Google Cloud** cards): that listing's entry, while
+  it is listed at the address the cluster was connected at.
+- A context of your own kubeconfig: only when its name is gcloud's `gke_<project>_<location>_<name>` for a project you
+  chose, the last listing (60 s) has a cluster of exactly that name, and that cluster's checked address
+  (`https://<endpoint>`) is the one the context is connected at (compared as URL origins). A context only *named* like
+  a GKE cluster, or one that points somewhere else, is an ordinary cluster: it could otherwise show another cluster's
+  data. When Google lists the cluster at a new address, it stops counting at the next listing.
+- A GKE-shaped name of a project you haven't chosen gets one quiet line under Nodes: "This looks like a GKE cluster of
+  <project>. Choose that project on the Google Cloud page to see Google's metrics, alerts and suggestions for it.",
+  with **Open Google Cloud**. Anything else (Google Cloud off, gcloud missing or signed out, a listing that failed) is
+  silently an ordinary cluster.
+
+The page asks with `gcp:cluster-view`, which takes only the cluster's handle: it can't name a project, a location or
+a cluster. The project's number comes from the project search (cached 5 minutes): the recommender names clusters by
+it.
+
+**Google suggests** (D176, D178). On a GKE cluster of a chosen project the Overview has a panel after the Problems and
+Recent warnings columns and before Usage and Nodes, read once per visit and every 10 minutes while the window is
+visible (`googleView.ts`, `GoogleSuggests.tsx`, styles in `gcp.css`):
+
+- The head: the `Cloud` icon, "Google suggests", the count, "GKE · <project> · <location>", and **Check again**.
+- A row per suggestion of GKE's diagnosis recommender (`google.container.DiagnosisInsight` and
+  `google.container.DiagnosisRecommender`): a badge with an icon and a word (Critical or High, Medium, Low or Unknown),
+  Google's sentence (two lines at most until opened), and under it "Deprecation · reliability · refreshed 2 days ago".
+  Worst first, then API deprecations, then the newest; at most 50.
+- Enter or a click opens the row in place: **What Google recommends** (the recommendation's sentence and priority),
+  for an API deprecation a table of the APIs (stops being served in, the callers of the last 30 days with their user
+  agent, requests and last call), and "From Google's GKE recommender. Landlens doesn't mark it done or dismissed."
+- None: "Google has no suggestions for this cluster." A failed read: its sentence, with **Copy command** when it names
+  `gcloud services enable …` or `gcloud auth login`.
+
+What is read (`packages/gcp/src/recommender.ts`): the ACTIVE insights and recommendations of the cluster's location,
+two GETs of at most two pages each. Only this cluster's are kept: an insight whose `targetResources` is exactly
+`//container.googleapis.com/projects/<project id or number>/(locations|zones)/<location>/clusters/<name>` (another
+cluster of the location, and another project's cluster of the same name, are dropped), and a recommendation joined to
+a kept insight. Each row passes a schema on its own (an odd row is dropped, the rest show). Google's sentences are
+cut to 300 characters, an API to 200, at most 10 APIs with 5 callers each; a user agent, written by whoever called the
+cluster's API server, is cut to 120 and redacted. All of it is shown as text: no Markdown, nothing becomes a link,
+control and format characters (a bidi override, a newline) are removed. Landlens never marks a suggestion accepted,
+claimed, dismissed, succeeded or failed: those are POSTs, and the package has none. Ask Claude on a suggestion comes
+with part 3.
+
 ## Claude's Google Cloud tools (`landlens-gcp`)
 
 Off by default. **Claude can read these projects** on the Google Cloud card turns them on, through its own channel
@@ -229,25 +290,33 @@ An unpackaged build has Google Cloud off unless one of these is set (a packaged 
 
 | Variable | What |
 |---|---|
-| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: all three Google origins become this loopback fake; anything else is ignored |
+| `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: all five Google origins become this loopback fake; anything else is ignored |
 | `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the tests' fake). With `LANDLENS_GCP_ENDPOINT` it is required: without it gcloud is "missing", and the login PATH's gcloud is never run against the fake. Otherwise gcloud is looked up on the login PATH |
 | `LANDLENS_GCP_REAL=1` | lets an unpackaged build reach the real Google Cloud with your gcloud. Only the person sets this, to try their own project; no test, script or agent does |
 | `LANDLENS_GKE_REAL=1` | with `LANDLENS_GCP_REAL=1` and no fake endpoint, lets an unpackaged build connect a real GKE cluster; without it, a development build opens only the fake's clusters on `127.x`. Only the person sets this |
 
 The fakes, in `packages/gcp/test`:
 
-- `fake-gcp.ts`: one loopback server for the three APIs. Five active projects (demo-shop with 73 resources over 23
+- `fake-gcp.ts`: one loopback server for the APIs. Five active projects (demo-shop with 73 resources over 23
   types, orbit-analytics with 1,200, archive-vault with 6,000, payments-core, ml-sandbox-42) and one being deleted;
   `query`, `assetTypes`, `name=` and `versionedResources`; GKE clusters; switches for 401, 403 `SERVICE_DISABLED`,
-  403, 429, a slow answer and a redirect. It records every request (the bearer, `X-Goog-User-Project`).
+  403, 429 (per API too), a slow answer and a redirect. It records every request (its method, the bearer,
+  `X-Goog-User-Project`). From wave 9, GKE's recommender: for demo-shop in us-central1, shop-prod's two active
+  suggestions named by the project number (`DEPRECATION_K8S_1_32_API`, high, with two APIs and their callers, one a
+  user agent with a bidi override, a newline and an instruction; `EXEC_PROBE_TIMEOUT`, medium), and three that must
+  never show on it: one on `shop-prod-canary`, one dismissed, and one on orbit-analytics's own `shop-prod` in
+  us-central1 (another project's cluster of the same name and location). `filter` is honoured for
+  `stateInfo.state = ACTIVE` only (any other is a 400); `advice` sets a location's rows and `ignoreFilter` answers
+  as if the filter weren't there.
 - `fake-gcloud.sh`: prints a fixed account and token; files in its `CLOUDSDK_CONFIG` folder change the account
   (empty: signed out), the token or make it fail, and it records each call and its environment.
 
 ```bash
-pnpm --filter @landlens/gcp test                         # auth, assets, errors, GKE, scrubbing against the fakes
+pnpm --filter @landlens/gcp test                         # auth, assets, client, errors, GKE, recommender, scrubbing
 pnpm --filter @landlens/gcp-mcp test                     # landlens-gcp's tools against the fake
 (cd apps/desktop && npx vitest run test/gcp-service.test.ts)   # GcpService in main
-pnpm -s build && (cd apps/desktop && LANDLENS_INTEGRATION=orbstack npx vitest run test/gcp.e2e.test.ts test/gke.e2e.test.ts)
+(cd apps/desktop && npx vitest run test/google-rules.test.ts)  # the Google suggests panel's words
+pnpm -s build && (cd apps/desktop && LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/gcp.e2e.test.ts test/gke.e2e.test.ts test/gview.e2e.test.ts)
 ```
 
 `gcp.e2e` needs no cluster for most of it (Welcome); its last case connects OrbStack for the sidebar, ⌘K and a
@@ -257,10 +326,26 @@ checks the question, that the connection has the ServiceAccount's RBAC (pods in 
 the kubeconfig's modes and no token in it, that `~/.kube/config` wasn't written, the switcher, the drawer, the switch
 asking in main and the MCP page; it deletes the ServiceAccount, Role and RoleBinding after. With
 `LANDLENS_INTEGRATION=orbstack,claude` it also asks a live session "which Cloud SQL instances are in project
-demo-shop?", answered from the fake through `landlens-gcp` (your own Claude Code subscription). With
-`LANDLENS_SHOTS=<folder>` they save `g4-*` and `g5-*` screenshots in dark and light.
+demo-shop?", answered from the fake through `landlens-gcp` (your own Claude Code subscription). `gview.e2e` (wave 9)
+connects shop-prod the same way and checks the Overview's **Google suggests** (two rows, one opened in place, the
+user agent as plain text, no link or heading inside, a disabled API's sentence with **Copy command**); then it opens
+OrbStack as a context of its own named `gke_demo-shop_us-central1_shop-prod` from a temporary kubeconfig (0600, in the
+test's folder, removed after; the catalog honours `KUBECONFIG`), where the panel shows only while the fake lists
+shop-prod at OrbStack's address, and `gke_orbit-analytics_us-central1_shop-prod` gets the hint line. Every request
+the fake recorded is a GET with gcloud's token. With `LANDLENS_SHOTS=<folder>` they save `g4-*`, `g5-*` and `g9-*`
+screenshots in dark and light (`g9-*` also at 1024×700).
 
 ## Left for you to check
+
+Wave 9 ([specs/009-google-view](specs/009-google-view/spec.md) section 9): on your own project, turn the APIs on
+(`gcloud services enable monitoring.googleapis.com recommender.googleapis.com --project <project>`) and have
+Monitoring Viewer and GKE Diagnosis Recommender Viewer (`roles/recommender.containerDiagnosisViewer`; Viewer or Owner
+covers both), then compare **Google suggests** with `gcloud recommender insights list
+--insight-type=google.container.DiagnosisInsight --location=<location> --project=<project>`. Still marked **[check]**
+until then: the `content` of subtypes other than the API deprecations (Landlens shows only their sentence); that a
+recommendation carries `associatedInsights` (Landlens also joins by the insight's `associatedRecommendations`); the
+Recommender's read quota (Landlens keeps the answer 10 minutes and reads only while an Overview is open); that
+gcloud's user token carries `cloud-platform`.
 
 - Real Google Cloud, which no test reaches: with `LANDLENS_GCP_REAL=1` and your own gcloud, that the project search,
   the resource search and `versionedResources` answer as the docs and the fake say, and that a disabled API and a

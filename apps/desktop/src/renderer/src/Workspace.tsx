@@ -613,6 +613,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
               setDock(true);
               setPrompt({ id: Date.now(), text: FIRST_QUESTION });
             }}
+            onOpenGcp={() => pick("gcp")}
           />
         ) : watch.error ? (
           <div className="notice" role="alert">

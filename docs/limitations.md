@@ -153,6 +153,14 @@ person's check reads them), and Ask Claude sends one problem at a time.
   through any proxy the sidecar checks the proxy's address, not the cluster's. A development build opens only the
   fake's clusters unless `LANDLENS_GKE_REAL=1`. The list is read when the catalog is (Welcome, the switcher's menu),
   cached 60 s. A `gcp.json` from before this release asks again for each cluster and for Claude's tools.
+- **Google's view of a cluster is wave 9 part 1 so far** ([gcp.md](gcp.md#googles-view-of-a-cluster)): only GKE's
+  diagnosis recommender (API deprecations, exec probe timeouts, …), no cost or idle-resource recommenders; Landlens
+  never marks a suggestion done, claimed or dismissed (no writes); only the sentence is shown for subtypes other than
+  API deprecations; no Ask Claude on a suggestion yet (part 3); Cloud Monitoring's metrics and alerts are parts 2 and
+  3. A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
+  counts only when its server is the address Google lists (an IP spelled as a DNS name, or the reverse, doesn't).
+  Read once per Overview visit and every 10 minutes, kept 10 minutes. Nothing was checked against the real
+  Recommender API.
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all

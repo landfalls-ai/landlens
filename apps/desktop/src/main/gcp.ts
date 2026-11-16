@@ -7,17 +7,18 @@
 // the projects you said yes to, review of part 5 M3) and the GKE clusters you said yes to connecting (each with its
 // address, a hash of its CA and the account, L3). userData/gke/kubeconfig (0700/0600) is Landlens's own kubeconfig for the GKE
 // clusters of those projects (part 5, D91): no token in it, and ~/.kube/config is never written.
-// What is cached, in memory: the projects you can see (5 minutes); each project's resources (60 seconds, per query).
-// One read per project at a time, two projects at once.
+// What is cached, in memory: the projects you can see (5 minutes); each project's resources (60 seconds, per query);
+// Google's suggestions for each GKE cluster (10 minutes, wave 9 D177). One read per project at a time, two at once.
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
-  CLOUD_CONFIRM, CLOUD_DECLINED, GCP_PAGE, GcpProjectId, type GcpProject, type GcpResource, type GcpStatus, type GkeCluster, type KubeContext, type Responses,
+  CLOUD_CONFIRM, CLOUD_DECLINED, GCP_PAGE, GcpProjectId, type GcpClusterView, type GcpProject, type GcpResource, type GcpStatus, type GkeAdvice, type GkeCluster,
+  type GkeRef, type KubeContext, type Responses,
 } from "@landlens/contracts";
 import {
-  ACCOUNT_SHAPE, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeKubeconfig, listClusters, LOOPBACK, rawGcpError,
-  resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
+  ACCOUNT_SHAPE, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK,
+  rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
 } from "@landlens/gcp";
 import type { GcpReader } from "@landlens/gcp-mcp";
 
@@ -63,8 +64,27 @@ const caHash = (ca: string | undefined) => (ca ? createHash("sha256").update(ca)
 /** GKE clusters listed, kept as long as a project's resources. */
 export const CLUSTERS_TTL = 60_000;
 type Listed = { at: number; items: GcpResource[]; cut: boolean };
+/** Google's suggestions for a GKE cluster are kept 10 minutes (Google refreshes them daily); a failure a minute (D177). */
+export const ADVICE_TTL = 10 * 60_000;
+export const ADVICE_FAILED_TTL = 60_000;
+/** "Check again" reads at once, but at most once in 10 seconds per cluster. */
+export const FRESH_EVERY = 10_000;
+/** Clusters whose view is kept; the oldest goes first. */
+const MAX_VIEWS = 50;
+type Advice = { items: GkeAdvice[]; at: string } | { error: string };
+type HeldAdvice = { at: number; ok: boolean; read: Promise<Advice> };
+/** A connected cluster as main knows it (D173): its context, the address it was connected at, and how. */
+export type ConnectedCluster = { context: string; server: string; viaLandlens: boolean };
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
+/** An address's origin, or "" when it isn't a URL. */
+const originOf = (u: string) => {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return "";
+  }
+};
 
 export class GcpService {
   private kept: Kept;
@@ -83,6 +103,8 @@ export class GcpService {
   private gke = new Map<string, GkeClusterFull>();
   /** Told the GKE contexts that left the catalog, so main disconnects them (review of part 5, L7). */
   private readonly goneListeners: ((contexts: string[]) => void)[] = [];
+  /** Google's suggestions per project/location/name (D177). */
+  private readonly advice = new Map<string, HeldAdvice>();
 
   constructor(private readonly o: {
     file: string;
@@ -169,6 +191,7 @@ export class GcpService {
     this.projectsCache = undefined;
     this.clustersCache = undefined;
     this.lists.clear();
+    this.advice.clear();
   }
 
   async status(fresh = false): Promise<GcpStatus> {
@@ -274,6 +297,7 @@ export class GcpService {
       if (unknown.length) throw fail(404, `Your account can't see ${unknown.join(", ")}.`);
     }
     for (const key of [...this.lists.keys()]) if (!ids.includes(key.split("\n")[0]!)) this.lists.delete(key);
+    for (const key of [...this.advice.keys()]) if (!ids.includes(key.split("/")[0]!)) this.advice.delete(key);
     if (ids.join() !== this.kept.projects.join()) this.clustersCache = undefined;
     // A project you take out leaves Claude's grant (adding it back asks again, M3), and its GKE clusters are
     // disconnected (L7).
@@ -534,6 +558,92 @@ export class GcpService {
     }
     const allowLocal = mode.on && !!mode.endpoint;
     return { kubeconfig: join(this.o.gkeDir, "kubeconfig"), env: gcloudEnv(this.o.env, await this.o.loginPath()), envOnly: true, refuseLocal: !allowLocal };
+  }
+
+  // ---- Google's view of a connected cluster (wave 9, D173–D177) --------------------------------------------------------
+
+  /**
+   * Whether a connected cluster is a GKE cluster of a chosen project (D173), the only place that answers it. A cluster
+   * Landlens connected from its own listing (`viaLandlens`): that listing's entry, at the address it was listed with.
+   * A context of your own kubeconfig: only when its name is gcloud's shape for a chosen project, the last listing (60 s)
+   * has a cluster of exactly that name, and the listing's checked address is the one the cluster is connected at. A
+   * name alone isn't enough: a context only named like a GKE cluster, or pointing elsewhere, could otherwise draw
+   * another cluster's graphs and alerts. A GKE-shaped name of a project you haven't chosen gets a hint; anything else
+   * (Google Cloud off, gcloud missing or signed out, a failed listing) is undefined, silently.
+   */
+  async gkeOf(c: ConnectedCluster): Promise<GkeRef | { hint: string } | undefined> {
+    if (!this.o.mode.on || !GKE_CONTEXT.test(c.context)) return undefined;
+    const s = await this.status().catch(() => undefined);
+    if (s?.state !== "ready") return undefined;
+    const [, project, location, name] = c.context.split("_") as [string, string, string, string];
+    if (!this.kept.projects.includes(project)) {
+      return c.viaLandlens ? undefined : { hint: `This looks like a GKE cluster of ${project}. Choose that project on the Google Cloud page to see Google's metrics, alerts and suggestions for it.` };
+    }
+    const listed = c.viaLandlens
+      ? this.gke.get(c.context)
+      : (await this.clustersFull().catch(() => undefined))?.clusters.find((x) => x.context === c.context);
+    if (!listed || !listed.endpoint || listed.project !== project || listed.location !== location || listed.name !== name) return undefined;
+    if (originOf(`https://${listed.endpoint}`) !== originOf(c.server)) return undefined;
+    const number = await this.numberOf(project);
+    return { project, ...(number ? { number } : {}), location, name };
+  }
+
+  /** A project's number from the project search (cached 5 minutes): the recommender names clusters by it. */
+  private async numberOf(project: string): Promise<string | undefined> {
+    const r = await this.projects().catch(() => undefined);
+    const n = r?.projects.find((p) => p.id === project)?.number;
+    return n && /^\d{1,30}$/.test(n) ? n : undefined;
+  }
+
+  /**
+   * Google's view of a GKE cluster (D177): its suggestions (and, from part 3, its open alerts), each failing alone into
+   * its fixed sentence. Kept per cluster 10 minutes (a failure a minute); `fresh` reads again, at most once in 10 s.
+   * Reads go through the two-at-once slot. Only `gkeOf`'s answer reaches here, never a name from the page.
+   */
+  async clusterView(ref: GkeRef, fresh = false): Promise<GcpClusterView> {
+    this.chosen(ref.project);
+    const key = `${ref.project}/${ref.location}/${ref.name}`;
+    const held = this.advice.get(key);
+    const age = held ? this.now() - held.at : Infinity;
+    const reuse = held && (fresh ? age < FRESH_EVERY : age < (held.ok ? ADVICE_TTL : ADVICE_FAILED_TTL));
+    const advice = reuse ? held.read : this.readAdvice(key, ref);
+    const at = new Date(this.now()).toISOString();
+    return {
+      gke: true,
+      cluster: { project: ref.project, location: ref.location, name: ref.name },
+      advice: await advice,
+      // Wave 9 part 3 reads Cloud Monitoring's open alerts here.
+      alerts: { items: [], others: 0, cut: false, at },
+    };
+  }
+
+  private readAdvice(key: string, ref: GkeRef): Promise<Advice> {
+    const gen = this.gen;
+    const entry: HeldAdvice = { at: this.now(), ok: true, read: Promise.resolve({ items: [], at: "" }) };
+    entry.read = this.client()
+      .then((client) => this.slot(() => gkeAdvice(client, ref)))
+      .then((items): Advice => ({ items, at: new Date(this.now()).toISOString() }))
+      .catch((e: unknown): Advice => {
+        entry.ok = false;
+        return { error: this.failed(`recommender ${ref.project}/${ref.location}`, e).message };
+      })
+      .then((r) => {
+        // Kept only if nothing was forgotten meanwhile (another account, another gcloud) and the project is still chosen.
+        if (gen !== this.gen || !this.kept.projects.includes(ref.project)) this.advice.delete(key);
+        return r;
+      });
+    this.advice.delete(key);
+    this.advice.set(key, entry);
+    while (this.advice.size > MAX_VIEWS) this.advice.delete(this.advice.keys().next().value!);
+    return entry.read;
+  }
+
+  /** `gcp:cluster-view`: a connected cluster's view, or `{ gke: false }` (with the hint, when there is one). */
+  async view(c: ConnectedCluster, fresh = false): Promise<GcpClusterView> {
+    const ref = await this.gkeOf(c);
+    if (!ref) return { gke: false };
+    if ("hint" in ref) return { gke: false, hint: ref.hint };
+    return this.clusterView(ref, fresh);
   }
 
   // ---- landlens-gcp, the agent's read-only tools (D93) ---------------------------------------------------------------

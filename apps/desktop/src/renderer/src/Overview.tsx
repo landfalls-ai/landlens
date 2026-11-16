@@ -1,5 +1,6 @@
 // The landing page: is this cluster healthy? One verdict, four tiles, the worst five problems (the Problems page has
 // them all), the recent warnings, and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
+// On a GKE cluster of a chosen project, Google's own suggestions sit under the two columns (wave 9, D178).
 import type { ClusterHealth, HealthEvent, HealthProblem, MetricsRange, MetricsSeries } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
 import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Layers, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
@@ -13,6 +14,8 @@ import { useMetrics } from "./metrics";
 import { Usage } from "./Usage";
 import { ChecksStrip } from "./Problems";
 import { missingChecks } from "@landlens/kube/checks";
+import { useGoogleView } from "./googleView";
+import { GoogleHint, GoogleSuggests } from "./GoogleSuggests";
 
 /** The Overview shows the worst few; the Problems page has them all. */
 const OV_PROBLEMS = 5;
@@ -36,10 +39,13 @@ export function Overview(props: {
   onAskProblem: (p: HealthProblem) => void;
   onSeeAll: () => void;
   onAskAll: () => void;
+  /** The Google Cloud page (a GKE-looking cluster's project isn't chosen). */
+  onOpenGcp: () => void;
 }) {
   const { health: h, now } = props;
   const [range, setRange] = useState<MetricsRange>("1h");
   const usage = useMetrics({ handle: props.handle, scope: "cluster" }, range, props.metricsVersion);
+  const google = useGoogleView(props.handle);
   if (!h && props.error && props.error.status === 403 && !props.scoped && props.onNamespace) {
     return <div className="ov"><NamespaceNeeded message={props.error.message} onNamespace={props.onNamespace} /></div>;
   }
@@ -131,8 +137,10 @@ export function Overview(props: {
           )}
         </section>
       </div>
+      <GoogleSuggests g={google} now={now} />
       <Usage state={usage} range={range} onRange={setRange} onSettings={props.onSettings} />
       {h.nodes ? <Nodes nodes={h.nodes.items} usage={usage.data?.source === "none" ? undefined : usage.data} /> : null}
+      <GoogleHint g={google} onOpenGcp={props.onOpenGcp} />
     </div>
   );
 }

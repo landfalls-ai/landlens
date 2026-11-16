@@ -748,6 +748,54 @@ export type GcpResource = {
 };
 export type GcpTypeCount = { assetType: string; count: number };
 export type GkeCluster = { project: string; location: string; name: string; status: string; version: string; endpoint: string; context: string };
+/**
+ * A connected cluster that is a GKE cluster of a chosen project (wave 9, D173): main's answer, never the page's. `number`
+ * is the project's number (the recommender names clusters by it), when the project search gave it.
+ */
+export type GkeRef = { project: string; number?: string; location: string; name: string };
+/** One of Google's suggestions for a GKE cluster, from its diagnosis recommender (D176): Google's text, cleaned and cut. */
+export type GkeAdvice = {
+  /** The insight's last path segment. */
+  id: string;
+  /** Google's subtype, such as DEPRECATION_K8S_1_32_API or EXEC_PROBE_TIMEOUT; "OTHER" when it isn't that shape. */
+  subtype: string;
+  topic: "deprecation" | "other";
+  severity: "critical" | "high" | "medium" | "low" | "unknown";
+  category: "reliability" | "cost" | "security" | "performance" | "manageability" | "sustainability" | "unknown";
+  /** Google's sentence, at most 300 characters. */
+  description: string;
+  /** The associated recommendation's description, at most 300 characters. */
+  action?: string;
+  priority?: "P1" | "P2" | "P3" | "P4";
+  /** When Google last refreshed it (ISO). */
+  refreshed?: string;
+  /** For an API deprecation: the APIs still called and who calls them (a user agent is the caller's own text). */
+  apis?: { api: string; stops?: string; clients: { agent: string; requests?: number; last?: string }[] }[];
+};
+/** An open Cloud Monitoring alert on a cluster (D186; wave 9 part 3). */
+export type GcpAlert = {
+  id: string;
+  opened: string;
+  policy: string;
+  policyId?: string;
+  severity: "critical" | "error" | "warning" | "none";
+  resourceType: string;
+  metric?: string;
+  subject?: { kind: "Pod" | "Node" | "Namespace"; namespace?: string; name: string; container?: string };
+};
+/**
+ * Google's view of a connected cluster (D177): whether it is a GKE cluster of a chosen project (with a hint when it
+ * looks like one of a project you haven't chosen), and if so Google's suggestions and open alerts, each failing alone
+ * into its fixed sentence. Alerts are read from wave 9 part 3; until then their list is empty.
+ */
+export type GcpClusterView =
+  | { gke: false; hint?: string }
+  | {
+      gke: true;
+      cluster: { project: string; location: string; name: string };
+      advice: { items: GkeAdvice[]; at: string } | { error: string };
+      alerts: { items: GcpAlert[]; others: number; cut: boolean; at: string } | { error: string };
+    };
 /** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
 export const GCP_MCP_SERVER = "landlens-gcp";
 /** What a GKE context needs said once before the first connect (D91); main asks it in a native dialog (part 5, L3). */
@@ -1229,6 +1277,8 @@ export const channels = {
   "gcp:resources": z.object({ project: GcpProjectId, assetType: GcpAssetType.optional(), query: GcpQuery.optional(), offset: z.number().int().min(0).max(GCP_MAX_RESOURCES).optional() }),
   "gcp:resource": z.object({ project: GcpProjectId, name: GcpResourceName }),
   "gcp:clusters": z.object({}),
+  // Google's view of a connected cluster (wave 9, D177): only the handle; main finds the project, location and cluster.
+  "gcp:cluster-view": z.object({ handle: Handle, fresh: z.boolean().optional() }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1363,6 +1413,7 @@ export type Responses = {
   /** `brief`: what Ask Claude quotes (D94): the fields and the scrubbed JSON, at most 8,000 characters, built in main. */
   "gcp:resource": { resource: GcpResource; json?: string; cut: boolean; brief?: string };
   "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
+  "gcp:cluster-view": GcpClusterView;
 };
 
 /** A tool as the MCP page shows it. */
