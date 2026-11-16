@@ -274,16 +274,23 @@ describe("McpService", () => {
       projects: async () => [{ id: "demo-shop", name: "Demo Shop" }], types: async () => ({ types: [], total: 0, cut: false }),
       resources: async () => ({ items: [], total: 0, cut: false }), resource: async () => { throw new Error("none"); },
       clusters: async () => ({ clusters: [], errors: [] }), connected: () => false,
+      advice: async () => ({ clusters: [], more: 0, errors: [] }), alerts: async () => ({ items: [], cut: false, unreadable: 0, unplaced: 0, at: "" }),
+      alert: async () => undefined, metrics: async () => { throw new Error("none"); }, limit: async () => undefined,
     };
+    const sessions: unknown[] = [];
+    const lines: unknown[][] = [];
     const svc = new McpService({
       store: new McpServerStore(join(dir, "mcp-servers.json"), fake()),
       clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
       frontDoor: {} as never,
-      clusters: { onGone: () => {} } as never,
+      clusters: { onGone: () => {}, get: () => ({ info: { server: "https://203.0.113.17" } }) } as never,
       metrics: async () => { throw new Error("no metrics"); },
       push: () => {},
       ask: { confirm: async () => false, openExternal: async () => {} },
-      gcp: { reader: async () => (on ? { reader, projects: ["demo-shop"] } : undefined) },
+      gcp: {
+        reader: async (session) => (sessions.push(session), on ? { reader, projects: ["demo-shop"] } : undefined),
+        line: (...a) => (lines.push(a), "Cloud Monitoring has 1 open alert for this cluster"),
+      },
     });
     await svc.start();
     try {
@@ -291,6 +298,9 @@ describe("McpService", () => {
       const off = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
       expect(off.servers.map((x) => x.name)).toEqual(["landlens-kube"]);
       expect(off.gcp).toBeUndefined();
+      // Without the grant the session's kube tools get no project and no line (D194).
+      expect(off.google!.projects).toEqual([]);
+      expect(off.google!.line).toBeUndefined();
       await off.close();
       expect((await svc.servers("orbstack")).servers.map((x) => x.name)).toEqual(["landlens-kube"]);
       on = true;
@@ -298,9 +308,20 @@ describe("McpService", () => {
       expect(s.servers.map((x) => x.name)).toEqual(["landlens-kube", "landlens-gcp"]);
       expect(s.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);
       expect(s.gcp).toEqual(["demo-shop"]);
+      // The reader knows the session's cluster (D195), and the kube tools get the grant's projects and the line (D194).
+      expect(sessions.at(-1)).toEqual({ context: "orbstack", server: "https://203.0.113.17" });
+      expect(s.google!.projects).toEqual(["demo-shop"]);
+      expect(s.google!.line!()).toBe("Cloud Monitoring has 1 open alert for this cluster");
+      expect(lines.at(-1)).toEqual(["h", ["demo-shop"], undefined]);
+      const limited = await svc.forSessions().open({ label: "agent 3 · orbstack", context: "orbstack", handle: "h", cluster: { ...cluster, namespaces: ["shop"] } });
+      expect(sessions.at(-1)).toEqual({ context: "orbstack", server: "https://203.0.113.17", namespaces: ["shop"] });
+      limited.google!.line!();
+      expect(lines.at(-1)).toEqual(["h", ["demo-shop"], ["shop"]]);
+      await limited.close();
       const page = (await svc.servers("orbstack")).servers.find((x) => x.name === "landlens-gcp")!;
       expect(page).toMatchObject({ builtin: true, connection: "gcp", status: "ready" });
       expect(page.tools!.every((t) => t.readOnly)).toBe(true);
+      expect(page.tools!.map((t) => t.name)).toEqual(expect.arrayContaining(["gke_recommendations", "gcp_alerts", "gcp_metrics"]));
       const list = () => fetch(s.servers[1]!.url, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: s.servers[1]!.headers[0]!.value }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
       expect((await list()).status).toBe(200);
       svc.gcpOff();

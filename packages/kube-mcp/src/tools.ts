@@ -208,7 +208,10 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
       ...(a.namespace ? { namespace: a.namespace } : {}),
       ...(certs ? { certs: () => certs(certNs) } : {}),
     });
-    return { text: healthText(h), data: { context: cluster.context, ...(a.namespace ? { namespace: a.namespace } : {}), health: h } };
+    // One line from Google's view, only in a session with the grant for this GKE cluster's project and only from what
+    // main already holds: counts and fixed words, no request, no outside text (wave 9 part 4, D194).
+    const google = (c.google ?? cluster.google)?.();
+    return { text: google ? `${healthText(h)}\n${google}` : healthText(h), data: { context: cluster.context, ...(a.namespace ? { namespace: a.namespace } : {}), health: h } };
   }));
 
   registerAppTool(server, "metrics", {

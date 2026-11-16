@@ -230,3 +230,100 @@ function means(cpu: MetricLine[], memory: MetricLine[]) {
   for (const l of memory) by.set(l.key, { ...(by.get(l.key) ?? { key: l.key, cpu: 0 }), memory: mean(l.points) });
   return [...by.values()].sort((a, b) => b.cpu - a.cpu);
 }
+
+// ---- gcp_metrics: a GKE cluster read from Cloud Monitoring alone (wave 9 part 4, D193) -----------------------------
+//
+// The agent's gcp_metrics reads a GKE cluster of a project it may read, connected in Landlens or not: there may be no
+// cluster to ask for requests, limits or a workload's pods. So it has no workload scopes, and its reference lines are
+// Cloud Monitoring's own (the containers' request and limit gauges, the nodes' allocatable), through the same three
+// labels, the same `by` and the same parse as the usage. At most six queries a call.
+
+/** The scopes gcp_metrics has: no workload, whose pods only the cluster can list. */
+export type GkeOnlyScope = "cluster" | "node" | "namespace" | "pod";
+export type GkeOnlyRequest = { scope: GkeOnlyScope; namespace?: string; name?: string; range: ScopeRequest["range"] };
+/** The most queries one gcp_metrics call makes (D193). */
+export const GKE_ONLY_QUERIES = 6;
+
+/** A container gauge's latest value per container of a pod, through the parse (D181 and the pod's own labels). */
+function latestBy(lines: MetricLine[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const l of lines) {
+    const last = l.points.at(-1);
+    if (last && Number.isFinite(last[1])) out.set(l.key, last[1]);
+  }
+  return out;
+}
+
+/**
+ * A scope of a GKE cluster from Cloud Monitoring only (D193). `ask` reaches Google as main (its 25 s cache, its slot);
+ * every query is D180's for the usage and the matching gauges for the references, all through D181's filter. A pod's
+ * request is the sum of its containers' latest request; its limit only when every container that has usage has one.
+ * A node's or the cluster's allocatable is the sum of the nodes' latest. A reference query that fails leaves its line
+ * out and says so in `reasons`; a usage query that fails throws (the caller says it).
+ */
+export async function gkeProjectSeries(ask: PromAsk, c: GkeRef, r: GkeOnlyRequest, now = Date.now()): Promise<MetricsSeries> {
+  if (!["cluster", "node", "namespace", "pod"].includes(r.scope)) throw bad("a scope Cloud Monitoring alone can read");
+  if ((r.scope === "pod" || r.scope === "namespace") && !r.namespace) throw bad("a namespace");
+  if ((r.scope === "pod" || r.scope === "node") && !r.name) throw bad("a name");
+  const req: ScopeRequest = { scope: r.scope, range: r.range, ...(r.scope === "pod" || r.scope === "namespace" ? { namespace: r.namespace! } : {}), ...(r.scope === "pod" || r.scope === "node" ? { name: r.name! } : {}) };
+  const step = gkeStep(req);
+  const q = gkeQueries(c, req, step);
+  const S = selector(c);
+  const from = now - RANGE_MS[r.range];
+  const want: GkeWant = { ...(q.only ? { only: q.only } : {}), ...(q.labels ? { labels: q.labels } : {}) };
+  const range = async (query: string, label: string, w: GkeWant) => parseGke(await ask(query, from, now, step), c, label, w);
+  // The reference gauges: the latest point is what counts, so an hour is enough whatever the range.
+  const refs: { key: "cpuRequest" | "cpuLimit" | "memRequest" | "memLimit" | "cpuAlloc" | "memAlloc"; query: string; label: string }[] = [];
+  if (r.scope === "pod") {
+    const sel = `${S},namespace_name="${req.namespace}",pod_name="${req.name}"`;
+    const by = `${G},namespace_name,pod_name,container_name`;
+    for (const [key, metric] of [["cpuRequest", "container_cpu_request_cores"], ["cpuLimit", "container_cpu_limit_cores"], ["memRequest", "container_memory_request_bytes"], ["memLimit", "container_memory_limit_bytes"]] as const) {
+      refs.push({ key, query: `sum by (${by}) (kubernetes_io:${metric}{${sel}})`, label: "container_name" });
+    }
+  } else if (r.scope === "node" || r.scope === "cluster") {
+    const sel = r.scope === "node" ? `${S},node_name="${req.name}"` : S;
+    refs.push({ key: "cpuAlloc", query: `sum by (${G},node_name) (kubernetes_io:node_cpu_allocatable_cores{${sel}})`, label: "node_name" });
+    refs.push({ key: "memAlloc", query: `sum by (${G},node_name) (kubernetes_io:node_memory_allocatable_bytes{${sel}})`, label: "node_name" });
+  }
+  const refStep = 60;
+  const refFrom = now - RANGE_MS["1h"];
+  const refRead = refs.map(async (x) => ({ key: x.key, lines: parseGke(await ask(x.query, refFrom, now, refStep), c, x.label, want).lines }));
+  for (const p of refRead) p.catch(() => undefined);
+  const [cpu, memory] = await Promise.all([range(q.cpu, q.label, want), range(q.memory, q.label, want)]);
+  const reasons: MetricsSeries["reasons"] = [];
+  if (cpu.cut || memory.cut) reasons.push({ code: "cloud-monitoring-cut", message: CUT_REASON });
+  const got = new Map<string, Map<string, number>>();
+  const lost: string[] = [];
+  for (const p of refRead) {
+    try {
+      const { key, lines } = await p;
+      got.set(key, latestBy(lines));
+    } catch (err) {
+      lost.push(failedSentence(err));
+    }
+  }
+  if (lost.length) reasons.push({ code: "cloud-monitoring-failed", message: `${r.scope === "pod" ? "Requests and limits" : "Allocatable"} couldn't all be read: ${lost[0]}`.slice(0, 300) });
+  const sum = (m: Map<string, number> | undefined) => (m && m.size ? [...m.values()].reduce((a, b) => a + b, 0) : undefined);
+  const containers = new Set([...cpu.lines, ...memory.lines].map((l) => l.key));
+  /** A limit only when every container with usage has one (otherwise there is no total limit). */
+  const limitOf = (m: Map<string, number> | undefined) => (m && m.size && [...containers].every((k) => m.has(k)) ? sum(m) : undefined);
+  const panel = (lines: MetricLine[], o: { request?: number | undefined; limit?: number | undefined; allocatable?: number | undefined }): MetricsSeries["cpu"] => {
+    const p: MetricsSeries["cpu"] = { series: lines };
+    for (const k of ["request", "limit", "allocatable"] as const) {
+      const v = o[k];
+      if (typeof v === "number" && Number.isFinite(v)) p[k] = v;
+    }
+    return p;
+  };
+  return {
+    source: "cloud-monitoring",
+    reasons,
+    step,
+    from,
+    to: now,
+    by: r.scope === "pod" ? "container" : r.scope === "namespace" ? "pod" : "node",
+    gke: { project: c.project, location: c.location, name: c.name },
+    cpu: panel(cpu.lines, r.scope === "pod" ? { request: sum(got.get("cpuRequest")), limit: limitOf(got.get("cpuLimit")) } : { allocatable: sum(got.get("cpuAlloc")) }),
+    memory: panel(memory.lines, r.scope === "pod" ? { request: sum(got.get("memRequest")), limit: limitOf(got.get("memLimit")) } : { allocatable: sum(got.get("memAlloc")) }),
+  };
+}

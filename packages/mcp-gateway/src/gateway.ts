@@ -142,6 +142,15 @@ export class GatewaySession {
     this.acpSession = acpSession;
   }
 
+  /**
+   * Every autonomy of this session asks from now on, with `why`. For main's own reads on the session's behalf that don't
+   * pass through a gateway call (the kube metrics tool reading Cloud Monitoring, wave 9 D194): held on this session
+   * itself, so it doesn't depend on Claude Code's id being bound yet.
+   */
+  hold(why: string) {
+    for (const a of this.autonomy.values()) a.hold(why);
+  }
+
   /** You allowed a tool call in the dock (Claude Code's permission request, answered through main). */
   permit(toolCallId: string, rule: string | undefined, always: boolean, autonomous = false) {
     if (always && rule && !autonomous) this.always.add(rule);

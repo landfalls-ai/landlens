@@ -287,7 +287,9 @@ all N) and Recent warnings; Nodes. It reads
   The chooser is a `.dialog` with a filter and a checklist (checkbox, name, id in mono). On Connections, a **Google
   Cloud** card after the providers: the state, account, chosen projects as mono chips, **Choose projects…** and
   **Open Google Cloud**, then a `.conn-row` with the switch **Claude can read these projects** and a dim sentence that
-  says what on and off mean (on asks in a native dialog first; an error is a `tone-bad` line). On the MCP page,
+  says what on and off mean (on asks in a native dialog first; an error is a `tone-bad` line). A yes kept from before
+  wave 9 adds a `.gcp-card-pending` status line under it, "Claude's reading is off: it now also covers metrics, alerts
+  and GKE recommendations. Turn it on again to allow that.", with a secondary **Turn it on again…**. On the MCP page,
   `landlens-gcp` follows `landlens-kube` while it is on: the `Cloud` tile, **Built in**, **From Connections**, and
   **Manage in Connections** in place of Test, Edit and Remove.
 - **MCP App views** (`AppFrame.tsx`): a `.app-frame` on `--bg-2` under the tool's card in the dock, in Preview and in

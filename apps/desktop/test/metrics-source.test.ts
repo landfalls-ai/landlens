@@ -1,6 +1,6 @@
 // Main's Cloud Monitoring source (wave 9 part 2, D182–D183): the handle's own cluster decides, through GcpService.gkeOf
-// only; an unchosen project and an unread listing are reasons; and a Claude session's metrics tool reads no Cloud
-// Monitoring until part 4 gives it the grant's projects.
+// only; an unchosen project and an unread listing are reasons; and a Claude session's metrics tool reads Cloud
+// Monitoring only for a project of its Google grant, holding its autonomy first (wave 9 part 4, D194).
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -32,8 +32,9 @@ describe("cloudMonitoringSource", () => {
 });
 
 describe("sessionSeries", () => {
-  it("a session's metrics tool reads the cluster with its own token and asks Google nothing (no grant covers metrics yet)", async () => {
-    const ask = vi.fn(async () => node);
+  const setup = () => {
+    const order: string[] = [];
+    const ask = vi.fn(async () => (order.push("ask"), node));
     const read = vi.fn(async (path: string): Promise<any> => (path === "/api/v1/nodes" ? { items: [] } : { items: [] }));
     const metrics = new MetricsService({
       clickland: () => ({ clusterName: (c) => c }),
@@ -42,13 +43,29 @@ describe("sessionSeries", () => {
       now: () => NOW,
       sampler: { timers: { set: () => 1, clear: () => {} }, now: () => NOW },
     });
-    const s = await sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, read);
+    return { order, ask, read, metrics };
+  };
+
+  it("without the session's Google grant (none given, or none for this project) it asks Google nothing", async () => {
+    const { ask, read, metrics } = setup();
+    for (const google of [undefined, { projects: [], hold: () => {} }, { projects: ["orbit-analytics"], hold: () => {} }]) {
+      const s = await sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, read, google);
+      expect(s.source).toBe("none");
+      expect(s.reasons.map((r) => r.code)).toContain("cloud-monitoring-not-granted");
+    }
     expect(ask).not.toHaveBeenCalled();
-    expect(s.source).toBe("none");
-    expect(s.reasons.map((r) => r.code)).toContain("cloud-monitoring-not-granted");
     // The IDE's own charts (no agent) do read it.
     expect((await metrics.series({ handle: "hhhhhhhhhhhh", scope: "cluster", range: "1h" }, { read })).source).toBe("cloud-monitoring");
     expect(ask).toHaveBeenCalled();
+  });
+
+  it("D194: with the grant's project it reads Cloud Monitoring, holding the session's autonomy before the first query", async () => {
+    const { order, ask, read, metrics } = setup();
+    const google = { projects: ["demo-shop"], hold: () => void order.push("hold") };
+    const s = await sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, read, google);
+    expect(s.source).toBe("cloud-monitoring");
+    expect(ask).toHaveBeenCalled();
+    expect(order[0]).toBe("hold");
   });
 });
 

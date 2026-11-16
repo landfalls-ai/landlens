@@ -19,9 +19,10 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
 - **landlens-kube** runs in memory per session, bound to the session's cluster (its own front-door token, its
   namespaces, Landlens's metrics source). It is still allowed whole (`mcp__landlens-kube`): every tool reads through
   the front door, which refuses writes.
-- **landlens-gcp** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)) is the second built-in server: five
+- **landlens-gcp** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)) is the second built-in server: eight
   read-only Google Cloud tools for the projects you chose (and granted, for the account signed in) when the session
-  began, run in main with your gcloud sign-in. When a session calls it, the gateway holds that session's autonomous
+  began, run in main with your gcloud sign-in: the five of wave 6 and, from wave 9, `gke_recommendations`,
+  `gcp_alerts` and `gcp_metrics` (fixed queries only; none takes a query or a filter). When a session calls it, the gateway holds that session's autonomous
   writes, so they ask. A session gets it only
   while **Claude can read these projects** is on (Connections), and it is allowed whole (`mcp__landlens-gcp`); turning
   the switch off takes it out of running sessions at once. The gateway's built-ins are a map by name, and no remote

@@ -116,6 +116,20 @@ describe("landlens-kube MCP server", () => {
     expect(text).toContain("Back-off restarting failed container api");
   });
 
+  it("wave 9 D194: the overview ends with Google's line only when the session has one", async () => {
+    const line = "Cloud Monitoring has 2 open alerts for this cluster and Google has 1 suggestion, as Landlens read them at 09:12 UTC: gcp_alerts and gke_recommendations (landlens-gcp) list them.";
+    expect((await call("cluster_overview")).text).not.toContain("Cloud Monitoring");
+    cluster.google = () => line;
+    try {
+      const { text } = await call("cluster_overview");
+      expect(text.trimEnd().endsWith(line)).toBe(true);
+      cluster.google = () => undefined;
+      expect((await call("cluster_overview")).text).not.toContain("Cloud Monitoring");
+    } finally {
+      delete cluster.google;
+    }
+  });
+
   it("describes a pod with its owners, last exit and events, without secrets", async () => {
     const { text } = await call("describe", { kind: "po", name: "orders-api-7d9f-x1", namespace: "landlens-dev" });
     expect(text).toContain("Container api: waiting (CrashLoopBackOff), ready false, restarts 7");

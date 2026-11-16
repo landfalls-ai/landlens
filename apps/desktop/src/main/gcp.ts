@@ -4,7 +4,7 @@
 // build, the loopback fake) and never to the renderer, a file, a log line or the agent.
 //
 // What is kept: userData/gcp.json (0600) holds the project ids you chose, the "Claude can read" grant (the account and
-// the projects you said yes to, review of part 5 M3) and the GKE clusters you said yes to connecting (each with its
+// the projects you said yes to, review of part 5 M3, and what it covers, wave 9 D190) and the GKE clusters you said yes to connecting (each with its
 // address, a hash of its CA and the account, L3). userData/gke/kubeconfig (0700/0600) is Landlens's own kubeconfig for the GKE
 // clusters of those projects (part 5, D91): no token in it, and ~/.kube/config is never written.
 // What is cached, in memory: the projects you can see (5 minutes); each project's resources (60 seconds, per query);
@@ -15,16 +15,16 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
-  CLOUD_CONFIRM, CLOUD_DECLINED, GCP_PAGE, GcpProjectId, type GcpClusterItem, type GcpClusterView, type GcpProject, type GcpResource, type GcpStatus, type GkeAdvice,
+  CLOUD_CONFIRM, CLOUD_DECLINED, GCP_GRANT_COVERS, GCP_GRANT_WORDS, GCP_PAGE, GcpProjectId, type GcpClusterItem, type GcpClusterView, type GcpProject, type GcpResource, type GcpStatus, type GkeAdvice,
   type GkeCluster, type GkeRef, type KubeContext, type Responses,
 } from "@landlens/contracts";
 import {
-  ACCOUNT_SHAPE, adviceBrief, alertBrief, alertPolicy, caFingerprint, clusterAlerts, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource,
+  ACCOUNT_SHAPE, adviceBrief, alertBrief, alertPolicy, alertRows, caFingerprint, clusterAlerts, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource,
   GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK, openAlerts, promRange, rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig,
   type AlertPolicyDetail, type GkeClusterFull, type RawAlert, type Runner,
 } from "@landlens/gcp";
-import type { PromAsk } from "@landlens/metrics";
-import type { GcpReader } from "@landlens/gcp-mcp";
+import { AskFailed, failedSentence, gkeProjectSeries, LabelsLost, type PromAsk } from "@landlens/metrics";
+import { GCP_ADVICE_CLUSTERS, type GcpReader } from "@landlens/gcp-mcp";
 import type { SidecarTls } from "@landlens/kube";
 
 /**
@@ -62,9 +62,13 @@ export const MAX_CACHED = 50_000;
  * account, so a cluster recreated under the same name, moved, or opened as someone else asks again.
  */
 type Confirmed = { context: string; endpoint: string; ca: string; account: string };
-/** What you said yes to for Claude (M3): the account and the projects at that question. */
-type Grant = { account: string; projects: string[] };
-type Kept = { projects: string[]; agentRead: boolean; grant?: Grant; confirmed: Confirmed[] };
+/**
+ * What you said yes to for Claude (M3): the account and the projects at that question, and what the question named
+ * (`covers`, D190): a yes given before it named metrics, alerts and GKE recommendations doesn't cover them.
+ */
+type Grant = { account: string; projects: string[]; covers: typeof GCP_GRANT_COVERS };
+/** `regrant`: a yes that covered less was dropped at load; the card says so until reading is turned on again or off. */
+type Kept = { projects: string[]; agentRead: boolean; grant?: Grant; regrant?: true; confirmed: Confirmed[] };
 const caHash = (ca: string | undefined) => (ca ? createHash("sha256").update(ca).digest("hex") : "");
 /** GKE clusters listed, kept as long as a project's resources. */
 export const CLUSTERS_TTL = 60_000;
@@ -169,6 +173,10 @@ export const ACCOUNT_CHANGED = "gcloud's account changed while Landlens read Goo
 export const numberUnknown = (project: string) => `Landlens couldn't read ${project}'s number, so it can't tell which suggestions are this cluster's.`;
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
+/** The session a landlens-gcp reader is for (D195): its cluster's context and address, and its namespace limit. */
+export type AgentSessionCluster = { context: string; server?: string; namespaces?: string[] };
+/** A connection as gkeOf decided on it: its context, address, how it was connected and whom its sidecar trusts. */
+const connKey = (c: ConnectedCluster) => JSON.stringify([c.context, c.server, c.viaLandlens, c.tls?.ca ?? null, !!c.tls?.insecure, !!c.tls?.serverName]);
 /** An address's origin, or "" when it isn't a URL. */
 const originOf = (u: string) => {
   try {
@@ -208,6 +216,13 @@ export class GcpService {
   private readonly promFailed = new Map<string, { at: number; err: Error }>();
   /** PromQL asks started and not ended: at most PROMS_AT_ONCE running and PROMS_WAITING waiting (L5). */
   private promsInFlight = 0;
+  /**
+   * Which connected clusters gkeOf last said are which GKE cluster (by the connection's context, address and trust),
+   * and the last view delivered for each GKE cluster: what cluster_overview's line is made from, with no request
+   * (wave 9 part 4, D194). Cleared with every other cache on an account change, and per project when it is taken out.
+   */
+  private readonly confirmedRefs = new Map<string, GkeRef>();
+  private readonly lastViews = new Map<string, { at: number; view: Extract<GcpClusterView, { gke: true }> }>();
 
   constructor(private readonly o: {
     file: string;
@@ -247,13 +262,17 @@ export class GcpService {
       const confirmed = Array.isArray(raw.confirmed) ? raw.confirmed.filter((c): c is Confirmed => !!c && typeof c === "object" && typeof c.context === "string" && GKE_CONTEXT.test(c.context)
         && typeof c.endpoint === "string" && c.endpoint.length <= 253 && typeof c.ca === "string" && /^([0-9a-f]{64})?$/.test(c.ca) && typeof c.account === "string" && ACCOUNT_SHAPE.test(c.account))
         .map((c) => ({ context: c.context, endpoint: c.endpoint, ca: c.ca, account: c.account })).slice(-500) : [];
-      // Claude's reading needs the grant it was given with (M3): an older file's bare switch asks again.
-      const g = raw.grant;
-      const grant = g && typeof g === "object" && typeof g.account === "string" && ACCOUNT_SHAPE.test(g.account) && Array.isArray(g.projects)
-        ? { account: g.account, projects: g.projects.filter((p): p is string => typeof p === "string" && GcpProjectId.safeParse(p).success).slice(0, 20) }
+      // Claude's reading needs the grant it was given with (M3): an older file's bare switch asks again. And a grant made
+      // before it covered metrics, alerts and GKE recommendations (no `covers: 2`, D190) is dropped: reading goes off,
+      // and the card says why (`regrant`) until it is turned on again or off.
+      const g = raw.grant as Partial<Grant> | undefined;
+      const shaped = !!g && typeof g === "object" && typeof g.account === "string" && ACCOUNT_SHAPE.test(g.account) && Array.isArray(g.projects);
+      const grant: Grant | undefined = shaped && g.covers === GCP_GRANT_COVERS
+        ? { account: g.account!, projects: g.projects!.filter((p): p is string => typeof p === "string" && GcpProjectId.safeParse(p).success).slice(0, 20), covers: GCP_GRANT_COVERS }
         : undefined;
       const agentRead = raw.agentRead === true && !!grant;
-      return { projects: [...new Set(projects)], agentRead, ...(agentRead ? { grant } : {}), confirmed };
+      const regrant = !agentRead && ((raw.agentRead === true && shaped && !grant) || raw.regrant === true);
+      return { projects: [...new Set(projects)], agentRead, ...(agentRead ? { grant } : {}), ...(regrant ? { regrant: true as const } : {}), confirmed };
     } catch {
       return { projects: [], agentRead: false, confirmed: [] };
     }
@@ -305,12 +324,15 @@ export class GcpService {
     this.policies.clear();
     this.proms.clear();
     this.promFailed.clear();
+    this.confirmedRefs.clear();
+    this.lastViews.clear();
   }
 
   async status(fresh = false): Promise<GcpStatus> {
     const base = () => ({
       projects: [...this.kept.projects], agentRead: this.kept.agentRead,
       ...(this.kept.agentRead ? { agentProjects: this.readable() } : {}),
+      ...(this.kept.regrant && !this.kept.agentRead ? { agentRegrant: true as const } : {}),
     });
     if (!this.o.mode.on) return { state: "off-dev", ...base() };
     if (!(await this.locate(fresh))) return { state: "missing", ...base() };
@@ -415,6 +437,8 @@ export class GcpService {
     for (const key of [...this.policies.keys()]) if (!ids.includes(key.split("/")[0]!)) this.policies.delete(key);
     for (const key of [...this.proms.keys()]) if (!ids.includes(key.split("|")[0]!)) this.proms.delete(key);
     for (const p of [...this.promFailed.keys()]) if (!ids.includes(p)) this.promFailed.delete(p);
+    for (const [k, r] of [...this.confirmedRefs]) if (!ids.includes(r.project)) this.confirmedRefs.delete(k);
+    for (const key of [...this.lastViews.keys()]) if (!ids.includes(key.split("/")[0]!)) this.lastViews.delete(key);
     if (ids.join() !== this.kept.projects.join()) this.clustersCache = undefined;
     // A project you take out leaves Claude's grant (adding it back asks again, M3), and its GKE clusters are
     // disconnected (L7).
@@ -433,7 +457,7 @@ export class GcpService {
    */
   async setAgentRead(on: boolean, confirm: Confirm): Promise<GcpStatus> {
     if (!on) {
-      const { grant: _g, ...rest } = this.kept;
+      const { grant: _g, regrant: _r, ...rest } = this.kept;
       this.kept = { ...rest, agentRead: false };
       this.save();
       return this.status();
@@ -443,16 +467,19 @@ export class GcpService {
     if (!s.projects.length) throw fail(409, "Choose the projects first.");
     const g = this.kept.grant;
     if (this.kept.agentRead && g && g.account === s.account && s.projects.every((p) => g.projects.includes(p))) return s;
+    // A yes given before this wave covered resources and clusters only (D190): the question says what it now covers.
+    const again = this.kept.regrant ? "Claude's reading was turned off because it now covers more than when you said yes: Cloud Monitoring metrics, open alerts and GKE recommendations as well.\n\n" : "";
     const yes = await confirm({
-      message: "Let Claude read these Google Cloud projects?",
-      detail: `Claude's sessions get read-only Google Cloud tools for ${s.projects.join(", ")}, run in Landlens as ${s.account}. Claude gets no Google token; what it reads is scrubbed of secret values. Claude can't change anything in Google Cloud. A project you choose later isn't included until Landlens asks again.`,
+      message: this.kept.regrant ? "Let Claude read these Google Cloud projects again?" : "Let Claude read these Google Cloud projects?",
+      detail: `${again}Claude's sessions get read-only Google Cloud tools for ${s.projects.join(", ")}, run in Landlens as ${s.account}: ${GCP_GRANT_WORDS}. Claude gets no Google token; what it reads is scrubbed of secret values. Claude can't change anything in Google Cloud. A project you choose later isn't included until Landlens asks again.`,
       yes: "Let Claude read them",
     });
     if (!yes) return this.status();
     // The answer covers what the question named: the account and projects as they are now, not as they become.
     const now = await this.status();
     if (now.account !== s.account) throw fail(409, "gcloud's account changed while Landlens asked. Ask again.");
-    this.kept = { ...this.kept, agentRead: true, grant: { account: s.account, projects: s.projects.filter((p) => this.kept.projects.includes(p)) } };
+    const { regrant: _r, ...kept } = this.kept;
+    this.kept = { ...kept, agentRead: true, grant: { account: s.account, projects: s.projects.filter((p) => this.kept.projects.includes(p)), covers: GCP_GRANT_COVERS } };
     this.save();
     return this.status();
   }
@@ -723,7 +750,11 @@ export class GcpService {
     const t = c.tls;
     if (!t || t.insecure || t.serverName || t.ca !== (listed.ca ? caFingerprint(listed.ca) : "")) return undefined;
     const number = await this.numberOf(project);
-    return { project, ...(number ? { number } : {}), location, name };
+    const ref: GkeRef = { project, ...(number ? { number } : {}), location, name };
+    this.confirmedRefs.delete(connKey(c));
+    this.confirmedRefs.set(connKey(c), ref);
+    while (this.confirmedRefs.size > MAX_VIEWS) this.confirmedRefs.delete(this.confirmedRefs.keys().next().value!);
+    return ref;
   }
 
   /** A project's number from the project search (cached 5 minutes): the recommender names clusters by it. */
@@ -743,11 +774,7 @@ export class GcpService {
     this.chosen(ref.project);
     const gen = this.gen;
     const key = `${ref.project}/${ref.location}/${ref.name}`;
-    const held = this.advice.get(key);
-    const age = held ? this.now() - held.at : Infinity;
-    const reuse = held && (fresh ? age < FRESH_EVERY : age < (held.ok ? ADVICE_TTL : ADVICE_FAILED_TTL));
-    const advice = reuse ? held.read : this.readAdvice(key, ref);
-    const [a, raw] = await Promise.all([advice, this.projectAlerts(ref.project, fresh)]);
+    const [a, raw] = await Promise.all([this.adviceOf(ref, fresh), this.projectAlerts(ref.project, fresh)]);
     // What was read for another account, or for a project taken out meanwhile, isn't delivered either (review of part
     // 3, L7): the clear only kept it from being kept.
     this.current(ref.project, gen);
@@ -761,13 +788,31 @@ export class GcpService {
       alerts: "error" in raw ? raw : { ...mine!, cut: raw.cut, unreadable: raw.unreadable + mine!.unreadable, unplaced: raw.unplaced, at: raw.at },
     };
     this.serve(view);
+    this.lastViews.delete(key);
+    this.lastViews.set(key, { at: this.now(), view });
+    while (this.lastViews.size > MAX_VIEWS) this.lastViews.delete(this.lastViews.keys().next().value!);
     return view;
+  }
+
+  /** A GKE cluster's suggestions as kept (10 minutes, a failure a minute; `fresh` at most once in 10 s), else read now. */
+  private adviceOf(ref: GkeRef, fresh = false): Promise<Advice> {
+    const key = `${ref.project}/${ref.location}/${ref.name}`;
+    const held = this.advice.get(key);
+    const age = held ? this.now() - held.at : Infinity;
+    const reuse = held && (fresh ? age < FRESH_EVERY : age < (held.ok ? ADVICE_TTL : ADVICE_FAILED_TTL));
+    return reuse ? held.read : this.readAdvice(key, ref);
   }
 
   /** Still the account and the project choice a read began with; else the read isn't delivered (L7). */
   private current(project: string, gen: number) {
     this.chosen(project);
     if (gen !== this.gen) throw fail(409, ACCOUNT_CHANGED);
+  }
+
+  /** Outside text the agent's tools are about to get (wave 9 part 4), told to main's store as the window's is (L3). */
+  private serveTexts(texts: string[]) {
+    const kept = texts.filter(Boolean);
+    if (kept.length) this.o.served?.(kept);
   }
 
   /** Outside text of a view or an item, told to main's store before the window gets it (L3). */
@@ -985,7 +1030,7 @@ export class GcpService {
    * signed in; otherwise undefined and the session has no Google Cloud tools. Every read goes through this service:
    * the chosen projects only, its caches and limits.
    */
-  async agentReader(connected: (context: string) => boolean): Promise<{ reader: GcpReader; projects: string[] } | undefined> {
+  async agentReader(connected: (context: string) => boolean, session?: AgentSessionCluster): Promise<{ reader: GcpReader; projects: string[] } | undefined> {
     if (!this.kept.agentRead) return undefined;
     const s = await this.status();
     // The projects you said yes to for Claude (M3), as the session begins: a project granted later isn't readable in
@@ -1012,8 +1057,126 @@ export class GcpService {
         return { clusters: r.clusters.filter((c) => ok.includes(c.project)), errors: r.errors.filter((e) => ok.includes(e.project)) };
       }),
       connected,
+      advice: (p, cluster) => this.agentOnly(allowed, p, () => this.agentAdvice(p, cluster)),
+      alerts: (p) => this.agentOnly(allowed, p, () => this.agentAlerts(p)),
+      alert: (p, id) => this.agentOnly(allowed, p, async () => {
+        const gen = this.gen;
+        const a = (await this.agentAlerts(p)).items.find((x) => x.id === id);
+        if (!a) return undefined;
+        const policy = a.policyId ? await this.policy(p, a.policyId) : undefined;
+        this.current(p, gen);
+        if (policy && !("error" in policy)) this.serveTexts([...policy.conditions, ...(policy.documentation ? [policy.documentation] : [])]);
+        return { alert: a, ...(policy ? { policy } : {}) };
+      }),
+      // A cluster that isn't a GKE context names no project the session may read: refused like another project.
+      metrics: (r) => this.agentOnly(allowed, GKE_CONTEXT.test(r.cluster) ? r.cluster.split("_")[1]! : "", () => this.agentMetrics(r)),
+      limit: (context) => this.sessionLimit(session, context),
     };
     return { reader, projects: start };
+  }
+
+  /**
+   * gke_recommendations (D191): the project's GKE clusters as listed (60 s), or the one named, at most ten, each one's
+   * suggestions through the view's own 10-minute cache. A cluster's failure is its sentence; a listing's failure is said.
+   */
+  private async agentAdvice(project: string, cluster?: string): ReturnType<GcpReader["advice"]> {
+    const gen = this.gen;
+    const listed = await this.clustersFull();
+    const all = listed.clusters.filter((c) => c.project === project && (!cluster || c.context === cluster));
+    const number = await this.numberOf(project);
+    const clusters = await Promise.all(all.slice(0, GCP_ADVICE_CLUSTERS).map(async ({ ca: _ca, ...c }) => {
+      const a = await this.adviceOf({ project, ...(number ? { number } : {}), location: c.location, name: c.name });
+      return "error" in a ? { cluster: c, items: [], error: a.error } : { cluster: c, items: a.items, cut: a.cut };
+    }));
+    this.current(project, gen);
+    this.serveTexts(clusters.flatMap((c) => c.items.flatMap((x) => [x.description, ...(x.action ? [x.action] : []), ...(x.apis ?? []).flatMap((api) => [api.api, ...api.clients.map((k) => k.agent)])])));
+    return { clusters, more: Math.max(0, all.length - GCP_ADVICE_CLUSTERS), errors: listed.errors.filter((e) => e.project === project) };
+  }
+
+  /** gcp_alerts (D192): the project's open alerts as kept (60 s), every resource type, its text cleaned at the read. */
+  private async agentAlerts(project: string): ReturnType<GcpReader["alerts"]> {
+    const gen = this.gen;
+    const raw = await this.projectAlerts(project, false);
+    this.current(project, gen);
+    if ("error" in raw) throw fail(502, raw.error);
+    const number = await this.numberOf(project);
+    const rows = alertRows(raw.alerts, { project, ...(number ? { number } : {}) });
+    this.serveTexts(rows.items.flatMap((a) => [a.policy, ...(a.labels ?? []).map(([, v]) => v)]));
+    return { items: rows.items, cut: raw.cut, unreadable: raw.unreadable + rows.unreadable, unplaced: raw.unplaced, at: raw.at };
+  }
+
+  /**
+   * gcp_metrics (D193): a GKE cluster the listing (60 s) has, read from Cloud Monitoring alone through promAsk (its 25 s
+   * cache, its slot, its kept 403/429), whether or not Landlens is connected to it. Every failure is a fixed sentence.
+   */
+  private async agentMetrics(r: Parameters<GcpReader["metrics"]>[0]): ReturnType<GcpReader["metrics"]> {
+    const project = r.cluster.split("_")[1]!;
+    const gen = this.gen;
+    const listed = await this.clustersFull();
+    const found = listed.clusters.find((c) => c.context === r.cluster && c.project === project);
+    if (!found) {
+      const e = listed.errors.find((x) => x.project === project);
+      throw fail(404, e ? unlisted(project, e.message) : `gke_clusters doesn't list ${r.cluster} now.`);
+    }
+    const { ca: _ca, ...cluster } = found;
+    const ref: GkeRef = { project, location: cluster.location, name: cluster.name };
+    const raw = this.promAsk(ref);
+    const ask: PromAsk = (...a) => raw(...a).catch((e: Error) => Promise.reject(new AskFailed(e?.message || "Cloud Monitoring couldn't be read.")));
+    let series;
+    try {
+      series = await gkeProjectSeries(ask, ref, { scope: r.scope, range: r.range, ...(r.namespace ? { namespace: r.namespace } : {}), ...(r.name ? { name: r.name } : {}) }, this.now());
+    } catch (e) {
+      if (e instanceof AskFailed) throw fail(502, `Cloud Monitoring (${project}) didn't answer: ${e.message}`);
+      if (e instanceof LabelsLost) throw fail(502, e.message);
+      throw fail(400, `Cloud Monitoring (${project}) couldn't be asked: ${failedSentence(e)}`);
+    }
+    this.current(project, gen);
+    return { cluster, series };
+  }
+
+  /**
+   * D195: a session limited to namespaces is limited on the cluster it is connected to: that context by name, or a
+   * listed GKE cluster at the session's address (another name for the same cluster). `undefined` (a Kubernetes alert
+   * whose cluster isn't readable) and a listing that can't be read count as the session's cluster: fail closed.
+   */
+  private async sessionLimit(session: AgentSessionCluster | undefined, context: string | undefined): Promise<string[] | undefined> {
+    const ns = session?.namespaces;
+    if (!session || !ns?.length) return undefined;
+    if (context === undefined || context === session.context) return ns;
+    if (!session.server) return undefined;
+    const listed = await this.clustersFull().catch(() => undefined);
+    if (!listed) return ns;
+    const c = listed.clusters.find((x) => x.context === context);
+    if (!c) return listed.errors.length ? ns : undefined;
+    return c.endpoint && originOf(`https://${c.endpoint}`) === originOf(session.server) ? ns : undefined;
+  }
+
+  /**
+   * cluster_overview's line for a session (D194), from what main already holds: gkeOf's last answer for this very
+   * connection and the last view delivered for that cluster (10 minutes at most). No request, no outside text (counts
+   * and fixed words only), so it holds nothing. Only for a project the session may read; a limited session counts the
+   * alerts in its namespaces and says how many others there are. Undefined when there is nothing held to say.
+   */
+  heldLine(c: ConnectedCluster, projects: string[], namespaces?: string[]): string | undefined {
+    const ref = this.confirmedRefs.get(connKey(c));
+    if (!ref || !projects.includes(ref.project) || !this.kept.projects.includes(ref.project)) return undefined;
+    const held = this.lastViews.get(`${ref.project}/${ref.location}/${ref.name}`);
+    if (!held || this.now() - held.at > ADVICE_TTL) return undefined;
+    const v = held.view;
+    let alerts: string;
+    if ("error" in v.alerts) alerts = "Cloud Monitoring's open alerts for this cluster couldn't be read";
+    else {
+      const all = v.alerts.items;
+      const mine = namespaces?.length ? all.filter((a) => !!a.subject?.namespace && namespaces.includes(a.subject.namespace)) : all;
+      const partial = v.alerts.cut || v.alerts.unreadable > 0 || v.alerts.over > 0 || v.alerts.unplaced > 0;
+      const n = `${mine.length}${partial ? "+" : ""}`;
+      const outside = all.length - mine.length;
+      alerts = (mine.length || partial ? `Cloud Monitoring has ${n} open alert${mine.length === 1 && !partial ? "" : "s"} for this cluster` : "Cloud Monitoring has no open alerts for this cluster")
+        + (outside ? ` (${outside} more outside this session's namespaces)` : "");
+    }
+    const advice = "error" in v.advice ? "Google's suggestions for it couldn't be read"
+      : `Google has ${v.advice.items.length ? `${v.advice.items.length}${v.advice.cut ? "+" : ""}` : v.advice.cut ? "0+" : "no"} suggestion${v.advice.items.length === 1 && !v.advice.cut ? "" : "s"}`;
+    return `${alerts} and ${advice}, as Landlens read them at ${new Date(held.at).toISOString().slice(11, 16)} UTC: gcp_alerts and gke_recommendations (landlens-gcp) list them.`;
   }
 
   /** A read for the agent: reading is on, and the project is one it may read in this session (M3, L8). */

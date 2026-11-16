@@ -9,6 +9,7 @@ import { z } from "zod";
 import { checkProject, outsideText } from "./assets.js";
 import type { GcpClient } from "./client.js";
 import { GcpError, SENTENCES } from "./errors.js";
+import { GKE_LOCATION, GKE_NAME } from "./gke.js";
 
 /** A GET's URL must stay short; D180's queries are well under this. */
 export const PROM_QUERY_MAX = 6_000;
@@ -73,18 +74,30 @@ const ALERT_LABELS = ["location", "cluster_name", "cluster", "namespace_name", "
 export type RawAlert = {
   name: string;
   openTime?: string;
-  resource?: { type?: string; labels?: Partial<Record<(typeof ALERT_LABELS)[number], string>> };
+  /**
+   * `other`: for a resource that isn't a GKE cluster's (a VM, a load balancer), up to six of its labels, how the agent's
+   * gcp_alerts says what it is about (wave 9 part 4, D192): keys of OTHER_LABEL's shape, values cleaned, redacted and
+   * cut to 120 here, sorted by key. A cluster's resource keeps none: its subject says it.
+   */
+  resource?: { type?: string; labels?: Partial<Record<(typeof ALERT_LABELS)[number], string>>; other?: [string, string][] };
   metric?: { type?: string };
   policy?: { name?: string; displayName?: string; severity?: string };
 };
+/** A label of a resource that isn't a cluster's, as gcp_alerts shows it (D192): its key's shape, at most six. */
+const OTHER_LABEL = /^[a-z_]{1,40}$/;
+export const OTHER_LABELS_MAX = 6;
 const slim = (a: z.infer<typeof Alert>): RawAlert => {
   const l = a.resource?.labels ?? {};
   const labels: NonNullable<NonNullable<RawAlert["resource"]>["labels"]> = {};
   for (const k of ALERT_LABELS) if (typeof l[k] === "string") labels[k] = l[k];
+  const other = (CLUSTER_RESOURCES as readonly string[]).includes(a.resource?.type ?? "") ? [] : Object.entries(l)
+    .filter((e): e is [string, string] => e[0] !== "project_id" && OTHER_LABEL.test(e[0]) && typeof e[1] === "string")
+    .sort((x, y) => x[0].localeCompare(y[0])).slice(0, OTHER_LABELS_MAX)
+    .map(([k, v]): [string, string] => [k, outsideText(v, 120)]);
   return {
     name: a.name,
     openTime: a.openTime,
-    ...(a.resource ? { resource: { type: a.resource.type, labels } } : {}),
+    ...(a.resource ? { resource: { type: a.resource.type, labels, ...(other.length ? { other } : {}) } } : {}),
     ...(a.metric ? { metric: { type: a.metric.type } } : {}),
     ...(a.policy ? { policy: { name: a.policy.name, displayName: a.policy.displayName, severity: a.policy.severity } } : {}),
   };
@@ -148,7 +161,7 @@ export async function openAlerts(client: GcpClient, project: string): Promise<{ 
 }
 
 /** Whether an alert's resource is this cluster: a Kubernetes resource by location and cluster_name, or a Prometheus target by location and cluster. */
-function onCluster(a: RawAlert, c: GkeRef): boolean {
+export function onCluster(a: RawAlert, c: GkeRef): boolean {
   const type = a.resource?.type;
   const l = a.resource?.labels ?? {};
   if (type === "prometheus_target") return l.location === c.location && l.cluster === c.name;
@@ -190,37 +203,86 @@ export function clusterAlerts(raw: RawAlert[], c: GkeRef): { items: GcpAlert[]; 
   let others = 0;
   let unreadable = 0;
   const seen = new Set<string>();
-  const numbered = !!c.number && /^\d{1,30}$/.test(c.number);
-  const ids = new Set([c.project, ...(numbered ? [c.number!] : [])]);
+  const own = ownIds(c);
   for (const a of raw) {
     if (!onCluster(a, c)) {
       others++;
       continue;
     }
-    const id = a.name.split("/").at(-1) ?? "";
-    const opened = isoOf(a.openTime);
-    if (!ALERT_ID.test(id) || !opened || seen.has(id)) {
+    const id = idOf(a);
+    const row = toAlert(a, own);
+    if (!row || seen.has(id)) {
       if (!seen.has(id)) unreadable++;
       continue;
     }
     seen.add(id);
-    const pol = /^projects\/([^/]+)\/alertPolicies\/(\d{1,30})$/.exec(a.policy?.name ?? "");
-    const metric = a.metric?.type;
-    const subject = subjectOf(a);
-    items.push({
-      id, opened,
-      policy: outsideText(a.policy?.displayName ?? "", 120),
-      // A policy named by a project number, when this project's number is unknown, may be its own or another's: said,
-      // not called another project's (review of part 3, L5). A project id never is all digits.
-      ...(pol && ids.has(pol[1]!) ? { policyId: pol[2]! } : pol && !numbered && /^\d{1,30}$/.test(pol[1]!) ? { policyUnknown: true as const } : {}),
-      severity: ALERT_SEVERITY[a.policy?.severity ?? ""] ?? "none",
-      resourceType: a.resource!.type!,
-      ...(metric && METRIC_TYPE.test(metric) ? { metric } : {}),
-      ...(subject ? { subject } : {}),
-    });
+    items.push(row);
   }
   items.sort((x, y) => y.opened.localeCompare(x.opened));
   return { items: items.slice(0, GCP_ALERTS_SHOWN), others, unreadable, over: Math.max(0, items.length - GCP_ALERTS_SHOWN) };
+}
+
+/** The project's id and (when known and of its shape) its number, by which its own policies are named. */
+const ownIds = (c: { project: string; number?: string }) => {
+  const numbered = !!c.number && /^\d{1,30}$/.test(c.number);
+  return { ids: new Set([c.project, ...(numbered ? [c.number!] : [])]), numbered };
+};
+const idOf = (a: RawAlert) => a.name.split("/").at(-1) ?? "";
+
+/** One open alert as a row, or undefined when it has no usable id or opening time (counted as unreadable by the caller). */
+function toAlert(a: RawAlert, own: { ids: Set<string>; numbered: boolean }): GcpAlert | undefined {
+  const id = idOf(a);
+  const opened = isoOf(a.openTime);
+  if (!ALERT_ID.test(id) || !opened) return undefined;
+  const pol = /^projects\/([^/]+)\/alertPolicies\/(\d{1,30})$/.exec(a.policy?.name ?? "");
+  const metric = a.metric?.type;
+  const subject = subjectOf(a);
+  const type = a.resource?.type ?? "";
+  return {
+    id, opened,
+    policy: outsideText(a.policy?.displayName ?? "", 120),
+    // A policy named by a project number, when this project's number is unknown, may be its own or another's: said,
+    // not called another project's (review of part 3, L5). A project id never is all digits.
+    ...(pol && own.ids.has(pol[1]!) ? { policyId: pol[2]! } : pol && !own.numbered && /^\d{1,30}$/.test(pol[1]!) ? { policyUnknown: true as const } : {}),
+    severity: ALERT_SEVERITY[a.policy?.severity ?? ""] ?? "none",
+    resourceType: RESOURCE_TYPE.test(type) ? type : "unknown",
+    ...(metric && METRIC_TYPE.test(metric) ? { metric } : {}),
+    ...(subject ? { subject } : {}),
+  };
+}
+/** A monitored resource's type (k8s_container, gce_instance, …); another text shows as "unknown". */
+const RESOURCE_TYPE = /^[a-z][a-z0-9_.]{0,63}$/;
+
+/** An open alert of the project as the agent's gcp_alerts lists it (D192): the GKE cluster it is on, or its other labels. */
+export type ProjectAlert = GcpAlert & { cluster?: { location: string; name: string }; labels?: [string, string][] };
+
+/**
+ * Every open alert of the project as gcp_alerts lists it (wave 9 part 4, D192), pure: newest first, one per id. A
+ * Kubernetes resource or a Prometheus target names its GKE cluster (`cluster`, when both values are GKE's shapes);
+ * another resource carries its labels (`other`, cleaned at the read). `unreadable` counts rows with no usable id or
+ * opening time, so the list never reads as whole when some were dropped.
+ */
+export function alertRows(raw: RawAlert[], c: { project: string; number?: string }): { items: ProjectAlert[]; unreadable: number } {
+  const own = ownIds(c);
+  const items: ProjectAlert[] = [];
+  const seen = new Set<string>();
+  let unreadable = 0;
+  for (const a of raw) {
+    const id = idOf(a);
+    const row = toAlert(a, own);
+    if (!row || seen.has(id)) {
+      if (!seen.has(id)) unreadable++;
+      continue;
+    }
+    seen.add(id);
+    const l = a.resource?.labels ?? {};
+    const type = a.resource?.type;
+    const name = type === "prometheus_target" ? l.cluster : (CLUSTER_RESOURCES as readonly string[]).includes(type ?? "") ? l.cluster_name : undefined;
+    const cluster = name && GKE_NAME.test(name) && l.location && GKE_LOCATION.test(l.location) ? { location: l.location, name } : undefined;
+    items.push({ ...row, ...(cluster ? { cluster } : {}), ...(a.resource?.other?.length ? { labels: a.resource.other } : {}) });
+  }
+  items.sort((x, y) => y.opened.localeCompare(x.opened));
+  return { items, unreadable };
 }
 
 /** An alert policy's detail as an alert shows it (D187). */

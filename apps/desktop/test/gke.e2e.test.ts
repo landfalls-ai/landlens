@@ -274,7 +274,7 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     await pending.getByRole("button", { name: /Let Claude read it too/ }).click();
     await expect.poll(() => app.evaluate(() => (globalThis as unknown as { asked: string[] }).asked.length)).toBe(3);
     await pending.waitFor({ state: "detached" });
-    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).grant).toEqual({ account: "person@example.com", projects: ["demo-shop", "orbit-analytics"] });
+    expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).grant).toEqual({ account: "person@example.com", projects: ["demo-shop", "orbit-analytics"], covers: 2 });
     await invoke("gcp:choose", { projects: ["demo-shop"] });
     await page.getByRole("button", { name: "MCP", exact: true }).click();
     const tile = page.getByRole("region", { name: "MCP server landlens-gcp" });

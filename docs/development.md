@@ -182,6 +182,16 @@ L3's served text, L6's sweep, L7's undelivered reads with a slow fake) and one t
 `startViewPoll` with fake timers, and a source check that the drawer and Ask read through `latestOnly`), an L3 case in
 `agent-service.test.ts`, and L1, L2, L5, L6, T1 and T5 cases in `packages/gcp`'s `monitoring`, `assets` and `briefs`
 tests.
+Part 4 (Claude's tools) adds the three tools' cases to `packages/gcp-mcp/test/server.test.ts` (its reader runs
+`gkeAdvice`, `openAlerts`/`alertRows`, `alertPolicy` and `gkeProjectSeries` straight against the fake; a `limits`
+argument plays D195), `gkeProjectSeries` cases to `packages/metrics/test/cloud-monitoring.test.ts`, `alertRows` cases
+to `monitoring.test.ts`, a "Claude's Google tools" block to `gcp-service.test.ts` (D190's grant, the reader's new
+reads, D195's limit, D194's line), the session series with and without the grant to `metrics-source.test.ts`, the
+session's `google` to `mcp-main.test.ts`, the session hold to `mcp-gateway`'s `autonomy.test.ts`, the overview's line
+to `kube-mcp`'s `server.test.ts`, the prompt's words to `prompt.test.ts`, and case (c) to `gview.e2e.test.ts`
+(screenshots `g9-p4-*`): a kept pre-wave grant, the card's line, the dialog's words, the MCP page's eight tools,
+Preview of `cluster_overview`, and with `LANDLENS_INTEGRATION=orbstack,claude` a live session answering from
+`gcp_alerts`.
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

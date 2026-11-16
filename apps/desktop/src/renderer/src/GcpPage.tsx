@@ -597,6 +597,9 @@ const CARD_STATE: Record<GcpStatus["state"], { tone: "ok" | "muted" | "warn"; wo
   "off-dev": { tone: "muted", word: "Off in development", icon: CircleDashed },
 };
 
+/** The card's line when a yes given before wave 9 was dropped (D190): what it now covers, and that it asks again. */
+export const GCP_REGRANT_LINE = "Claude's reading is off: it now also covers metrics, alerts and GKE recommendations. Turn it on again to allow that.";
+
 /** The Google Cloud card on the Connections page (D95). */
 export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => void; onOpen?: () => void }) {
   const s = props.status;
@@ -645,10 +648,16 @@ export function GcpCard(props: { status: GcpStatus; onStatus: (s: GcpStatus) => 
               </label>
               <span className="dim small">
                 {s.agentRead
-                  ? "Claude's sessions have read-only Google Cloud tools for these projects, run in Landlens with your sign-in; what they read is scrubbed of secret values. Claude gets no Google token."
+                  ? "Claude's sessions have read-only Google Cloud tools for these projects (resources, GKE clusters, their Cloud Monitoring metrics and open alerts, and GKE recommendations), run in Landlens with your sign-in; what they read is scrubbed of secret values. Claude gets no Google token."
                   : "Off: Claude's sessions have no Google Cloud tools. Turning it on asks you first."}
                 {s.agentRead ? " A project you choose later, or another gcloud account, isn't included until Landlens asks again; sessions keep the projects they started with." : ""}
               </span>
+              {!s.agentRead && s.agentRegrant ? (
+                <div className="gcp-card-pending" role="status" aria-label="Claude's reading needs your yes again">
+                  <span className="small">{GCP_REGRANT_LINE}</span>
+                  <button className="secondary sm" disabled={busy || !s.projects.length} onClick={() => agentRead(true)}>Turn it on again…</button>
+                </div>
+              ) : null}
               {pending.length ? (
                 <div className="gcp-card-pending" role="status">
                   <span className="small">Claude can't read <b className="mono">{pending.join(", ")}</b> yet: chosen after you said yes.</span>

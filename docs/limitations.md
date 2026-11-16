@@ -181,7 +181,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all
-  clusters and sessions; a project granted later is readable only in a new session.
+  clusters and sessions; a project granted later is readable only in a new session. A yes given before wave 9 is
+  dropped and asked again, since it didn't name metrics, alerts and recommendations.
+- **Claude's GKE tools (wave 9 part 4) are fixed reads** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
+  `gcp_metrics` has CPU and memory only, 60 s samples and non-evictable memory, no workload scopes (a workload's pods
+  need the connected cluster's `metrics`), and no queries or filters of the model's own; references come from Cloud
+  Monitoring's request, limit and allocatable gauges, which a cluster without them (or with system metrics off) lacks.
+  `gcp_alerts` lists open alerts only (no closed ones or history), the newest 1,000 read, at most 50 shown, and can't
+  snooze, acknowledge or close one; `gke_recommendations` is GKE's diagnosis recommender only, at most 10 clusters and
+  40 suggestions a call, and can't dismiss one. A namespace limit applies only on the session's own cluster (by name
+  or listed address): another GKE cluster of the project is read as the project grant allows. `cluster_overview`'s line
+  is only as fresh as the last view of the Overview or Problems (10 minutes at most) and is absent otherwise. Nothing
+  was checked against real Google Cloud.
 - **Autonomous mode is per session and never remembered**: each session, a resumed one too, starts with every write
   asking, and the scope is typed again each time; there is no default scope per connection. A resumed session is also
   held for good: its routine writes ask even with autonomous on, since Landlens can't see what its transcript read

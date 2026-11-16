@@ -391,7 +391,49 @@ each run against its own test file, then restored).
 
 ## Part 4: Claude's tools (D190–D196)
 
-- [ ] The grant's `covers`, the dialog, the card's line
-- [ ] `GcpReader`'s new methods and `agentReader`; `server.ts`'s three tools; `server.test.ts`
-- [ ] D194: `mcp.ts`, `index.ts`, `service.ts`; `cluster_overview`'s line; D195
-- [ ] The prompt's words; the MCP page; the live-session e2e; docs; review; fixes
+- [x] The grant's `covers`, the dialog, the card's line
+- [x] `GcpReader`'s new methods and `agentReader`; `server.ts`'s three tools; `server.test.ts`
+- [x] D194: `mcp.ts`, `index.ts`, `metrics-source.ts` (the session series; `service.ts` already applied `agent`);
+  `cluster_overview`'s line; D195
+- [x] The prompt's words; the MCP page; the live-session e2e; docs
+- [ ] Review; fixes
+
+### Departures from the spec in part 4
+
+1. **The readers say what they didn't read.** `advice` returns `{ clusters, more, errors }` rather than an array, so
+   the tool can say "N more GKE clusters … not read" and a listing's failure; `alerts` returns the counts (`cut`,
+   `unreadable`, `unplaced`) beside the rows, so the list never reads as all clear when it isn't (no silent all-clear,
+   as D188). The head counts with "+" then.
+2. **`gcp_alerts` reads every resource type through a new pure `alertRows`** (`packages/gcp/src/monitoring.ts`), on the
+   same 60 s cache as the view. A non-cluster resource's labels are kept at the read (`RawAlert.resource.other`: up to
+   six, keys `^[a-z_]{1,40}$`, never `project_id`, values cleaned, redacted and cut to 120), so main still keeps no
+   other field of Google's row (part 3's L6). A Kubernetes row's GKE cluster is named only when its location and
+   name are GKE's shapes.
+3. **D194's hold is on the gateway session itself** (`GatewaySession.hold(why)`; `McpGateway.hold` is unchanged), not
+   `gateway.hold(acpSession, …)`: the session's kube tools are built before Claude Code's session id is bound. The
+   session series takes a fourth argument, `google: { projects, hold }`, set once the gateway has answered; before
+   that it is `NO_GOOGLE` (no project), so no call can read Google early.
+4. **`cluster_overview`'s line** says when Landlens read what it counts ("as Landlens read them at 09:12 UTC"), is
+   made from the last view of this very connection (by context, address and trust, as `gkeOf` decided) in the last
+   10 minutes, and is absent otherwise. A limited session counts the alerts in its namespaces and says how many more
+   there are; a failed or cut read says so ("couldn't be read", "3+").
+5. **D195's limit is wider than "the context the session is connected to"**: a listed GKE cluster at the session's
+   address (another name for the same cluster) is limited too, a Kubernetes alert whose cluster can't be told counts
+   as the session's own, and so does any cluster when the listing can't be read. `limit` is async. A namespace given
+   with the cluster or node scope doesn't open them. `gcp_alerts` with an `id` outside the limit answers as not open.
+6. **`gcp_metrics`' reference gauges** are read over the last hour (60 s steps) whatever the range: only their latest
+   value counts. A reference read that fails leaves its line out with a note; a usage read that fails is the call's
+   sentence.
+7. **The whole answer is cut at 24,000 characters** after a second redaction, with a note; the spec named per-field
+   cuts only.
+8. **The grant's dialog** for a dropped yes is titled "Let Claude read these Google Cloud projects again?" and begins
+   by saying why; the card's line has its own **Turn it on again…** button.
+9. **The dialog itself has no screenshot**: it is a native sheet, which the e2e answers in main; its message and
+   detail are asserted there, and the card's line before and after is shot (`g9-p4-01`, `g9-p4-02`).
+
+### [check] items settled or moved by part 4
+
+- **[check 6]** (quotas): the tools read through main's caches (advice 10 minutes, alerts 60 s, policies 10 minutes,
+  PromQL 25 s in its slot), 30 calls a minute a session, at most 10 clusters' suggestions and 6 PromQL queries a call.
+- **[check 1]** stays the person's live check; `gcp_metrics` uses the same labels and draws nothing (with
+  `LabelsLost`'s sentence) if `by` drops them. [check 2], [check 3] and [check 7] are unchanged.

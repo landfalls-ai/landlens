@@ -32,10 +32,11 @@ export function cloudMonitoringSource(gcp: Pick<GcpService, "gkeOf" | "promAsk" 
 
 /**
  * The series a session's `metrics` tool reads: what it reads of the cluster goes with the session's own token (`read`),
- * and it reads no Cloud Monitoring yet. The grant that covers metrics, and the session's projects and hold, are part
- * 4's (D190, D194); until then its Google projects are none, and the answer says why (cloud-monitoring-not-granted).
+ * and Cloud Monitoring only for a project in `google.projects` (the session's Google grant as it began, D194), holding
+ * its autonomy with `google.hold` before the first query leaves. A call without `google` (Preview before its session
+ * is open, or any caller that forgets it) reads with no project: never as the IDE's own charts do.
  */
 export function sessionSeries(metrics: Pick<MetricsService, "series">) {
-  return (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">, read?: (path: string) => Promise<any>): Promise<MetricsSeries> =>
-    metrics.series({ handle, ...r }, { ...(read ? { read } : {}), agent: { projects: [], hold: () => {} } });
+  return (handle: string, r: Omit<Parameters<MetricsService["series"]>[0], "handle">, read?: (path: string) => Promise<any>, google?: { projects: string[]; hold(): void }): Promise<MetricsSeries> =>
+    metrics.series({ handle, ...r }, { ...(read ? { read } : {}), agent: { projects: [...(google?.projects ?? [])], hold: () => google?.hold() } });
 }

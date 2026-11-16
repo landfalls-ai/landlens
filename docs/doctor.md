@@ -219,6 +219,13 @@ read with the person's access only for what Landlens's window is showing …"; i
 reading the TLS Secrets, so certificates aren't checked yet."; if the person can't read them, the same sentence as the window's. A
 `namespace` outside the session's limit gets no certificates. The MCP Preview on the MCP page uses the same hook.
 
+On a GKE cluster of a project the session may read (wave 9 part 4, D194), the overview's last line is Google's, made
+only from what main already holds for this connection (the last view of it in the last 10 minutes; no request, no
+outside text): "Cloud Monitoring has 3 open alerts for this cluster and Google has 2 suggestions, as Landlens read them
+at 09:12 UTC: gcp_alerts and gke_recommendations (landlens-gcp) list them." A session limited to namespaces counts the
+alerts in them and says how many others there are; a read that failed or was cut says so ("couldn't be read", "3+").
+Without the grant, or with nothing held, there is no line. `diagnose()` and the counts are unchanged.
+
 ## The scenarios
 
 `node deploy/scenarios/doctor/up.mjs` starts one broken workload per class in `landlens-dev` on OrbStack, plus the

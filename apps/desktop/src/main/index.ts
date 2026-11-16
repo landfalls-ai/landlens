@@ -22,7 +22,7 @@ import { clipboardFormats, clipboardMarker, SecretService } from "./secrets";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
-import { gcpMode, GcpService } from "./gcp";
+import { connectedOf, gcpMode, GcpService } from "./gcp";
 import { cloudMonitoringSource, sessionSeries } from "./metrics-source";
 import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
@@ -105,8 +105,8 @@ async function start() {
   /** Clusters connected through Landlens's GKE kubeconfig, by handle (ipc.ts adds them; a context of yours isn't one). */
   const gkeHandles = new Set<string>();
   // For the metrics tool: `read` is the session's own front-door token (its policy, scrubbing and audit), so what the
-  // series reads from the cluster is read as the session. The usage numbers are Clickland's, Prometheus's or the shared
-  // sampler's; a session reads no Cloud Monitoring until part 4 gives it the grant's projects (metrics-source.ts).
+  // series reads from the cluster is read as the session. The usage numbers are Clickland's, Prometheus's, the shared
+  // sampler's, or Cloud Monitoring's only for a project of the session's Google grant, holding its autonomy first (D194).
   const series = sessionSeries(metrics);
   const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
   // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
@@ -203,7 +203,17 @@ async function start() {
     // Clickland, Landflow and Landfall (D107): served after the connections when Tools for Claude is on.
     family,
     // landlens-gcp (D93): read-only Google Cloud tools for sessions, when you turned "Claude can read" on.
-    gcp: { reader: () => gcp.agentReader((context) => clusters.list().some((c) => c.context === context)) },
+    // `session` is the session's own cluster, for the namespace limit (D195); `line` is cluster_overview's (D194).
+    gcp: {
+      reader: (session) => gcp.agentReader((context) => clusters.list().some((c) => c.context === context), session),
+      line: (handle, projects, namespaces) => {
+        try {
+          return gcp.heldLine(connectedOf(clusters, gkeHandles, handle), projects, namespaces);
+        } catch {
+          return undefined; // the cluster has gone: no line
+        }
+      },
+    },
     clickland: settings,
     frontDoor,
     clusters,

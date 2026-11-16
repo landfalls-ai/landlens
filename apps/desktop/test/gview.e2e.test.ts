@@ -20,10 +20,14 @@
 // one; the drawer shows the policy's documentation as text with no link or heading; the Overview has their line; and
 // Ask Claude on an alert and on a suggestion sends main's brief under its fixed head, into a fence it can't close (the
 // agent is played in main).
+// Part 4 (D190–D196), (c): the same own context, with a "Claude can read" yes kept from before the wave: the card says it
+// is off and why, Turn it on again asks in main with what it now covers, the MCP page lists landlens-gcp's eight tools,
+// and Preview of cluster_overview ends with Google's line from what main holds. With LANDLENS_INTEGRATION=orbstack,claude
+// a live session asked which alerts are open on shop-prod answers from gcp_alerts (your own Claude Code).
 // Every request the fake recorded is a GET with gcloud's token; nothing else is written to OrbStack.
-// LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/gview.e2e.test.ts  (screenshots to $LANDLENS_SHOTS, g9-, g9-p2-, g9-p3-)
+// LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/gview.e2e.test.ts  (screenshots to $LANDLENS_SHOTS, g9-, g9-p2-, g9-p3-, g9-p4-)
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Locator, type Page } from "playwright-core";
@@ -32,7 +36,9 @@ import { demoShopAlerts, FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN } from "../../../pa
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 import { chosenNamespaces } from "./e2e-helpers";
 
-const run = (process.env.LANDLENS_INTEGRATION ?? "").split(",").includes("orbstack");
+const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
+const run = flags.includes("orbstack");
+const claude = flags.includes("claude");
 const shots = process.env.LANDLENS_SHOTS;
 const shot = async (page: Page, name: string, colorScheme: "dark" | "light" = "dark", el?: Locator) => {
   if (!shots) return;
@@ -544,5 +550,151 @@ describe.runIf(run)("(b) a context of your own is GKE only at the listing's addr
     await reopen();
     await panel(page).waitFor({ timeout: 30_000 });
     await expect(rows(page).count()).resolves.toBe(2);
+  });
+});
+
+describe.runIf(run)("(c) part 4: Claude's Google tools on your own GKE-named context", { timeout: 180_000 }, () => {
+  let app: ElectronApplication;
+  let page: Page;
+  let fake: FakeGcp;
+  let model: ReturnType<typeof realModel>;
+  const sdk = sdkDir();
+  const userData = mkdtempSync(join(tmpdir(), "landlens-e2e-gview-p4-"));
+  const folder = mkdtempSync(join(tmpdir(), "landlens-e2e-gview-p4-kc-"));
+  const kubeconfig = join(folder, "kubeconfig");
+  const SHOP = "gke_demo-shop_us-central1_shop-prod";
+  const invoke = (channel: string, req: unknown) =>
+    page.evaluate(([c, r]) => (globalThis as unknown as Landlens).landlens.invoke(c as string, r).then((x) => ({ ok: x }), (e: Error) => ({ error: e.message })), [channel, req] as const);
+  const card = () => page.getByRole("region", { name: "Google Cloud connection" });
+  const kept = () => JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")) as { agentRead: boolean; grant?: unknown; regrant?: boolean };
+  let handle = "";
+
+  beforeAll(async () => {
+    const own = orbstack();
+    const { server, "certificate-authority-data": ca } = own.clusters[0]!.cluster;
+    writeFileSync(kubeconfig, JSON.stringify({
+      apiVersion: "v1", kind: "Config", preferences: {}, "current-context": SHOP,
+      clusters: [{ name: "orb", cluster: { server, "certificate-authority-data": ca } }],
+      users: [{ name: "orb", user: own.users[0]!.user }],
+      contexts: [{ name: SHOP, context: { cluster: "orb", user: "orb" } }],
+    }), { mode: 0o600 });
+    fake = await new FakeGcp().start();
+    fake.clusters.set("demo-shop", [{ name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: new URL(server).host, masterAuth: { clusterCaCertificate: ca } }]);
+    model = realModel();
+    fake.gke.set("demo-shop/us-central1/shop-prod", { nodes: model.nodes, pods: model.pods });
+    fake.alerts.set("demo-shop", demoShopAlerts({ namespace: NS, pod: model.pick.name, container: model.pick.containers[0]!, node: model.nodes[0]! }));
+    // A yes given before this wave: the account and the projects, and no `covers`.
+    writeFileSync(join(userData, "gcp.json"), JSON.stringify({ projects: ["demo-shop"], agentRead: true, grant: { account: "person@example.com", projects: ["demo-shop"] }, confirmed: [] }), { mode: 0o600 });
+    ({ app, page } = await launch({ userData, fake, sdk, kubeconfig }));
+    // Main's questions are native dialogs: answered yes here, in main, each one's message and detail kept.
+    await app.evaluate(({ dialog }) => {
+      const g = globalThis as unknown as { asked: { message: string; detail: string }[] };
+      g.asked = [];
+      dialog.showMessageBox = (async (...a: unknown[]) => {
+        const o = a.at(-1) as { message: string; detail?: string };
+        g.asked.push({ message: o.message, detail: o.detail ?? "" });
+        return { response: 0, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+    });
+  }, 120_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await fake?.stop();
+    rmSync(folder, { recursive: true, force: true });
+    rmSync(sdk, { recursive: true, force: true });
+    rmSync(userData, { recursive: true, force: true });
+  }, 60_000);
+
+  it("a yes kept from before the wave is off: the card says why, and turning it on again asks in main what it now covers", async () => {
+    await page.getByRole("heading", { name: "Pick a cluster" }).waitFor();
+    await page.getByRole("button", { name: new RegExp(`^${SHOP}`) }).click({ timeout: 30_000 });
+    await page.getByRole("region", { name: "Verdict" }).waitFor({ timeout: 60_000 });
+    // The Overview reads Google's view of shop-prod (what cluster_overview's line is made from, below).
+    await panel(page).waitFor({ timeout: 30_000 });
+    await page.getByRole("region", { name: "Problems" }).locator(".ov-alerts").waitFor({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Connections", exact: true }).click();
+    const line = card().getByRole("status", { name: "Claude's reading needs your yes again" });
+    await line.waitFor({ timeout: 20_000 });
+    expect(await line.innerText()).toContain("Claude's reading is off: it now also covers metrics, alerts and GKE recommendations. Turn it on again to allow that.");
+    const sw = card().getByRole("switch", { name: "Claude can read these projects" });
+    expect(await sw.isChecked()).toBe(false);
+    expect(kept().agentRead).toBe(true); // nothing written until the person acts
+    await card().scrollIntoViewIfNeeded();
+    await all(page, "g9-p4-01-card-regrant", card());
+    await line.getByRole("button", { name: "Turn it on again…" }).click();
+    await expect.poll(() => sw.isChecked(), { timeout: 10_000 }).toBe(true);
+    const asked = await app.evaluate(() => (globalThis as unknown as { asked: { message: string; detail: string }[] }).asked);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.message).toBe("Let Claude read these Google Cloud projects again?");
+    expect(asked[0]!.detail).toContain("Claude's reading was turned off because it now covers more than when you said yes: Cloud Monitoring metrics, open alerts and GKE recommendations as well.");
+    expect(asked[0]!.detail).toContain("for demo-shop, run in Landlens as person@example.com: resources, GKE clusters, their Cloud Monitoring metrics and open alerts, and GKE recommendations. Claude gets no Google token;");
+    await line.waitFor({ state: "detached" });
+    expect(kept()).toMatchObject({ agentRead: true, grant: { account: "person@example.com", projects: ["demo-shop"], covers: 2 } });
+    expect(kept()).not.toHaveProperty("regrant");
+    await all(page, "g9-p4-02-card-on", card());
+  });
+
+  it("the MCP page lists landlens-gcp's eight read-only tools, and Preview of cluster_overview ends with Google's line", async () => {
+    await page.getByRole("button", { name: "MCP", exact: true }).click();
+    const tile = page.getByRole("region", { name: "MCP server landlens-gcp" });
+    await tile.waitFor({ timeout: 20_000 });
+    const tools = tile.getByRole("list", { name: "landlens-gcp tools" });
+    await tools.waitFor({ timeout: 20_000 });
+    const names = await tools.locator(".ov-name .mono").allInnerTexts();
+    expect([...names].sort()).toEqual(["gcp_alerts", "gcp_get_resource", "gcp_metrics", "gcp_projects", "gcp_resource_types", "gcp_search_resources", "gke_clusters", "gke_recommendations"]);
+    // Every one needs no ask; the three new ones need arguments, so they have no Preview.
+    await expect(tile.getByRole("button", { name: /^Preview gcp_metrics$/ }).count()).resolves.toBe(0);
+    await tile.getByText("gcp_metrics", { exact: true }).scrollIntoViewIfNeeded();
+    await all(page, "g9-p4-03-mcp-tools", tile);
+    // Already connected: connect answers with its handle.
+    handle = ((await invoke("cluster:connect", { context: SHOP })) as { ok: { handle: string } }).ok.handle;
+    const tried = (await invoke("mcp:try", { handle, server: "landlens-kube", tool: "cluster_overview" })) as { ok: { id: string; preview?: string; status: string } };
+    expect(tried.ok.status).toBe("ok");
+    // The call's whole result, as its view gets it (the preview is cut at 2,000 characters).
+    const view = (await invoke("mcp:app-open", { call: tried.ok.id })) as { ok: { view: string; result: { content: { type: string; text?: string }[] } } };
+    const whole = view.ok.result.content.map((c) => c.text ?? "").join("\n");
+    await invoke("mcp:app-close", { view: view.ok.view });
+    expect(whole.trimEnd().split("\n").at(-1)).toMatch(/Cloud Monitoring has 3 open alerts for this cluster and Google has 2 suggestions, as Landlens read them at \d\d:\d\d UTC: gcp_alerts and gke_recommendations \(landlens-gcp\) list them\./);
+  });
+
+  describe.runIf(claude)("a live session reads shop-prod's alerts through gcp_alerts", () => {
+    const dock = () => page.getByRole("complementary", { name: "Claude Code" });
+    const box = () => dock().getByRole("combobox", { name: "Message Claude Code" });
+    const stop = () => dock().getByRole("button", { name: "Stop", exact: true });
+
+    it("answers which Cloud Monitoring alerts are open on shop-prod, from the fake, read-only", async () => {
+      await page.getByRole("button", { name: "Overview", exact: true }).click().catch(() => undefined);
+      // What the fake is asked from here (main's caches may answer from the Overview's earlier reads).
+      const before = fake.requests.length;
+      await page.keyboard.press("Meta+j");
+      await expect.poll(() => box().isEnabled({ timeout: 2_000 }).catch(() => false), { timeout: 90_000 }).toBe(true);
+      await box().fill("Which Cloud Monitoring alerts are open on the GKE cluster shop-prod in Google Cloud project demo-shop? List each with its policy name.");
+      await box().press("Enter");
+      await stop().waitFor({ timeout: 60_000 }).catch(() => {});
+      const deadline = Date.now() + 240_000;
+      while (await stop().count()) {
+        if (Date.now() > deadline) throw new Error(`the agent did not finish in 4 minutes; the dock says:\n${await dock().innerText()}`);
+        await page.waitForTimeout(500);
+      }
+      const answer = (await dock().locator(".msg-agent").allTextContents()).join("\n");
+      expect(answer).toContain("Container restarts");
+      expect(answer).toContain("Node memory");
+      for (const gone of ["must not show", "orbit-analytics's own"]) expect(answer).not.toContain(gone);
+      await all(page, "g9-p4-04-live-answer");
+      const calls = ((await invoke("mcp:calls", {})) as { ok: { calls: { server: string; tool: string; status: string; origin: string }[] } }).ok.calls;
+      const gcp = calls.filter((c) => c.server === "landlens-gcp" && c.origin === "agent");
+      expect(gcp.some((c) => c.tool === "gcp_alerts" && c.status === "ok")).toBe(true);
+      const asked = fake.requests.slice(before);
+      expect(asked.every((r) => r.method === "GET")).toBe(true);
+      expect(asked.filter((r) => /projects\/(?!demo-shop)[a-z][-a-z0-9]+\//.test(r.path))).toEqual([]);
+      // No card asked: every landlens-gcp tool is a read.
+      await expect(dock().getByRole("region", { name: "Claude asks" }).count()).resolves.toBe(0);
+    }, 330_000);
+  });
+
+  it("asked Google only with GETs and gcloud's token", () => {
+    expect(fake.requests.length).toBeGreaterThan(0);
+    expect(fake.requests.every((r) => r.method === "GET" && r.authorization === `Bearer ${GCP_TOKEN}`)).toBe(true);
   });
 });

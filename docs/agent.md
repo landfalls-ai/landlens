@@ -106,10 +106,16 @@ the dock shows inline under the tool's card; the model still gets the same text.
 | `rollout_history` | A Deployment's ReplicaSets by revision, with images |
 | `metrics` | CPU and memory over 1h, 6h or 24h for the cluster, a node, a namespace, a pod or a workload, with requests and limits, from Landlens's metrics source (Clickland, else the cluster's Prometheus, else metrics-server) |
 
-When you turn on **Claude can read these projects** (Connections), sessions also get `landlens-gcp`, five read-only
-Google Cloud tools for the projects you chose, run in main with your gcloud sign-in; the session's prompt names the
-projects it began with (one granted later is refused in it) and puts what they hold under the outside-text rule.
-After a session reads Google Cloud data, its autonomous GitHub and Linear writes ask
+When you turn on **Claude can read these projects** (Connections), sessions also get `landlens-gcp`, eight read-only
+Google Cloud tools for the projects you chose, run in main with your gcloud sign-in: resources, GKE clusters, and from
+wave 9 a GKE cluster's suggestions (`gke_recommendations`), the project's open alerts (`gcp_alerts`, an id gives the
+policy's conditions and documentation) and a cluster's CPU and memory from Cloud Monitoring (`gcp_metrics`). The
+session's prompt names the projects it began with (one granted later is refused in it) and the tools, and puts what
+they hold under the outside-text rule, whose words now name "alert policy names and documentation, and recommendation
+text". With the grant, the kube `metrics` tool on a GKE cluster of a granted project reads Cloud Monitoring too, and
+`cluster_overview` ends with one line counting the alerts and suggestions main already holds; a session limited to
+namespaces sees only its namespaces' alerts and metrics of its own cluster. After a session reads Google Cloud data,
+through either server, its autonomous GitHub and Linear writes ask
 ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)).
 
 With **Tools for Claude** on for a Land family sibling (Connections), sessions also get its own MCP server:

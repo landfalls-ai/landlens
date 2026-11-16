@@ -5,7 +5,7 @@
 import type { GkeRef } from "@landlens/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeGcp, GCP_TOKEN } from "../../gcp/test/fake-gcp";
-import { AskFailed, CUT_REASON, cloudMonitoringSeries, gkeHasData, gkeQueries, gkeStep, LabelsLost, parseGkeMatrix, parseGkeMatrixCut, POD_REGEX_MAX, type PromAsk } from "../src/cloud-monitoring.js";
+import { AskFailed, CUT_REASON, cloudMonitoringSeries, GKE_ONLY_QUERIES, gkeHasData, gkeProjectSeries, gkeQueries, gkeStep, LabelsLost, parseGkeMatrix, parseGkeMatrixCut, POD_REGEX_MAX, type PromAsk } from "../src/cloud-monitoring.js";
 
 const NOW = Date.parse("2026-11-16T09:00:00Z");
 const C: GkeRef = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
@@ -380,5 +380,58 @@ describe("Fable's security review of part 2, fixed", () => {
   it("T7: NaN, infinite, odd and non-array points are dropped; the finite ones kept", () => {
     const raw = { status: "success", data: { resultType: "matrix", result: [{ metric: { ...id, node_name: "n" }, values: [[NOW / 1000, "NaN"], [NOW / 1000, "+Inf"], [NOW / 1000, "-Inf"], "x", [NOW / 1000], ["t", "1"], null, [NOW / 1000, "0.5"]] }] } };
     expect(parseGkeMatrix(raw, C, "node_name")).toEqual([{ key: "n", points: [[NOW, 0.5]] }]);
+  });
+});
+
+describe("gkeProjectSeries: a GKE cluster from Cloud Monitoring alone (wave 9 part 4, D193)", () => {
+  it("a pod's containers, with requests summed and a limit only when every container has one, in at most six fixed queries", async () => {
+    const ask = fakeAsk();
+    const s = await gkeProjectSeries(ask, C, { scope: "pod", namespace: "shop", name: "orders-api-7c9f-x2x4q", range: "1h" }, NOW);
+    expect(s).toMatchObject({ source: "cloud-monitoring", by: "container", gke: { project: "demo-shop", location: "us-central1", name: "shop-prod" }, reasons: [] });
+    expect(keys(s.cpu.series)).toEqual(["api", "istio-proxy"]);
+    expect(s.cpu.request).toBeCloseTo(0.2);
+    expect(s.cpu.limit).toBeCloseTo(1);
+    expect(s.memory.request).toBe(256 * 2 ** 20);
+    expect(s.memory.limit).toBe(1024 * 2 ** 20);
+    expect(ask.queries.length).toBeLessThanOrEqual(GKE_ONLY_QUERIES);
+    for (const q of ask.queries) {
+      expect(q).toContain(`{${S}`);
+      expect(q).toContain(`sum by (${G}`);
+    }
+  });
+
+  it("a node's and the cluster's allocatable, summed over the nodes; never another project's, even when the scope leaks", async () => {
+    fake.leak = true;
+    const s = await gkeProjectSeries(fakeAsk(), C, { scope: "cluster", range: "6h" }, NOW);
+    expect(keys(s.cpu.series)).toEqual(["gke-shop-prod-default-pool-1a2b", "gke-shop-prod-default-pool-3c4d"]);
+    expect(s.cpu.allocatable).toBeCloseTo(7.84);
+    expect(s.memory.allocatable).toBe(27e9);
+    const n = await gkeProjectSeries(fakeAsk(), C, { scope: "node", name: "gke-shop-prod-default-pool-1a2b", range: "1h" }, NOW);
+    expect(n.cpu.allocatable).toBeCloseTo(3.92);
+    const ns = await gkeProjectSeries(fakeAsk(), C, { scope: "namespace", namespace: "shop", range: "1h" }, NOW);
+    expect(ns.by).toBe("pod");
+    expect(ns.cpu).not.toHaveProperty("allocatable");
+  });
+
+  it("a container without a limit: no limit is drawn; a reference read that fails is said, never silence", async () => {
+    const strip: PromAsk = async (q, ...rest) => {
+      const r = (await fakeAsk()(q, ...rest)) as { data: { result: { metric: Record<string, string> }[] } };
+      if (q.includes("cpu_limit_cores")) r.data.result = r.data.result.filter((x) => x.metric.container_name !== "istio-proxy");
+      if (q.includes("memory_request_bytes")) throw new AskFailed("Cloud Monitoring didn't accept Landlens's query.");
+      return r;
+    };
+    const s = await gkeProjectSeries(strip, C, { scope: "pod", namespace: "shop", name: "orders-api-7c9f-x2x4q", range: "1h" }, NOW);
+    expect(s.cpu).not.toHaveProperty("limit");
+    expect(s.cpu.request).toBeCloseTo(0.2);
+    expect(s.memory).not.toHaveProperty("request");
+    expect(s.reasons).toEqual([{ code: "cloud-monitoring-failed", message: "Requests and limits couldn't all be read: Cloud Monitoring didn't accept Landlens's query." }]);
+  });
+
+  it("has no workload scope, and needs a namespace and a name where they count", async () => {
+    const ask = vi.fn();
+    await expect(gkeProjectSeries(ask, C, { scope: "deployment" as never, namespace: "shop", name: "orders-api", range: "1h" }, NOW)).rejects.toThrow();
+    await expect(gkeProjectSeries(ask, C, { scope: "pod", name: "x", range: "1h" }, NOW)).rejects.toThrow();
+    await expect(gkeProjectSeries(ask, C, { scope: "node", range: "1h" }, NOW)).rejects.toThrow();
+    expect(ask).not.toHaveBeenCalled();
   });
 });

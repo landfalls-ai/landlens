@@ -30,6 +30,15 @@ export type ClusterSession = {
   close(): Promise<void>;
 };
 
+/**
+ * Google Cloud for the session's own kube tools (wave 9 part 4, D194): the projects the session may read (its grant as
+ * it began; none without it), `hold` (its GitHub and Linear autonomy asks from then on, before Cloud Monitoring is
+ * asked), and cluster_overview's line from what main holds.
+ */
+export type SessionGoogle = { projects: string[]; hold(): void; line?(): string | undefined };
+/** Before the gateway has answered: no project, nothing to hold. A session's metrics call never goes without one. */
+export const NO_GOOGLE: SessionGoogle = Object.freeze({ projects: [], hold: () => {} });
+
 /** The MCP gateway as a session sees it (the desktop's McpGateway, through its store of servers). */
 export interface SessionMcp {
   open(s: { label: string; context: string; handle: string; cluster: AgentCluster }): Promise<{
@@ -45,6 +54,8 @@ export interface SessionMcp {
     family?: string[];
     /** The Google Cloud projects landlens-gcp reads in this session, when it has them (wave 6, D93). */
     gcp?: string[];
+    /** What the session's kube tools may use of Google Cloud (D194); without it, nothing. */
+    google?: SessionGoogle;
     /** Tell the gateway Claude Code's id for the session, so the call log and the dock agree. */
     bind(sessionId: string): void;
     close(): Promise<void>;
@@ -62,7 +73,7 @@ export async function startClusterSession(deps: {
    * CPU and memory for the cluster, from Landlens's metrics source, for the metrics tool. `read` goes through the
    * front door with the session's token, for what the series reads from the cluster itself.
    */
-  metrics?: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>) => Promise<MetricsSeries>;
+  metrics?: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>, google?: SessionGoogle) => Promise<MetricsSeries>;
   /** The person's certificate facts for cluster_overview (main's DoctorService.certsFor). */
   certs?: (handle: string, namespaces?: string[]) => { state: DoctorCheckState; certs?: CertInput[] };
   /** Parent folder for session working folders. */
@@ -131,6 +142,9 @@ export async function startClusterSession(deps: {
     deps.frontDoor.revokeToken(token);
     if (approved) deps.frontDoor.revokeToken(approved);
   };
+  // What the gateway says the session may use of Google Cloud, once it has opened the session (D194): a call before
+  // that (there is none: Claude Code connects after) reads with no project.
+  let google: SessionGoogle = NO_GOOGLE;
   const cluster = frontDoorCluster({
     url: deps.frontDoor.clusterUrl(req.handle),
     certificate: deps.frontDoor.certificate,
@@ -138,13 +152,15 @@ export async function startClusterSession(deps: {
     context: c.info.context,
     types: async () => types,
     ...(req.namespaces?.length ? { namespaces: req.namespaces } : {}),
-    ...(deps.metrics ? { metrics: (r, read) => deps.metrics!(req.handle, r, read) } : {}),
+    ...(deps.metrics ? { metrics: (r, read) => deps.metrics!(req.handle, r, read, google) } : {}),
+    google: () => google.line?.(),
     ...(deps.certs ? { certs: async (ns) => deps.certs!(req.handle, ns) } : {}),
     ...(propose ? { propose } : {}),
   });
   let mcp: Awaited<ReturnType<SessionMcp["open"]>>;
   try {
     mcp = await deps.mcp.open({ label, context: c.info.context, handle: req.handle, cluster });
+    if (mcp.google) google = mcp.google;
   } catch (err) {
     revokeTokens();
     rmSync(cwd, { recursive: true, force: true });

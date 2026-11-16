@@ -732,7 +732,19 @@ export type GcpStatus = {
    * after that question isn't readable by Claude until main asks again (gcp:agent-read with on).
    */
   agentProjects?: string[];
+  /**
+   * Claude's reading was turned off because the grant was made before it covered metrics, alerts and GKE
+   * recommendations (wave 9 part 4, D190): the Connections card says so until it is turned on again (or off).
+   */
+  agentRegrant?: true;
 };
+/**
+ * What a "Claude can read these projects" yes covers (D190): 1 was resources and GKE clusters (wave 6); 2 adds Cloud
+ * Monitoring metrics, open alerts and GKE recommendations. A grant of another number is dropped at load and asks again.
+ */
+export const GCP_GRANT_COVERS = 2;
+/** What the yes of GCP_GRANT_COVERS covers, in the dialog's words. */
+export const GCP_GRANT_WORDS = "resources, GKE clusters, their Cloud Monitoring metrics and open alerts, and GKE recommendations";
 export type GcpProject = { id: string; name: string; number: string };
 /** One resource as Cloud Asset's search returns it: every string cut to 300 characters, at most 20 labels. */
 export type GcpResource = {

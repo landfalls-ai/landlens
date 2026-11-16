@@ -5,9 +5,9 @@
 import { BUILTIN_MCP_SERVER, CONN_NOTES, FAMILY_NOTES, GCP_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type FamilyInfo, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries, type Sibling } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
-import { BuiltinUpstream, isSibling, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { BuiltinUpstream, isSibling, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, WHY, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import { gcpMcpServer, type GcpReader } from "@landlens/gcp-mcp";
-import type { SessionMcp } from "@landlens/acp-host";
+import type { SessionGoogle, SessionMcp } from "@landlens/acp-host";
 import { AppViews, viewCsp } from "./app-views";
 import type { ClicklandSettingsStore } from "./clickland-settings";
 import { originOf, type McpServerStore } from "./mcp-store";
@@ -56,7 +56,8 @@ export class McpService {
     clickland: ClicklandSettingsStore;
     frontDoor: FrontDoor;
     clusters: ClusterManager;
-    metrics: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>) => Promise<MetricsSeries>;
+    /** `google`: what the session may use of Google Cloud (D194); without it, no Cloud Monitoring. */
+    metrics: (handle: string, req: Parameters<NonNullable<AgentCluster["metrics"]>>[0], read?: (path: string) => Promise<any>, google?: SessionGoogle) => Promise<MetricsSeries>;
     /** The person's certificate facts for cluster_overview's Preview (DoctorService.certsFor). */
     certs?: (handle: string, namespaces?: string[]) => Awaited<ReturnType<NonNullable<AgentCluster["certs"]>>>;
     push: (call: McpCall) => void;
@@ -67,8 +68,15 @@ export class McpService {
     connections?: ConnectionServers;
     /** Clickland, Landflow and Landfall, served after the connections, when Tools for Claude is on (docs/family.md). */
     family?: FamilyServers;
-    /** Google Cloud for landlens-gcp (GcpService.agentReader): undefined while Claude may not read it. */
-    gcp?: { reader(): Promise<{ reader: GcpReader; projects: string[] } | undefined> };
+    /**
+     * Google Cloud for landlens-gcp (GcpService.agentReader): undefined while Claude may not read it. `session`: the
+     * session's cluster (its context, address and namespace limit, for D195). `line`: cluster_overview's line for a
+     * session's cluster from what main holds (GcpService.heldLine, D194).
+     */
+    gcp?: {
+      reader(session?: { context: string; server?: string; namespaces?: string[] }): Promise<{ reader: GcpReader; projects: string[] } | undefined>;
+      line?(handle: string, projects: string[], namespaces?: string[]): string | undefined;
+    };
     log?: (l: string) => void;
   }) {
     this.gateway = new McpGateway({
@@ -103,9 +111,9 @@ export class McpService {
   /** The gateway as an agent session sees it (acp-host's SessionMcp). */
   forSessions(): SessionMcp {
     return {
-      open: async ({ label, context, cluster }) => {
+      open: async ({ label, context, handle, cluster }) => {
         const remotes = await this.remotesFor(context);
-        const gcp = await this.gcpBuiltin();
+        const gcp = await this.gcpBuiltin(this.sessionCluster(handle, context, cluster.namespaces));
         const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes, ...(gcp ? { builtins: [gcp.spec] } : {}) });
         const providers = remotes.flatMap((r) => (r.provider && !isSibling(r.provider.id) ? [PROVIDER_LABEL[r.provider.id]] : []));
         // The Land family's servers get their own paragraph in the standing rules (D114).
@@ -114,15 +122,41 @@ export class McpService {
         const readsFree = remotes.flatMap((r) => (r.provider && s.allow.some((a) => a.startsWith(`mcp__${r.name}__`)) ? [PROVIDER_LABEL[r.provider.id]] : []));
         return {
           servers: s.servers(), allow: s.allow, ...(providers.length || family.length ? { providers, readsFree } : {}), ...(family.length ? { family } : {}), ...(gcp ? { gcp: gcp.projects } : {}),
+          google: this.sessionGoogle(s, handle, gcp?.projects ?? [], cluster.namespaces),
           bind: (id) => s.bind(id), close: () => s.close(),
         };
       },
     };
   }
 
+  /** A session's cluster as landlens-gcp's reader needs it (D195): its context, its address, its namespace limit. */
+  private sessionCluster(handle: string, context: string, namespaces?: string[]) {
+    let server: string | undefined;
+    try {
+      server = this.deps.clusters.get(handle).info.server;
+    } catch {
+      server = undefined;
+    }
+    return { context, ...(server ? { server } : {}), ...(namespaces?.length ? { namespaces } : {}) };
+  }
+
+  /**
+   * What a session's kube tools may use of Google Cloud (D194): the projects its landlens-gcp has (none without the
+   * grant), a hold on this very gateway session (its GitHub and Linear writes ask from then on, as after a landlens-gcp
+   * call), and cluster_overview's line from what main holds.
+   */
+  private sessionGoogle(s: GatewaySession, handle: string, projects: string[], namespaces?: string[]): SessionGoogle {
+    const line = this.deps.gcp?.line;
+    return {
+      projects: [...projects],
+      hold: () => s.hold(WHY.gcp),
+      ...(line && projects.length ? { line: () => line(handle, projects, namespaces) } : {}),
+    };
+  }
+
   /** landlens-gcp for a session (D93), when you let Claude read your Google Cloud projects and gcloud is ready. */
-  private async gcpBuiltin(): Promise<{ spec: BuiltinSpec; projects: string[] } | undefined> {
-    const g = await this.deps.gcp?.reader().catch((err) => {
+  private async gcpBuiltin(session?: { context: string; server?: string; namespaces?: string[] }): Promise<{ spec: BuiltinSpec; projects: string[] } | undefined> {
+    const g = await this.deps.gcp?.reader(session).catch((err) => {
       this.deps.log?.(`[mcp] landlens-gcp: ${rawError(err)}`);
       return undefined;
     });
@@ -366,14 +400,18 @@ export class McpService {
         const info = this.deps.clusters.get(handle).info;
         const types = await this.deps.clusters.discovery(handle);
         const label = `you · ${info.context}`;
+        const gcp = await this.gcpBuiltin(this.sessionCluster(handle, info.context));
+        // Preview runs the session's tools as a session would get them: Cloud Monitoring only with the grant (D194).
+        let google: SessionGoogle | undefined;
         const token = this.deps.frontDoor.issueToken({ label, policy: agentReadOnlyPolicy(), clusters: [handle] });
         const cluster = frontDoorCluster({
           url: this.deps.frontDoor.clusterUrl(handle), certificate: this.deps.frontDoor.certificate, token, context: info.context,
-          types: async () => types, metrics: (r, read) => this.deps.metrics(handle, r, read),
+          types: async () => types, metrics: (r, read) => this.deps.metrics(handle, r, read, google),
+          google: () => google?.line?.(),
           ...(this.deps.certs ? { certs: async (ns: string[] | undefined) => this.deps.certs!(handle, ns) } : {}),
         });
-        const gcp = await this.gcpBuiltin();
         const session = await this.gateway.open({ label, context: info.context, origin: "you", cluster, remotes: await this.remotesFor(info.context), ...(gcp ? { builtins: [gcp.spec] } : {}) });
+        google = this.sessionGoogle(session, handle, gcp?.projects ?? []);
         return { session, revoke: () => this.deps.frontDoor.revokeToken(token) };
       })();
       this.consoles.set(handle, c);
