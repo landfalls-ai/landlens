@@ -236,7 +236,7 @@ No High; one Medium, seven Low and eight missing tests, all fixed. Each test was
   [agent.md](../../agent.md), [design.md](../../design.md), [architecture.md](../../architecture.md),
   [development.md](../../development.md), [limitations.md](../../limitations.md), [roadmap.md](../../roadmap.md),
   [plan.md](../../plan.md), [history.md](../../history.md))
-- [ ] Fable's security review of part 3, and its fixes
+- [x] Fable's security review of part 3, and its fixes (below)
 
 Every safety rule's test was seen to fail with the rule taken out (33 mutations, each run against its own test file,
 then restored): the project-exact and `OPEN` filters, `cut`, both `unreadable` counts, the 200 cap and `over`,
@@ -278,12 +278,14 @@ shape. One didn't fail, and isn't a rule on its own (departure 14).
    empty section after a partial read says some weren't read instead of the all-clear; the Overview's line and the
    verdict's sub-line have failed and partial variants ("couldn't be read", "only partly read").
 10. **The drawer, when the alert leaves a partly read list**, says "Not among the alerts read since 12:03." (it may
-    still be open) rather than "No longer open". A policy of another project says why it isn't read. The documentation's
+    still be open) rather than "No longer open" (and, since the review's M1 and T2, when the read failed or Google's view
+    couldn't be read: `goneNote`). A policy of another project says why it isn't read. The documentation's
     cut note is a small pill.
 11. **An alert's context carries `namespaces`**: the subject's (a Prometheus target's Namespace included), or `""` for
     a node, the cluster or no subject, so wave 8's L11 rule keeps it from a limited session. Only a Pod subject goes
-    as a reference. Ask in the drawer sends the brief the drawer already read; elsewhere `askGoogle` reads it, one at a
-    time (a second Ask while reading is dropped), and a failure shows in the workspace's notice.
+    as a reference. Ask in the drawer sends the brief the drawer already read (since the review's L4 only while the alert
+    is in the view it was read for); elsewhere `askGoogle` reads it (since T3 the latest Ask wins), and a failure shows
+    in the workspace's notice.
 12. **The e2e's part 3 cases run in (b)**, OrbStack as your own context with full access, not in (a): (a)'s
     ServiceAccount is limited to `landlens-dev`, where the namespace rule hides the node's and the target's alerts.
     The fake's alerts name `landlens-dev`'s real pod and OrbStack's node, so **Open Pod** opens the real pod. The
@@ -291,7 +293,8 @@ shape. One didn't fail, and isn't a rule on its own (departure 14).
     prompt main received rather than the chip's title.
 13. **The policy's documentation keeps its Markdown as text**: a link written in it (`[the runbook](https://…)`) is
     shown and quoted as characters inside the well and the fence; only `documentation.links` isn't read.
-14. **The generation check in `projectAlerts` and `policy`** (as in `readAdvice`) is belt-and-braces: `forget()` and
+14. **The generation check in `projectAlerts` and `policy`** (as in `readAdvice`) was belt-and-braces (removed by the
+    review's L7, which checks delivery instead): `forget()` and
     `choose()` clear both maps synchronously and each entry is set before any await, so taking the check out changes
     no outcome. The rule it would guard ("a read across an account change isn't kept") holds by the clear, whose
     mutation does fail its test.
@@ -305,6 +308,86 @@ shape. One didn't fail, and isn't a rule on its own (departure 14).
   Landlens filters in main. That Google's default order is newest first (so a cut keeps the newest 1,000) is still the
   person's live check.
 - [check 1] and [check 7] are still the person's live checks.
+
+### Security review of part 3, fixed
+
+No High; one Medium, seven Low and eight missing tests, all fixed as the review proposed (two places chose a little
+differently, said in the item). Each test was seen to fail with its fix taken out (40 mutations, one per fix or rule,
+each run against its own test file, then restored).
+
+- [x] **M1** The view no longer vanishes when main can't confirm the cluster. `view()` asks `gkeOf(c, { unread: true })`
+  and a failed listing is `{ gke: false, unread: unlisted(…) }`; a GKE-named context of a chosen project while gcloud
+  is missing or signed out (or its state can't be read) is `{ gke: false, unread: unchecked(project, sentence) }` with
+  `client()`'s own sentences (Google Cloud off still says nothing). `GcpClusterView`'s not-GKE arm has `unread?`.
+  `alertNotes` gives "Google's view of this cluster couldn't be read: …", `overviewAlerts` and `verdictAlerts` their
+  "couldn't be read" lines; a plain `{ gke: false }`, a hint and no answer still give nothing. `gcp:cluster-item` is a
+  503 with the sentence. The hook's failure goes through `viewOnError`: a cluster that was GKE, was unread, or has no
+  answer yet and is named as GKE clusters are (`gkeShaped`) becomes `{ gke: false, unread: <main's message> }`, never
+  the last answer; one known not to be GKE stays as it was. Before the first answer such a context is `reading`, and the
+  verdict says "Reading Cloud Monitoring's alerts…" (only for GKE-named contexts, so OrbStack shows nothing new). An
+  open alert drawer stays (the held alert keeps its `project`) and is checked against `alertsForDrawer`: an unread,
+  failed or not-GKE view has no list, so the alert is "Not among the alerts read since …". Tests:
+  `gcp-service.test.ts` (after a good view, the container listing refused and 60 s on; gcloud signed out, nothing asked;
+  gcloud missing; Google Cloud off; the item's 503), `google-rules.test.ts` (each rule with `unread`, and nothing for a
+  plain not-GKE, a hint or undefined; `viewOnError` after a good list, a good "none", on and on, from the start;
+  `alertsForDrawer` and `goneNote`).
+- [x] **L1** `openAlerts` counts what it doesn't show: another project's rows (by id, number or prefix) first, and they
+  count nowhere; then CLOSED is dropped; a state that is neither OPEN nor CLOSED (or none) is `unreadable`; an open row
+  with no `project_id` is `unplaced`. The view carries `unplaced`; `alertsPartial` includes it (so "0+", no all-clear,
+  the drawer's "not among those read"), and the strip says "2 open alerts in Cloud Monitoring's answer don't say which
+  project or cluster they are about." Tests: `monitoring.test.ts` (T7's pinned drop now `unplaced: 1`,
+  `unreadable: 1`; closed, another project's odd state, a stateless and a resource-less row), `gcp-service.test.ts`
+  (the view's `unplaced`), `google-rules.test.ts` (partial, "0+", both sentences, the verdict and Overview lines).
+- [x] **L2** `clean`'s class is now `\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}`, U+FE00–FE0F, U+E0100–E01EF and the
+  blank letters U+115F, U+1160, U+3164, U+FFA0, U+2800 (the review's class, written with escapes). Its other callers
+  (projects' names, resources' fields and labels, GKE status and version, the scrubbed configuration's keys and values,
+  the recommender's text) behave as before except that an emoji loses its variation selector (`❤️` shows as `❤`) and a
+  code point unassigned in Node's Unicode (17.0 here) goes. Tests: `assets.test.ts` (the carriers, a 290-selector run,
+  a resource and label still read; the emoji line updated), `monitoring.test.ts` (a policy's name, condition and
+  documentation), `briefs.test.ts` (an alert's and a suggestion's values).
+- [x] **L3** Main remembers the outside text it serves in Google's view: `GcpService`'s `served` hook gets each alert
+  policy's name, each suggestion's description, recommendation, API and callers (from `clusterView`), and each item's
+  conditions, documentation and every brief line holding a quoted value (from `item`); `index.ts` puts them in a
+  `SiblingText<"gcp">` (the store is now generic over its key), and `AgentService.prompt` calls `gcpQuoted` when
+  `gcpText.found(text)` has any, as well as on `GCP_QUOTE`. Matching is the store's (whole values of 16 characters or
+  more, after the window's normalisation). Tests: `agent-service.test.ts` (a served documentation pasted with no head
+  and no project line holds; a served brief line quoted as terminal output holds; a plain question doesn't),
+  `gcp-service.test.ts` (what the view and the item serve, and a question quoting the documentation is found).
+- [x] **L4** `briefToSend(held, item, viewAt)` in `googleRules.ts`: the drawer's brief only while the alert isn't gone,
+  the read is this alert's, and it was read for the view shown (the drawer records the alerts' read time `at` when it
+  reads; the view's `alerts.at` changes when main reads Google again). Otherwise Ask sends no brief and main is asked:
+  its 404 "That alert is no longer open on this cluster." when gone, a fresh brief when still open. Ask stays visible
+  rather than hidden, so a person who asks about an alert that has gone is told so. Test in `google-rules.test.ts`
+  rather than `problems.test.ts` (it is a Google rule); the drawer's call to it is checked in T3's test.
+- [x] **L5** `clusterAlerts` marks an alert `policyUnknown` when its policy is named by a number and this project's number
+  is unknown (a project id never is all digits); no `policyId`, so nothing is read. `policyNote` gives the drawer
+  "Landlens couldn't read demo-shop's number, so it can't tell whether this policy is its own." Tests:
+  `monitoring.test.ts` (without the number `policyUnknown`; with it `policyId`, and another number neither),
+  `google-rules.test.ts` (both notes).
+- [x] **L6** `openAlerts` keeps a slim row (`RawAlert` is now its own type): the name, opening time, resource type, the
+  eight labels `onCluster` and `subjectOf` read (strings only), the metric's type and the policy's name, display name
+  and severity; the schema no longer passes the rest through. `projectAlerts` drops entries past `ALERTS_TTL` when it
+  sets a new one. Tests: `monitoring.test.ts` (a row with `metadata`, `log`, `url`, user labels, metric labels and an
+  extra resource label comes back as exactly the slim row), `gcp-service.test.ts` (after 60 s, a view of another project
+  leaves only its entry).
+- [x] **L7** `clusterView` notes the generation at its start and, after both reads, calls `current(project, gen)`: the
+  project still chosen (else the 404 "Choose <project> on the Google Cloud page first.") and the account unchanged (else
+  409 `ACCOUNT_CHANGED`). `item` checks again after the policy read. The alerts, advice and policy reads check the same
+  inside their slot, before the request. The generation checks on keeping in `projectAlerts` and `policy` are deleted
+  (T6, departure 14 settled: `forget()` and `choose()` clear synchronously and the entry is set before any await), with
+  a comment saying so; `readAdvice`'s stays (part 1's T3 tests it). Tests: `gcp-service.test.ts` (a view across an
+  account change rejected; a project taken out while its two reads wait behind another project's: 404, and no request
+  of demo-shop's or its number after the removal; an item's policy read waiting for a slot not sent; an item whose
+  policy read straddles an account change rejected). The two existing "in flight across an account change" tests now
+  expect the 409 too.
+- [x] **T1** `alertPolicy`'s 10 s spied as the alerts' 15 s is, under a 60 s client. **T2** The drawer's two sentences
+  are `goneNote(held, view)`: "closed" only after a whole read without the alert; "unread" for a partial, failed,
+  unplaced, unread or absent view. The workspace passes it as `note`. **T3** The drawer's item read and Ask's read are
+  `latestOnly` (Ask's second click now wins rather than being dropped: the later question is the one the person means);
+  a source test in `google-rules.test.ts` checks both, as part 2's T3 checked `index.ts`. **T4** `startViewPoll(active,
+  load, visible)`: nothing while inactive, one read now, then every `VIEW_EVERY` only while visible, never `fresh`;
+  tested with fake timers, and the hook's use of it checked in the source test. **T5** Two rows with one id: one alert,
+  the first, and the second not unreadable. **T6** is L7. **T7** is L1. **T8** is M1's tests.
 
 ## Part 4: Claude's tools (D190–D196)
 

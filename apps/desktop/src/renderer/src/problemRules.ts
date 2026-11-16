@@ -121,10 +121,11 @@ export function filterAlerts(alerts: GcpAlert[], f: { severity: Severity; text: 
 }
 
 /** The alert in the drawer, kept when it leaves the view (as a problem is, D59): `goneAt` is when it was first missing. */
-export type HeldAlert = { id: string; last: GcpAlert; goneAt?: number };
+/** `project`: the project whose view it was read in, so the drawer can stay when Google's view isn't GKE's now (M1). */
+export type HeldAlert = { id: string; last: GcpAlert; project?: string; goneAt?: number };
 export function holdAlert(held: HeldAlert | undefined, alerts: GcpAlert[] | undefined, now: number): HeldAlert | undefined {
   if (!held || !alerts) return held;
   const a = alerts.find((x) => x.id === held.id);
-  if (a) return a === held.last && !held.goneAt ? held : { id: a.id, last: a };
+  if (a) return a === held.last && !held.goneAt ? held : { id: a.id, last: a, ...(held.project ? { project: held.project } : {}) };
   return held.goneAt ? held : { ...held, goneAt: now };
 }

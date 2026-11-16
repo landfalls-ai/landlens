@@ -83,7 +83,7 @@ type HeldAdvice = { at: number; ok: boolean; read: Promise<Advice> };
  * reads them again. They are read per project (alerts.list answers for the project), and cut to each cluster's on use.
  */
 export const ALERTS_TTL = 60_000;
-type ProjectAlerts = { alerts: RawAlert[]; cut: boolean; unreadable: number; at: string } | { error: string };
+type ProjectAlerts = { alerts: RawAlert[]; cut: boolean; unreadable: number; unplaced: number; at: string } | { error: string };
 type HeldAlerts = { at: number; read: Promise<ProjectAlerts> };
 /** An alert policy's detail is kept 10 minutes, a failure a minute (D187); at most this many. */
 export const POLICY_TTL = 10 * 60_000;
@@ -151,6 +151,20 @@ class Slots {
 export const unlisted = (project: string, sentence: string) =>
   `Landlens couldn't list ${project}'s GKE clusters to check that this is one of them: ${sentence}`;
 
+/**
+ * Your GKE-named context of a chosen project when gcloud can't say who is signed in (review of part 3, M1): Google's
+ * view says it couldn't check, never nothing.
+ */
+export const unchecked = (project: string, sentence: string) => `Landlens couldn't check that this is a GKE cluster of ${project}: ${sentence}`;
+/** What gcloud's state says when it isn't ready (the same sentences as a read's). */
+const NOT_READY = {
+  missing: "Install the Google Cloud CLI, then run `gcloud auth login`.",
+  "signed-out": "gcloud isn't signed in. Run `gcloud auth login`.",
+  failed: "Landlens couldn't ask gcloud who is signed in.",
+} as const;
+/** A view read across an account change isn't delivered (review of part 3, L7). */
+export const ACCOUNT_CHANGED = "gcloud's account changed while Landlens read Google's view of this cluster. It reads it again in a minute.";
+
 /** What a GKE cluster's view says when the project's number is unknown (review of part 1, L1). */
 export const numberUnknown = (project: string) => `Landlens couldn't read ${project}'s number, so it can't tell which suggestions are this cluster's.`;
 
@@ -211,6 +225,12 @@ export class GcpService {
     now?: () => number;
     /** Claude's reading went off without the switch (gcloud's account changed): landlens-gcp leaves open sessions. */
     onAgentOff?: () => void;
+    /**
+     * Text written outside Landlens that main is about to send the window in Google's view (each alert policy's name,
+     * conditions and documentation, each suggestion's text, each brief line that quotes one): main remembers it, so a
+     * question that quotes it holds the session's autonomy whatever head the window wrote (review of part 3, L3).
+     */
+    served?: (texts: string[]) => void;
   }) {
     this.kept = this.load();
   }
@@ -342,8 +362,8 @@ export class GcpService {
   private async client(): Promise<GcpClient> {
     const s = await this.status();
     if (s.state === "off-dev") throw fail(409, "Google Cloud is off in development builds.");
-    if (s.state === "missing") throw fail(409, "Install the Google Cloud CLI, then run `gcloud auth login`.");
-    if (s.state === "signed-out" || !s.account) throw fail(409, "gcloud isn't signed in. Run `gcloud auth login`.");
+    if (s.state === "missing") throw fail(409, NOT_READY.missing);
+    if (s.state === "signed-out" || !s.account) throw fail(409, NOT_READY["signed-out"]);
     const auth = this.auth!;
     const account = s.account;
     return new GcpClient({
@@ -721,42 +741,76 @@ export class GcpService {
    */
   async clusterView(ref: GkeRef, fresh = false): Promise<GcpClusterView> {
     this.chosen(ref.project);
+    const gen = this.gen;
     const key = `${ref.project}/${ref.location}/${ref.name}`;
     const held = this.advice.get(key);
     const age = held ? this.now() - held.at : Infinity;
     const reuse = held && (fresh ? age < FRESH_EVERY : age < (held.ok ? ADVICE_TTL : ADVICE_FAILED_TTL));
     const advice = reuse ? held.read : this.readAdvice(key, ref);
     const [a, raw] = await Promise.all([advice, this.projectAlerts(ref.project, fresh)]);
+    // What was read for another account, or for a project taken out meanwhile, isn't delivered either (review of part
+    // 3, L7): the clear only kept it from being kept.
+    this.current(ref.project, gen);
     const mine = "error" in raw ? undefined : clusterAlerts(raw.alerts, ref);
-    return {
+    const view: GcpClusterView = {
       gke: true,
       cluster: { project: ref.project, location: ref.location, name: ref.name },
       advice: a,
       // Rows of the answer that weren't an alert's shape count with this cluster's unreadable ones: whose they are is
       // unknown, so the list never reads as complete (no silent all-clear).
-      alerts: "error" in raw ? raw : { ...mine!, cut: raw.cut, unreadable: raw.unreadable + mine!.unreadable, at: raw.at },
+      alerts: "error" in raw ? raw : { ...mine!, cut: raw.cut, unreadable: raw.unreadable + mine!.unreadable, unplaced: raw.unplaced, at: raw.at },
     };
+    this.serve(view);
+    return view;
+  }
+
+  /** Still the account and the project choice a read began with; else the read isn't delivered (L7). */
+  private current(project: string, gen: number) {
+    this.chosen(project);
+    if (gen !== this.gen) throw fail(409, ACCOUNT_CHANGED);
+  }
+
+  /** Outside text of a view or an item, told to main's store before the window gets it (L3). */
+  private serve(v: GcpClusterView | undefined, item?: GcpClusterItem) {
+    if (!this.o.served) return;
+    const texts: string[] = [];
+    if (v?.gke) {
+      if (!("error" in v.alerts)) for (const a of v.alerts.items) texts.push(a.policy);
+      if (!("error" in v.advice)) {
+        for (const x of v.advice.items) {
+          texts.push(x.description, ...(x.action ? [x.action] : []));
+          for (const api of x.apis ?? []) texts.push(api.api, ...api.clients.map((k) => k.agent));
+        }
+      }
+    }
+    if (item) {
+      if (item.policy && !("error" in item.policy)) texts.push(...item.policy.conditions, ...(item.policy.documentation ? [item.policy.documentation] : []));
+      texts.push(...item.brief.split("\n").filter((l) => l.includes('"')));
+    }
+    const kept = texts.filter(Boolean);
+    if (kept.length) this.o.served(kept);
   }
 
   /**
    * A project's open alerts (D185), kept 60 s and read again on `fresh` at most once in 10 s; a failure is its sentence,
-   * kept as long. A read across an account change, or for a project taken out meanwhile, isn't kept; and only this
-   * read's own entry is removed, never a newer one (as `readAdvice`).
+   * kept as long. Entries past their 60 s leave when a new one is set, so a project's raw answer isn't held until its
+   * next read (review of part 3, L6). A read waiting for its slot isn't sent once the account changed or the project was
+   * taken out (L7). Nothing read before such a change is kept: `forget()` and `choose()` clear the map synchronously and
+   * the entry is set before anything is awaited (so the generation check this once had changed no outcome, part 3's
+   * departure 14; L7's check on delivery replaces it).
    */
   private projectAlerts(project: string, fresh: boolean): Promise<ProjectAlerts> {
     const held = this.alertsOf.get(project);
-    const age = held ? this.now() - held.at : Infinity;
+    const t = this.now();
+    const age = held ? t - held.at : Infinity;
     if (held && age < (fresh ? FRESH_EVERY : ALERTS_TTL)) return held.read;
     const gen = this.gen;
-    const entry: HeldAlerts = { at: this.now(), read: Promise.resolve({ error: "" }) };
+    const entry: HeldAlerts = { at: t, read: Promise.resolve({ error: "" }) };
     entry.read = this.client()
-      .then((client) => this.slot(() => openAlerts(client, project)))
+      .then((client) => this.slot(() => (this.current(project, gen), openAlerts(client, project))))
       .then((r): ProjectAlerts => ({ ...r, at: new Date(this.now()).toISOString() }))
-      .catch((e: unknown): ProjectAlerts => ({ error: this.failed(`alerts ${project}`, e).message }))
-      .then((r) => {
-        if ((gen !== this.gen || !this.kept.projects.includes(project)) && this.alertsOf.get(project) === entry) this.alertsOf.delete(project);
-        return r;
-      });
+      .catch((e: unknown): ProjectAlerts => ({ error: this.failed(`alerts ${project}`, e).message }));
+    for (const [p, h] of this.alertsOf) if (t - h.at >= ALERTS_TTL) this.alertsOf.delete(p);
     this.alertsOf.set(project, entry);
     return entry.read;
   }
@@ -768,24 +822,33 @@ export class GcpService {
    * (kept 10 minutes), each failing into its sentence; the brief then leaves them out.
    */
   async item(c: ConnectedCluster, kind: "alert" | "advice", id: string): Promise<GcpClusterItem> {
-    const ref = await this.gkeOf(c);
+    const ref = await this.gkeOf(c, { unread: true });
+    if (ref && "unread" in ref) throw fail(503, ref.unread);
     if (!ref || "hint" in ref) throw fail(404, "This cluster isn't a GKE cluster of a project you chose.");
+    const gen = this.gen;
     const v = await this.clusterView(ref);
     if (!v.gke) throw fail(404, ITEM_GONE[kind]);
     const where = { project: ref.project, location: ref.location, name: ref.name };
+    const out = (r: GcpClusterItem) => (this.serve(undefined, r), r);
     if (kind === "advice") {
       const a = "error" in v.advice ? undefined : v.advice.items.find((x) => x.id === id);
       if (!a) throw fail(404, ITEM_GONE.advice);
-      return { brief: adviceBrief(where, a) };
+      return out({ brief: adviceBrief(where, a) });
     }
     const a = "error" in v.alerts ? undefined : v.alerts.items.find((x) => x.id === id);
     if (!a) throw fail(404, ITEM_GONE.alert);
-    if (!a.policyId) return { brief: alertBrief(where, a) };
+    if (!a.policyId) return out({ brief: alertBrief(where, a) });
     const policy = await this.policy(ref.project, a.policyId);
-    return { brief: alertBrief(where, a, "error" in policy ? undefined : policy), policy };
+    // An alert of the view before an account change isn't paired with a policy read after it (L7).
+    this.current(ref.project, gen);
+    return out({ brief: alertBrief(where, a, "error" in policy ? undefined : policy), policy });
   }
 
-  /** An alert policy's detail (D187), kept 10 minutes (a failure a minute), at most MAX_POLICIES, read in the slot. */
+  /**
+   * An alert policy's detail (D187), kept 10 minutes (a failure a minute), at most MAX_POLICIES, read in the slot; not
+   * sent from the slot once the account changed or the project was taken out (L7). As with alerts, nothing read before
+   * such a change is kept: the map is cleared synchronously and the entry is set before anything is awaited.
+   */
   private policy(project: string, policyId: string): Promise<Policy> {
     const key = `${project}/${policyId}`;
     const held = this.policies.get(key);
@@ -793,14 +856,10 @@ export class GcpService {
     const gen = this.gen;
     const entry: HeldPolicy = { at: this.now(), ok: true, read: Promise.resolve({ error: "" }) };
     entry.read = this.client()
-      .then((client) => this.slot(() => alertPolicy(client, project, policyId)))
+      .then((client) => this.slot(() => (this.current(project, gen), alertPolicy(client, project, policyId))))
       .catch((e: unknown): Policy => {
         entry.ok = false;
         return { error: this.failed(`alert policy ${project}`, e).message };
-      })
-      .then((r) => {
-        if ((gen !== this.gen || !this.kept.projects.includes(project)) && this.policies.get(key) === entry) this.policies.delete(key);
-        return r;
       });
     this.policies.delete(key);
     this.policies.set(key, entry);
@@ -815,7 +874,7 @@ export class GcpService {
     // it): a sentence, kept a minute like a failure, never an empty list that reads as "nothing" (review of part 1, L1).
     const read: Promise<Advice> = ref.number
       ? this.client()
-        .then((client) => this.slot(() => gkeAdvice(client, ref)))
+        .then((client) => this.slot(() => (this.current(ref.project, gen), gkeAdvice(client, ref))))
         .then(({ items, cut }): Advice => ({ items, cut, at: new Date(this.now()).toISOString() }))
       : Promise.resolve({ error: numberUnknown(ref.project) });
     entry.read = read
@@ -899,11 +958,23 @@ export class GcpService {
     return this.kept.projects.includes(project) ? project : undefined;
   }
 
-  /** `gcp:cluster-view`: a connected cluster's view, or `{ gke: false }` (with the hint, when there is one). */
+  /**
+   * `gcp:cluster-view`: a connected cluster's view, or `{ gke: false }` (with the hint, when there is one). A GKE-named
+   * context of a chosen project that main couldn't check (gcloud missing or signed out, the GKE listing failed) is
+   * `{ gke: false, unread }` with the sentence, so the alerts it showed never just vanish (review of part 3, M1).
+   */
   async view(c: ConnectedCluster, fresh = false): Promise<GcpClusterView> {
-    const ref = await this.gkeOf(c);
-    if (!ref) return { gke: false };
+    const ref = await this.gkeOf(c, { unread: true });
+    if (!ref) {
+      const project = this.chosenProjectOf(c.context);
+      if (!project) return { gke: false };
+      const s = await this.status().catch(() => undefined);
+      if (s?.state === "ready") return { gke: false };
+      const why = s?.state === "missing" || s?.state === "signed-out" ? NOT_READY[s.state] : s?.state === "off-dev" ? undefined : NOT_READY.failed;
+      return why ? { gke: false, unread: unchecked(project, why) } : { gke: false };
+    }
     if ("hint" in ref) return { gke: false, hint: ref.hint };
+    if ("unread" in ref) return { gke: false, unread: ref.unread };
     return this.clusterView(ref, fresh);
   }
 

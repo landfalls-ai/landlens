@@ -160,6 +160,12 @@ export class AgentService {
        * any holds the session's autonomy, whatever its head says (security review of part 3, M2).
        */
       siblingText?: { found(text: string): Set<"clickland" | "landflow" | "landfall"> };
+      /**
+       * Google Cloud's outside text main served the window (alert policies' names, conditions and documentation, Google's
+       * suggestions: GcpService's `served`). A question that quotes any holds autonomy as GCP_QUOTE does, whatever head
+       * the window wrote (security review of wave 9 part 3, L3).
+       */
+      gcpText?: { found(text: string): Set<"gcp"> };
       metrics?: Parameters<typeof startClusterSession>[0]["metrics"];
       certs?: Parameters<typeof startClusterSession>[0]["certs"];
       /** Past sessions and your chosen skills (agent-history.ts). */
@@ -388,8 +394,9 @@ export class AgentService {
     const s = this.session(id);
     // The brain's draft has the session: a question now would mix its answer into the draft's box (L4).
     if (this.drafting.has(id)) throw Object.assign(new Error(BRAIN_NOTES.drafting), { status: 409 });
-    // Google Cloud data enters the session with this question: hold its autonomous writes before it is sent (W1).
-    if (GCP_QUOTE.test(text)) this.deps.autonomy?.gcpQuoted?.(id);
+    // Google Cloud data enters the session with this question: hold its autonomous writes before it is sent (W1). Main
+    // decides from what it served too (gcpText), not only from the head and brief line the window wrote (L3).
+    if (GCP_QUOTE.test(text) || this.deps.gcpText?.found(text).size) this.deps.autonomy?.gcpQuoted?.(id);
     // So does a sibling's: Clickland's log lines are written by workloads (D113's reasoning, review of part 2 L8). Main
     // decides from what it served (siblingText), not only from the head the window wrote (review of part 3, M2).
     const quoted = new Set(this.deps.siblingText?.found(text) ?? []);

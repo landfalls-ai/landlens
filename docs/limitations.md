@@ -166,10 +166,15 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **Cloud Monitoring's alerts are the open ones only, read-only** ([gcp.md](gcp.md#googles-view-of-a-cluster)): the
   newest 1,000 open alerts of the project (one page; past it the page says only those were read), and of those only
   the ones whose resource names this cluster (`k8s_*` by `cluster_name`, `prometheus_target` by `cluster`); others
-  are counted, not listed; at most 200 shown. No closed alerts and no alert's history, no snooze, acknowledge or close
+  are counted, not listed (an open alert that names no project is counted as one that may be this cluster's, never
+  placed); at most 200 shown. No closed alerts and no alert's history, no snooze, acknowledge or close
   (writes), no incidents, uptime checks, SLOs or dashboards, no Triage on an alert, and no alerts on the Google Cloud
   page or in ⌘K's search (only the command). A policy's documentation is shown as its first 300 characters of plain
-  text (no Markdown, no links), with at most 5 conditions; a policy of another project of the metrics scope isn't read.
+  text (no Markdown, no links), with at most 5 conditions; a policy of another project of the metrics scope isn't read,
+  nor one named by a number while this project's number couldn't be read. Every invisible carrier Landlens knows of is
+  removed from Google's text (an emoji loses its variation selector; a code point newer than Node's Unicode goes).
+  Pasting a few words of a policy's documentation into a question with no quote head holds autonomy only when the
+  pasted text holds a whole value main served (16 characters or more), as for Clickland's lines.
   A severity word Landlens doesn't know shows no badge. Alerts don't count in the sidebar's, the status bar's or the
   Pods badge's numbers. Read every 60 s while the Overview or Problems is shown, so an alert can take a minute to
   appear or go. Nothing was checked against the real Monitoring API ([check 2], [check 3]).

@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { rawGcpError, SENTENCES } from "../src/errors.js";
 import type { GcpAlert } from "@landlens/contracts";
-import { ALERTS_LIMIT_MS, alertPolicy, clusterAlerts, openAlerts, POLICY_MAX_BYTES, PROM_LIMIT_MS, PROM_QUERY_MAX, promRange } from "../src/monitoring.js";
+import { ALERTS_LIMIT_MS, alertPolicy, clusterAlerts, openAlerts, POLICY_LIMIT_MS, POLICY_MAX_BYTES, PROM_LIMIT_MS, PROM_QUERY_MAX, promRange } from "../src/monitoring.js";
 import { FakeGcp, GCP_TOKEN, PROMQL_MARKER } from "./fake-gcp.js";
 import { clientFor } from "./helpers.js";
 
@@ -173,7 +173,45 @@ describe("openAlerts (D185)", () => {
       raw("unspecified", on("k8s_node", { node_name: "n1" }), { state: "STATE_UNSPECIFIED" }),
     ]);
     try {
-      expect((await openAlerts(clientFor(fake).client, "demo-shop")).alerts.map((a) => a.name.split("/").at(-1))).toEqual(["mine"]);
+      const r = await openAlerts(clientFor(fake).client, "demo-shop");
+      expect(r.alerts.map((a) => a.name.split("/").at(-1))).toEqual(["mine"]);
+      // L1 (review of part 3; T7): not shown, but counted, so the page never says "none" over them: the open alert that
+      // names no project is `unplaced`, the one whose state isn't OPEN or CLOSED `unreadable`. Another project's (by
+      // id, number or prefix) isn't this one's to count.
+      expect(r).toMatchObject({ unplaced: 1, unreadable: 1 });
+    } finally {
+      fake.alerts.delete("demo-shop");
+    }
+  });
+
+  it("L1: a closed alert and another project's alert of any state count nowhere; an unplaced one with no state is unreadable", async () => {
+    fake.alerts.set("demo-shop", [
+      raw("closed", on("k8s_node", { node_name: "n1" }), { state: "CLOSED" }),
+      raw("other-odd", { type: "k8s_node", labels: { project_id: "orbit-analytics", node_name: "n1" } }, { state: "STATE_UNSPECIFIED" }),
+      { ...raw("stateless", { type: "k8s_cluster", labels: {} }), state: undefined },
+      raw("no-resource", undefined as never),
+    ]);
+    try {
+      expect(await openAlerts(clientFor(fake).client, "demo-shop")).toMatchObject({ alerts: [], unreadable: 1, unplaced: 1 });
+    } finally {
+      fake.alerts.delete("demo-shop");
+    }
+  });
+
+  it("L6: keeps only the fields Landlens reads of each row: no metadata, log, user labels or other labels", async () => {
+    fake.alerts.set("demo-shop", [{
+      ...raw("x", on("k8s_pod", { namespace_name: "shop", pod_name: "p-1", team: "LABEL-MARKER" }), { policy: { name: "projects/demo-shop/alertPolicies/9", displayName: "P", severity: "WARNING", userLabels: { a: "USER-MARKER" } } }),
+      metadata: { userLabels: { b: "META-MARKER" } }, log: { message: "LOG-MARKER" }, url: "https://console.example/x",
+      metric: { type: "kubernetes.io/pod/x", labels: { c: "METRIC-MARKER" }, displayName: "METRIC-MARKER" },
+    }]);
+    try {
+      const [a] = (await openAlerts(clientFor(fake).client, "demo-shop")).alerts;
+      expect(a).toEqual({
+        name: "projects/demo-shop/alerts/x", openTime: "2026-11-16T09:00:00Z",
+        resource: { type: "k8s_pod", labels: { location: "us-central1", cluster_name: "shop-prod", namespace_name: "shop", pod_name: "p-1" } },
+        metric: { type: "kubernetes.io/pod/x" }, policy: { name: "projects/demo-shop/alertPolicies/9", displayName: "P", severity: "WARNING" },
+      });
+      expect(JSON.stringify(a)).not.toMatch(/MARKER|console\.example/);
     } finally {
       fake.alerts.delete("demo-shop");
     }
@@ -278,6 +316,29 @@ describe("clusterAlerts (D186)", () => {
     expect(r.items.find((a) => a.id === "c")!.policyId).toBeUndefined();
   });
 
+  it("T5: two rows with one id give one alert, the first; the second isn't counted as unreadable", () => {
+    const r = clusterAlerts([
+      raw("dup", on("k8s_cluster", {}), { policy: { name: "projects/demo-shop/alertPolicies/1", displayName: "First" } }),
+      raw("dup", on("k8s_cluster", {}), { policy: { name: "projects/demo-shop/alertPolicies/2", displayName: "Second" } }),
+    ] as never, SHOP);
+    expect(r).toMatchObject({ items: [{ id: "dup", policy: "First", policyId: "1" }], unreadable: 0, over: 0 });
+    expect(r.items).toHaveLength(1);
+  });
+
+  it("L5 (review of part 3): with this project's number unknown, a policy named by a number may be its own: `policyUnknown`, no policyId", () => {
+    const { number: _n, ...noNumber } = SHOP;
+    const of = (c: typeof SHOP | typeof noNumber, name: string) => clusterAlerts([raw("a", on("k8s_cluster", {}), { policy: { name } })] as never, c).items[0]!;
+    expect(of(noNumber, "projects/482913570214/alertPolicies/77")).toMatchObject({ policyUnknown: true });
+    expect(of(noNumber, "projects/482913570214/alertPolicies/77").policyId).toBeUndefined();
+    // With the number known, it is this project's or another's, never unknown.
+    expect(of(SHOP, "projects/482913570214/alertPolicies/77")).toMatchObject({ policyId: "77" });
+    expect(of(SHOP, "projects/482913570214/alertPolicies/77").policyUnknown).toBeUndefined();
+    expect(of(SHOP, "projects/730284615592/alertPolicies/77").policyUnknown).toBeUndefined();
+    // Named by an id, it is known either way.
+    expect(of(noNumber, "projects/demo-shop/alertPolicies/77")).toMatchObject({ policyId: "77" });
+    expect(of(noNumber, "projects/orbit-analytics/alertPolicies/77").policyUnknown).toBeUndefined();
+  });
+
   it("a policy of another project, or one only ending like this project's, has no policyId", () => {
     const ids = (name: string) => clusterAlerts([raw("a", on("k8s_cluster", {}), { policy: { name } })] as never, SHOP).items[0]!.policyId;
     expect(ids("projects/demo-shop/alertPolicies/77")).toBe("77");
@@ -306,6 +367,30 @@ describe("clusterAlerts (D186)", () => {
 });
 
 describe("alertPolicy (D187)", () => {
+  it("T1 (review of part 3): asks with its own 10 s limit, under a client whose own limit is longer", async () => {
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      await alertPolicy(clientFor(fake, { limitMs: 60_000 }).client, "demo-shop", "1001");
+      expect(spy).toHaveBeenCalledWith(POLICY_LIMIT_MS);
+      expect(POLICY_LIMIT_MS).toBe(10_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("L2 (review of part 3): variation selectors, private use, blank letters and lone surrogates leave the name and the documentation", async () => {
+    const hidden = "a\uFE0F\u{E0101}\u{E0142}b\uE000c\u3164d\uD800e";
+    fake.policies.set("demo-shop/7", { name: "projects/demo-shop/alertPolicies/7", conditions: [{ displayName: `cond ${hidden}` }], documentation: { content: `doc ${hidden}` } });
+    try {
+      const p = await alertPolicy(clientFor(fake).client, "demo-shop", "7");
+      expect(p).toEqual({ conditions: ["cond abcde"], documentation: "doc abcde", cut: false });
+      const name = clusterAlerts([raw("x", on("k8s_cluster", {}), { policy: { displayName: `name ${hidden}` } })] as never, SHOP).items[0]!.policy;
+      expect(name).toBe("name abcde");
+    } finally {
+      fake.policies.delete("demo-shop/7");
+    }
+  });
+
   it("reads two conditions and the documentation as one line of plain text, cut to 300, `cut` said", async () => {
     const p = await alertPolicy(clientFor(fake).client, "demo-shop", "1001");
     expect(fake.requests[0]).toMatchObject({ method: "GET", path: "/v3/projects/demo-shop/alertPolicies/1001", userProject: "demo-shop" });

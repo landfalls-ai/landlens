@@ -78,7 +78,7 @@ export function Overview(props: {
   return (
     <div className="ov">
       {props.several ? <div className="chip ov-scope" role="note"><Ic icon={Layers} size={12} />{props.several} namespaces selected: this page shows the whole cluster</div> : null}
-      <Verdict h={h} onAsk={props.onAskAll} alerts={verdictAlerts(google.view)} />
+      <Verdict h={h} onAsk={props.onAskAll} alerts={verdictAlerts(google.view, google.reading)} />
       <ChecksStrip h={h} />
       <div className="tiles">
         {h.nodes ? (

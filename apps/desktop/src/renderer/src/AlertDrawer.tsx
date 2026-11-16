@@ -3,12 +3,13 @@
 // alert's id, nothing else). The documentation is written in Google Cloud by whoever made the policy: it is shown as
 // text in a well that says so (no Markdown, no links), and its first 300 characters only. When the alert leaves the
 // view the drawer stays, saying when, as a problem's does. Landlens doesn't snooze, acknowledge or close an alert.
+// Ask Claude hands on the brief read here only while the alert is in the view it was read for (review of part 3, L4).
 import type { GcpAlert, GcpClusterItem } from "@landlens/contracts";
 import { BellRing, CircleCheck, CircleX, Clock, Info, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
 import { Ic, iconOfKind } from "./icons";
-import { ALERT_BADGE, alertSubjectLine, openFor, policyName } from "./googleRules";
+import { ALERT_BADGE, alertSubjectLine, briefToSend, latestOnly, openFor, policyName, policyNote } from "./googleRules";
 import type { HeldAlert } from "./problemRules";
 
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -17,8 +18,10 @@ export function AlertDrawer(props: {
   handle: string;
   project: string;
   held: HeldAlert;
-  /** The alert list may be missing some (cut, unreadable or over 200): a missing alert may still be open. */
-  partial?: boolean;
+  /** What to say once the alert has left the view (goneNote): closed, or not among those read (it may still be open). */
+  note?: "closed" | "unread";
+  /** When the view's alerts were read: a brief read for an earlier view isn't handed on (L4). */
+  viewAt?: string;
   now: number;
   onClose: () => void;
   /** With the brief this drawer has read, if any. */
@@ -27,19 +30,24 @@ export function AlertDrawer(props: {
 }) {
   const a = props.held.last;
   const gone = props.held.goneAt;
-  // The detail of one alert: read when the drawer opens on it, kept while it stays.
-  const [item, setItem] = useState<{ id: string; r?: GcpClusterItem; error?: ApiError }>();
-  const current = useRef(a.id);
-  current.current = a.id;
+  // The detail of one alert: read when the drawer opens on it, kept while it stays; `at` is the view it was read for.
+  // Only the latest read's answer lands (latestOnly, T3): a slow one for the previous alert never replaces it.
+  type Item = { id: string; at?: string; r?: GcpClusterItem; error?: ApiError };
+  const [item, setItem] = useState<Item>();
+  const read = useRef<(handle: string, id: string, at: string | undefined) => void>(undefined);
+  read.current ??= latestOnly(
+    (h: string, id: string, at: string | undefined): Promise<Item> => api.invoke("gcp:cluster-item", { handle: h, kind: "alert", id }).then(
+      (r) => ({ id, ...(at ? { at } : {}), r }),
+      (error: ApiError) => ({ id, error }),
+    ),
+    { value: setItem, error: () => undefined },
+  );
   useEffect(() => {
     if (gone && item?.id === a.id) return;
     const id = a.id;
     setItem({ id });
     if (gone) return;
-    api.invoke("gcp:cluster-item", { handle: props.handle, kind: "alert", id }).then(
-      (r) => current.current === id && setItem({ id, r }),
-      (error: ApiError) => current.current === id && setItem({ id, error }),
-    );
+    read.current!(props.handle, id, props.viewAt);
   }, [a.id, props.handle]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const b = ALERT_BADGE[a.severity];
@@ -53,7 +61,7 @@ export function AlertDrawer(props: {
           <span className={`kind-tile sm ${b?.tone ?? ""}`}><Ic icon={BellRing} size={15} /></span>
           <div className="eyebrow">Alert<span className="sep"> / </span>Cloud Monitoring<span className="sep"> / </span>{props.project}</div>
           <span className="grow" />
-          <button className="ask-btn" onClick={() => props.onAsk(a, mine?.r?.brief)}><Ic icon={Sparkles} size={14} />Ask Claude</button>
+          <button className="ask-btn" onClick={() => props.onAsk(a, briefToSend(props.held, mine, props.viewAt))}><Ic icon={Sparkles} size={14} />Ask Claude</button>
           <button className="icon-btn" onClick={props.onClose} aria-label="Close alert" title="Close (Esc)"><Ic icon={X} size={15} /></button>
         </div>
         <h2 className="drawer-title">{policyName(a)}</h2>
@@ -66,7 +74,7 @@ export function AlertDrawer(props: {
         </div>
       </header>
       {gone ? (
-        props.partial ? (
+        props.note !== "closed" ? (
           <div className="notice pb-gone" role="status">
             <Ic icon={Info} size={15} className="dim" />
             <div className="notice-body"><strong>Not among the alerts read since {clock(gone)}.</strong><p>Cloud Monitoring's answer was only partly read, so it may still be open. This is what Landlens saw last.</p></div>
@@ -94,7 +102,7 @@ export function AlertDrawer(props: {
           <section className="al-policy" aria-label="From the policy">
             <h3>From the policy</h3>
             {!a.policyId ? (
-              <p className="dim">This alert's policy isn't one of {props.project}'s (it may be another project's in the same metrics scope), so Landlens doesn't read it.</p>
+              <p className="dim">{policyNote(a, props.project)}</p>
             ) : gone && !mine?.r ? (
               <p className="dim">This alert is no longer open, so its policy isn't read.</p>
             ) : !mine || (!mine.r && !mine.error) ? (

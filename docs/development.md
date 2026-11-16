@@ -176,7 +176,12 @@ Part 3 (Cloud Monitoring's alerts) adds `openAlerts`, `clusterAlerts` and `alert
 half and `gcp:cluster-item` in `gcp-service.test.ts`, the alerts' words and Ask's contexts in `google-rules.test.ts`,
 the third section's rules in `problems.test.ts`, a `GCP_QUOTE` case in `agent-service.test.ts`, and three cases in
 `gview.e2e.test.ts` (b) (screenshots `g9-p3-*`), whose fake alerts name `landlens-dev`'s real pod and OrbStack's node
-and whose agent is played in main (`agent:start` and `agent:prompt` replaced, as in `landflow.e2e`).
+and whose agent is played in main (`agent:start` and `agent:prompt` replaced, as in `landflow.e2e`). Its security
+review's fixes add a "Fable's security review of part 3, fixed" block to `gcp-service.test.ts` (M1's unread views, L1,
+L3's served text, L6's sweep, L7's undelivered reads with a slow fake) and one to `google-rules.test.ts` (the rules,
+`startViewPoll` with fake timers, and a source check that the drawer and Ask read through `latestOnly`), an L3 case in
+`agent-service.test.ts`, and L1, L2, L5, L6, T1 and T5 cases in `packages/gcp`'s `monitoring`, `assets` and `briefs`
+tests.
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

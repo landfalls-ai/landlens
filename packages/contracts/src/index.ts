@@ -785,6 +785,11 @@ export type GcpAlert = {
   policy: string;
   /** The policy's number, only when the policy is this project's (by id or number). */
   policyId?: string;
+  /**
+   * The policy is named by a project number and Landlens couldn't read this project's number, so it can't tell whether
+   * the policy is this project's (review of part 3, L5): it isn't read, and the drawer says why.
+   */
+  policyUnknown?: true;
   /** Google's word, or "none" for no word or one Landlens doesn't know ([check 2]: never guessed). */
   severity: "critical" | "error" | "warning" | "none";
   /** k8s_container, k8s_pod, k8s_node, k8s_cluster or prometheus_target. */
@@ -810,7 +815,12 @@ export type GcpClusterItem = {
  * into its fixed sentence.
  */
 export type GcpClusterView =
-  | { gke: false; hint?: string }
+  /**
+   * Not a GKE cluster of a chosen project: with `hint` when it looks like one of a project you haven't chosen; with
+   * `unread` when it may be one but main couldn't check (gcloud signed out or missing, the GKE listing failed): then the
+   * pages say Google's view couldn't be read, never nothing (review of part 3, M1).
+   */
+  | { gke: false; hint?: string; unread?: string }
   | {
       gke: true;
       cluster: { project: string; location: string; name: string };
@@ -822,10 +832,11 @@ export type GcpClusterView =
       /**
        * This cluster's open alerts (D185–D186). `others`: open alerts of the project that don't name this cluster. `cut`:
        * Google had more than the 1,000 read. `unreadable`: alerts of the answer Landlens couldn't read (an odd shape, or
-       * one of this cluster's with no id or opening time); `over`: this cluster's beyond the 200 shown. Any of the last
-       * three means the list may be missing some, and nothing says "none".
+       * one of this cluster's with no id or opening time, or a state that is neither OPEN nor CLOSED); `over`: this
+       * cluster's beyond the 200 shown; `unplaced`: open alerts of the answer whose resource names no project (review of
+       * part 3, L1). Any of the last four means the list may be missing some, and nothing says "none".
        */
-      alerts: { items: GcpAlert[]; others: number; cut: boolean; unreadable: number; over: number; at: string } | { error: string };
+      alerts: { items: GcpAlert[]; others: number; cut: boolean; unreadable: number; over: number; unplaced: number; at: string } | { error: string };
     };
 /** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
 export const GCP_MCP_SERVER = "landlens-gcp";

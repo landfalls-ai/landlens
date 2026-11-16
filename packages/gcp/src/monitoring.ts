@@ -54,16 +54,41 @@ export const POLICY_DOC_MAX = 300;
 
 const text = z.string().max(100_000);
 const AlertsPage = z.object({ alerts: z.array(z.unknown()).max(100_000).optional(), nextPageToken: text.optional() }).passthrough();
+// Only the fields Landlens reads: Google's row also has `metadata`, `log` and the policy's user labels, none of it
+// cleaned, and none of it kept in main (review of part 3, L6).
 const Alert = z.object({
   name: text,
   state: text.optional(),
   openTime: text.optional(),
-  resource: z.object({ type: text.optional(), labels: z.record(z.string(), z.unknown()).optional() }).passthrough().optional(),
-  metric: z.object({ type: text.optional() }).passthrough().optional(),
-  policy: z.object({ name: text.optional(), displayName: text.optional(), severity: text.optional() }).passthrough().optional(),
-}).passthrough();
-/** An open alert of the project as Google sent it, schema-checked; nothing of it is cleaned yet. */
-export type RawAlert = z.infer<typeof Alert>;
+  resource: z.object({ type: text.optional(), labels: z.record(z.string(), z.unknown()).optional() }).optional(),
+  metric: z.object({ type: text.optional() }).optional(),
+  policy: z.object({ name: text.optional(), displayName: text.optional(), severity: text.optional() }).optional(),
+});
+/** The resource labels an alert of a GKE cluster is placed by (D186); project_id is checked in openAlerts. */
+const ALERT_LABELS = ["location", "cluster_name", "cluster", "namespace_name", "pod_name", "container_name", "node_name", "namespace"] as const;
+/**
+ * An open alert of the project as main keeps it: the fields clusterAlerts reads and nothing else of Google's row
+ * (review of part 3, L6). Its text isn't cleaned yet: clusterAlerts does that.
+ */
+export type RawAlert = {
+  name: string;
+  openTime?: string;
+  resource?: { type?: string; labels?: Partial<Record<(typeof ALERT_LABELS)[number], string>> };
+  metric?: { type?: string };
+  policy?: { name?: string; displayName?: string; severity?: string };
+};
+const slim = (a: z.infer<typeof Alert>): RawAlert => {
+  const l = a.resource?.labels ?? {};
+  const labels: NonNullable<NonNullable<RawAlert["resource"]>["labels"]> = {};
+  for (const k of ALERT_LABELS) if (typeof l[k] === "string") labels[k] = l[k];
+  return {
+    name: a.name,
+    openTime: a.openTime,
+    ...(a.resource ? { resource: { type: a.resource.type, labels } } : {}),
+    ...(a.metric ? { metric: { type: a.metric.type } } : {}),
+    ...(a.policy ? { policy: { name: a.policy.name, displayName: a.policy.displayName, severity: a.policy.severity } } : {}),
+  };
+};
 const Policy = z.object({
   name: text.optional(),
   conditions: z.array(z.object({ displayName: text.optional() }).passthrough()).max(1000).optional(),
@@ -88,23 +113,38 @@ const isNode = (s: unknown): s is string => typeof s === "string" && NodeName.sa
 /**
  * The project's open alerts (D185): one page of the newest 1,000, 15 s, 8 MB, no filter. Kept: `state` OPEN and
  * `resource.labels.project_id` exactly the project asked (another project of the metrics scope never shows under this
- * one). `cut`: Google had more. `unreadable`: rows that weren't an alert's shape, so whose they are is unknown.
+ * one, nor is it counted: its count isn't this project's to show). `cut`: Google had more. `unreadable`: rows that
+ * weren't an alert's shape, so whose they are is unknown, and rows of this project (or of none) whose state is neither
+ * OPEN nor CLOSED, so whether they are open is unknown. `unplaced`: open alerts whose resource names no project (a
+ * PromQL or log-based condition can aggregate the labels away), so they may be this cluster's (review of part 3, L1).
  */
-export async function openAlerts(client: GcpClient, project: string): Promise<{ alerts: RawAlert[]; cut: boolean; unreadable: number }> {
+export async function openAlerts(client: GcpClient, project: string): Promise<{ alerts: RawAlert[]; cut: boolean; unreadable: number; unplaced: number }> {
   checkProject(project);
   const r = AlertsPage.safeParse(await client.get("monitoring", `/v3/projects/${project}/alerts`, { pageSize: String(ALERTS_PAGE) }, project, { limitMs: ALERTS_LIMIT_MS }));
   if (!r.success) throw new GcpError(200, SENTENCES.answer, "schema");
   const alerts: RawAlert[] = [];
   let unreadable = 0;
+  let unplaced = 0;
   for (const x of r.data.alerts ?? []) {
     const a = Alert.safeParse(x);
     if (!a.success) {
       unreadable++;
       continue;
     }
-    if (a.data.state === "OPEN" && a.data.resource?.labels?.project_id === project) alerts.push(a.data);
+    const owner = a.data.resource?.labels?.project_id;
+    if (owner !== undefined && owner !== project) continue;
+    if (a.data.state === "CLOSED") continue;
+    if (a.data.state !== "OPEN") {
+      unreadable++;
+      continue;
+    }
+    if (owner === undefined) {
+      unplaced++;
+      continue;
+    }
+    alerts.push(slim(a.data));
   }
-  return { alerts, cut: !!r.data.nextPageToken, unreadable };
+  return { alerts, cut: !!r.data.nextPageToken, unreadable, unplaced };
 }
 
 /** Whether an alert's resource is this cluster: a Kubernetes resource by location and cluster_name, or a Prometheus target by location and cluster. */
@@ -150,7 +190,8 @@ export function clusterAlerts(raw: RawAlert[], c: GkeRef): { items: GcpAlert[]; 
   let others = 0;
   let unreadable = 0;
   const seen = new Set<string>();
-  const ids = new Set([c.project, ...(c.number && /^\d{1,30}$/.test(c.number) ? [c.number] : [])]);
+  const numbered = !!c.number && /^\d{1,30}$/.test(c.number);
+  const ids = new Set([c.project, ...(numbered ? [c.number!] : [])]);
   for (const a of raw) {
     if (!onCluster(a, c)) {
       others++;
@@ -169,7 +210,9 @@ export function clusterAlerts(raw: RawAlert[], c: GkeRef): { items: GcpAlert[]; 
     items.push({
       id, opened,
       policy: outsideText(a.policy?.displayName ?? "", 120),
-      ...(pol && ids.has(pol[1]!) ? { policyId: pol[2]! } : {}),
+      // A policy named by a project number, when this project's number is unknown, may be its own or another's: said,
+      // not called another project's (review of part 3, L5). A project id never is all digits.
+      ...(pol && ids.has(pol[1]!) ? { policyId: pol[2]! } : pol && !numbered && /^\d{1,30}$/.test(pol[1]!) ? { policyUnknown: true as const } : {}),
       severity: ALERT_SEVERITY[a.policy?.severity ?? ""] ?? "none",
       resourceType: a.resource!.type!,
       ...(metric && METRIC_TYPE.test(metric) ? { metric } : {}),

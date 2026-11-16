@@ -84,9 +84,14 @@ describe("Google suggests", () => {
 // suggestion.
 import type { GcpAlert, GcpClusterView } from "@landlens/contracts";
 import {
-  ADVICE_QUESTION, adviceContext, ALERT_BADGE, ALERT_QUESTION, alertContext, alertCount, alertNotes, alertOthers, alertSubjectLine, NO_ALERTS, openFor,
-  overviewAlerts, policyName, verdictAlerts,
+  ADVICE_QUESTION, adviceContext, ALERT_BADGE, ALERT_QUESTION, alertContext, alertCount, alertNotes, alertOthers, alertsAt, alertsForDrawer, alertsPartial,
+  alertSubjectLine, briefToSend, gkeShaped, goneNote, NO_ALERTS, openFor, overviewAlerts, policyName, policyNote, startViewPoll, VIEW_EVERY, verdictAlerts,
+  viewOnError,
 } from "../src/renderer/src/googleRules";
+import { holdAlert } from "../src/renderer/src/problemRules";
+import { vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { inSession, quoteHead, withQuotes } from "../src/renderer/src/quotes";
 import { GCP_QUOTE } from "../src/main/agent";
 
@@ -97,8 +102,8 @@ const al = (over: Partial<GcpAlert> = {}): GcpAlert => ({
 const view = (alerts: GcpClusterView extends infer V ? V extends { gke: true; alerts: infer A } ? A : never : never): GcpClusterView => ({
   gke: true, cluster: { project: "demo-shop", location: "us-central1", name: "shop-prod" }, advice: { items: [], cut: false, at: "" }, alerts,
 });
-const whole = (items: GcpAlert[], o: Partial<{ others: number; cut: boolean; unreadable: number; over: number }> = {}) =>
-  view({ items, others: 0, cut: false, unreadable: 0, over: 0, at: "", ...o });
+const whole = (items: GcpAlert[], o: Partial<{ others: number; cut: boolean; unreadable: number; over: number; unplaced: number; at: string }> = {}) =>
+  view({ items, others: 0, cut: false, unreadable: 0, over: 0, unplaced: 0, at: "", ...o });
 
 describe("Cloud Monitoring's alerts (D188)", () => {
   it("severity: Critical and Error are bad, Warning warns, and no word Landlens knows shows nothing ([check 2])", () => {
@@ -194,5 +199,151 @@ describe("Ask Claude on an alert or a suggestion (D189)", () => {
     expect(ns.ref).toBeUndefined();
     expect(inSession(ns, ["monitoring"])).toBe(true);
     expect(inSession(ns, ["shop"])).toBe(false);
+  });
+});
+
+describe("Fable's security review of part 3, fixed (renderer)", () => {
+  const UNREAD = "Landlens couldn't list demo-shop's GKE clusters to check that this is one of them: Your account can't list GKE clusters in demo-shop.";
+
+  it("M1 (T8): Google's view that couldn't be read says so on the page, the Overview and the verdict; a plain not-GKE still says nothing", () => {
+    const unread: GcpClusterView = { gke: false, unread: UNREAD };
+    expect(alertNotes(unread)).toEqual([`Google's view of this cluster couldn't be read: ${UNREAD}`]);
+    expect(overviewAlerts(unread)).toEqual({ text: "Cloud Monitoring's open alerts couldn't be read", tone: "muted" });
+    expect(verdictAlerts(unread)).toBe("Cloud Monitoring's open alerts for this cluster couldn't be read.");
+    for (const quiet of [{ gke: false } as GcpClusterView, { gke: false, hint: "This looks like a GKE cluster of x." } as GcpClusterView, undefined]) {
+      expect(alertNotes(quiet)).toEqual([]);
+      expect(overviewAlerts(quiet)).toBeUndefined();
+      expect(verdictAlerts(quiet)).toBeUndefined();
+    }
+    // Before the first answer, for a context named as GKE clusters are: the verdict says it is reading.
+    expect(verdictAlerts(undefined, true)).toBe("Reading Cloud Monitoring's alerts…");
+    expect(verdictAlerts(whole([]), true)).toBeUndefined();
+    expect(gkeShaped("gke_demo-shop_us-central1_shop-prod")).toBe(true);
+    expect(gkeShaped("gke_demo-shop_us-central1-a_shop-prod")).toBe(true);
+    expect(gkeShaped("orbstack")).toBe(false);
+    expect(gkeShaped("gke_x")).toBe(false);
+  });
+
+  it("M1: a rejected gcp:cluster-view after a good one leaves no all-clear and no old list; a cluster known not to be GKE stays quiet", () => {
+    const good = whole([al()], { at: "2026-11-16T12:00:00.000Z" });
+    const failed = viewOnError(good, "Choose demo-shop on the Google Cloud page first.", true);
+    expect(failed).toEqual({ gke: false, unread: "Choose demo-shop on the Google Cloud page first." });
+    expect(verdictAlerts(failed)).toBe("Cloud Monitoring's open alerts for this cluster couldn't be read.");
+    expect(alertNotes(failed)).toEqual(["Google's view of this cluster couldn't be read: Choose demo-shop on the Google Cloud page first."]);
+    // A good "none" doesn't stand either.
+    expect(verdictAlerts(viewOnError(whole([]), "x", false))).toBe("Cloud Monitoring's open alerts for this cluster couldn't be read.");
+    // Failing on and on keeps saying so; failing from the start, for a GKE-named context, too.
+    expect(viewOnError(failed, "again", true)).toEqual({ gke: false, unread: "again" });
+    expect(viewOnError(undefined, "x", true)).toEqual({ gke: false, unread: "x" });
+    // Not GKE-named and never GKE: nothing to say.
+    expect(viewOnError(undefined, "x", false)).toEqual({ gke: false });
+    expect(viewOnError({ gke: false }, "x", true)).toEqual({ gke: false });
+    expect(viewOnError({ gke: false, hint: "h" }, "x", true)).toEqual({ gke: false, hint: "h" });
+  });
+
+  it("M1 and T2: the drawer's alert is 'not among those read' when the view can't show it, 'no longer open' only after a whole read", () => {
+    const held = { id: "0a2-restarts", last: al(), project: "demo-shop" };
+    const whileUnread = holdAlert(held, alertsForDrawer({ gke: false, unread: UNREAD }), 5)!;
+    expect(whileUnread.goneAt).toBe(5);
+    expect(goneNote(whileUnread, { gke: false, unread: UNREAD })).toBe("unread");
+    // The alerts read failed, or the list was partly read: it may still be open.
+    expect(goneNote(whileUnread, view({ error: "x" }))).toBe("unread");
+    expect(goneNote(whileUnread, whole([], { cut: true }))).toBe("unread");
+    expect(goneNote(whileUnread, whole([], { unplaced: 1 }))).toBe("unread");
+    expect(goneNote(whileUnread, undefined)).toBe("unread");
+    // The whole answer read and it isn't in it: closed.
+    expect(goneNote(whileUnread, whole([]))).toBe("closed");
+    // Still in the view: nothing.
+    expect(goneNote(held, whole([al()]))).toBeUndefined();
+    expect(alertsForDrawer(view({ error: "x" }))).toEqual([]);
+    expect(alertsForDrawer({ gke: false })).toEqual([]);
+    expect(alertsForDrawer(undefined)).toBeUndefined();
+    expect(alertsForDrawer(whole([al()]))).toEqual([al()]);
+    // Back in a whole list: open again, the project kept.
+    expect(holdAlert(whileUnread, [al()], 9)).toEqual({ id: "0a2-restarts", last: al(), project: "demo-shop" });
+  });
+
+  it("L1: open alerts that name no project keep the list from reading whole and say so", () => {
+    const v = whole([], { unplaced: 2 });
+    expect(alertsPartial(v)).toBe(true);
+    expect(alertCount(0, v)).toBe("0+");
+    expect(alertNotes(v)).toEqual(["2 open alerts in Cloud Monitoring's answer don't say which project or cluster they are about."]);
+    expect(alertNotes(whole([], { unplaced: 1 }))).toEqual(["1 open alert in Cloud Monitoring's answer doesn't say which project or cluster it is about."]);
+    expect(verdictAlerts(v)).toBe("Cloud Monitoring's alerts were only partly read; this cluster may have open alerts.");
+    expect(overviewAlerts(v)).toEqual({ text: "Cloud Monitoring's alerts were only partly read", tone: "muted" });
+  });
+
+  it("L4: the drawer hands on its brief only while the alert is open and the brief was read for the view shown", () => {
+    const at = "2026-11-16T12:00:00.000Z";
+    const held = { id: "0a2-restarts", last: al() };
+    const item = { id: "0a2-restarts", at, r: { brief: "Google Cloud project: demo-shop" } };
+    expect(alertsAt(whole([al()], { at }))).toBe(at);
+    expect(briefToSend(held, item, at)).toBe("Google Cloud project: demo-shop");
+    // Gone: main is asked (its 404, or a fresh brief).
+    expect(briefToSend({ ...held, goneAt: 5 }, item, at)).toBeUndefined();
+    // Read for an earlier view, another alert's, not read yet, or no view now.
+    expect(briefToSend(held, item, "2026-11-16T12:01:00.000Z")).toBeUndefined();
+    expect(briefToSend(held, { ...item, id: "other" }, at)).toBeUndefined();
+    expect(briefToSend(held, { id: "0a2-restarts" }, at)).toBeUndefined();
+    expect(briefToSend(held, item, undefined)).toBeUndefined();
+  });
+
+  it("L5: the drawer says why it reads no policy: another project's, or one Landlens can't place without the number", () => {
+    expect(policyNote(al(), "demo-shop")).toBeUndefined();
+    const { policyId: _p, ...noPolicy } = al();
+    expect(policyNote(noPolicy, "demo-shop")).toBe("This alert's policy isn't one of demo-shop's (it may be another project's in the same metrics scope), so Landlens doesn't read it.");
+    expect(policyNote({ ...noPolicy, policyUnknown: true }, "demo-shop")).toBe("Landlens couldn't read demo-shop's number, so it can't tell whether this policy is its own.");
+  });
+
+  it("T3: the drawer's read and Ask's read of an item go through latestOnly: a late answer never lands after a newer one", () => {
+    const src = (f: string) => readFileSync(join(__dirname, "../src/renderer/src", f), "utf8");
+    const drawer = src("AlertDrawer.tsx");
+    expect(drawer).toMatch(/latestOnly\(\s*\(h: string, id: string, at: string \| undefined\): Promise<Item> => api\.invoke\("gcp:cluster-item"/);
+    expect(drawer).toContain("read.current!(props.handle, id, props.viewAt)");
+    expect(drawer.match(/"gcp:cluster-item"/g)).toHaveLength(1);
+    const ws = src("Workspace.tsx");
+    expect(ws).toMatch(/askItem\.current \?\?= latestOnly\(\s*\(item: GoogleItem, h: string, brief: string \| undefined\) =>\s*brief \? Promise\.resolve\(\{ item, brief \}\) : api\.invoke\("gcp:cluster-item"/);
+    expect(ws).toContain("const askGoogle = (item: GoogleItem, brief?: string) => askItem.current!(item, cluster.handle, brief);");
+    expect(ws.match(/"gcp:cluster-item"/g)).toHaveLength(1);
+    // L4, T2, M1: the drawer hands on only briefToSend's brief; the workspace checks the held alert against
+    // alertsForDrawer and gives the drawer goneNote's words.
+    expect(drawer).toContain("props.onAsk(a, briefToSend(props.held, mine, props.viewAt))");
+    expect(drawer).toContain('props.note !== "closed" ? (');
+    expect(ws).toContain("holdAlert(held, alertsForDrawer(google.view), Date.now())");
+    expect(ws).toContain("{...(goneNote(alertSel, google.view) ? { note: goneNote(alertSel, google.view)! } : {})}");
+    // The hook polls through startViewPoll and turns a failed call into "couldn't be read" (M1, T4).
+    const hook = src("googleView.ts");
+    expect(hook).toContain("useEffect(() => startViewPoll(active, load, () => document.visibilityState === \"visible\"), [load, active]);");
+    expect(hook).toContain("setView((prev) => viewOnError(prev,");
+    expect(src("Overview.tsx")).toContain("verdictAlerts(google.view, google.reading)");
+  });
+
+  it("T4: the view's poll reads now and every 60 s while visible, never fresh, and nothing while the page isn't shown", () => {
+    vi.useFakeTimers();
+    try {
+      const loads: boolean[] = [];
+      let visible = true;
+      expect(startViewPoll(false, (f) => void loads.push(f), () => visible)).toBeUndefined();
+      vi.advanceTimersByTime(VIEW_EVERY * 3);
+      expect(loads).toEqual([]);
+      const stop = startViewPoll(true, (f) => void loads.push(f), () => visible)!;
+      expect(loads).toEqual([false]);
+      vi.advanceTimersByTime(VIEW_EVERY - 1);
+      expect(loads).toEqual([false]);
+      vi.advanceTimersByTime(1);
+      expect(loads).toEqual([false, false]);
+      visible = false;
+      vi.advanceTimersByTime(VIEW_EVERY * 2);
+      expect(loads).toEqual([false, false]);
+      visible = true;
+      vi.advanceTimersByTime(VIEW_EVERY);
+      expect(loads).toEqual([false, false, false]);
+      stop();
+      vi.advanceTimersByTime(VIEW_EVERY * 2);
+      expect(loads).toHaveLength(3);
+      expect(VIEW_EVERY).toBe(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

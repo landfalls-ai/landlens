@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { channels, CLOUD_DECLINED } from "@landlens/contracts";
-import { ADVICE_FAILED_TTL, ADVICE_TTL, ALERTS_TTL, connectedOf, ITEM_GONE, MAX_POLICIES, POLICY_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
+import { ACCOUNT_CHANGED, ADVICE_FAILED_TTL, ADVICE_TTL, ALERTS_TTL, CLUSTERS_TTL, connectedOf, ITEM_GONE, unchecked, MAX_POLICIES, POLICY_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
 import { MetricsService } from "@landlens/metrics";
 import { cloudMonitoringSource, sessionSeries } from "../src/main/metrics-source";
+import { SiblingText } from "../src/main/sibling-text";
 import { caFingerprint } from "@landlens/gcp";
 import { demoShopAlerts, demoShopPolicies, FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, PROMQL_MARKER } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
@@ -26,7 +27,7 @@ beforeEach(() => {
   fake.leak = false;
 });
 
-function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number; kept?: unknown; onAgentOff?: () => void } = {}) {
+function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number; kept?: unknown; onAgentOff?: () => void; served?: (texts: string[]) => void } = {}) {
   const data = mkdtempSync(join(tmpdir(), "landlens-gcp-"));
   const file = join(data, "gcp.json");
   if (o.kept !== undefined) writeFileSync(file, JSON.stringify(o.kept), { mode: 0o600 });
@@ -43,6 +44,7 @@ function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined;
     ...(o.fetch ? { fetch: o.fetch } : {}),
     ...(o.now ? { now: o.now } : {}),
     ...(o.onAgentOff ? { onAgentOff: o.onAgentOff } : {}),
+    ...(o.served ? { served: o.served } : {}),
   });
   return { svc, file, logs, dir, data };
 }
@@ -709,7 +711,7 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     expect(v.cluster).toEqual({ project: "demo-shop", location: "us-central1", name: "shop-prod" });
     if ("error" in v.advice) throw new Error(v.advice.error);
     expect(v.advice.items.map((a) => a.id)).toEqual(["deprecation-1-32", "exec-probe-timeout"]);
-    expect(v.alerts).toEqual({ items: [], others: 0, cut: false, unreadable: 0, over: 0, at: expect.any(String) });
+    expect(v.alerts).toEqual({ items: [], others: 0, cut: false, unreadable: 0, over: 0, unplaced: 0, at: expect.any(String) });
     const asked = () => fake.hits("/insights").length;
     expect(asked()).toBe(1);
     // Cached: the next visit, and Check again within 10 s, ask nothing.
@@ -844,7 +846,8 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     writeFileSync(join(dir, "account"), "someone-else@example.com");
     await svc.status(true);
     expect(views.size).toBe(0);
-    await first;
+    // Not delivered either (review of part 3, L7).
+    await expect(first).rejects.toMatchObject({ status: 409 });
     expect(views.size).toBe(0);
     // Again, but a read for the same cluster starts after the change, before the old one ends: the old read's end
     // leaves the newer one alone.
@@ -857,7 +860,7 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     writeFileSync(join(dir, "account"), "a-third@example.com");
     await svc.status(true);
     const newer = svc.clusterView(shop);
-    await old;
+    await old.catch(() => undefined);
     expect([...views.keys()]).toEqual(["demo-shop/us-central1/shop-prod"]);
     await newer;
     expect(views.size).toBe(1);
@@ -1243,7 +1246,7 @@ describe("Cloud Monitoring's alerts beside the doctor's problems (wave 9 part 3,
     await new Promise((r) => setTimeout(r, 50));
     writeFileSync(join(dir, "account"), "someone-else@example.com");
     await svc.status(true);
-    await first;
+    await expect(first).rejects.toMatchObject({ status: 409 });
     expect(held.size).toBe(0);
   });
 
@@ -1332,5 +1335,148 @@ describe("Cloud Monitoring's alerts beside the doctor's problems (wave 9 part 3,
       expect(ch.safeParse({ handle: "handle-0001", kind: "policy", id: "1001" }).success).toBe(false);
       expect(ch.safeParse({ handle: "handle-0001", kind: "alert", id: "1001", project: "orbit-analytics" }).success).toBe(false);
     });
+  });
+});
+
+describe("Fable's security review of part 3, fixed", () => {
+  const TLS = { ca: caFingerprint(FAKE_CLUSTER_CA), insecure: false, serverName: false, proxy: false };
+  const PROD = { context: "gke_demo-shop_us-central1_shop-prod", server: "https://203.0.113.17", viaLandlens: false, tls: TLS };
+  const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
+  const seed = () => {
+    fake.alerts.set("demo-shop", demoShopAlerts());
+    for (const [id, p] of Object.entries(demoShopPolicies())) fake.policies.set(`demo-shop/${id}`, p);
+  };
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const LISTING_403 = "Your account can't list GKE clusters in demo-shop (it needs Kubernetes Engine Cluster Viewer).";
+
+  it("M1 (T8): a GKE view that loses its listing, or whose gcloud signs out, says it couldn't be read, never a bare { gke: false }", async () => {
+    seed();
+    let t = 1_000_000;
+    const { svc, dir } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    expect((await svc.view(PROD)).gke).toBe(true);
+    // The next poll after the listing's minute: the container API refuses.
+    fake.fail.set("demo-shop", { status: 403, api: "container" });
+    t += CLUSTERS_TTL;
+    expect(await svc.view(PROD)).toEqual({ gke: false, unread: unlisted("demo-shop", LISTING_403) });
+    // An alert's item says so too, not "isn't a GKE cluster".
+    await expect(svc.item(PROD, "alert", "0a2-restarts")).rejects.toMatchObject({ status: 503, message: unlisted("demo-shop", LISTING_403) });
+    fake.fail.clear();
+    t += CLUSTERS_TTL;
+    expect((await svc.view(PROD)).gke).toBe(true);
+    // gcloud signed out.
+    writeFileSync(join(dir, "account"), "");
+    await svc.status(true);
+    fake.requests.length = 0;
+    expect(await svc.view(PROD)).toEqual({ gke: false, unread: unchecked("demo-shop", "gcloud isn't signed in. Run `gcloud auth login`.") });
+    expect(fake.requests).toHaveLength(0);
+    // Not gcloud's GKE name, or a project not chosen: nothing said, as before.
+    expect(await svc.view({ context: "orbstack", server: "https://127.0.0.1:26443", viaLandlens: false })).toEqual({ gke: false });
+    expect(await svc.view({ ...PROD, context: "gke_orbit-analytics_us-central1_shop-prod" })).toEqual({ gke: false });
+  });
+
+  it("M1: gcloud missing, for a chosen project's GKE-named context, says so; Google Cloud off says nothing", async () => {
+    const kept = { projects: ["demo-shop"], agentRead: false, confirmed: [] };
+    const missing = service({ mode: { on: true, endpoint: fake.origin, gcloud: "/nowhere/gcloud" }, kept });
+    expect(await missing.svc.view(PROD)).toEqual({ gke: false, unread: unchecked("demo-shop", "Install the Google Cloud CLI, then run `gcloud auth login`.") });
+    expect(await service({ mode: { on: false }, kept }).svc.view(PROD)).toEqual({ gke: false });
+  });
+
+  it("L1: open alerts that name no project are counted on the view (`unplaced`), so the list never reads as whole", async () => {
+    const restarts = demoShopAlerts()[1]!;
+    fake.alerts.set("demo-shop", [restarts, { ...restarts, name: "projects/demo-shop/alerts/aggregated", resource: { type: "k8s_cluster", labels: { location: "us-central1" } } }]);
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const v = await svc.view(PROD);
+    if (!v.gke || "error" in v.alerts) throw new Error("no alerts");
+    expect(v.alerts).toMatchObject({ items: [{ id: "0a2-restarts" }], unplaced: 1, unreadable: 0 });
+  });
+
+  it("L3: main tells its store the outside text it serves: policies' names, conditions and documentation, suggestions, brief lines", async () => {
+    seed();
+    const served: string[] = [];
+    const { svc } = service({ served: (t) => void served.push(...t) });
+    await svc.choose(["demo-shop"]);
+    await svc.view(PROD);
+    expect(served).toContain("Container restarts (shop)");
+    expect(served).toContain("Kubernetes 1.32 stops serving APIs that this cluster's clients still call. Upgrading to 1.32 breaks them.");
+    const r = await svc.item(PROD, "alert", "0a2-restarts");
+    if (!r.policy || "error" in r.policy) throw new Error("no policy");
+    expect(served).toEqual(expect.arrayContaining(["Restart count above 3 in 10 min", r.policy.documentation!]));
+    expect(served).toContain(r.brief.split("\n").find((l) => l.startsWith("Policy documentation"))!);
+    // What the agent's prompt is checked against: a question that quotes the documentation with no head at all.
+    const store = new SiblingText<"gcp">();
+    store.served("gcp", served.map((body) => ({ body })));
+    expect([...store.found(`Is this right?\n${r.policy.documentation}`)]).toEqual(["gcp"]);
+    expect(store.found("Why is the node not ready?").size).toBe(0);
+  });
+
+  it("L6: a project's kept alerts past their 60 s leave when another project's are read", async () => {
+    seed();
+    let t = 1_000_000;
+    const { svc } = service({ now: () => t });
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    const held = (svc as unknown as { alertsOf: Map<string, unknown> }).alertsOf;
+    await svc.clusterView(shop);
+    expect([...held.keys()]).toEqual(["demo-shop"]);
+    t += ALERTS_TTL - 1;
+    await svc.clusterView({ project: "orbit-analytics", location: "us-central1", name: "x" });
+    expect([...held.keys()]).toEqual(["demo-shop", "orbit-analytics"]);
+    t += ALERTS_TTL;
+    await svc.clusterView({ project: "orbit-analytics", location: "us-central1", name: "x" });
+    expect([...held.keys()]).toEqual(["orbit-analytics"]);
+  });
+
+  it("L7: a view read across an account change isn't delivered; nor one for a project taken out, whose waiting reads aren't sent", async () => {
+    seed();
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    fake.slowMs = 300;
+    const across = svc.clusterView(shop);
+    await tick(50);
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    await expect(across).rejects.toMatchObject({ status: 409, message: ACCOUNT_CHANGED });
+    // Taken out while its reads wait for a slot: both slots are another project's.
+    const busy = svc.clusterView({ project: "orbit-analytics", number: "730284615592", location: "us-central1", name: "x" });
+    await tick(50);
+    const waiting = svc.clusterView(shop);
+    await tick(20);
+    const before = fake.requests.length;
+    await svc.choose(["orbit-analytics"]);
+    await expect(waiting).rejects.toMatchObject({ status: 404, message: "Choose demo-shop on the Google Cloud page first." });
+    await busy;
+    const shops = fake.requests.slice(before).filter((r) => r.userProject === "demo-shop" || r.path.includes("demo-shop") || r.path.includes("482913570214"));
+    expect(shops).toEqual([]);
+  });
+
+  it("L7: an item's policy read waiting for a slot isn't sent once its project is taken out", async () => {
+    seed();
+    const { svc } = service();
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    await svc.view(PROD);
+    fake.slowMs = 300;
+    const busy = svc.clusterView({ project: "orbit-analytics", number: "730284615592", location: "us-central1", name: "x" }, true);
+    await tick(50);
+    const item = svc.item(PROD, "alert", "0a2-restarts");
+    await tick(50);
+    await svc.choose(["orbit-analytics"]);
+    await expect(item).rejects.toMatchObject({ status: 404 });
+    await busy;
+    expect(fake.hits("/alertPolicies/")).toHaveLength(0);
+  });
+
+  it("L7: an item's alert isn't paired with a policy read after the account changed", async () => {
+    seed();
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop"]);
+    await svc.view(PROD);
+    fake.slowMs = 300;
+    const item = svc.item(PROD, "alert", "0a2-restarts");
+    await tick(100);
+    expect(fake.hits("/alertPolicies/")).toHaveLength(1);
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    await expect(item).rejects.toMatchObject({ status: 409, message: ACCOUNT_CHANGED });
   });
 });

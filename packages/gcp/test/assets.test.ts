@@ -171,8 +171,21 @@ describe("Fable's security review of part 4, fixed", () => {
     const hidden = "a\u{E0001}\u{E0049}\u{E0067}\u{E007F}b\u{1D173}c\u2028d\u2029e\u202ef\u200bg\u0007h\u00adi\ufeffj";
     expect(clean(hidden)).toBe("abcdefghij");
     expect(clean(hidden)).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
-    // Letters, marks, emoji (with their variation selector) and spaces are kept.
-    expect(clean("Zürich é 東京 😀 ❤️ 👍🏽 a b")).toBe("Zürich é 東京 😀 ❤️ 👍🏽 a b");
+    // Letters, marks, emoji and spaces are kept; an emoji's variation selector goes (L2 of part 3), its picture stays.
+    expect(clean("Zürich é 東京 😀 ❤️ 👍🏽 a b")).toBe("Zürich é 東京 😀 ❤ 👍🏽 a b");
+  });
+
+  it("L2 (review of wave 9 part 3): variation selectors, private use, unassigned, lone surrogates and blank letters go too", () => {
+    // U+FE0F, two of U+E0100–E01EF (the "data hidden in an emoji" carrier), private use U+E000 and U+F0000, unassigned
+    // U+0378, the Hangul fillers and the braille blank, a lone high and a lone low surrogate.
+    const hidden = "a\uFE0F\u{E0101}\u{E0142}b\uE000\u{F0000}c\u0378d\u3164\u115F\u1160\uFFA0\u2800e\uD800f\uDC00g";
+    expect(clean(hidden)).toBe("abcdefg");
+    // A run of selectors after a visible letter (one per byte) leaves only the letter.
+    expect(clean(`x${Array.from({ length: 290 }, (_, i) => String.fromCodePoint(0xe0100 + (i % 240))).join("")}`)).toBe("x");
+    // Other callers keep what they showed: a resource's names, a label, a project's name with an emoji.
+    expect(toResource({ name: "//storage.googleapis.com/bucket-1", assetType: "storage.googleapis.com/Bucket", displayName: "Shop 🛒 data\uFE0F", labels: { env: "prod\uE000" } })).toMatchObject({
+      name: "//storage.googleapis.com/bucket-1", displayName: "Shop 🛒 data", labels: { env: "prod" },
+    });
   });
 
   it("L4: a cut never splits a character in two", () => {

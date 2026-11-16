@@ -80,6 +80,9 @@ async function start() {
   let history: ClicklandHistory | undefined;
   // What main sent the window from Clickland, so a question that quotes it holds autonomy (review of part 3, M2).
   const siblingText = new SiblingText();
+  // What main sent the window of Google's view that someone outside wrote (alert policies, suggestions): a question
+  // that quotes it holds autonomy too (security review of wave 9 part 3, L3).
+  const gcpText = new SiblingText<"gcp">();
   const doctor = new DoctorService({ clusters, hub, history: (handle, q) => history?.lastLines(handle, q) ?? Promise.resolve(undefined) });
   let win: BrowserWindow | undefined;
   const send = (channel: string, payload: unknown) => {
@@ -192,6 +195,7 @@ async function start() {
     log: (l) => console.log(l),
     // gcloud's account changed: the grant to Claude ends, and landlens-gcp leaves open sessions at once (part 5, M3).
     onAgentOff: () => mcp?.gcpOff(),
+    served: (texts) => gcpText.served("gcp", texts.map((body) => ({ body }))),
   });
   mcp = new McpService({
     store: mcpStore,
@@ -238,6 +242,7 @@ async function start() {
   }) as ConstructorParameters<typeof AgentService>[0]["push"];
   const agent = new AgentService({
     siblingText,
+    gcpText,
     frontDoor,
     clusters,
     sessionsDir: join(app.getPath("userData"), "agent-sessions"),
