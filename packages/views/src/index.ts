@@ -10,3 +10,4 @@ export * from "./rows.js";
 export * from "./transform.js";
 export * from "./schema.js";
 export * from "./patch.js";
+export * from "./projection.js";

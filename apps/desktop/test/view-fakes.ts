@@ -1,8 +1,10 @@
 // An in-memory front door and Kubernetes API for the view runtime's tests (as wave 8's drain tests use fake-api.ts):
 // tokens with the real policy check (`authorize`), lists with label and field selectors, watches that stream the
 // store's changes and close when their token is revoked, single GETs, metrics-server and followed logs. Every request
-// is recorded with the token's label, so a test can say "this sent nothing".
-import { KubeClient, authorize, parseRequest, type TokenGrant } from "@landlens/kube";
+// is recorded with the token's label, so a test can say "this sent nothing". A token whose policy redacts gets its answers
+// scrubbed as the front door scrubs them (redactObject for JSON and each watch event, a LineScrubber per
+// followed log, scrubLines for a whole one), so the runtime's tests see what the app sees (security review, L8).
+import { KubeClient, LineScrubber, authorize, parseRequest, redactObject, scrubLines, type TokenGrant } from "@landlens/kube";
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 
 export type Seen = { label: string; method: string; path: string; status: number };
@@ -16,12 +18,19 @@ const KINDS: Record<string, { kind: string; group: string; version: string; name
   deployments: { kind: "Deployment", group: "apps", version: "v1", namespaced: true },
   replicasets: { kind: "ReplicaSet", group: "apps", version: "v1", namespaced: true },
   jobs: { kind: "Job", group: "batch", version: "v1", namespaced: true },
+  // A custom resource whose kind is also Node (Longhorn's), with its own shapes (L2).
+  lhnodes: { kind: "Node", group: "longhorn.io", version: "v1beta1", namespaced: false },
 };
 
-export const TYPES: ResourceType[] = Object.entries(KINDS).map(([resource, k]) => ({ group: k.group, version: k.version, resource, kind: k.kind, namespaced: k.namespaced, verbs: ["get", "list", "watch"] }));
+export const TYPES: ResourceType[] = [
+  ...Object.entries(KINDS).map(([resource, k]) => ({ group: k.group, version: k.version, resource, kind: k.kind, namespaced: k.namespaced, verbs: ["get", "list", "watch"] })),
+  // As a cluster with metrics-server discovers them (L4): nodes' usage is cluster-scoped, pods' namespaced.
+  { group: "metrics.k8s.io", version: "v1beta1", resource: "nodes", kind: "NodeMetrics", namespaced: false, verbs: ["get", "list"] },
+  { group: "metrics.k8s.io", version: "v1beta1", resource: "pods", kind: "PodMetrics", namespaced: true, verbs: ["get", "list"] },
+];
 
 type Stream = { token: string; resource: string; namespace?: string; label?: string; field?: string; push: (line: string) => void; close: () => void };
-type LogStream = { token: string; key: string; push: (line: string) => void; close: () => void };
+type LogStream = { token: string; key: string; push: (line: string) => void; raw: (text: string) => void; close: () => void };
 
 const status = (code: number, message: string) => new Response(JSON.stringify({ kind: "Status", apiVersion: "v1", status: "Failure", code, message }), { status: code, headers: { "content-type": "application/json" } });
 
@@ -88,6 +97,8 @@ export class FakeApi {
   refuse?: (path: string) => number | undefined;
   /** Hold every answer to a path that matches until released. */
   hold?: RegExp;
+  /** The front door's scrub for a redacting token; off only to prove the runtime's own layer (departure 15). */
+  scrubs = true;
   private held: (() => void)[] = [];
   private streams = new Set<Stream>();
   private logs = new Set<LogStream>();
@@ -115,6 +126,12 @@ export class FakeApi {
     if (i < 0) return;
     const [o] = list.splice(i, 1);
     this.emit(resource, "DELETED", { ...o!, metadata: { ...o!.metadata, resourceVersion: String(++this.rv) } });
+  }
+
+  /** Raw text to every open follow of a container's log, chunk by chunk (a line may be split across two). */
+  logChunks(namespace: string, pod: string, ...chunks: string[]) {
+    const key = `${namespace}/${pod}`;
+    for (const s of this.logs) if (s.key === key) for (const c of chunks) s.raw(c);
   }
 
   /** A container's log: lines now (and to every open follow). */
@@ -173,7 +190,8 @@ export class FakeApi {
       if (refused) return (record(refused), status(refused, `${path} is forbidden: User "you" cannot list it`));
       record(200);
       if (this.hold?.test(path)) await new Promise<void>((r) => this.held.push(r));
-      return this.answer(token, url, init.signal ?? undefined);
+      const res = this.answer(token, url, init.signal ?? undefined);
+      return grant.policy.redact && this.scrubs ? scrubbed(res, url.searchParams.get("watch") === "1" || url.searchParams.get("follow") === "true") : res;
     }) as unknown as typeof fetch;
   }
 
@@ -262,6 +280,7 @@ export class FakeApi {
         s = {
           token, key,
           push: (l) => open && c.enqueue(enc.encode(`${ts()} ${l}\n`)),
+          raw: (t) => open && c.enqueue(enc.encode(t)),
           close: () => {
             if (!open) return;
             open = false;
@@ -280,6 +299,33 @@ export class FakeApi {
     });
     return new Response(body, { headers: { "content-type": "text/plain" } });
   }
+}
+
+/** An answer as the front door gives it to a redacting token: JSON as objects, text as lines, streams line by line. */
+async function scrubbed(res: Response, stream: boolean): Promise<Response> {
+  if (!res.ok) return res;
+  const text = /^text\/plain\b/.test(res.headers.get("content-type") ?? "");
+  if (!stream) {
+    const body = await res.text();
+    return new Response(text ? scrubLines(body) : JSON.stringify(redactObject(JSON.parse(body))), { status: res.status, headers: res.headers });
+  }
+  const scrub = new LineScrubber();
+  const batch = (lines: string[]) => (text ? scrub.push(lines) : lines.map((l) => (l.trim() ? JSON.stringify(redactObject(JSON.parse(l))) : l)));
+  let pending = "";
+  const lines = new TransformStream<string, string>({
+    transform(chunk, c) {
+      pending += chunk;
+      const parts = pending.split("\n");
+      pending = parts.pop() ?? "";
+      if (parts.length) c.enqueue(batch(parts).join("\n") + "\n");
+    },
+    flush(c) {
+      const out = [...batch(pending ? [pending] : []), ...(text ? scrub.end() : [])];
+      if (out.length) c.enqueue(out.map((l, i) => (i < out.length - 1 || !pending ? `${l}\n` : l)).join(""));
+    },
+  });
+  const body = res.body!.pipeThrough(new TextDecoderStream()).pipeThrough(lines).pipeThrough(new TextEncoderStream());
+  return new Response(body, { status: res.status, headers: res.headers });
 }
 
 /** The ClusterManager the runtime sees: one cluster, its discovery, and a way to make it go. */

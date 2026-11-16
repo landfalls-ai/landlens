@@ -43,6 +43,20 @@ export const VIEW_LIMITS = {
   logPods: 5,
   /** Views open at once in main (one per window; the rest is headroom for a reload). */
   openViews: 4,
+  // Security review of wave 10 part 1 (M3, M5): what one view may cost main, in work and in memory.
+  /**
+   * A join's work: the right side's rows indexed (each label counted for a selector join), then every candidate a left
+   * row is compared with, times the join's takes and aggregates. Past it the join isn't worked out and says so.
+   */
+  joinWork: 500_000,
+  /** Objects a source reads, over all its watches (a "*" in a limited view is one per namespace), before its pipe. */
+  sourceObjects: 10_000,
+  /** Objects a view's watches keep, together. */
+  viewObjects: 20_000,
+  /** Characters of JSON a view's watches keep, together, each object trimmed to what the document reads (32 MiB). */
+  viewChars: 33_554_432,
+  /** Characters a source's rows hold after its pipe (what a join reads and the 2,000-row cut takes from; 8 MiB). */
+  sourceChars: 8_388_608,
 } as const;
 
 export type ViewLimits = { -readonly [K in keyof typeof VIEW_LIMITS]: number };
@@ -81,7 +95,7 @@ export function narrowLimits<T extends Record<string, number>>(base: T, o: Parti
   const out = { ...base };
   for (const [k, v] of Object.entries(o) as [keyof T & string, number | undefined][]) {
     if (v === undefined) continue;
-    if (!(k in base)) throw new RangeError(`no such limit: ${k}`);
+    if (!Object.hasOwn(base, k)) throw new RangeError(`no such limit: ${k}`);
     if (typeof v !== "number" || !Number.isFinite(v) || v < 1 || v > base[k]!) {
       throw new RangeError(`limit ${k} may only be narrowed: ${String(v)} is not a number from 1 to ${base[k]}`);
     }
@@ -95,7 +109,7 @@ export function checkTimes(base: ViewTimes, o: Partial<ViewTimes> = {}): ViewTim
   const out = { ...base };
   for (const [k, v] of Object.entries(o) as [keyof ViewTimes, number | undefined][]) {
     if (v === undefined) continue;
-    if (!(k in base)) throw new RangeError(`no such time: ${k}`);
+    if (!Object.hasOwn(base, k)) throw new RangeError(`no such time: ${k}`);
     if (typeof v !== "number" || !Number.isFinite(v) || v < 1 || v > 600_000) throw new RangeError(`time ${k} must be a finite number of ms from 1 to 600000`);
     out[k] = v;
   }

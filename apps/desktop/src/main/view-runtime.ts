@@ -16,14 +16,15 @@ import {
 } from "@landlens/contracts";
 import {
   agentReadOnlyPolicy, apiPath, type ClusterManager, followLogs, type FrontDoor, frontDoorFetch, KubeClient, KubeError,
-  key as typeKey, ResourceWatcher, type WatcherEvent, type LogLine,
+  KEY_LINES, keyState, key as typeKey, type KeyState, ResourceWatcher, WatchBudget, type WatcherEvent, type LogLine,
 } from "@landlens/kube";
 import { missingChecks } from "@landlens/kube/checks";
 import { quantity } from "@landlens/metrics";
 import {
-  cellText, checkTimes, computed, deliver, EVENT_FIELDS, LIST_FIELDS, narrowLimits, objectRows, ownerEntry, parseDocument,
-  parseFields, plainRows, runPipe, SENTENCES, usesWorkload, VIEW_LIMITS, VIEW_TIMES, type ParsedPath, type Row, type Source,
-  type ViewDocument, type ViewLimits, type ViewTimes,
+  BASE_KEEP, cellText, checkTimes, computed, deliver, EVENT_FIELDS, JoinTooBig, type Keep, keepFor, keepKey, LIST_FIELDS,
+  logLines, mergeKeep, narrowLimits, objectRows, ownerEntry, parseDocument, parseFields, plainRows, project, runPipe, SENTENCES,
+  usesWorkload, VIEW_LIMITS, VIEW_TIMES, type ParsedPath, type Row, type Source, type ViewDocument, type ViewLimits,
+  type ViewTimes,
 } from "@landlens/views";
 import { z } from "zod";
 
@@ -81,11 +82,15 @@ class WatchFeed implements Feed {
     readonly key: string,
     private readonly client: KubeClient,
     private readonly target: { group: string; version: string; resource: string; namespace?: string; labelSelector?: string; fieldSelector?: string },
-    private readonly opts: { batchMs: number; maxItems: number },
+    private readonly opts: { batchMs: number; maxItems: number; keep: Keep; budget: WatchBudget },
     private readonly changed: () => void,
   ) {}
   start() {
-    this.watcher = new ResourceWatcher(this.client, this.target, (e) => this.on(e), { batchMs: this.opts.batchMs, maxItems: this.opts.maxItems }).start();
+    // Each object trimmed to what the view's document reads, within the view's budget (security review, M5).
+    const keep = this.opts.keep;
+    this.watcher = new ResourceWatcher(this.client, this.target, (e) => this.on(e), {
+      batchMs: this.opts.batchMs, maxItems: this.opts.maxItems, budget: this.opts.budget, project: (o) => project(o, keep),
+    }).start();
   }
   stop() {
     void this.watcher?.stop();
@@ -96,6 +101,9 @@ class WatchFeed implements Feed {
   }
   get truncated(): boolean {
     return !!this.watcher?.truncated;
+  }
+  get cutBy(): false | "items" | "budget" {
+    return this.watcher?.cutBy ?? false;
   }
   private on(e: WatcherEvent) {
     if (e.type === "error") this.state = { status: e.fatal ? "fatal" : "error", code: e.status, message: e.message };
@@ -158,6 +166,8 @@ class LogFeed implements Feed {
   private n = 0;
   private stops = new Map<string, () => void>();
   private last = new Map<string, string>();
+  /** Each pod's log is one stream: whether a private key it logged is still open (security review, M1). */
+  private keys = new Map<string, KeyState>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private retries = new Set<ReturnType<typeof setTimeout>>();
   private stopped = true;
@@ -212,6 +222,7 @@ class LogFeed implements Feed {
       const chosen = pods.slice(0, this.t.maxPods).map((p) => p.metadata.name);
       this.pods = { followed: chosen.length, total: pods.length };
       for (const [name, stop] of this.stops) if (!chosen.includes(name)) (stop(), this.stops.delete(name));
+      for (const name of [...this.keys.keys()]) if (!chosen.includes(name)) this.keys.delete(name);
       for (const name of chosen) if (!this.stops.has(name)) void this.follow(name, gen);
       if (this.state.status !== "ok" || !chosen.length) {
         this.state = { status: "ok" };
@@ -241,7 +252,8 @@ class LogFeed implements Feed {
     const since = this.last.get(pod);
     const stop = followLogs(this.client, {
       namespace: this.s.namespace, pod, container, previous: this.s.previous, follow: !this.s.previous,
-      ...(since ? { sinceTime: since } : { tailLines: this.s.tail }),
+      // KEY_LINES more than are kept: a key that began before the kept lines is seen from its BEGIN, then cut away (M1).
+      ...(since ? { sinceTime: since } : { tailLines: this.s.tail + KEY_LINES }),
     }, {
       lines: (batch) => {
         if (!this.live(gen)) return;
@@ -269,11 +281,14 @@ class LogFeed implements Feed {
     this.stops.set(pod, stop);
   }
   private add(pod: string, batch: LogLine[]) {
-    for (const l of batch) {
+    let st = this.keys.get(pod);
+    if (!st) this.keys.set(pod, (st = keyState()));
+    const texts = logLines(batch.map((l) => l.text), st);
+    batch.forEach((l, i) => {
       if (l.ts) this.last.set(pod, l.ts);
-      const text = cellText(l.text);
+      const text = texts[i]!;
       this.lines.push({ ts: l.ts, text, failure: FAILURE_LINE.test(text), n: ++this.n });
-    }
+    });
     if (this.s.workload) this.lines.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.n - b.n));
     if (this.lines.length > this.s.tail) this.lines = this.lines.slice(-this.s.tail);
     this.state = { status: "ok" };
@@ -298,9 +313,19 @@ type SourceRun = {
   /** Whether `piped` is the full answer: false while loading, failed or cut (a join that reads it says so). */
   whole: boolean;
   data: SourceData;
+  /**
+   * What this source's data was read for: its document, its reads, the parameters and the same of every source it
+   * joins. Kept data is kept only when this is unchanged (security review, M6).
+   */
+  sig: string;
   lastPush: number;
   pushTimer?: ReturnType<typeof setTimeout>;
 };
+
+/** A read a source needs, planned before any is made: a watch (shared by target, its Keep merged) or another feed. */
+type Read =
+  | { watch: true; base: string; target: { group: string; version: string; resource: string; namespace?: string; labelSelector?: string; fieldSelector?: string }; keep: Keep }
+  | { watch: false; key: string; make: () => Feed };
 
 type View = {
   id: string;
@@ -310,9 +335,22 @@ type View = {
   client: KubeClient;
   namespaces?: string[];
   document: ViewDocument;
+  /** By name, with no prototype: a parameter named like an Object method reads nothing inherited (L5). */
   params: Record<string, string>;
   /** Bumped by every change (a version, a parameter, a stop): reads and pushes of an older one are dropped. */
   gen: number;
+  /**
+   * The generation `sources` were built for. While a sync waits (on discovery) it is behind `gen`: nothing is computed,
+   * pushed or answered from the older sources (security review, M6).
+   */
+  ready: number;
+  /** What the view's watches keep together (M5). */
+  budget: WatchBudget;
+  /** Sources whose reads changed since they were last computed; computed once, when their push is due (M3). */
+  dirty: Set<string>;
+  computeTimer?: ReturnType<typeof setTimeout>;
+  /** Events age out of `sinceMinutes` on this tick, with no watch event (L6). */
+  eventsTimer?: ReturnType<typeof setInterval>;
   feeds: Map<string, Feed>;
   sources: Map<string, SourceRun>;
   running: boolean;
@@ -335,6 +373,7 @@ export class ViewRuntime {
   private readonly L: ViewLimits;
   private readonly T: ViewTimes;
   private readonly now: () => number;
+  private computes = 0;
 
   constructor(private readonly deps: ViewRuntimeDeps) {
     this.L = narrowLimits({ ...VIEW_LIMITS } as ViewLimits, deps.limits);
@@ -355,22 +394,31 @@ export class ViewRuntime {
     if (this.views.size >= this.L.openViews) throw fail(429, SENTENCES.overLimit("open views", this.views.size + 1, this.L.openViews));
     const c = this.deps.clusters.get(r.data.handle);
     const namespaces = r.data.namespaces ? [...new Set(r.data.namespaces)] : undefined;
+    // Everything that can refuse the open is checked before a token exists (security review, L1).
+    const params = this.checkParams(parsed.document, r.data.params ?? {});
     const label = `view · ${c.info.context}`;
     const token = this.deps.frontDoor.issueToken({ label, policy: agentReadOnlyPolicy(namespaces), clusters: [r.data.handle] });
-    const url = this.deps.frontDoor.clusterUrl(r.data.handle);
-    const certificate = this.deps.frontDoor.certificate;
-    const client = this.deps.client?.(url, token, certificate) ?? new KubeClient({ url, secret: "" }, frontDoorFetch({ certificate, token }));
-    let id: string;
-    do id = randomBytes(8).toString("hex");
-    while (this.views.has(id));
-    const view: View = {
-      id, handle: r.data.handle, context: c.info.context, token, client, ...(namespaces ? { namespaces } : {}),
-      document: parsed.document, params: this.checkParams(parsed.document, r.data.params ?? {}), gen: 0, feeds: new Map(), sources: new Map(),
-      running: false, visible: true, lastRefresh: 0, closed: false,
-    };
-    this.views.set(id, view);
-    void this.sync(view);
-    return id;
+    let id = "";
+    try {
+      const url = this.deps.frontDoor.clusterUrl(r.data.handle);
+      const certificate = this.deps.frontDoor.certificate;
+      const client = this.deps.client?.(url, token, certificate) ?? new KubeClient({ url, secret: "" }, frontDoorFetch({ certificate, token }));
+      do id = randomBytes(8).toString("hex");
+      while (this.views.has(id));
+      const view: View = {
+        id, handle: r.data.handle, context: c.info.context, token, client, ...(namespaces ? { namespaces } : {}),
+        document: parsed.document, params, gen: 0, ready: 0, budget: new WatchBudget(this.L.viewObjects, this.L.viewChars),
+        dirty: new Set(), feeds: new Map(), sources: new Map(), running: false, visible: true, lastRefresh: 0, closed: false,
+      };
+      this.views.set(id, view);
+      void this.sync(view);
+      return id;
+    } catch (e) {
+      // A token whose view didn't open is never left behind.
+      if (id) this.views.delete(id);
+      this.deps.frontDoor.revokeToken(token);
+      throw e;
+    }
   }
 
   /** A new version of the view's document: sources that read the same thing keep their reads; the rest start again. */
@@ -437,15 +485,17 @@ export class ViewRuntime {
   }
 
   data(viewId: string, source: string): SourceData | undefined {
-    const s = this.view(viewId).sources.get(source);
-    return s ? structuredClone(s.data) : undefined;
+    const v = this.view(viewId);
+    const s = v.sources.get(source);
+    return s ? structuredClone(this.current(v, s)) : undefined;
   }
 
   /** Each source's state and counts: what part 2 tells Claude and the page (no row of it). */
   status(viewId: string): Record<string, SourceStatus> {
     const out: Record<string, SourceStatus> = {};
-    for (const [id, s] of this.view(viewId).sources) {
-      const { state, message, total, truncated, at, rows } = s.data;
+    const v = this.view(viewId);
+    for (const [id, s] of v.sources) {
+      const { state, message, total, truncated, at, rows } = this.current(v, s);
       out[id] = { state, ...(message ? { message } : {}), rows: rows.length, total, truncated, at };
     }
     return out;
@@ -456,12 +506,20 @@ export class ViewRuntime {
     const r = RowRef.safeParse(ref);
     if (!r.success) return false;
     const k = refKey(r.data);
-    for (const s of this.view(viewId).sources.values()) if (s.data.rows.some((row) => row._ref && refKey(row._ref) === k)) return true;
+    const v = this.view(viewId);
+    // While a change is being built, no row of the older sources counts (M6).
+    if (v.ready !== v.gen) return false;
+    for (const s of v.sources.values()) if (s.data.rows.some((row) => row._ref && refKey(row._ref) === k)) return true;
     return false;
   }
 
   get size() {
     return this.views.size;
+  }
+
+  /** How many times a source's rows were worked out, in all (the tests' count of main's work, M3). */
+  get computeRuns() {
+    return this.computes;
   }
 
   // ---- the work ------------------------------------------------------------------------------------------------
@@ -473,9 +531,14 @@ export class ViewRuntime {
     return v;
   }
 
-  /** Parameter values, each checked against its parameter; anything else is dropped. */
+  /** A source's data as main may answer it now: nothing of an older version while a change is being built (M6). */
+  private current(v: View, s: SourceRun): SourceData {
+    return v.ready === v.gen ? s.data : { state: "loading", rows: [], total: 0, truncated: false, at: s.data.at };
+  }
+
+  /** Parameter values, each checked against its parameter; anything else is dropped. No prototype (L5). */
   private checkParams(d: ViewDocument, given: Record<string, string>): Record<string, string> {
-    const out: Record<string, string> = {};
+    const out: Record<string, string> = Object.create(null);
     for (const p of d.params ?? []) {
       const v = Object.hasOwn(given, p.name) ? given[p.name]! : p.default;
       if (v === undefined) continue;
@@ -491,11 +554,36 @@ export class ViewRuntime {
     v.running = false;
     for (const f of v.feeds.values()) f.stop();
     v.feeds.clear();
+    clearTimeout(v.computeTimer);
+    v.computeTimer = undefined;
+    v.dirty.clear();
+    clearInterval(v.eventsTimer);
+    v.eventsTimer = undefined;
+    // What a stopped view read isn't kept in main (security review, M5): it is read again when it is shown.
+    for (const s of v.sources.values()) {
+      clearTimeout(s.pushTimer);
+      s.pushTimer = undefined;
+      s.piped = [];
+      s.whole = false;
+      s.data = { state: "loading", rows: [], total: 0, truncated: false, at: s.data.at };
+    }
   }
 
-  /** (Re)build a view's sources and feeds from its document and parameters; reads with the same target are kept. */
+  /**
+   * (Re)build a view's sources and feeds from its document and parameters; reads with the same target are kept. Each
+   * source is planned on its own and takes its reads only if all of them fit (L3); a source keeps the data it had only
+   * if it, its reads, the parameters and every source it joins are unchanged (M6).
+   */
   private async sync(v: View) {
     const gen = ++v.gen;
+    // Until this version's sources are built, nothing of the older ones is computed or pushed (M6).
+    for (const s of v.sources.values()) {
+      clearTimeout(s.pushTimer);
+      s.pushTimer = undefined;
+    }
+    clearTimeout(v.computeTimer);
+    v.computeTimer = undefined;
+    v.dirty.clear();
     let types: ResourceType[] = [];
     const needsTypes = Object.values(v.document.sources).some((s) => s.kind === "kube.list");
     if (needsTypes) {
@@ -509,37 +597,83 @@ export class ViewRuntime {
     // Hidden: nothing of the old version may go on reading; show() builds this version.
     if (!v.visible) return this.stopFeeds(v);
     const old = v.feeds;
-    const feeds = new Map<string, Feed>();
     const sources = new Map<string, SourceRun>();
-    const want = (key: string, make: () => Feed) => {
-      if (!feeds.has(key)) {
-        if (feeds.size >= this.L.feeds) throw new RangeError(SENTENCES.overLimit("reads in this view", feeds.size + 1, this.L.feeds));
-        const f = old.get(key) ?? make();
-        feeds.set(key, f);
-      }
-      return key;
-    };
+    const watches = new Map<string, { target: Extract<Read, { watch: true }>["target"]; keep: Keep }>();
+    const others = new Map<string, () => Feed>();
     for (const [id, source] of Object.entries(v.document.sources)) {
       const prev = v.sources.get(id);
       const run: SourceRun = {
-        id, source, feeds: [], owners: [], piped: [], whole: false, lastPush: prev?.lastPush ?? 0,
-        data: prev && JSON.stringify(prev.source) === JSON.stringify(source) ? prev.data : { state: "loading", rows: [], total: 0, truncated: false, at: 0 },
+        id, source, feeds: [], owners: [], piped: [], whole: false, lastPush: prev?.lastPush ?? 0, sig: "",
+        data: { state: "loading", rows: [], total: 0, truncated: false, at: 0 },
       };
       sources.set(id, run);
+      const reads: Read[] = [];
       try {
-        this.plan(v, run, types, want);
-      } catch (e) {
-        run.refused = { state: "error", message: e instanceof RangeError ? e.message : SENTENCES.noAnswer };
+        this.plan(v, run, types, reads);
+      } catch {
+        run.refused = { state: "error", message: SENTENCES.noAnswer };
+      }
+      const keys = new Set(reads.map((r) => (r.watch ? r.base : r.key)));
+      const fresh = [...keys].filter((k) => !watches.has(k) && !others.has(k)).length;
+      if (!run.refused && watches.size + others.size + fresh > this.L.feeds) {
+        run.refused = { state: "error", message: SENTENCES.overLimit("reads in this view", watches.size + others.size + fresh, this.L.feeds) };
+      }
+      if (run.refused) {
+        run.feeds = [];
+        run.owners = [];
+        continue;
+      }
+      for (const r of reads) {
+        if (!r.watch) {
+          if (!others.has(r.key)) others.set(r.key, r.make);
+          continue;
+        }
+        const w = watches.get(r.base);
+        watches.set(r.base, w ? { target: w.target, keep: mergeKeep(w.keep, r.keep) } : { target: r.target, keep: r.keep });
       }
     }
-    for (const s of v.sources.values()) clearTimeout(s.pushTimer);
+    // A watch's key names its target and what it keeps: sources on one target share it; a version that reads more of
+    // its objects starts it again.
+    const finalKey = new Map<string, string>();
+    const feeds = new Map<string, Feed>();
+    for (const [base, w] of watches) {
+      const key = `${base}|${keepKey(w.keep)}`;
+      finalKey.set(base, key);
+      feeds.set(key, old.get(key) ?? new WatchFeed(key, v.client, w.target, { batchMs: this.T.batch, maxItems: this.L.watchObjects, keep: w.keep, budget: v.budget }, () => this.feedChanged(v, key)));
+    }
+    for (const [key, make] of others) feeds.set(key, old.get(key) ?? make());
+    const params = JSON.stringify(Object.keys(v.params).sort().map((k) => [k, v.params[k]]));
+    for (const id of joinOrder(sources)) {
+      const run = sources.get(id)!;
+      run.feeds = run.feeds.map((k) => finalKey.get(k) ?? k);
+      run.owners = run.owners.map((k) => finalKey.get(k) ?? k);
+      run.sig = JSON.stringify([run.source, run.feeds, run.owners, run.refused ?? null, params, joinsOf(run.source).map((j) => sources.get(j)?.sig ?? "")]);
+      const prev = v.sources.get(id);
+      if (prev && prev.sig === run.sig) run.data = prev.data;
+    }
+    // Stopped before the new ones start: a stopped watch gives its share of the view's budget back.
     for (const [k, f] of old) if (!feeds.has(k)) f.stop();
     v.feeds = feeds;
     v.sources = sources;
     v.running = true;
+    v.ready = gen;
     for (const [k, f] of feeds) if (!old.has(k)) f.start();
+    this.startEventsTick(v);
     // Kept feeds with data, refused sources: computed now; the rest as their reads answer.
     this.recompute(v, [...sources.keys()]);
+  }
+
+  /** Every minute (VIEW_TIMES.eventsTick), events sources are computed again, so an event ages out with no change (L6). */
+  private startEventsTick(v: View) {
+    clearInterval(v.eventsTimer);
+    v.eventsTimer = undefined;
+    const ids = [...v.sources.values()].filter((s) => s.source.kind === "kube.events" && !s.refused).map((s) => s.id);
+    if (!ids.length) return;
+    v.eventsTimer = setInterval(() => {
+      if (v.closed || !v.running || v.ready !== v.gen) return;
+      for (const id of ids) v.dirty.add(id);
+      this.scheduleCompute(v);
+    }, this.T.eventsTick);
   }
 
   /** The namespaces a source reads: `all` (everything the view may), or a list; a namespace outside the limit is refused. */
@@ -547,20 +681,29 @@ export class ViewRuntime {
     let ns: string | undefined;
     if (value === undefined || value === "*") ns = undefined;
     else if (typeof value === "string") ns = value;
-    else if (value && typeof value === "object" && "param" in value) ns = v.params[(value as { param: string }).param];
+    else if (value && typeof value === "object" && "param" in value) {
+      // Own parameters only: `constructor` names nothing (L5).
+      const p = (value as { param: string }).param;
+      ns = Object.hasOwn(v.params, p) ? v.params[p] : undefined;
+    }
     if (ns === undefined) return v.namespaces ? { list: v.namespaces } : { all: true };
     if (v.namespaces && !v.namespaces.includes(ns)) return { refused: SENTENCES.scope(ns, v.namespaces) };
     return { list: [ns] };
   }
 
-  /** Which feeds a source needs, made through `want` (shared by key); or why it can't run. */
-  private plan(v: View, run: SourceRun, types: ResourceType[], want: (key: string, make: () => Feed) => string) {
+  /**
+   * Which reads a source needs, planned into `reads` (nothing is made here; sync shares them by key); or why it can't
+   * run. A watch says what of its objects the source reads (keepFor), so the view keeps only that (M5).
+   */
+  private plan(v: View, run: SourceRun, types: ResourceType[], reads: Read[]) {
     const s = run.source;
     const changed = (key: string) => () => this.feedChanged(v, key);
-    const watch = (t: { group: string; version: string; resource: string }, ns: string | undefined, sel: { labelSelector?: string; fieldSelector?: string } = {}) => {
+    const want = (key: string, make: () => Feed) => (reads.push({ watch: false, key, make }), key);
+    const watch = (t: { group: string; version: string; resource: string }, ns: string | undefined, sel: { labelSelector?: string; fieldSelector?: string } = {}, keep: Keep = BASE_KEEP) => {
       const target = { ...t, ...(ns ? { namespace: ns } : {}), ...sel };
-      const key = `w|${t.group}|${t.version}|${t.resource}|${ns ?? ""}|${sel.labelSelector ?? ""}|${sel.fieldSelector ?? ""}`;
-      return want(key, () => new WatchFeed(key, v.client, target, { batchMs: this.T.batch, maxItems: this.L.watchObjects }, changed(key)));
+      const base = `w|${t.group}|${t.version}|${t.resource}|${ns ?? ""}|${sel.labelSelector ?? ""}|${sel.fieldSelector ?? ""}`;
+      reads.push({ watch: true, base, target, keep });
+      return base;
     };
     const each = (ns: { all: true } | { list: string[] }) => ("all" in ns ? [undefined] : ns.list);
     switch (s.kind) {
@@ -570,13 +713,14 @@ export class ViewRuntime {
         run.type = { group: t.group, version: s.version ?? t.version, resource: t.resource, kind: t.kind };
         run.fields = parseFields(s.fields ?? LIST_FIELDS);
         const sel = { ...(s.labelSelector ? { labelSelector: s.labelSelector } : {}), ...(s.fieldSelector ? { fieldSelector: s.fieldSelector } : {}) };
+        const keep = keepFor(run.fields);
         if (!t.namespaced) {
-          run.feeds.push(watch(run.type, undefined, sel));
+          run.feeds.push(watch(run.type, undefined, sel, keep));
           return;
         }
         const ns = this.namespacesOf(v, s.namespace);
         if ("refused" in ns) return void (run.refused = { state: "forbidden", message: ns.refused });
-        for (const n of each(ns)) run.feeds.push(watch(run.type, n, sel));
+        for (const n of each(ns)) run.feeds.push(watch(run.type, n, sel, keep));
         if (usesWorkload(s)) {
           for (const n of each(ns)) {
             run.owners.push(watch({ group: "apps", version: "v1", resource: "replicasets" }, n), watch({ group: "batch", version: "v1", resource: "jobs" }, n));
@@ -590,7 +734,8 @@ export class ViewRuntime {
         const ns = this.namespacesOf(v, s.namespace);
         if ("refused" in ns) return void (run.refused = { state: "forbidden", message: ns.refused });
         const sel = s.warningsOnly ? { fieldSelector: "type=Warning" } : {};
-        for (const n of each(ns)) run.feeds.push(watch(EVENTS, n, sel));
+        const keep = keepFor(run.fields);
+        for (const n of each(ns)) run.feeds.push(watch(EVENTS, n, sel, keep));
         if (usesWorkload(s)) for (const n of each(ns)) run.owners.push(watch({ group: "apps", version: "v1", resource: "replicasets" }, n), watch({ group: "batch", version: "v1", resource: "jobs" }, n));
         return;
       }
@@ -608,6 +753,9 @@ export class ViewRuntime {
       }
       case "kube.top": {
         const nodes = s.of === "nodes";
+        // Nodes' usage is the whole cluster's: refused here for a namespace-limited view, with no request (L4). The
+        // token alone would let it through, since nodes.metrics.k8s.io is cluster-scoped and discovery knows it.
+        if (nodes && v.namespaces) return void (run.refused = { state: "forbidden", message: SENTENCES.scopeCluster(v.namespaces) });
         const ns = nodes ? ({ all: true } as const) : this.namespacesOf(v, s.namespace);
         if ("refused" in ns) return void (run.refused = { state: "forbidden", message: ns.refused });
         for (const n of nodes ? [undefined] : each(ns)) {
@@ -681,15 +829,32 @@ export class ViewRuntime {
     });
   }
 
+  /**
+   * A read changed: its sources are marked, and computed once when their push is due (at most once per T.push a
+   * source), off the watch's own callback (security review, M3: every batch recomputed at once froze main).
+   */
   private feedChanged(v: View, key: string) {
-    if (v.closed || !v.running || !v.feeds.has(key)) return;
-    const ids = [...v.sources.values()].filter((s) => s.feeds.includes(key) || s.owners.includes(key)).map((s) => s.id);
-    if (ids.length) this.recompute(v, ids);
+    if (v.closed || !v.running || v.ready !== v.gen || !v.feeds.has(key)) return;
+    for (const s of v.sources.values()) if (s.feeds.includes(key) || s.owners.includes(key)) v.dirty.add(s.id);
+    this.scheduleCompute(v);
+  }
+
+  private scheduleCompute(v: View) {
+    if (v.computeTimer || !v.dirty.size) return;
+    let due = Infinity;
+    for (const id of v.dirty) due = Math.min(due, (v.sources.get(id)?.lastPush ?? 0) + this.T.push);
+    v.computeTimer = setTimeout(() => {
+      v.computeTimer = undefined;
+      const ids = [...v.dirty];
+      v.dirty.clear();
+      if (v.closed || !v.running || v.ready !== v.gen) return;
+      this.recompute(v, ids);
+    }, Math.max(0, due - this.now()));
   }
 
   /** Recompute sources, then every source that joins one of them (joins form no circle: the schema refused one). */
   private recompute(v: View, ids: string[]) {
-    const order = this.joinOrder(v);
+    const order = joinOrder(v.sources);
     const todo = new Set(ids);
     for (const id of order) {
       const s = v.sources.get(id)!;
@@ -700,23 +865,20 @@ export class ViewRuntime {
     }
   }
 
-  /** Sources in an order where each comes after the sources it joins. */
-  private joinOrder(v: View): string[] {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    const visit = (id: string, depth: number) => {
-      if (seen.has(id) || depth > 16) return;
-      seen.add(id);
-      const s = v.sources.get(id);
-      if (!s) return;
-      for (const st of "pipe" in s.source ? (s.source.pipe ?? []) : []) if ("join" in st) visit(st.join.with, depth + 1);
-      out.push(id);
-    };
-    for (const id of v.sources.keys()) visit(id, 0);
-    return out;
+  /** A source's rows worked out; whatever goes wrong in that is its error, never main's (L2). */
+  private compute(v: View, s: SourceRun) {
+    this.computes++;
+    try {
+      this.work(v, s);
+    } catch (e) {
+      s.piped = [];
+      s.whole = false;
+      s.data = { state: "error", message: e instanceof JoinTooBig ? e.message : SENTENCES.computeFailed, rows: [], total: 0, truncated: false, at: this.now() };
+      this.schedulePush(v, s);
+    }
   }
 
-  private compute(v: View, s: SourceRun) {
+  private work(v: View, s: SourceRun) {
     const at = this.now();
     const done = (data: Omit<SourceData, "at">, whole: boolean, piped: Row[] = []) => {
       s.piped = piped;
@@ -753,12 +915,20 @@ export class ViewRuntime {
           if (e) owners.set(e[0], e[1]);
         }
       }
+      // At most sourceObjects over all of the source's watches (M3: a "*" is one watch per namespace of the limit).
       let objects: KubeObject[] = [];
+      let sourceCut = false;
       for (const f of feeds as WatchFeed[]) {
-        objects = objects.concat(f.objects());
-        if (f.truncated) truncated = true;
+        const room = this.L.sourceObjects - objects.length;
+        const got = f.objects();
+        if (got.length > room) sourceCut = true;
+        objects = objects.concat(got.length > room ? got.slice(0, Math.max(0, room)) : got);
       }
-      if (truncated && feeds.some((f) => (f as WatchFeed).truncated)) notes.push(SENTENCES.watchCut(this.L.watchObjects));
+      const cuts = new Set((feeds as WatchFeed[]).map((f) => f.cutBy));
+      if (cuts.has("items")) notes.push(SENTENCES.watchCut(this.L.watchObjects));
+      if (sourceCut && !cuts.has("items")) notes.push(SENTENCES.watchCut(this.L.sourceObjects));
+      if (cuts.has("budget")) notes.push(SENTENCES.viewCut);
+      if (cuts.has("items") || cuts.has("budget") || sourceCut) truncated = true;
       if (src.kind === "kube.events") {
         const since = at - (src.sinceMinutes ?? 60) * 60_000;
         objects = objects.filter((o) => {
@@ -826,7 +996,14 @@ export class ViewRuntime {
       else continue;
       truncated = true;
     }
-    const piped = runPipe(base, pipe, { params: v.params, rowsOf: (id) => v.sources.get(id)?.piped });
+    let piped = runPipe(base, pipe, { params: v.params, rowsOf: (id) => v.sources.get(id)?.piped, joinWork: this.L.joinWork });
+    // What a source keeps (what a join reads) holds at most sourceChars of text (M5).
+    const fit = rowsWithin(piped, this.L.sourceChars);
+    if (fit < piped.length) {
+      piped = piped.slice(0, fit);
+      truncated = true;
+      notes.push(SENTENCES.rowsTooBig(fit));
+    }
     const out = deliver(piped, this.L.rows);
     if (out.truncated) {
       truncated = true;
@@ -886,7 +1063,7 @@ export class ViewRuntime {
     const gen = v.gen;
     const send = () => {
       s.pushTimer = undefined;
-      if (v.closed || gen !== v.gen || !v.visible || v.sources.get(s.id) !== s) return;
+      if (v.closed || gen !== v.gen || v.ready !== v.gen || !v.visible || v.sources.get(s.id) !== s) return;
       s.lastPush = this.now();
       this.deps.push({ view: v.id, source: s.id, data: structuredClone(s.data) });
     };
@@ -897,6 +1074,38 @@ export class ViewRuntime {
 }
 
 const OWNERS_UNREAD = "ReplicaSets or Jobs couldn't be read, so a pod's workload may stop at them.";
+
+/** Sources in an order where each comes after the sources it joins. */
+function joinOrder(sources: ReadonlyMap<string, SourceRun>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (id: string, depth: number) => {
+    if (seen.has(id) || depth > 16) return;
+    seen.add(id);
+    const s = sources.get(id);
+    if (!s) return;
+    for (const j of joinsOf(s.source)) visit(j, depth + 1);
+    out.push(id);
+  };
+  for (const id of sources.keys()) visit(id, 0);
+  return out;
+}
+
+const joinsOf = (src: Source): string[] => ("pipe" in src ? (src.pipe ?? []) : []).flatMap((st) => ("join" in st ? [st.join.with] : []));
+
+/** How many of the rows fit in `max` characters (cell text, keys, about 100 for a `_ref`). */
+function rowsWithin(rows: readonly Row[], max: number): number {
+  let chars = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    for (const k of Object.keys(r)) {
+      const c = r[k];
+      chars += k.length + (typeof c === "string" ? c.length : c && typeof c === "object" ? 100 : 8);
+    }
+    if (chars > max) return i;
+  }
+  return rows.length;
+}
 
 const finite = (n: unknown): number | null => (typeof n === "number" && Number.isFinite(n) ? n : null);
 const refKey = (r: { group: string; resource: string; namespace?: string; name: string }) => `${r.group}/${r.resource}/${r.namespace ?? ""}/${r.name}`;

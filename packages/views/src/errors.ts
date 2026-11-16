@@ -35,6 +35,11 @@ export const SENTENCES = {
   notReadable: "This view's sources stopped: open it again.",
   joinMissing: (source: string) => `${source} isn't read yet or couldn't be read, so what this source joins from it is missing.`,
   joinCut: (source: string) => `${source} was cut, so what this source joins from it may be missing.`,
+  // Security review of wave 10 part 1 (M3, M5).
+  joinTooBig: (source: string) => `Joining ${source} here is too much work to do live: filter or limit either side first.`,
+  viewCut: "This view keeps too many objects in all, so some are left out: read fewer kinds or namespaces.",
+  computeFailed: "Landlens couldn't work out this source's rows.",
+  rowsTooBig: (shown: number) => `Only the first ${shown.toLocaleString("en-US")} rows fit: this source's rows hold too much text.`,
 } as const;
 
 export type Issue = { pointer: string; message: string };

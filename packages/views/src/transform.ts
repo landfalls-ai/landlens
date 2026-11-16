@@ -3,6 +3,7 @@
 // row is only ever given the keys its steps declare (fieldsAfter), plus the hidden `_ref` and `_tone`.
 import type { Cell } from "./path.js";
 import { HIDDEN, type Row } from "./rows.js";
+import { SENTENCES } from "./errors.js";
 import { VIEW_LIMITS } from "./limits.js";
 
 export type Value = string | number | boolean | { param: string };
@@ -26,7 +27,19 @@ export type PipeContext = {
   params: Readonly<Record<string, string>>;
   /** Another source's rows after its own pipe, before the 2,000-row cut (a join's right side). */
   rowsOf: (source: string) => readonly Row[] | undefined;
+  /** A join's work budget (VIEW_LIMITS.joinWork unless narrower). */
+  joinWork?: number;
 };
+
+/**
+ * A join that would take more than its work budget (security review of wave 10 part 1, M3: a 10,000 × 10,000 join on
+ * one shared key took 13 s of main's thread). Thrown before the work is done, with D222's sentence.
+ */
+export class JoinTooBig extends RangeError {
+  constructor(readonly source: string) {
+    super(SENTENCES.joinTooBig(source));
+  }
+}
 
 /** A cell of a row, own properties only. */
 export const get = (row: Row, f: string): Cell => {
@@ -116,39 +129,86 @@ export function parsePairs(v: Cell): Map<string, string> {
   return out;
 }
 
+/**
+ * A join, by value (a hash index of the right side) or by selector (the right side indexed by each `k=v` label; a left
+ * row's candidates are the rows of its rarest pair, then every pair checked). Its work is counted as it goes and it
+ * stops at the budget, before taking or aggregating anything (JoinTooBig).
+ */
 function join(rows: readonly Row[], j: Extract<PipeStep, { join: unknown }>["join"], ctx: PipeContext): Row[] {
   const right = ctx.rowsOf(j.with) ?? [];
-  const matchesOf: (r: Row) => Row[] = "left" in j.on
-    ? (() => {
-        const on = j.on as { left: string; right: string };
-        const index = new Map<string, Row[]>();
-        for (const r of right) {
-          const k = get(r, on.right);
-          if (k === null) continue;
-          const key = `${typeof k === "number" ? "n" : "s"}:${String(k)}`;
-          const list = index.get(key);
-          if (list) list.push(r);
-          else index.set(key, [r]);
+  const budget = ctx.joinWork ?? VIEW_LIMITS.joinWork;
+  const per = Math.max(1, Object.keys(j.take ?? {}).length + Object.keys(j.agg ?? {}).length);
+  let work = 0;
+  const spend = (n: number) => {
+    work += n;
+    if (work > budget) throw new JoinTooBig(j.with);
+  };
+  const matches: (readonly Row[])[] = new Array(rows.length);
+  if ("left" in j.on) {
+    const on = j.on;
+    const index = new Map<string, Row[]>();
+    for (const r of right) {
+      spend(1);
+      const k = get(r, on.right);
+      if (k === null) continue;
+      const key = `${typeof k === "number" ? "n" : "s"}:${String(k)}`;
+      const list = index.get(key);
+      if (list) list.push(r);
+      else index.set(key, [r]);
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const k = get(rows[i]!, on.left);
+      let m: readonly Row[] = [];
+      if (k !== null) {
+        const n = asNumber(k);
+        m = index.get(`s:${String(k)}`) ?? (Number.isNaN(n) ? undefined : index.get(`n:${String(n)}`)) ?? index.get(`s:${String(n)}`) ?? [];
+      }
+      spend(1 + m.length * per);
+      matches[i] = m;
+    }
+  } else {
+    const on = j.on;
+    type Labelled = { r: Row; labels: Map<string, string> };
+    const index = new Map<string, Labelled[]>();
+    for (const r of right) {
+      const labels = parsePairs(get(r, on.labels));
+      spend(1 + labels.size);
+      const e = { r, labels };
+      for (const [k, v] of labels) {
+        // parsePairs splits at the first "=", so a key holds none and `k=v` names one pair.
+        const key = `${k}=${v}`;
+        const list = index.get(key);
+        if (list) list.push(e);
+        else index.set(key, [e]);
+      }
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const sel = parsePairs(get(rows[i]!, on.selector));
+      spend(1 + sel.size);
+      // As Kubernetes reads a Service's selector: an empty one selects nothing.
+      let best: Labelled[] | undefined;
+      if (sel.size) {
+        for (const [k, v] of sel) {
+          const b = index.get(`${k}=${v}`);
+          if (!b) {
+            best = undefined;
+            break;
+          }
+          if (!best || b.length < best.length) best = b;
         }
-        return (l: Row) => {
-          const k = get(l, on.left);
-          if (k === null) return [];
-          const n = asNumber(k);
-          return index.get(`s:${String(k)}`) ?? (Number.isNaN(n) ? undefined : index.get(`n:${String(n)}`)) ?? index.get(`s:${String(n)}`) ?? [];
-        };
-      })()
-    : (() => {
-        const on = j.on as { selector: string; labels: string };
-        const labelled = right.map((r) => ({ r, labels: parsePairs(get(r, on.labels)) }));
-        return (l: Row) => {
-          const sel = parsePairs(get(l, on.selector));
-          // As Kubernetes reads a Service's selector: an empty one selects nothing.
-          if (!sel.size) return [];
-          return labelled.filter(({ labels }) => [...sel].every(([k, v]) => labels.get(k) === v)).map(({ r }) => r);
-        };
-      })();
-  return rows.map((l) => {
-    const m = matchesOf(l);
+      }
+      if (!best) {
+        matches[i] = [];
+        continue;
+      }
+      spend(best.length * sel.size);
+      const m = best.filter(({ labels }) => [...sel].every(([k, v]) => labels.get(k) === v)).map(({ r }) => r);
+      spend(m.length * per);
+      matches[i] = m;
+    }
+  }
+  return rows.map((l, i) => {
+    const m = matches[i]!;
     const out: Row = keep(l, { ...withoutHidden(l) });
     for (const [to, from] of Object.entries(j.take ?? {})) out[to] = m.length ? get(m[0]!, from) : null;
     for (const [to, a] of Object.entries(j.agg ?? {})) out[to] = aggregate(m, a);

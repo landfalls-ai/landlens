@@ -60,6 +60,8 @@ export function parsePath(p: string): ParsedPath | { error: string } {
 export type ReadContext = {
   /** The kind when the object doesn't say (list items carry it once watch.ts fills it; plain rows don't). */
   kind?: string;
+  /** The kind's API group, when known: kubectl's words for a Pod or a Node are core's only (computed.ts). */
+  group?: string;
   owners?: OwnerIndex;
   now?: number;
 };

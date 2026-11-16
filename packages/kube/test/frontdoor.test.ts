@@ -277,7 +277,7 @@ describe("FrontDoor: an object token (wave 8 part 4, D162)", () => {
 
 describe("FrontDoor scrubbing for agent tokens", () => {
   /** What the fake cluster answers next: content type, body (string or chunks), extra headers. */
-  let answer: { type: string; body: string | string[]; headers?: Record<string, string> };
+  let answer: { type: string; body: string | string[]; headers?: Record<string, string>; gap?: number };
   let s: Server;
   let d: FrontDoor;
   const H = "clusterBBBB2";
@@ -295,8 +295,14 @@ describe("FrontDoor scrubbing for agent tokens", () => {
     s = createServer((req, res) => {
       seen.push(req);
       res.writeHead(200, { "Content-Type": answer.type, ...answer.headers });
-      for (const c of [answer.body].flat()) res.write(c);
-      res.end();
+      // `gap`: the chunks a while apart, so each reaches the front door on its own (a key logged a line a second).
+      void (async () => {
+        for (const c of [answer.body].flat()) {
+          res.write(c);
+          if (answer.gap) await new Promise((r) => setTimeout(r, answer.gap));
+        }
+        res.end();
+      })();
     });
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
     d = new FrontDoor(tls);
@@ -348,6 +354,39 @@ describe("FrontDoor scrubbing for agent tokens", () => {
     const r = await get("/api/v1/namespaces/x/pods/a/log", agent(), "*/*");
     expect(r.body).toContain("connecting to postgres://app:<redacted>@db/app");
     expect(r.body).not.toContain("hunter2");
+  });
+
+  // Security review of wave 10 part 1, M1: a private key logged one line at a time, followed (`kubectl logs -f`), had
+  // only its first and last line redacted. The stream now remembers that a key is open, across lines and chunks.
+  const PEM = ["-----BEGIN RSA PRIVATE KEY-----", "MIIEpAIBAAKCAQEAsecretsecretsecretsecretsecret", "Zm9vYmFyYmF6cXV4c2VjcmV0c2VjcmV0c2VjcmV0==", "-----END RSA PRIVATE KEY-----"];
+  it("redacts a private key logged line by line in a followed log, also split across chunks", async () => {
+    const stamp = "2026-11-16T10:00:00.000000000Z ";
+    const body = ["starting", ...PEM, "listening on :8080"].map((l) => stamp + l).join("\n") + "\n";
+    // Every way of cutting the stream into two chunks, mid-line included.
+    for (const at of [10, 40, 80, 120, 160, body.length - 20]) {
+      answer = { type: "text/plain", body: [body.slice(0, at), body.slice(at)] };
+      const r = await get("/api/v1/namespaces/x/pods/a/log?follow=true&timestamps=true", agent(), "*/*");
+      expect(r.body).not.toMatch(/MIIEpAIB|Zm9vYmFy/);
+      expect(r.body.split("\n").slice(0, 6)).toEqual([`${stamp}starting`, ...PEM.map(() => `${stamp}<redacted private key>`), `${stamp}listening on :8080`]);
+    }
+    // One line a chunk, each on its own: the state is the stream's, not a chunk's.
+    answer = { type: "text/plain", body: ["starting", ...PEM, "listening on :8080"].map((l) => stamp + l + "\n"), gap: 15 };
+    const each = await get("/api/v1/namespaces/x/pods/a/log?follow=true&timestamps=true", agent(), "*/*");
+    expect(each.body.split("\n").slice(0, 6)).toEqual([`${stamp}starting`, ...PEM.map(() => `${stamp}<redacted private key>`), `${stamp}listening on :8080`]);
+    // A followed read whose tail began inside the key, a line a chunk (as an API server sends it): the body lines
+    // before its END go too.
+    answer = { type: "text/plain", body: [...PEM.slice(1), "listening on :8080"].map((l) => stamp + l + "\n"), gap: 15 };
+    const split = await get("/api/v1/namespaces/x/pods/a/log?follow=true&timestamps=true&tailLines=4", agent(), "*/*");
+    expect(split.body.split("\n").slice(0, 4)).toEqual([...PEM.slice(1).map(() => `${stamp}<redacted private key>`), `${stamp}listening on :8080`]);
+    // The same in one chunk.
+    answer = { type: "text/plain", body: [[...PEM.slice(1), "listening on :8080"].map((l) => stamp + l).join("\n") + "\n"] };
+    const mid = await get("/api/v1/namespaces/x/pods/a/log?follow=true&timestamps=true&tailLines=4", agent(), "*/*");
+    expect(mid.body).not.toMatch(/MIIEpAIB|Zm9vYmFy/);
+    expect(mid.body.split("\n").slice(0, 4)).toEqual([...PEM.slice(1).map(() => `${stamp}<redacted private key>`), `${stamp}listening on :8080`]);
+    // Read whole (not followed): a key whose END the log hasn't reached yet is still taken to the end.
+    answer = { type: "text/plain", body: ["starting", ...PEM.slice(0, 3)].join("\n") + "\n" };
+    const r = await get("/api/v1/namespaces/x/pods/a/log", agent(), "*/*");
+    expect(r.body).not.toMatch(/MIIEpAIB|Zm9vYmFy/);
   });
 
   it("refuses what it can't read rather than pass it through", async () => {

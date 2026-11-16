@@ -5,7 +5,7 @@ import { agentReadOnlyPolicy } from "@landlens/kube";
 import { SENTENCES } from "@landlens/views";
 import { afterEach, describe, expect, it } from "vitest";
 import { helmRows, ViewRuntime, type ViewPush, type ViewRuntimeDeps } from "../src/main/view-runtime";
-import { FakeApi, fakeClusters, sleep, until } from "./view-fakes";
+import { FakeApi, fakeClusters, sleep, TYPES, until } from "./view-fakes";
 
 const H = "handle-0001";
 const FAST = { batch: 10, push: 40, top: 30, metrics: 30, doctor: 30, helm: 30, eventsTick: 50, logPods: 40, logRetry: 20, refresh: 200, hiddenStop: 60 };
@@ -250,9 +250,11 @@ describe("live sources (D210)", () => {
     api.release();
     await until(() => pushes.some((p) => p.data.state === "ok"), "a push");
     await sleep(60);
-    const names = pushes.filter((p) => p.data.state === "ok").flatMap((p) => p.data.rows.map((r) => r.name));
+    // Every push, of any state (security review, M6: a "loading" push carried the older parameter's rows).
+    const names = pushes.flatMap((p) => p.data.rows.map((r) => r.name));
     expect(names).not.toContain("a");
     expect(names).toContain("b");
+    expect(rt.shows(id, { group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: "a" })).toBe(false);
 
     // A poll that answers after the view closed is never pushed.
     const later = new FakeApi();
@@ -474,5 +476,238 @@ describe("arguments are checked as IPC requests are", () => {
     await wait(id, "pods", (d) => d.rows.length === 1);
     expect(rt.shows(id, { group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: "a" })).toBe(true);
     expect(rt.shows(id, { group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: "b" })).toBe(false);
+  });
+});
+
+// Security review of wave 10 part 1 (M1–M6, L1–L8): each fix with a test that fails without it.
+describe("security review of part 1", () => {
+  const PEM = ["-----BEGIN RSA PRIVATE KEY-----", "MIIEpAIBAAKCAQEAsecretsecretsecretsecretsecret", "Zm9vYmFyYmF6cXV4c2VjcmV0c2VjcmV0c2VjcmV0==", "-----END RSA PRIVATE KEY-----"];
+  const stamp = "2026-11-16T10:00:00.000000000Z ";
+  async function pemLogged(scrubs: boolean) {
+    const { api, rt, wait } = setup();
+    api.scrubs = scrubs;
+    api.add("pods", pod("api-0"));
+    api.log("landlens-dev", "api-0", "starting");
+    const id = rt.open({ handle: H, document: doc({ l: { kind: "kube.logs", namespace: "landlens-dev", pod: "api-0" } }) });
+    await wait(id, "l", (x) => (x.lines?.length ?? 0) === 1);
+    // Line by line, and the base64 lines split across chunks mid-line.
+    const text = [...PEM, "listening on :8080"].map((l) => stamp + l + "\n").join("");
+    const cut = [0, 50, 100, 130, 170, 220, text.length];
+    api.logChunks("landlens-dev", "api-0", ...cut.slice(1).map((e, i) => text.slice(cut[i], e)));
+    const d = await wait(id, "l", (x) => x.lines!.at(-1)!.text === "listening on :8080");
+    expect(d.lines!.map((l) => l.text)).toEqual(["starting", ...PEM.map(() => "<redacted private key>"), "listening on :8080"]);
+  }
+  it("M1: a private key logged line by line is redacted on every line, split across chunks too", () => pemLogged(true));
+  it("M1: the runtime redacts it on its own, without the front door's stream state (layered)", () => pemLogged(false));
+  async function tailInsideKey(scrubs: boolean) {
+    const { api, rt, wait } = setup();
+    api.scrubs = scrubs;
+    api.add("pods", pod("api-0"));
+    api.log("landlens-dev", "api-0", "starting", ...PEM, ...Array.from({ length: 7 }, (_, i) => `tick ${i}`));
+    // The kept lines (10) begin inside the key, just after its BEGIN.
+    const id = rt.open({ handle: H, document: doc({ l: { kind: "kube.logs", namespace: "landlens-dev", pod: "api-0", tailLines: 10 } }) });
+    const d = await wait(id, "l", (x) => (x.lines?.length ?? 0) === 10);
+    expect(d.lines!.map((l) => l.text)).toEqual(["<redacted private key>", "<redacted private key>", "<redacted private key>", ...Array.from({ length: 7 }, (_, i) => `tick ${i}`)]);
+    expect(JSON.stringify(d)).not.toMatch(/MIIEpAIB|Zm9vYmFy/);
+  }
+  it("M1: a log whose kept lines begin inside a key shows none of its body", () => tailInsideKey(true));
+  it("M1: the runtime does so on its own too (layered)", () => tailInsideKey(false));
+
+  it("M3: twenty changes inside one push interval are worked out once, not twenty times", async () => {
+    const { api, rt, wait } = setup({ times: { ...FAST, push: 400 } });
+    const id = rt.open({ handle: H, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: "landlens-dev" } }) });
+    await wait(id, "pods", (d) => d.state === "ok");
+    await sleep(20);
+    const before = rt.computeRuns;
+    for (let i = 0; i < 20; i++) {
+      api.add("pods", pod(`p${i}`));
+      await sleep(12); // past the watch's 10 ms batch: about twenty batches
+    }
+    await wait(id, "pods", (d) => d.rows.length === 20);
+    expect(rt.computeRuns - before).toBeLessThanOrEqual(2);
+  });
+
+  it("M3: a join past its work budget isn't worked out and says so, with no rows", async () => {
+    const { api, rt, wait } = setup({ limits: { joinWork: 20 } });
+    for (let i = 0; i < 6; i++) api.add("pods", pod(`p${i}`));
+    const id = rt.open({
+      handle: H,
+      document: doc({
+        a: { kind: "kube.list", resource: "pods", namespace: "landlens-dev", fields: { name: "$name", app: 'metadata.labels["app"]' } },
+        b: { kind: "kube.list", resource: "pods", namespace: "landlens-dev", fields: { name: "$name", app: 'metadata.labels["app"]' }, pipe: [{ join: { with: "a", on: { left: "app", right: "app" }, agg: { n: { fn: "count" } } } }] },
+      }),
+    });
+    const d = await wait(id, "b", (x) => x.state === "error");
+    expect(d).toMatchObject({ message: SENTENCES.joinTooBig("a"), rows: [] });
+  });
+
+  it("M3: a source reads at most sourceObjects over all its watches", async () => {
+    const { api, rt, wait } = setup({ limits: { sourceObjects: 3 } });
+    for (const ns of ["landlens-dev", "shop"]) for (const n of ["a", "b"]) api.add("pods", pod(`${n}-${ns}`, { ns }));
+    const id = rt.open({ handle: H, namespaces: ["landlens-dev", "shop"], document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: "*" } }) });
+    const d = await wait(id, "pods", (x) => x.state === "ok");
+    expect(d.rows).toHaveLength(3);
+    expect(d).toMatchObject({ truncated: true, message: SENTENCES.watchCut(3) });
+  });
+
+  it("M5: a view's watches keep at most viewObjects together, and say so", async () => {
+    const { api, rt, wait } = setup({ limits: { watchObjects: 3, viewObjects: 4 } });
+    for (let i = 0; i < 3; i++) {
+      api.add("pods", pod(`p${i}`));
+      api.add("configmaps", { metadata: { name: `c${i}`, namespace: "landlens-dev" } });
+    }
+    const id = rt.open({ handle: H, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: "landlens-dev" }, cms: { kind: "kube.list", resource: "configmaps", namespace: "landlens-dev" } }) });
+    const a = await wait(id, "pods", (x) => x.state === "ok");
+    const b = await wait(id, "cms", (x) => x.state === "ok");
+    expect(a.rows.length + b.rows.length).toBe(4);
+    expect([a.message, b.message].join(" ")).toContain(SENTENCES.viewCut);
+  });
+
+  it("M5: objects are kept trimmed to what the document reads (a big ConfigMap fits a 2,000-character budget)", async () => {
+    const { api, rt, wait } = setup({ limits: { viewChars: 2_000 } });
+    // The front door caps a string at 4,096 characters; the rest of the object is what a watch would keep whole.
+    api.add("configmaps", { metadata: { name: "big", namespace: "landlens-dev" }, data: { blob: "x".repeat(200_000), small: "s" } });
+    const id = rt.open({ handle: H, document: doc({ cms: { kind: "kube.list", resource: "configmaps", namespace: "landlens-dev", fields: { name: "$name", small: 'data["small"]' } } }) });
+    const d = await wait(id, "cms", (x) => x.state === "ok");
+    expect(d).toMatchObject({ truncated: false, rows: [{ name: "big", small: "s" }] });
+    // Reading the blob itself doesn't fit, and is said.
+    rt.update(id, doc({ cms: { kind: "kube.list", resource: "configmaps", namespace: "landlens-dev", fields: { name: "$name", blob: 'data["blob"]' } } }));
+    const e = await wait(id, "cms", (x) => x.state === "ok" && x.truncated);
+    expect(e).toMatchObject({ rows: [], message: SENTENCES.viewCut });
+  });
+
+  it("M5: a source's rows hold at most sourceChars of text", async () => {
+    const { api, rt, wait } = setup({ limits: { sourceChars: 700 } });
+    for (let i = 0; i < 5; i++) api.add("configmaps", { metadata: { name: `c${i}`, namespace: "landlens-dev" }, data: { v: "y".repeat(200) } });
+    const id = rt.open({ handle: H, document: doc({ cms: { kind: "kube.list", resource: "configmaps", namespace: "landlens-dev", fields: { v: 'data["v"]' } } }) });
+    const d = await wait(id, "cms", (x) => x.state === "ok");
+    expect(d.rows).toHaveLength(2);
+    expect(d).toMatchObject({ truncated: true, message: SENTENCES.rowsTooBig(2) });
+  });
+
+  it("M5: a view stopped while hidden keeps no rows in main", async () => {
+    const { api, rt, wait } = setup();
+    api.add("pods", pod("a"));
+    const id = rt.open({ handle: H, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: "landlens-dev" } }) });
+    await wait(id, "pods", (d) => d.rows.length === 1);
+    rt.hide(id);
+    await until(() => api.openWatches === 0, "the watch to stop");
+    // Main's own record of the source (not data(), which says loading while stopped anyway).
+    const run = (rt as unknown as { views: Map<string, { sources: Map<string, { piped: unknown[]; data: SourceData }> }> }).views.get(id)!.sources.get("pods")!;
+    expect(run.piped).toEqual([]);
+    expect(run.data.rows).toEqual([]);
+  });
+
+  it("M6: an older read's event while a change waits on discovery is never pushed", async () => {
+    const api = new FakeApi();
+    const c = fakeClusters();
+    let gate: (() => void) | undefined;
+    let holding = false;
+    const clusters = { ...c.clusters, discovery: async () => (holding && (await new Promise<void>((r) => (gate = r))), TYPES) };
+    const pushes: ViewPush[] = [];
+    const rt = new ViewRuntime({ clusters, frontDoor: api.door, client: (_u, t) => api.client(t), push: (p) => pushes.push(p), times: FAST });
+    runtimes.push(rt);
+    api.add("pods", pod("a", { ns: "landlens-dev" }));
+    api.add("pods", pod("b", { ns: "shop" }));
+    const id = rt.open({ handle: H, params: { ns: "landlens-dev" }, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: { param: "ns" } } }, { params: [{ name: "ns", type: "namespace" }] }) });
+    await until(() => pushes.some((p) => p.data.rows.some((r) => r.name === "a")), "a");
+    holding = true;
+    const from = pushes.length;
+    rt.setParams(id, { ns: "shop" });
+    expect(rt.shows(id, { group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: "a" })).toBe(false);
+    expect(rt.data(id, "pods")!.rows).toEqual([]);
+    api.add("pods", pod("a2", { ns: "landlens-dev" })); // the old watch is still open while discovery waits
+    await sleep(80);
+    gate!();
+    await until(() => pushes.slice(from).some((p) => p.data.rows.some((r) => r.name === "b")), "b");
+    await sleep(60);
+    const names = pushes.slice(from).flatMap((p) => p.data.rows.map((r) => r.name));
+    expect(names).not.toContain("a");
+    expect(names).not.toContain("a2");
+  });
+
+  it("L1: an open refused for its parameters leaves no token behind", () => {
+    const { api, rt } = setup();
+    const d = doc({ pods: { kind: "kube.list", resource: "pods" } }, { params: [{ name: "c", type: "choice", options: ["a"] }] });
+    for (let i = 0; i < 3; i++) expect(() => rt.open({ handle: H, document: d, params: { c: "zzz" } })).toThrow(/isn't one of its options/);
+    expect(api.door.issued).toHaveLength(0);
+    expect(api.door.grants.size).toBe(0);
+    // Anything that throws once the token exists revokes it.
+    const broken = setup({ client: () => { throw new Error("no client"); } });
+    expect(() => broken.rt.open({ handle: H, document: d })).toThrow(/no client/);
+    expect(broken.api.door.issued).toHaveLength(1);
+    expect(broken.api.door.grants.size).toBe(0);
+    expect(broken.rt.size).toBe(0);
+  });
+
+  it("L2: a custom resource of kind Node isn't read as core's node", async () => {
+    const { api, rt, wait } = setup();
+    api.add("lhnodes", { metadata: { name: "n1" }, spec: { unschedulable: true }, status: { conditions: [{ type: "Ready", status: "True" }] } });
+    api.add("lhnodes", { metadata: { name: "n2" }, status: { conditions: { Ready: { status: "True" } } } });
+    const id = rt.open({ handle: H, document: doc({ n: { kind: "kube.list", resource: "lhnodes", group: "longhorn.io", fields: { name: "$name", status: "$status" } } }) });
+    const d = await wait(id, "n", (x) => x.state === "ok" && x.rows.length === 2);
+    // core's words would say "Ready,SchedulingDisabled" (bad): this is Longhorn's object, read by its conditions.
+    expect(d.rows.map((r) => [r.status, r._tone])).toEqual([["Ready", "ok"], [null, "muted"]]);
+  });
+
+  it("L2: a source whose rows can't be worked out says so; nothing escapes into main", async () => {
+    const escaped: unknown[] = [];
+    const on = (e: unknown) => escaped.push(e);
+    process.on("unhandledRejection", on);
+    try {
+      const { rt, wait } = setup({ doctor: async () => ({ at: "", cut: false, checks: {} }) as unknown as DoctorReport });
+      const id = rt.open({ handle: H, document: doc({ p: { kind: "doctor.problems" } }) });
+      expect(await wait(id, "p", (x) => x.state === "error")).toMatchObject({ message: SENTENCES.computeFailed, rows: [] });
+      await sleep(50);
+      expect(escaped).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", on);
+    }
+  });
+
+  it("L3: a source refused for too many reads starts none of them", async () => {
+    const { api, rt, wait } = setup();
+    const namespaces = Array.from({ length: 30 }, (_, i) => `ns-${i}`);
+    const id = rt.open({ handle: H, namespaces, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: "*" } }) });
+    expect(await wait(id, "pods", (x) => x.state === "error")).toMatchObject({ message: SENTENCES.overLimit("reads in this view", 30, 24) });
+    await sleep(50);
+    expect(api.openWatches).toBe(0);
+    expect(api.seen).toEqual([]);
+  });
+
+  it("L4: nodes' usage in a namespace-limited view is refused before any request (discovery knows the kind)", async () => {
+    const { api, rt, wait } = setup();
+    api.metrics.set("/apis/metrics.k8s.io/v1beta1/nodes", { items: [{ metadata: { name: "orbstack" }, usage: { cpu: "1", memory: "1Gi" } }] });
+    const id = rt.open({ handle: H, namespaces: ["landlens-dev"], document: doc({ nodes: { kind: "kube.top", of: "nodes" } }) });
+    expect(await wait(id, "nodes", (x) => x.state !== "loading")).toMatchObject({ state: "forbidden", message: SENTENCES.scopeCluster(["landlens-dev"]), rows: [] });
+    await sleep(50);
+    expect(api.seen.filter((x) => x.path.includes("metrics.k8s.io"))).toEqual([]);
+  });
+
+  it("L5: a parameter named like an Object method is refused, and the runtime reads own parameters only", () => {
+    const { rt } = setup();
+    expect(() => rt.open({ handle: H, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: { param: "constructor" } } }, { params: [{ name: "constructor", type: "namespace" }] }) })).toThrow(/isn't valid/);
+    const namespacesOf = (rt as unknown as { namespacesOf: (v: unknown, x: unknown) => unknown }).namespacesOf.bind(rt);
+    expect(namespacesOf({ params: {} }, { param: "constructor" })).toEqual({ all: true });
+    expect(namespacesOf({ params: {}, namespaces: ["landlens-dev"] }, { param: "toString" })).toEqual({ list: ["landlens-dev"] });
+  });
+
+  it("L6: an event leaves the rows once it is older than sinceMinutes, with no watch event", async () => {
+    let clock = Date.parse("2026-11-16T12:00:00Z");
+    const { api, rt, wait } = setup({ now: () => clock });
+    api.add("events", { metadata: { name: "e1", namespace: "landlens-dev" }, type: "Warning", reason: "BackOff", message: "x", lastTimestamp: new Date(clock - 59 * 60_000).toISOString(), involvedObject: { kind: "Pod", name: "a" } });
+    const id = rt.open({ handle: H, document: doc({ ev: { kind: "kube.events", namespace: "landlens-dev", sinceMinutes: 60 } }) });
+    await wait(id, "ev", (x) => x.state === "ok" && x.rows.length === 1);
+    clock += 2 * 60_000;
+    await wait(id, "ev", (x) => x.state === "ok" && x.rows.length === 0, "the event to age out");
+  });
+
+  it("L8: the fake scrubs as the front door does: an env value never reaches a row", async () => {
+    const { api, rt, wait, pushes } = setup();
+    api.add("pods", pod("a"));
+    const id = rt.open({ handle: H, document: doc({ pods: { kind: "kube.list", resource: "pods", namespace: "landlens-dev", fields: { v: "spec.containers[0].env[0].value" } } }) });
+    const d = await wait(id, "pods", (x) => x.state === "ok");
+    expect(d.rows[0]!.v).toBe("<redacted>");
+    expect(JSON.stringify(pushes)).not.toContain("hunter2");
   });
 });

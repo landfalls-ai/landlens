@@ -233,4 +233,21 @@ describe("D225's limits, at the limit and one past", () => {
     ok(tail(L.logLines));
     expect(issues(tail(L.logLines + 1))).toEqual(["/sources/l/tailLines: at most 500"]);
   });
+
+  // Security review of wave 10 part 1, M4: `<\s*/?\s*(…)` was quadratic ("<" and 140,000 spaces took 8 s).
+  it("checks refused tags in linear time; whitespace after < isn't a tag in HTML", () => {
+    for (const pad of [" ", "\n", "\t"]) {
+      const t0 = performance.now();
+      ok(small({ blocks: [{ type: "app", id: "a", uses: [], html: "<" + pad.repeat(140_000) }] }));
+      expect(performance.now() - t0).toBeLessThan(100);
+    }
+    ok(small({ blocks: [{ type: "app", id: "a", uses: [], html: "< iframe>" }] }));
+    expect(issues(small({ blocks: [{ type: "app", id: "a", uses: [], html: "x".repeat(100_000) + "</IFRAME>" }] }))).toEqual(["/blocks/0/html: a block's html can't contain <iframe>."]);
+  });
+
+  // L5: an id that every object inherits.
+  it("refuses a source, block or parameter id named constructor or prototype", () => {
+    expect(issues(small({ params: [{ name: "constructor", type: "namespace" }] }))[0]).toMatch(/^\/params\/0\/name: not an id Landlens allows/);
+    expect(issues(small({ sources: { prototype: { kind: "kube.list", resource: "pods" } } })).some((i) => /not an id Landlens allows|not a valid name here/.test(i))).toBe(true);
+  });
 });

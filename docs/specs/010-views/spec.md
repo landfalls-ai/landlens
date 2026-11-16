@@ -389,6 +389,9 @@ do the same read **without asking**, checked each time the source runs:
 | Frame tool calls; link dialogs; action or ask intents | 60 a minute; 3 a minute; 6 a minute, one sheet open at a time |
 | Saved views; a view file on import | 200; 512,000 bytes |
 | `render_view` + `patch_view` calls per session | 30 a minute |
+| A join's work (part 1's security review, M3) | 500,000 (right rows indexed, candidates compared, times takes and aggregates); past it the source says so, no rows |
+| Objects a source reads over all its watches; objects a view's watches keep together | 10,000; 20,000 |
+| Characters of JSON a view's watches keep (each object trimmed to what the document reads); characters a source's rows hold | 32 MiB; 8 MiB |
 
 ## 6. The page, the composer and the session
 

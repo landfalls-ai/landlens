@@ -127,6 +127,14 @@ person's check reads them), and Ask Claude sends one problem at a time.
   connections' sources). When it does, a view shows what Claude could read, so env values show as `<redacted>` and
   Secrets never appear; usage over time is never read from Cloud Monitoring (a view has no Google grant); a
   workload's log follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
+- **A private key logged a line at a time is redacted from its BEGIN to its END, up to 200 lines** (wave 10 part 1's
+  review, M1): a longer one shows its lines past the 200th, and a followed read whose tail begins at a key's last body
+  line when that line is shorter than 16 characters shows that line (a few bytes). The front door holds a followed
+  log's leading base64-only lines (16 characters or more) until another line comes, so a container whose first lines
+  are such and then goes quiet shows them late.
+- **A view's work and memory have caps** (review M3, M5): a join past 500,000 units of work isn't worked out (filter or
+  limit a side); a source reads at most 10,000 objects over its watches, a view's watches keep 20,000 objects and 32
+  MiB together, and a source's rows hold 8 MiB of text. Each is said when it cuts.
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
 - **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 14).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have

@@ -38,7 +38,7 @@ export function refOf(o: unknown, t: KindRef): RowRefT | undefined {
 
 /** Kubernetes objects as rows, with `_ref` and `_tone`. */
 export function objectRows(objects: readonly unknown[], fields: [string, ParsedPath][], t: KindRef, ctx: Omit<ReadContext, "kind"> = {}): Row[] {
-  const read: ReadContext = { ...ctx, kind: t.kind };
+  const read: ReadContext = { ...ctx, kind: t.kind, group: t.group };
   const out: Row[] = new Array(objects.length);
   for (let i = 0; i < objects.length; i++) {
     const o = objects[i];
@@ -47,7 +47,7 @@ export function objectRows(objects: readonly unknown[], fields: [string, ParsedP
     const ref = refOf(o, t);
     if (ref) row._ref = ref;
     const kind = typeof (o as { kind?: unknown })?.kind === "string" ? (o as { kind: string }).kind : t.kind;
-    if (o && typeof o === "object" && (o as { metadata?: unknown }).metadata) row._tone = statusOf(kind, o as never).tone;
+    if (o && typeof o === "object" && (o as { metadata?: unknown }).metadata) row._tone = statusOf(kind, o as never, t.group).tone;
     out[i] = row;
   }
   return out;

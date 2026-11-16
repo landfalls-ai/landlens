@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { ownerEntry } from "../src/computed.js";
 import { objectRows, parseFields, type Row } from "../src/rows.js";
 import { parseDocument } from "../src/schema.js";
-import { asNumber, deliver, fieldsAfter, get, runPipe, runStep, type PipeStep } from "../src/transform.js";
+import { checkTimes, narrowLimits, VIEW_LIMITS, VIEW_TIMES } from "../src/limits.js";
+import { SENTENCES } from "../src/errors.js";
+import { asNumber, deliver, fieldsAfter, get, JoinTooBig, runPipe, runStep, type PipeStep } from "../src/transform.js";
 
 const ctx = (other: Record<string, Row[]> = {}, params: Record<string, string> = {}) => ({ params, rowsOf: (id: string) => other[id] });
 const rows: Row[] = [
@@ -157,5 +159,64 @@ describe("property: no step returns a key outside its declared fields", () => {
 
   it("runPipe runs at most 8 steps", () => {
     expect(runPipe(rows, Array.from({ length: 12 }, () => ({ limit: 4 } as PipeStep)), ctx())).toHaveLength(4);
+  });
+});
+
+// Security review of wave 10 part 1, M3: joins had no budget (10,000 × 10,000 on one key took 13.6 s of main's thread).
+describe("a join's work budget", () => {
+  const timed = <T>(f: () => T): { ms: number; out?: T; err?: unknown } => {
+    const t0 = performance.now();
+    try {
+      const out = f();
+      return { ms: performance.now() - t0, out };
+    } catch (err) {
+      return { ms: performance.now() - t0, err };
+    }
+  };
+  const aggs = Object.fromEntries(["count", "sum", "avg", "min", "max", "first", "countDistinct"].map((fn, i) => [`a${i}`, { fn, field: "v" }]).concat([["a7", { fn: "sum", field: "v" }]]));
+
+  it("a 10,000 × 10,000 value join on one shared key stops at the budget, fast", () => {
+    const left: Row[] = Array.from({ length: 10_000 }, (_, i) => ({ k: "same", i }));
+    const right: Row[] = Array.from({ length: 10_000 }, (_, i) => ({ k: "same", v: i }));
+    const r = timed(() => runStep(left, { join: { with: "r", on: { left: "k", right: "k" }, agg: aggs as never } }, ctx({ r: right })));
+    expect(r.err).toBeInstanceOf(JoinTooBig);
+    expect((r.err as Error).message).toBe(SENTENCES.joinTooBig("r"));
+    expect(r.ms).toBeLessThan(200);
+  });
+
+  it("a 5,000 × 10,000 selector join on shared labels stops at the budget, fast", () => {
+    const left: Row[] = Array.from({ length: 5_000 }, (_, i) => ({ sel: "app=api, tier=web", i }));
+    const right: Row[] = Array.from({ length: 10_000 }, (_, i) => ({ labels: `app=api, tier=web, n=${i}`, v: i }));
+    const r = timed(() => runStep(left, { join: { with: "r", on: { selector: "sel", labels: "labels" }, agg: { n: { fn: "count" } } } }, ctx({ r: right })));
+    expect(r.err).toBeInstanceOf(JoinTooBig);
+    expect(r.ms).toBeLessThan(200);
+  });
+
+  it("a big join within the budget is worked out, fast: by the rarest label, not by every right row", () => {
+    // 2,000 Services, 10,000 pods, each Service selecting its 5 pods by a label all of them share and one of their own.
+    const left: Row[] = Array.from({ length: 2_000 }, (_, i) => ({ sel: `app=shop, part=p${i}` }));
+    const right: Row[] = Array.from({ length: 10_000 }, (_, i) => ({ labels: `app=shop, part=p${i % 2_000}`, v: 1 }));
+    const r = timed(() => runStep(left, { join: { with: "r", on: { selector: "sel", labels: "labels" }, agg: { n: { fn: "count" } } } }, ctx({ r: right })));
+    expect(r.err).toBeUndefined();
+    expect(r.out!.every((x) => x.n === 5)).toBe(true);
+    expect(r.ms).toBeLessThan(500);
+  });
+
+  it("the budget is the caller's when narrower: at it the join runs, past it it stops", () => {
+    const step = { join: { with: "r", on: { left: "k", right: "k" }, agg: { n: { fn: "count" } } } } as PipeStep;
+    // 2 right rows indexed, then 2 left rows each matching 2 (1 + 2 × 1): 2 + 3 + 3 = 8.
+    const two: Row[] = [{ k: 1 }, { k: 1 }];
+    expect(runStep(two, step, { ...ctx({ r: two }), joinWork: 8 }).map((x) => x.n)).toEqual([2, 2]);
+    expect(() => runStep(two, step, { ...ctx({ r: two }), joinWork: 7 })).toThrow(JoinTooBig);
+  });
+});
+
+// Security review of wave 10 part 1, L7: an inherited name was taken as a limit or a time.
+describe("limits and times: own names only", () => {
+  it("refuses toString, constructor and hasOwnProperty", () => {
+    for (const k of ["toString", "constructor", "hasOwnProperty"]) {
+      expect(() => narrowLimits({ ...VIEW_LIMITS }, { [k]: 1 } as never)).toThrow(/no such limit/);
+      expect(() => checkTimes({ ...VIEW_TIMES }, { [k]: 1 } as never)).toThrow(/no such time/);
+    }
   });
 });

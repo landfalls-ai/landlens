@@ -4,6 +4,9 @@
 // on metrics.k8s.io and pods/log is settled: both are reads the view's token is allowed (the audit says the request
 // left the front door), and a cluster with no metrics-server says so.
 //
+// Its container also logs a (made-up) private key one line a second, every ten ticks: no line of its body reaches a
+// view or a followed read through the front door (security review of wave 10 part 1, M1).
+//
 // What it touches: a throwaway Deployment and ConfigMap (view-check-*, labelled scenario=view-check) made with
 // kubectl apply in landlens-dev, scaled once, and deleted at the end. Nothing else is written.
 import { execFile, spawn } from "node:child_process";
@@ -12,7 +15,7 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SourceData } from "@landlens/contracts";
-import { agentReadOnlyPolicy, ClusterManager, FrontDoor, frontDoorFetch, KubeClient, listReleases, loopbackCert, type AuditEntry } from "@landlens/kube";
+import { agentReadOnlyPolicy, ClusterManager, followLogs, FrontDoor, frontDoorFetch, KubeClient, listReleases, loopbackCert, type AuditEntry } from "@landlens/kube";
 import { SENTENCES } from "@landlens/views";
 import { ViewRuntime, type ViewPush } from "../src/main/view-runtime";
 
@@ -51,7 +54,11 @@ const MANIFEST = {
             containers: [{
               name: "ticker", image: "busybox:1.36", imagePullPolicy: "IfNotPresent",
               env: [{ name: "DB_PASSWORD", value: "hunter2-in-env" }],
-              command: ["sh", "-c", "i=0; while true; do echo \"tick $i token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"; i=$((i+1)); sleep 1; done"],
+              command: ["sh", "-c", [
+                "i=0; while true; do",
+                "if [ $((i % 10)) -eq 0 ]; then echo '-----BEGIN RSA PRIVATE KEY-----'; sleep 1; echo 'MIIEfakeKEYbodyLINEone0000000000000000'; sleep 1; echo 'Zm9vZmFrZUtFWWJvZHlMSU5FdHdv=='; sleep 1; echo '-----END RSA PRIVATE KEY-----'; fi;",
+                "echo \"tick $i token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"; i=$((i+1)); sleep 1; done",
+              ].join(" ")],
             }],
           },
         },
@@ -145,8 +152,10 @@ describe.runIf(run)("the view runtime on OrbStack", () => {
 
   it("[check] pods/log is a read the view's token is allowed: a workload's log, followed and scrubbed", async () => {
     const id = rt.open({ handle, namespaces: [NS], document: doc({ log: { kind: "kube.logs", namespace: NS, workload: { kind: "Deployment", name: NAME }, tailLines: 50 } }) });
-    const d = await wait(id, "log", (x) => (x.lines?.length ?? 0) >= 3);
-    expect(d.lines![0]!.text).toMatch(/^tick \d+ token=<redacted github token>$/);
+    const d = await wait(id, "log", (x) => (x.lines?.length ?? 0) >= 3 && x.lines!.some((l) => l.text === "<redacted private key>"));
+    expect(d.lines!.some((l) => /^tick \d+ token=<redacted github token>$/.test(l.text))).toBe(true);
+    // M1: the key was logged a line at a time; none of its body is here.
+    expect(JSON.stringify(d.lines)).not.toMatch(/MIIEfake|Zm9vZmFr/);
     const logs = audit.filter((e) => e.label === "view · orbstack" && e.path.endsWith("/log"));
     expect(logs.length).toBeGreaterThan(0);
     // Every one was let through; a pod still starting may answer 400 itself, so at least one answered 200.
@@ -154,6 +163,51 @@ describe.runIf(run)("the view runtime on OrbStack", () => {
     expect(logs.some((e) => e.status === 200)).toBe(true);
     rt.close(id);
   }, 60_000);
+
+  it("M1: a followed log read through the front door (kubectl logs -f's path) has no line of a key's body", async () => {
+    const token = door.issueToken({ label: "view · orbstack", policy: agentReadOnlyPolicy([NS]), clusters: [handle] });
+    const c = new KubeClient({ url: door.clusterUrl(handle), secret: "" }, frontDoorFetch({ certificate: door.certificate, token }));
+    const pod = await kubectl("get", "pods", "-l", `app=${NAME}`, "--field-selector=status.phase=Running", "-o", "jsonpath={.items[0].metadata.name}");
+    const got: string[] = [];
+    const stop = followLogs(c, { namespace: NS, pod, container: "ticker", tailLines: 5, follow: true }, { lines: (b) => void got.push(...b.map((l) => l.text)), end: () => {} });
+    try {
+      // Two whole keys (four redacted lines in a row, then a tick): the 5-line tail holds at most one, so at least one
+      // was logged live, a line a second, each line its own chunk. (The tail may also begin inside an earlier key: its
+      // lines before the END are redacted too, M1's lead-in.)
+      const whole = () => got.filter((l, i) => l.startsWith("tick") && i >= 4 && got.slice(i - 4, i).every((x) => x === "<redacted private key>")).length >= 2;
+      const t0 = Date.now();
+      while (!whole()) {
+        if (Date.now() - t0 > 60_000) throw new Error(`no key logged: ${got.slice(-10).join(" | ")}`);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    } finally {
+      stop();
+      door.revokeToken(token);
+    }
+    expect(got.join("\n")).not.toMatch(/MIIEfake|Zm9vZmFr/);
+
+    // A tail chosen to begin just after a key's BEGIN (read as you with kubectl, then followed with the view's token).
+    const mine = await kubectl("logs", pod, "-c", "ticker", "--tail=40");
+    const all = mine.trimEnd().split("\n");
+    const begin = all.lastIndexOf("-----BEGIN RSA PRIVATE KEY-----");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    const token2 = door.issueToken({ label: "view · orbstack", policy: agentReadOnlyPolicy([NS]), clusters: [handle] });
+    const c2 = new KubeClient({ url: door.clusterUrl(handle), secret: "" }, frontDoorFetch({ certificate: door.certificate, token: token2 }));
+    const tail: string[] = [];
+    const stop2 = followLogs(c2, { namespace: NS, pod, container: "ticker", tailLines: all.length - begin - 1, follow: true }, { lines: (b) => void tail.push(...b.map((l) => l.text)), end: () => {} });
+    try {
+      const t1 = Date.now();
+      while (!tail.some((l) => l.startsWith("tick"))) {
+        if (Date.now() - t1 > 30_000) throw new Error(`no tick: ${tail.join(" | ")}`);
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } finally {
+      stop2();
+      door.revokeToken(token2);
+    }
+    expect(tail[0]).toBe("<redacted private key>");
+    expect(tail.join("\n")).not.toMatch(/MIIEfake|Zm9vZmFr/);
+  }, 120_000);
 
   it("[check] metrics.k8s.io is a read the view's token is allowed; with no metrics-server, the source says so", async () => {
     const id = rt.open({ handle, namespaces: [NS], document: doc({ top: { kind: "kube.top", of: "pods", namespace: NS } }) });

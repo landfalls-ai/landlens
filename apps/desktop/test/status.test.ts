@@ -88,3 +88,17 @@ describe("buildNav", () => {
     ]);
   });
 });
+
+// Security review of wave 10 part 1, L2: an object of another shape (a custom resource named Pod or Node) never throws.
+describe("kubectl's words over odd shapes", () => {
+  it("reads maps, nulls and strings where lists belong as nothing, never throwing", () => {
+    const odd = { metadata: { name: "x" }, spec: { containers: { a: 1 }, initContainers: "no" }, status: { conditions: { Ready: { status: "True" } }, containerStatuses: { api: { restartCount: 9 } }, initContainerStatuses: [null] } } as unknown as KubeObject;
+    expect(nodeStatus(odd)).toEqual({ text: "NotReady", tone: "bad" });
+    expect(() => podStatus(odd)).not.toThrow();
+    expect(podReady(odd).text).toBe("0/0");
+    expect(podRestarts(odd).sort).toBe(0);
+    const strange = { metadata: { name: "y" }, status: { reason: { not: "a string" }, containerStatuses: [{ restartCount: "7", state: { waiting: { reason: 42 } } }] } } as unknown as KubeObject;
+    expect(typeof podStatus(strange).text).toBe("string");
+    expect(podRestarts(strange).sort).toBe(0);
+  });
+});

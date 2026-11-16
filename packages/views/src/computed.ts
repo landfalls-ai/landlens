@@ -75,10 +75,19 @@ const PHASE_TONE: Record<string, Tone> = {
   Pending: "warn", Released: "warn", Terminating: "muted", Lost: "bad", Failed: "bad", Unknown: "muted",
 };
 
-/** `$status` and `$tone` in one: kubectl's words for pods and nodes, ready against desired for workloads. */
-export function statusOf(kind: string, o: Obj): { text: string; tone: Tone } {
-  if (kind === "Pod") return podStatus(o as never);
-  if (kind === "Node") return nodeStatus(o as never);
+/**
+ * `$status` and `$tone` in one: kubectl's words for pods and nodes, ready against desired for workloads. The text is a
+ * cell (cellText, at most 64): a pod's reasons and an event's type are anyone's text (security review of wave 10 part 1,
+ * M2). kubectl's words for a Pod or a Node only for core's (`group` "" or not known): a custom resource of kind `Node`
+ * or `Pod` (Longhorn's, Calico's) has other shapes (L2) and reads as any other object.
+ */
+export function statusOf(kind: string, o: Obj, group?: string): { text: string; tone: Tone } {
+  const core = group === undefined || group === "";
+  if (core && kind === "Pod") {
+    const s = podStatus(o as never);
+    return { text: cellText(s.text, 64), tone: s.tone };
+  }
+  if (core && kind === "Node") return nodeStatus(o as never);
   const r = replicas(kind, o);
   if (r) {
     if (r.desired === 0) return { text: "Scaled to 0", tone: "muted" };
@@ -94,7 +103,7 @@ export function statusOf(kind: string, o: Obj): { text: string; tone: Tone } {
     return { text: "Running", tone: "ok" };
   }
   if (kind === "CronJob") return o.spec?.suspend === true ? { text: "Suspended", tone: "muted" } : { text: "Active", tone: "ok" };
-  if (kind === "Event") return o.type === "Warning" ? { text: "Warning", tone: "warn" } : { text: str(o.type) ?? "Normal", tone: "muted" };
+  if (kind === "Event") return o.type === "Warning" ? { text: "Warning", tone: "warn" } : { text: cellText(str(o.type) ?? "Normal", 64), tone: "muted" };
   const phase = str(o.status?.phase);
   if (phase) return { text: cellText(phase, 64), tone: PHASE_TONE[phase] ?? "muted" };
   const conds: unknown[] = Array.isArray(o.status?.conditions) ? o.status.conditions.slice(0, 20) : [];
@@ -137,10 +146,13 @@ export function computed(name: ComputedName, raw: unknown, ctx: ReadContext = {}
       const t = Date.parse(str(o.metadata?.creationTimestamp) ?? "");
       return Number.isFinite(t) ? t : null;
     }
-    case "$status": return statusOf(kind, o).text || null;
-    case "$tone": return statusOf(kind, o).tone;
+    case "$status": {
+      const t = statusOf(kind, o, ctx.group).text;
+      return t ? cellText(t, 64) : null;
+    }
+    case "$tone": return statusOf(kind, o, ctx.group).tone;
     case "$ready": {
-      if (kind === "Pod") return podReady(o as never).text;
+      if (kind === "Pod" && (ctx.group ?? "") === "") return podReady(o as never).text;
       const r = replicas(kind, o);
       return r ? `${r.ready}/${r.desired}` : null;
     }
@@ -148,7 +160,7 @@ export function computed(name: ComputedName, raw: unknown, ctx: ReadContext = {}
       const r = replicas(kind, o);
       return r ? `${r.ready}/${r.desired}` : null;
     }
-    case "$restarts": return kind === "Pod" ? podRestarts(o as never).sort : null;
+    case "$restarts": return kind === "Pod" && (ctx.group ?? "") === "" ? podRestarts(o as never).sort : null;
     case "$node": return kind === "Pod" ? (str(o.spec?.nodeName) ? cellText(o.spec.nodeName) : null) : kind === "Node" && n ? cellText(n) : null;
     case "$images": {
       const spec = podSpecOf(o);

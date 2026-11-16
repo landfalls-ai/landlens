@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { KubeClient } from "../src/client.js";
-import { ResourceWatcher, type WatcherEvent } from "../src/watch.js";
+import { ResourceWatcher, WatchBudget, type WatcherEvent } from "../src/watch.js";
 
 const pod = (uid: string, rv: string, name = uid) => ({ metadata: { uid, name, namespace: "a", resourceVersion: rv, managedFields: [{}] } });
 
@@ -181,5 +181,44 @@ describe("ResourceWatcher's selectors and cap (wave 10)", () => {
     for (const maxItems of [0, -1, 1.5, Number.NaN, Infinity]) {
       expect(() => new ResourceWatcher(client, { group: "", version: "v1", resource: "pods" }, () => {}, { maxItems })).toThrow(RangeError);
     }
+  });
+
+  // Security review of wave 10 part 1, M5: a view's watches keep objects trimmed, within one budget for all of them.
+  it("trims each object with `project`, and several watchers keep at most their shared budget", async () => {
+    const big = (uid: string) => ({ ...pod(uid, "1"), data: { blob: "x".repeat(1000) } });
+    const list = () => json({ kind: "PodList", apiVersion: "v1", metadata: { resourceVersion: "1" }, items: [big("a1"), big("a2"), big("a3")] });
+    const budget = new WatchBudget(4, 1_000_000);
+    const project = (o: any) => ({ metadata: { uid: o.metadata.uid, name: o.metadata.name } }) as never;
+    const one = scripted({ list: [list()], watch: [] });
+    const w1 = (await collect((on) => new ResourceWatcher(one.client, { group: "", version: "v1", resource: "pods" }, on, { project, budget }), (e) => e.some((x) => x.type === "snapshot"))).watcher;
+    expect(w1.snapshot()).toHaveLength(3);
+    expect(Object.keys(w1.snapshot()[0]!)).toEqual(["metadata"]); // no data, no kind: only what project kept
+    expect(budget.objects).toBe(3);
+    const two = scripted({ list: [list()], watch: [() => stream({ type: "ADDED", object: big("a9") })] });
+    const w2 = (await collect((on) => new ResourceWatcher(two.client, { group: "", version: "v1", resource: "pods" }, on, { project, budget, batchMs: 10 }), (e) => e.some((x) => x.type === "snapshot"))).watcher;
+    expect(w2.snapshot()).toHaveLength(1);
+    expect(w2.cutBy).toBe("budget");
+    expect(w1.truncated).toBe(false);
+    expect(budget.objects).toBe(4);
+    await w1.stop();
+    expect(budget.objects).toBe(1); // a stopped watcher gives its share back
+    await w2.stop();
+    expect(budget).toMatchObject({ objects: 0, chars: 0 });
+  });
+
+  it("counts characters too: an object that grows past the budget is dropped and said", async () => {
+    const budget = new WatchBudget(100, 400);
+    const sized = (uid: string, n: number, rv: string) => ({ ...pod(uid, rv), data: "y".repeat(n) });
+    const { client } = scripted({
+      list: [json({ kind: "PodList", apiVersion: "v1", metadata: { resourceVersion: "1" }, items: [sized("b1", 50, "1"), sized("b2", 50, "2")] })],
+      watch: [() => stream({ type: "MODIFIED", object: sized("b1", 500, "3") })],
+    });
+    const { watcher } = await collect((on) => new ResourceWatcher(client, { group: "", version: "v1", resource: "pods" }, on, { budget, batchMs: 10 }), (e) => e.some((x) => x.type === "delta"));
+    expect(watcher.snapshot().map((o) => o.metadata.uid)).toEqual(["b2"]);
+    expect(watcher.cutBy).toBe("budget");
+    expect(budget.objects).toBe(1);
+    expect(budget.chars).toBe(JSON.stringify(watcher.snapshot()[0]).length);
+    await watcher.stop();
+    expect(() => new WatchBudget(0, 1)).toThrow(RangeError);
   });
 });

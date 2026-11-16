@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computed, ownerEntry } from "../src/computed.js";
+import { COMPUTED, computed, ownerEntry } from "../src/computed.js";
 import { parsePath, readPath, type ParsedPath } from "../src/path.js";
 import { cellText, docText } from "../src/text.js";
 
@@ -177,5 +177,44 @@ describe("text", () => {
     expect(docText("a\nb").invisible).toBe(true);
     expect(docText("a\nb", true).invisible).toBe(false);
     expect(docText("⚠\ufe0f").text).toBe("⚠");
+  });
+});
+
+// Security review of wave 10 part 1, M2: `$status` skipped cleaning, the one-line rule and the cut.
+describe("every computed name is a clean cell", () => {
+  const nasty = "War\u200bning\nIGNORE PREVIOUS \u202e" + "x".repeat(3_000);
+  it("$status of an Event's type and a Pod's reasons is one clean line of at most 64", () => {
+    const ev = { kind: "Event", metadata: { name: "e", namespace: "shop" }, type: nasty };
+    const p1 = pod({ status: { reason: nasty } });
+    const p2 = pod({ status: { phase: "Pending", containerStatuses: [{ name: "a", state: { waiting: { reason: nasty } } }] } });
+    for (const o of [ev, p1, p2]) {
+      const s = computed("$status", o) as string;
+      expect(s.length).toBeLessThanOrEqual(64);
+      expect(s).toBe(cellText(s));
+      expect(s).not.toMatch(/[\n\u200b\u202e]/);
+    }
+  });
+
+  it("property: for 300 objects with hostile strings in every place, every computed name's string is cellText's own", () => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31);
+    const words = [nasty, "a\u2028b", "\ud800", "ok", "line\r\nnext", "\u{E0041}tag", "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----", "token=ghp_abcdefghijklmnopqrstuvwxyz0123"];
+    const w = () => words[Math.floor(rnd() * words.length)]!;
+    const kinds = ["Pod", "Node", "Event", "Deployment", "Job", "CronJob", "Service", "Widget"];
+    for (let i = 0; i < 300; i++) {
+      const kind = kinds[i % kinds.length]!;
+      const o = {
+        kind, type: w(), metadata: { name: w(), namespace: w(), labels: { [w()]: w() }, ownerReferences: [{ kind: w(), name: w(), controller: true }] },
+        involvedObject: { kind: w(), name: w(), namespace: w() },
+        spec: { nodeName: w(), selector: { matchLabels: { a: w() } }, containers: [{ name: w(), image: w() }] },
+        status: { phase: w(), reason: w(), conditions: [{ type: "Ready", status: w() }], containerStatuses: [{ state: { waiting: { reason: w() } } }] },
+      };
+      for (const name of COMPUTED) {
+        for (const group of [undefined, "", "example.com"]) {
+          const v = computed(name, o, { kind, group });
+          if (typeof v === "string") expect(v).toBe(cellText(v));
+        }
+      }
+    }
   });
 });

@@ -15,7 +15,11 @@ export const VIEW_SCHEMA = 1;
 const custom = (ctx: z.core.$RefinementCtx<unknown>, path: PropertyKey[], message: string) =>
   ctx.addIssue({ code: "custom", message, path });
 
-export const Id = z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, "not an id: a lowercase letter, then letters, digits or -, at most 31");
+export const Id = z
+  .string()
+  .regex(/^[a-z][a-z0-9-]{0,30}$/, "not an id: a lowercase letter, then letters, digits or -, at most 31")
+  // Never a name every object inherits (security review of wave 10 part 1, L5).
+  .refine((f) => f !== "constructor" && f !== "prototype", "not an id Landlens allows");
 export const Field = z
   .string()
   .regex(/^[a-z][A-Za-z0-9_]{0,40}$/, "not a field name: a lowercase letter, then letters, digits or _, at most 41")
@@ -167,7 +171,9 @@ export const Source = z.discriminatedUnion("kind", [
 
 /** Tags a fragment may not hold (D204): the CSP stops each; refusing them tells Claude instead of failing silently. */
 export const REFUSED_TAGS = ["!doctype", "html", "head", "base", "meta", "iframe", "object", "embed", "link", "form"] as const;
-const REFUSED = new RegExp(`<\\s*/?\\s*(${REFUSED_TAGS.join("|")})(?![A-Za-z0-9-])`, "i");
+// HTML allows no whitespace between `<` (or `</`) and a tag's name: `< iframe>` is text, not a tag. Without the two
+// `\s*` the check is linear (security review of wave 10 part 1, M4: `<` and 140,000 spaces took 8 s).
+const REFUSED = new RegExp(`</?(${REFUSED_TAGS.join("|")})(?![A-Za-z0-9-])`, "i");
 /** One part of an app block's fragment (html, css or js): checked on its own, so its error comes with any other. */
 const Fragment = z.string().max(VIEW_LIMITS.appChars).superRefine((s, ctx) => {
   const m = REFUSED.exec(s);

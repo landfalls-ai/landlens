@@ -194,11 +194,12 @@ Preview of `cluster_overview`, and with `LANDLENS_INTEGRATION=orbstack,claude` a
 `gcp_alerts`.
 
 Views on demand (wave 10, [spec](specs/010-views/spec.md)): part 1's unit tests are `packages/views/test`
-(`schema`, `path`, `transform` with a seeded property test, `patch` and the limits), `packages/kube/test/watch.test.ts`
+(`schema`, `path`, `transform` with a seeded property test, `patch`, `projection` and the limits), `packages/kube/test/watch.test.ts`
 (selectors and the cap) and `frontdoor-fetch.test.ts` (a real front door before a fake sidecar), and
 `apps/desktop/test/view-runtime.test.ts`, which runs `ViewRuntime` against `test/view-fakes.ts`: an in-memory API
 and front door that apply the real token policy (`authorize`), record every request with the token's label, stream
-watches and followed logs, and can hold or refuse a path. On OrbStack, `LANDLENS_INTEGRATION=orbstack pnpm --filter
+watches and followed logs, and can hold or refuse a path; for a redacting token it scrubs answers as the front door does (`scrubs = false` only to
+hold the runtime's own layer). On OrbStack, `LANDLENS_INTEGRATION=orbstack pnpm --filter
 @landlens/desktop test:integration` runs `view-runtime.integration.test.ts` through a real front door and sidecar: it
 applies a throwaway Deployment (busybox, `IfNotPresent`) and ConfigMap named `view-check-*` (labelled
 `scenario=view-check`) in `landlens-dev`, scales the Deployment once, reads Helm's `landlens-demo`, and deletes both by
