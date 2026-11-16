@@ -295,6 +295,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "views:app-call": ({ frame, name, arguments: args }) => viewsOf(views).appCall(frame, name, args ?? {}),
     "views:intent": async ({ frame, url }) => viewsOf(views).intent(frame, url),
     "views:audit": async ({ view }) => viewsOf(views).auditOf(view),
+    "views:link": async ({ view, block, url }) => ({ opened: await viewsOf(views).link(view, block, url) }),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

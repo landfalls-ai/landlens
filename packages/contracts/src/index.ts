@@ -1230,6 +1230,11 @@ export type ViewState = {
   busy: boolean;
   /** The session's last turn failed (its words, as the dock shows them). */
   failed?: string;
+  /**
+   * Main closed the view (its cluster went, a new view replaced it, the page asked): the page shows it no longer, so
+   * a view never stays on screen, marked Live, after its cluster has gone (security review of wave 10 part 3, H1).
+   */
+  closed?: true;
 };
 /** A source's new data for the page (D210), stamped with the view's version so the page drops a push of an older one. */
 export type ViewDataPush = { view: string; version: number; source: string; data: SourceData };
@@ -1459,6 +1464,9 @@ export const channels = {
   "views:app-call": z.object({ frame: McpViewId, name: McpToolName, arguments: z.record(z.string(), z.unknown()).optional() }).strict(),
   "views:intent": z.object({ frame: McpViewId, url: z.string().min(1).max(2000) }).strict(),
   "views:audit": z.object({ view: ViewId }).strict(),
+  // A text block's Markdown link (security review of wave 10 part 3, L4): main finds it in the block and asks in its
+  // own dialog, as for a frame's link; the address may be long here so that main, not the window, refuses it.
+  "views:link": z.object({ view: ViewId, block: ViewPartId, url: z.string().min(1).max(10_000) }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1612,6 +1620,7 @@ export type Responses = {
    */
   "views:intent": { intent?: ViewIntent };
   "views:audit": { label: string; entries: ViewAuditEntry[] };
+  "views:link": { opened: boolean };
 };
 
 /** A tool as the MCP page shows it. */

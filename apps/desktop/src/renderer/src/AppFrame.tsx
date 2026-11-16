@@ -96,6 +96,9 @@ export function AppFrame(props: {
       key: (k) => frame.current?.dispatchEvent(new KeyboardEvent("keydown", { ...k, bubbles: true, cancelable: true })),
       // A key comes from the person only while they are in the frame (L2); a script's own keys are dropped.
       focused: () => !!frame.current && document.activeElement === frame.current && document.hasFocus(),
+      // A click or key inside the frame activates its parents too (Chromium's user activation): the person's gesture,
+      // within its few seconds, is what lets a block's intent through (security review of part 3, M1).
+      gesture: () => (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive === true,
       context: () => hostContext(frame.current?.clientWidth, b ? VIEW_MAX_HEIGHT : MAX_HEIGHT, b?.fill),
     });
     // A block's sources, live: what the page's store hears from main, for the sources this block names.

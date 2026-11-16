@@ -31,7 +31,7 @@ function Failed({ d, rows }: { d: SourceData | undefined; rows: boolean }) {
 /** One block in its grid cell: its title, an "Ask about this" for blocks with rows, then what it draws. */
 export function ViewBlock(props: {
   view: string; version: number; b: BlockDoc; i: number; data: (source: string) => SourceData | undefined;
-  hands: RowHands; onOpenObject: (t: ObjectTarget) => void; onIntent: (i: ViewIntent) => boolean;
+  hands: RowHands; onOpenObject: (t: ObjectTarget) => void; onIntent: (i: ViewIntent, block: string) => boolean;
   onAsk: (block: string, title: string) => void; single: boolean; height: number; now: number;
 }) {
   const { b } = props;
@@ -49,7 +49,7 @@ export function ViewBlock(props: {
       case "list": return <ListBlock b={b} d={d} hands={props.hands} now={props.now} />;
       case "logs": return <LogsBlock b={b} d={d} />;
       case "problems": return <ProblemsBlock b={b} d={d} hands={props.hands} />;
-      case "text": return <TextBlock b={b} />;
+      case "text": return <TextBlock view={props.view} block={key} b={b} />;
       default: return null;
     }
   };
@@ -69,7 +69,7 @@ export function ViewBlock(props: {
         <AppFrame
           block={{ view: props.view, block: b.id!, uses: b.uses ?? [], version: props.version, ...(b.fill && props.single ? { fill: props.height } : {}) }}
           onOpenObject={props.onOpenObject}
-          onIntent={props.onIntent}
+          onIntent={(i) => props.onIntent(i, name)}
         />
       ) : (
         <>

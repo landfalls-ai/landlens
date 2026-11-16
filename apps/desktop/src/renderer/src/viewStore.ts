@@ -7,28 +7,63 @@ import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate
 import { useState, useSyncExternalStore } from "react";
 import type { Sort } from "./tableState";
 import { api } from "./api";
+import { refKey } from "./viewBlocks";
 
 export type ViewSnapshot = {
   /** The working view, its state and its session, once views:start answered. */
   view?: {
     id: string; session: AgentSessionInfo; ask: string; state?: ViewState; data: Record<string, { version: number; data: SourceData }>;
     /**
+     * The cluster the view reads (its handle when it started, and its context): the page shows it, and its rows act,
+     * only while that cluster is the one connected (security review of part 3, H1).
+     */
+    handle: string; context: string;
+    /**
      * Objects on the composer as chips (wave 10 part 3): a row's Ask Claude, or a block's ask intent (D219). They go
      * with the next question as references (the session reads each with its own token); nothing is sent by adding one.
      */
     chips?: RowRef[];
     /**
-     * Rows chosen for the selection bar (D156, D218): by the person's checkboxes, or by a block's select intent (D219),
-     * which never offers Delete.
+     * Rows chosen for the selection bar (D156, D218): by the person's checkboxes, or by a block's select intent (D219).
+     * `fromBlock`: the refKeys a block chose, and `block` its title. They stay the block's when the person ticks more
+     * or unticks some, so a selection holding any of them never offers Delete (security review of part 3, M2).
      */
-    selection?: { refs: RowRef[]; by: "you" | "block" };
+    selection?: Selection;
   };
-  /** Sending the first ask (views:start hasn't answered). */
+  /** Sending the first ask (views:start hasn't answered), on this cluster. */
   starting?: string;
+  startingOn?: string;
   error?: string;
 };
 
+export type Selection = { refs: RowRef[]; fromBlock: string[]; block?: string };
+/** Who the bar says chose the rows: the block, while any row it chose is still in the selection. */
+export const chosenBy = (s: Pick<Selection, "fromBlock">): "you" | "block" => (s.fromBlock.length ? "block" : "you");
+
+/**
+ * The selection after a change. A block's select replaces it with the block's rows, all marked the block's. The
+ * person's change (a tick, an untick, tick-all, the rows the view still shows) keeps the mark on each block row that
+ * stays, so one more tick never turns the block's choice into the person's (security review of part 3, M2). At most 50.
+ */
+export function nextSelection(cur: Selection | undefined, refs: RowRef[], by: "you" | "block", block?: string): Selection | undefined {
+  const kept = refs.slice(0, 50);
+  if (!kept.length) return undefined;
+  if (by === "block") return { refs: kept, fromBlock: kept.map(refKey), ...(block ? { block } : {}) };
+  const was = new Set(cur?.fromBlock ?? []);
+  const fromBlock = kept.map(refKey).filter((k) => was.has(k));
+  return { refs: kept, fromBlock, ...(fromBlock.length && cur?.block ? { block: cur.block } : {}) };
+}
+
+/** The view to show and act on for the cluster connected now: none when the working view is another cluster's (H1). */
+export const viewOn = (s: ViewSnapshot, handle: string): ViewSnapshot => ({
+  ...(s.view && s.view.handle === handle ? { view: s.view } : {}),
+  ...(s.starting && s.startingOn === handle ? { starting: s.starting, startingOn: handle } : {}),
+  ...(s.error ? { error: s.error } : {}),
+});
+
 let snap: ViewSnapshot = {};
+/** The cluster the window shows now (bind): a view of another one is closed, and a start for another is let go. */
+let bound: string | undefined;
 const listeners = new Set<() => void>();
 const set = (next: ViewSnapshot) => {
   snap = next;
@@ -68,6 +103,8 @@ function wire() {
   api.on("views:state", (s: ViewState) => {
     const v = snap.view;
     if (!v || v.id !== s.id) return;
+    // Main closed it (its cluster went, say): the page is blank again and says so, never a frozen "Live" (H1).
+    if (s.closed) return set({ error: "The view closed: its cluster disconnected or its session's view was replaced. Ask again to build a new one." });
     // A new version's data starts empty: what the older one had isn't this one's.
     const data = Object.fromEntries(Object.entries(v.data).filter(([, d]) => d.version === s.version));
     set({ ...snap, view: { ...v, state: s, data, session: s.session === v.session.session ? v.session : { ...v.session, session: s.session } } });
@@ -112,19 +149,36 @@ export const viewStore = {
     return d && v?.state && d.version === v.state.version ? d.data : undefined;
   },
 
+  /**
+   * The window shows this cluster now (the Workspace mounts for each cluster): a working view of another cluster is
+   * closed, in main too, so its rows never act on this one's objects of the same name (security review of part 3, H1).
+   */
+  bind(handle: string) {
+    wire();
+    bound = handle;
+    const v = snap.view;
+    if (v && v.handle !== handle) {
+      set({});
+      void api.invoke("views:close", { view: v.id }).catch(() => {});
+    } else if (snap.starting && snap.startingOn !== handle) set({});
+  },
+
   async start(handle: string, text: string): Promise<void> {
     wire();
+    bound ??= handle;
     const old = snap.view?.id;
-    set({ starting: text });
+    set({ starting: text, startingOn: handle });
     if (old) void api.invoke("views:close", { view: old }).catch(() => {});
     try {
       const r = await api.invoke("views:start", { handle, text });
+      // The person switched cluster while it started: it is no view of the one shown now.
+      if (bound !== handle) return void api.invoke("views:close", { view: r.view }).catch(() => {});
       for (const l of askListeners) l(r.session.session, text);
-      set({ view: { id: r.view, session: r.session, ask: text, data: {} } });
+      set({ view: { id: r.view, handle, context: r.session.context, session: r.session, ask: text, data: {} } });
       const st = await api.invoke("views:get", { view: r.view });
       if (snap.view?.id === r.view && !snap.view.state) set({ view: { ...snap.view, state: st } });
     } catch (e) {
-      set({ error: (e as Error).message });
+      if (bound === handle) set({ error: (e as Error).message });
     }
   },
 
@@ -151,12 +205,13 @@ export const viewStore = {
     const v = snap.view;
     if (v) set({ ...snap, view: { ...v, chips: ref ? (v.chips ?? []).filter((c) => !sameRef(c, ref)) : [] } });
   },
-  /** The selection bar's rows, and who chose them; none clears it. */
-  select(refs: RowRef[], by: "you" | "block" = "you") {
+  /** The selection bar's rows (nextSelection: a block's rows stay the block's); none clears it. */
+  select(refs: RowRef[], by: "you" | "block" = "you", block?: string) {
     const v = snap.view;
     if (!v) return;
-    const { selection: _, ...rest } = v;
-    set({ ...snap, view: refs.length ? { ...rest, selection: { refs: refs.slice(0, 50), by } } : rest });
+    const { selection: cur, ...rest } = v;
+    const next = nextSelection(cur, refs, by, block);
+    set({ ...snap, view: next ? { ...rest, selection: next } : rest });
   },
 
   async version(to: number) {

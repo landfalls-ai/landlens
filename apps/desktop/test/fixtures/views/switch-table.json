@@ -1,0 +1,47 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "the test's deployment",
+      "document": {
+        "schema": 1,
+        "title": "The test's deployment",
+        "sources": {
+          "deps": {
+            "kind": "kube.list",
+            "resource": "deployments",
+            "group": "apps",
+            "namespace": "landlens-dev",
+            "fields": {
+              "name": "$name"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ],
+            "labelSelector": "app=views-e2e-sw"
+          }
+        },
+        "blocks": [
+          {
+            "type": "table",
+            "source": "deps",
+            "title": "Deps",
+            "select": true,
+            "columns": [
+              {
+                "field": "name",
+                "header": "Name"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

@@ -69,6 +69,13 @@ export type HostDeps = {
    * view's own script, not the person, and is dropped (review of wave 10 part 2, L2).
    */
   focused?(): boolean;
+  /**
+   * Whether the person has just acted in this window (a click or a key in the last few seconds: Chromium's transient
+   * user activation, which a gesture inside the frame gives its parent too). A block's intent counts only with the
+   * frame focused and such a gesture: a script on a timer can't open Landlens's sheet, drawer or panel while the
+   * person is elsewhere (security review of wave 10 part 3, M1). Without it, focus alone decides.
+   */
+  gesture?(): boolean;
   now?(): number;
   context(): HostContext;
   log?(level: string, data: unknown): void;
@@ -223,7 +230,7 @@ export class AppHost {
           const url = typeof params.url === "string" ? params.url : "";
           // A block's intents: the allowlist here first, then main's; the answer says only whether anything showed,
           // never what the person did with it (D219).
-          if (this.deps.intent && url.startsWith("landlens://")) return ok(parseIntent(url) && (await this.deps.intent(url)) ? {} : { isError: true });
+          if (this.deps.intent && url.startsWith("landlens://")) return ok(parseIntent(url) && this.personHere() && (await this.deps.intent(url)) ? {} : { isError: true });
           const target = objectLink(url);
           if (target) return ok((await this.deps.openObject(target)) === false ? { isError: true } : {});
           const view = VIEW_LINK.exec(url);
@@ -258,6 +265,14 @@ export class AppHost {
     return true;
   }
   private keys: number[] = [];
+
+  /**
+   * A block's intent only in answer to the person (security review of wave 10 part 3, M1): its frame has the focus, and
+   * they acted just now. A host with no `focused` (never a block's: AppFrame always gives one) refuses every intent.
+   */
+  private personHere(): boolean {
+    return this.deps.focused?.() === true && (this.deps.gesture?.() ?? true);
+  }
 
   private notify(method: string, params: unknown) {
     this.deps.post({ jsonrpc: "2.0", method, params });

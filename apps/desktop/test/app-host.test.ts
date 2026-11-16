@@ -113,7 +113,7 @@ describe("the MCP Apps host core", () => {
       const host = new AppHost(block, {
         post: (m) => posts.push(m), callTool: async (name) => (calls.push(name), { content: [] }), openLink: async () => true,
         openObject: (t) => (objects.push(t), t.name === "in-view"), resize: (h) => sizes.push(h), context: () => ctx(),
-        openView: (id) => opened.push(id), tools: new Set(["view_data"]), maxHeight: 2000, ...over,
+        openView: (id) => opened.push(id), tools: new Set(["view_data"]), maxHeight: 2000, focused: () => true, gesture: () => true, ...over,
       });
       return { host, posts, opened, objects, sizes, calls };
     }
@@ -218,6 +218,35 @@ describe("the MCP Apps host core", () => {
       for (const i of [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) expect(w.posts.find((p) => p.id === 100 + i), urls[i]).toMatchObject({ result: { isError: true } });
       expect(w.objects).toEqual([]);
       expect(w.opened).toEqual([]);
+    });
+
+    it("takes a block's intents only in answer to the person: its frame focused and a gesture just now (security review of part 3, M1)", async () => {
+      const urls = [
+        "landlens://action/restart/Deployment/landlens-dev/api",
+        "landlens://action/scale/Deployment/landlens-dev/api",
+        "landlens://logs/Deployment/landlens-dev/api",
+        "landlens://ask/Deployment/landlens-dev/api",
+        "landlens://select/Deployment/landlens-dev/api/landlens-dev/web",
+        "landlens://object/Deployment/landlens-dev/api",
+      ];
+      // A script on a timer while the person types elsewhere: the frame hasn't the focus. Then the frame has it but
+      // nobody acted (focus left there long ago); then no `focused` at all (refused, never assumed).
+      for (const over of [{ focused: () => false }, { focused: () => true, gesture: () => false }, { focused: undefined }]) {
+        const asked: string[] = [];
+        const w = raw({ ...over, intent: async (url) => (asked.push(url), true) });
+        await init(w.host);
+        urls.forEach((url, i) => w.host.receive({ jsonrpc: "2.0", id: 300 + i, method: "ui/open-link", params: { url } }));
+        await tick();
+        expect(asked, JSON.stringify(Object.keys(over))).toEqual([]);
+        for (let i = 0; i < urls.length; i++) expect(w.posts.find((p) => p.id === 300 + i)).toMatchObject({ result: { isError: true } });
+      }
+      // The person clicked in the block just now: each reaches main.
+      const asked: string[] = [];
+      const w = raw({ intent: async (url) => (asked.push(url), true) });
+      await init(w.host);
+      urls.forEach((url, i) => w.host.receive({ jsonrpc: "2.0", id: 400 + i, method: "ui/open-link", params: { url } }));
+      await tick();
+      expect(asked).toEqual(urls);
     });
 
     it("keeps a server's view in the dock to landlens://object: no action, ask, logs or select (no intent dep)", async () => {

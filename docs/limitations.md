@@ -129,9 +129,14 @@ person's check reads them), and Ask Claude sends one problem at a time.
   as `<redacted>` and Secrets never appear; usage over time is never read from Cloud Monitoring (a view has no Google
   grant); a workload's log follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
   A view row's object menu and drawer read the object as you when they open, so a row the view still shows that is
-  already gone says so then. A block's selection never offers Delete, and a frame can't start a delete or a drain at
-  all: open the object and use its menu. An intent while a sheet is open is dropped, and more than six a minute from
-  one frame are refused, without telling the block. Intents find objects only among the rows of the block's own
+  already gone says so then. A selection holding any row a block chose never offers Delete, also after you tick more
+  rows (untick the block's, or Clear and tick your own), and a frame can't start a delete or a drain at all: open the
+  object and use its menu. A block's intent counts only while its frame has the focus and you clicked or typed in the
+  last few seconds (Chromium's user activation), so a block can still open a non-destructive sheet a moment after you
+  click in it; that sheet takes no focus, and Apply needs your press. An intent while a sheet is open, or an object
+  while a drawer is open, is dropped, and more than six a minute from one frame are refused, without telling the
+  block. A view closes when you switch cluster: switching back means asking again. Asking about quoted lines in the
+  drawer over a view isn't offered (ask about the object, or open it in its list). Intents find objects only among the rows of the block's own
   sources. Object chips on the strip's composer go with the next question only (at most 10). **View source** in How
   Claude built this is plain text, not the editor. "Ask about this block" sends rows as JSON in a fence (Claude reads
   them fine; they aren't a table), and a question about a block is refused once the view moved to another version.

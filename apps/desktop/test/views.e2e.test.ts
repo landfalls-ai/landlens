@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Frame, type Page } from "playwright-core";
@@ -307,6 +307,30 @@ describe.runIf(run)("the Views page, with the fake agent, on OrbStack", { timeou
     await page.getByRole("region", { name: "Problems" }).locator(".vb-probs, .vb-empty").first().waitFor({ timeout: 20_000 });
     // The text block: Claude's markdown through the dock's renderer; a link says its host and opens nothing here.
     expect(await page.locator(".vb-md strong").first().innerText()).toBe("What this shows.");
+    // A text block's link opens only through main's link dialog, as a frame's does (security review of part 3, L4):
+    // the dialog names the block Claude built and shows the address whole; a link over 500 characters gets no dialog
+    // and opens nothing. Main's dialog and the browser are stood in for here.
+    await app.evaluate(({ dialog, shell }) => {
+      const g = globalThis as unknown as { asked: string[]; opened: string[] };
+      g.asked = [];
+      g.opened = [];
+      (dialog as unknown as { showMessageBox: (...a: unknown[]) => Promise<unknown> }).showMessageBox = async (...a: unknown[]) => {
+        const q = a.at(-1) as { message: string; detail: string };
+        g.asked.push(`${q.message}\n${q.detail}`);
+        return { response: 0, checkboxChecked: false };
+      };
+      (shell as unknown as { openExternal: (u: string) => Promise<void> }).openExternal = async (u: string) => void g.opened.push(u);
+    });
+    const links = () => app.evaluate(() => {
+      const g = globalThis as unknown as { asked: string[]; opened: string[] };
+      return { asked: [...g.asked], opened: [...g.opened] };
+    });
+    await page.locator(".vb-md a", { hasText: "the long runbook" }).click();
+    await page.waitForTimeout(800);
+    expect(await links()).toEqual({ asked: [], opened: [] });
+    await page.locator(".vb-md a", { hasText: "Kubernetes deployments" }).click();
+    await expect.poll(async () => (await links()).opened).toEqual(["https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"]);
+    expect((await links()).asked).toEqual([expect.stringMatching(/^Open kubernetes\.io in your browser\?\nA text block Claude built on the Views page \(views-e2e, in Landlens's own blocks\) wants to open this address:\nhttps:\/\/kubernetes\.io\//)]);
     // The log: the logger's lines arrive, failures in their tone, and "Failures only" keeps just those.
     const log = page.getByRole("log", { name: "Log" });
     await expect.poll(() => log.locator(".vb-line.fail").count(), { timeout: 30_000 }).toBeGreaterThan(0);
@@ -402,7 +426,8 @@ describe.runIf(run)("the Views page, with the fake agent, on OrbStack", { timeou
     const was = restartedAt(DEPLOY);
     await f.locator("#restart").click();
     await expect.poll(() => said("restart")).toBe("shown");
-    const card = page.getByRole("region", { name: "Review asked for by this view" });
+    // The card says which block Claude built asked (security review of part 3, L3).
+    const card = page.getByRole("region", { name: "Review asked for by a block claude built (a block that asks)" });
     await card.waitFor({ timeout: 20_000 });
     await shoot(page, "w10p3-03-intent-sheet", [1280]);
     await page.waitForTimeout(600);
@@ -412,6 +437,115 @@ describe.runIf(run)("the Views page, with the fake agent, on OrbStack", { timeou
     // Logs open in the panel under the view.
     await f.locator("#logs").click();
     await page.getByRole("region", { name: "Panel" }).getByRole("tab", { name: new RegExp(DEPLOY) }).first().waitFor({ timeout: 10_000 });
+  });
+
+  it("M1 (review of part 3). a block on a timer opens nothing while the person types elsewhere, and takes none of their keys", async () => {
+    const replicas = () => kubectl("get", `deploy/${DEPLOY}`, "-o", "jsonpath={.spec.replicas}");
+    const was = replicas();
+    await ask("view-script: timer-intent");
+    const f = await frameWith(page, "body[data-timer='1']");
+    const box = strip().getByRole("textbox", { name: "Ask Claude" });
+    await box.click();
+    // The person types a question at an ordinary pace (about 8 keys a second); the block asks for a scale 2.5 s in.
+    const text = "why does this have 3 pods when it should have fewer, and what changed since yesterday";
+    let sheets = 0;
+    for (const word of text.split(/(?= )/)) {
+      await page.keyboard.type(word, { delay: 120 });
+      sheets += await sheet().count();
+    }
+    await expect.poll(() => f.locator("body").getAttribute("data-r"), { timeout: 10_000 }).not.toBeNull();
+    expect(await f.locator("body").getAttribute("data-asked")).toBe("1");
+    // Every character stayed in the composer (a sheet a block asked for takes no focus, the second wall), no sheet
+    // opened (the host refused the intent: the frame hadn't the focus, the first wall), and nothing changed.
+    expect(await box.inputValue()).toBe(text);
+    expect(sheets).toBe(0);
+    expect(await sheet().count()).toBe(0);
+    expect(await f.locator("body").getAttribute("data-r")).toBe("refused");
+    expect(replicas()).toBe(was);
+    await box.fill("");
+  });
+
+  it("M2 (review of part 3). a block's choice stays the block's when the person ticks one more row: still no Delete", async () => {
+    await ask("view-script: select-block");
+    const f = await frameWith(page, "body[data-chooser='1']");
+    await f.locator("#choose").click();
+    await expect.poll(() => f.locator("body").getAttribute("data-sel")).toBe("shown");
+    const bar = page.getByRole("region", { name: "Chosen rows" });
+    await bar.getByText("Chosen by a block Claude built (Chooser)").waitFor();
+    expect(await bar.getByRole("button", { name: /Delete/ }).count()).toBe(0);
+    // The person ticks the logger's row too: three ways to take the block's rows into "yours" before, none now.
+    await page.getByRole("region", { name: "Deps", exact: true }).getByRole("checkbox", { name: `Select ${LOGDEPLOY}`, exact: true }).click();
+    await bar.getByText("1 of these chosen by a block Claude built (Chooser)").waitFor();
+    expect(await bar.innerText()).toContain("2 selected");
+    expect(await bar.getByRole("button", { name: /Delete/ }).count()).toBe(0);
+    await shoot(page, "w10p3-07-select-kept", [1280]);
+    // Unticking the block's own row leaves the person's choice alone: now Delete is theirs to offer.
+    await page.getByRole("region", { name: "Deps", exact: true }).getByRole("checkbox", { name: `Select ${DEPLOY}`, exact: true }).click();
+    await expect.poll(() => bar.getByRole("button", { name: /Delete/ }).count()).toBeGreaterThan(0);
+    expect(await bar.getByText("chosen by a block").count()).toBe(0);
+    await bar.getByRole("button", { name: /Clear/ }).click();
+  });
+});
+
+// A view is its cluster's (security review of part 3, H1). A kubeconfig that names the OrbStack cluster twice
+// (`orbstack` and `orbstack-b`, the same server and user), written for this run only, so a switch never leaves OrbStack.
+describe.runIf(run)("a view and a cluster switch, on OrbStack named twice", { timeout: 120_000 }, () => {
+  let app: ElectronApplication;
+  let page: Page;
+  const userData = mkdtempSync(join(tmpdir(), "landlens-e2e-views-switch-"));
+  const kubeconfig = join(userData, "kubeconfig.json");
+  const rowsOf = (block: string) => page.getByRole("region", { name: block, exact: true }).locator(".vb-rt .tr[role=row]");
+
+  beforeAll(async () => {
+    kubectl("create", "deployment", `${DEPLOY}-sw`, "--image=registry.k8s.io/pause:3.10", "--replicas=1");
+    kubectl("rollout", "status", `deploy/${DEPLOY}-sw`, "--timeout=120s");
+    const kc = JSON.parse(execFileSync("kubectl", ["config", "view", "--minify", "--flatten", "--context", "orbstack", "-o", "json"], { encoding: "utf8" }));
+    const ctx = kc.contexts.find((c: { name: string }) => c.name === "orbstack");
+    kc.contexts.push({ ...ctx, name: "orbstack-b" });
+    writeFileSync(kubeconfig, JSON.stringify(kc), { mode: 0o600 });
+    mkdirSync(join(userData, "agent-sessions"), { recursive: true, mode: 0o700 });
+    app = await electron.launch({
+      executablePath: require("electron") as unknown as string,
+      args: [resolve(__dirname, "..")],
+      env: { ...process.env, ELECTRON_RENDERER_URL: "", LANDLENS_USER_DATA: userData, LANDLENS_ACP_AGENT: resolve(__dirname, "fixtures/fake-acp-agent.mjs"), KUBECONFIG: kubeconfig },
+    });
+    page = await app.firstWindow();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("heading", { name: "Pick a cluster" }).waitFor();
+    await page.getByRole("button", { name: /^orbstack(?!-b)/ }).first().click();
+    await page.getByRole("button", { name: "Views", exact: true }).click();
+  }, 180_000);
+
+  afterAll(async () => {
+    await app?.close();
+    rmSync(kubeconfig, { force: true });
+    try {
+      kubectl("delete", "deployment", `${DEPLOY}-sw`, "--ignore-not-found", "--wait=false");
+    } catch {
+      // nothing to remove
+    }
+  }, 60_000);
+
+  it("H1. after a switch to another context the view is gone: no rows, nothing to act on, and its cluster was named", async () => {
+    const box = page.getByRole("textbox", { name: "What do you want to see?" });
+    await box.fill("view-script: switch-table");
+    await box.press("Enter");
+    await expect.poll(() => rowsOf("Deps").count(), { timeout: 30_000 }).toBe(1);
+    // The view names the cluster it reads.
+    expect(await page.locator(".view-head .view-cluster").innerText()).toBe("orbstack");
+    const was = restartedAt(`${DEPLOY}-sw`);
+    await page.getByRole("button", { name: /switch cluster/ }).click();
+    await page.getByRole("menuitem", { name: /orbstack-b/ }).click();
+    await page.getByRole("button", { name: /orbstack-b, switch cluster/ }).waitFor({ timeout: 60_000 });
+    await page.getByRole("button", { name: "Views", exact: true }).click();
+    // The page is blank for orbstack-b: the old view, its rows, its menus and its bar are gone.
+    await page.getByRole("heading", { name: /^Describe what you want to see on orbstack-b/ }).waitFor({ timeout: 10_000 });
+    expect(await page.locator(".view-head").count()).toBe(0);
+    expect(await rowsOf("Deps").count()).toBe(0);
+    await page.waitForTimeout(1_500);
+    expect(await page.locator(".view-head").count()).toBe(0);
+    await shoot(page, "w10p3-08-switched", [1280]);
+    expect(restartedAt(`${DEPLOY}-sw`)).toBe(was);
   });
 });
 

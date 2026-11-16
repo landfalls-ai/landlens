@@ -1,11 +1,17 @@
 // Enough Markdown for an agent's answers: paragraphs, headings, lists, tables, code blocks, inline code, bold,
 // italics and links. It builds React elements from text, never HTML, so nothing the agent writes can run in the page.
 import { Check, Copy } from "lucide-react";
-import { Fragment, useState, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useState, type ReactNode } from "react";
 import { api } from "./api";
 import { Ic } from "./icons";
 import { parseTable, TABLE_MAX, tableStarts, type MdTable } from "./mdTable";
 import { copyText } from "./present";
+
+/**
+ * Who opens a link the Markdown shows: by default main's `link:open` (an agent's answer, as before); a text block on
+ * the Views page gives its own, which goes through main's link dialog (security review of wave 10 part 3, L4).
+ */
+export const LinkOpener = createContext<((url: string) => void) | undefined>(undefined);
 
 export function Markdown({ text }: { text: string }) {
   const blocks: ReactNode[] = [];
@@ -121,6 +127,7 @@ function inline(s: string): ReactNode {
  * read), so the host is always shown beside it and the whole address is the tooltip.
  */
 function Link({ url, text }: { url: string; text: string }) {
+  const opener = useContext(LinkOpener);
   let host = "";
   try {
     host = new URL(url).host;
@@ -136,7 +143,8 @@ function Link({ url, text }: { url: string; text: string }) {
         rel="noreferrer"
         onClick={(e) => {
           e.preventDefault();
-          void api.invoke("link:open", { url }).catch(() => {});
+          if (opener) opener(url);
+          else void api.invoke("link:open", { url }).catch(() => {});
         }}
       >
         {text}

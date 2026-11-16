@@ -4,7 +4,7 @@
 // taken out.
 import type { KubeObject } from "@landlens/contracts";
 import { describe, expect, it } from "vitest";
-import { sheetHeading } from "../src/renderer/src/actionAsks";
+import { eyebrowOf, FRAME_VERB_ACTIONS, replicasFrom, sheetHeading, takesFocus } from "../src/renderer/src/actionAsks";
 import { applyStep, cardCapped, leftOutNote, OPEN_OPS, SHORT, type ApplyPress } from "../src/renderer/src/applyRules";
 
 const press = (o: Partial<ApplyPress> = {}): ApplyPress => ({
@@ -61,5 +61,33 @@ describe("the action sheet's heading", () => {
     expect(sheetHeading(draft)).toBe("Delete 6 configmaps");
     expect(sheetHeading(draft, { title: "Delete 5 configmaps in a" })).toBe("Delete 5 configmaps in a");
     expect(sheetHeading(draft, {})).toBe("Delete 6 configmaps");
+  });
+});
+
+describe("a sheet a block asked for (security review of wave 10 part 3, M1, L3; L2's M14, M18)", () => {
+  it("names the block Claude built that asked, never Landlens's own page", () => {
+    expect(eyebrowOf({})).toBe("Your action");
+    expect(eyebrowOf({ asker: "view", block: "A block that asks" })).toBe("Asked for by a block Claude built (A block that asks)");
+    expect(eyebrowOf({ asker: "view" })).toBe("Asked for by a block Claude built");
+  });
+
+  it("takes no focus from where the person is typing; your own sheet does", () => {
+    expect(takesFocus({ asker: "view" })).toBe(false);
+    expect(takesFocus({})).toBe(true);
+  });
+
+  it("keeps the count when the replicas field holds a letter or nothing, so a stray key never makes it 0", () => {
+    for (const raw of ["", "a", "abc", "e", "-", "1e3", " ", "-1"]) expect(replicasFrom(raw, 3), JSON.stringify(raw)).toBe(3);
+    expect(replicasFrom("0", 3)).toBe(0);
+    expect(replicasFrom("12", 3)).toBe(12);
+    expect(replicasFrom("2.7", 3)).toBe(2);
+    expect(replicasFrom("5000", 3)).toBe(1000);
+  });
+
+  it("opens each of a block's seven verbs as its own sheet: resume is suspend's other way, uncordon cordon's", () => {
+    expect(FRAME_VERB_ACTIONS).toEqual({
+      scale: { kind: "scale" }, restart: { kind: "restart" }, trigger: { kind: "trigger" },
+      suspend: { kind: "suspend", flag: true }, resume: { kind: "suspend", flag: false }, cordon: { kind: "cordon", flag: true }, uncordon: { kind: "cordon", flag: false },
+    });
   });
 });

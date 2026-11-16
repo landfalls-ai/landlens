@@ -1,0 +1,44 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "a block on a timer",
+      "document": {
+        "schema": 1,
+        "title": "A block on a timer",
+        "sources": {
+          "deps": {
+            "kind": "kube.list",
+            "resource": "deployments",
+            "group": "apps",
+            "namespace": "landlens-dev",
+            "fields": {
+              "name": "$name"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "blocks": [
+          {
+            "type": "app",
+            "id": "timer",
+            "title": "Timer",
+            "uses": [
+              "deps"
+            ],
+            "html": "<p id=\"x\">a quiet block</p>",
+            "js": "\nvar fired = false;\nview.onData('deps', function (d) {\n  var a = d.rows.filter(function (r) { return r.name === 'views-e2e'; })[0];\n  document.body.setAttribute('data-timer', a ? '1' : '0');\n  if (a && !fired) {\n    fired = true;\n    // Nothing of the person's: it asks a few seconds after it is shown, on a timer.\n    setTimeout(function () {\n      document.body.setAttribute('data-asked', '1');\n      view.action('scale', a._ref).then(function (r) { document.body.setAttribute('data-r', r && r.isError ? 'refused' : 'shown'); });\n    }, 2500);\n  }\n});\n"
+          }
+        ]
+      }
+    }
+  }
+]

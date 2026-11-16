@@ -6,7 +6,7 @@
 import type { ActionResult, ActionReview, ClusterInfo, KubeObject } from "@landlens/contracts";
 import { CircleCheck, CircleX, Minus, Plus, TriangleAlert, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { askFirst, eyebrowOf, PREVIEW_ONLY, sheetHeading, verbOf, type ActionDraft } from "./actionAsks";
+import { askFirst, eyebrowOf, PREVIEW_ONLY, replicasFrom, sheetHeading, takesFocus, verbOf, type ActionDraft } from "./actionAsks";
 import { api, type ApiError } from "./api";
 import type { NavTarget } from "./Details";
 import { DrainSheet } from "./DrainPlanView";
@@ -53,7 +53,10 @@ function ChangeSheet(props: SheetProps) {
   const listed = typeof o.spec?.replicas === "number" ? o.spec.replicas : 1;
   // The row can be a watch event behind (just after a scale): Scale reads the object again for "Now N".
   const [current, setCurrent] = useState(listed);
-  const [replicas, setReplicas] = useState(listed);
+  const [replicas, setReplicasNow] = useState<number>(listed);
+  // What the field shows while the person edits it: an empty or non-numeric text keeps the count (replicasFrom).
+  const [typed, setTyped] = useState<string>();
+  const setReplicas = (n: number | ((r: number) => number)) => (setTyped(undefined), setReplicasNow(n));
   const touched = useRef(false);
   useEffect(() => {
     if (d.kind !== "scale") return;
@@ -73,6 +76,7 @@ function ChangeSheet(props: SheetProps) {
   const reviewId = useRef<string>(undefined);
   reviewId.current = stage.s === "review" ? stage.review.id : undefined;
   const verb = verbOf(d);
+  const own = takesFocus(d);
 
   // A review left open when the sheet goes is dropped in main too.
   useEffect(() => () => {
@@ -91,22 +95,26 @@ function ChangeSheet(props: SheetProps) {
       // A preview-only cordon (D153) is shown like a review, with Apply off.
       if ((r.id || r.previewOnly) && r.operations) {
         setStage({ s: "review", review: r });
-        setTimeout(() => (box.current?.contains(document.activeElement) || document.activeElement === document.body) && applyBtn.current?.focus(), 0);
+        // Apply takes the focus only from the sheet itself (or from nowhere, for your own action): a block's sheet
+        // never draws the keyboard to Apply (security review of part 3, M1).
+        setTimeout(() => (box.current?.contains(document.activeElement) || (own && document.activeElement === document.body)) && applyBtn.current?.focus(), 0);
       } else setStage({ s: "problems", messages: (r.problems ?? []).map((p) => p.message), ...(r.conflict ? { conflict: true } : {}) });
     } catch (e) {
       setStage({ s: "problems", messages: [(e as ApiError).message] });
     }
   };
-  // Actions without a choice open straight on the review. Focus moves into the sheet at once, so Esc and Tab are its
-  // own even when it was opened from a row's key.
+  // Actions without a choice open straight on the review. Your own sheet takes the focus at once, so Esc and Tab are
+  // its own even when it was opened from a row's key; a sheet a block asked for leaves the focus where the person is
+  // (they may be typing a question), and waits for them to move into it (security review of part 3, M1).
   useEffect(() => {
-    box.current?.focus();
+    if (own) box.current?.focus();
     if (d.kind !== "scale") void review();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  // The count's field has focus whenever the form shows (first, and after Back).
+  // The count's field has focus whenever the form shows (first, and after Back) for your own sheet, and for a block's
+  // only once the person is in the sheet.
   useEffect(() => {
-    if (stage.s === "form") field.current?.focus();
-  }, [stage.s]);
+    if (stage.s === "form" && (own || box.current?.contains(document.activeElement))) field.current?.focus();
+  }, [stage.s]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const apply = async () => {
     if (stage.s !== "review" || !stage.review.id || !stage.review.digest) return;
@@ -163,8 +171,14 @@ function ChangeSheet(props: SheetProps) {
               <p className="small dim">Now <b className="mono">{current}</b> replica{current === 1 ? "" : "s"}. Landlens checks the change with the cluster before anything is sent.</p>
               <div className="stepper" role="group" aria-label="Replicas">
                 <button type="button" className="icon-btn" aria-label="One fewer" disabled={replicas <= 0} onClick={() => step(-1)}><Ic icon={Minus} size={14} /></button>
-                <input ref={field} className="mono" type="number" inputMode="numeric" min={0} max={1000} aria-label="Replicas" value={replicas}
-                  onChange={(e) => (touched.current = true, setReplicas(Math.max(0, Math.min(1000, Math.floor(Number(e.target.value) || 0)))))}
+                <input ref={field} className="mono" type="number" inputMode="numeric" min={0} max={1000} aria-label="Replicas" value={typed ?? replicas}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    touched.current = true;
+                    setReplicasNow((r: number) => replicasFrom(raw, r));
+                    setTyped(raw);
+                  }}
+                  onBlur={() => setTyped(undefined)}
                   onKeyDown={(e) => {
                     if (e.key === "ArrowUp" || e.key === "ArrowDown") (e.preventDefault(), step((e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 10 : 1)));
                   }} />

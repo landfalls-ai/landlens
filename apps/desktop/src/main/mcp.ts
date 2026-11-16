@@ -523,6 +523,17 @@ export class McpService {
     if (!v) throw fail(404, "That view has closed.");
     if (this.linkAsked) throw fail(429, "Landlens is already asking about a link.");
     if (!this.views.allowLink(viewId)) throw fail(429, "That view is opening links too often.");
+    const who = v.block ? `A block Claude built on the Views page (${v.block.caption ?? v.block.block})` : `The ${v.server} view (${v.tool})`;
+    return this.confirmLink(who, raw);
+  }
+
+  /**
+   * Main's one dialog for a link something other than the person wrote (a view's frame, a text block on the Views
+   * page: security review of wave 10 part 3, L4): https only, no credentials, at most VIEW_LINK_SHOWN characters shown
+   * whole, a query said, `who` asking; one dialog at a time. Opens only on Open.
+   */
+  async confirmLink(who: string, raw: string): Promise<boolean> {
+    if (this.linkAsked) throw fail(429, "Landlens is already asking about a link.");
     let u: URL;
     try {
       u = new URL(raw);
@@ -531,7 +542,6 @@ export class McpService {
     }
     if (u.protocol !== "https:" || u.username || u.password) throw fail(400, "Views may open https links only.");
     if (u.href.length > VIEW_LINK_SHOWN) throw fail(400, `That link is ${u.href.length.toLocaleString("en-US")} characters: Landlens shows a view's link whole before it opens it, and opens none over ${VIEW_LINK_SHOWN}.`);
-    const who = v.block ? `A block Claude built on the Views page (${v.block.caption ?? v.block.block})` : `The ${v.server} view (${v.tool})`;
     this.linkAsked = true;
     try {
       const yes = await this.deps.ask.confirm({

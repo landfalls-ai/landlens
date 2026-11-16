@@ -4,7 +4,7 @@
 import type { ResourceType, RowRef, ViewRow } from "@landlens/contracts";
 import { describe, expect, it } from "vitest";
 import {
-  barsOf, cellWords, linesOf, logLines, oneKind, refKey, rowObjects, rowOf, selectionActions, sortKey, statOf, tableColumns, toneOf, tweakSort, unitWords,
+  barsOf, bulkOffered, cellWords, chipOf, linesOf, logLines, oneKind, refKey, rowObjects, rowOf, selectionActions, sortKey, statOf, tableColumns, toneOf, tweakSort, unitWords,
 } from "../src/renderer/src/viewBlocks";
 
 const NOW = Date.parse("2026-11-16T12:00:00Z");
@@ -131,6 +131,24 @@ describe("the selection bar's actions (D156, D219)", () => {
     expect(oneKind([ref("a"), ref("b")])).toEqual({ group: "apps", version: "v1", resource: "deployments", kind: "Deployment" });
     expect(oneKind([ref("a"), ref("p", { group: "", resource: "pods", kind: "Pod" })])).toBeUndefined();
     expect(oneKind([])).toBeUndefined();
+    // The same resource name in two groups is two kinds (L2's M13): a Longhorn "nodes" isn't core's.
+    expect(oneKind([ref("n1", { group: "", resource: "nodes", kind: "Node" }), ref("n2", { group: "longhorn.io", resource: "nodes", kind: "Node" })])).toBeUndefined();
+  });
+
+  it("never lets a bulk Delete start from a selection a block chose any row of, whatever the bar shows (L2's M15)", () => {
+    expect(bulkOffered("delete", "block")).toBe(false);
+    expect(bulkOffered("restart", "block")).toBe(true);
+    expect(bulkOffered("delete", "you")).toBe(true);
+  });
+});
+
+describe("a chip from the drawer over a view (security review of part 3, L5)", () => {
+  const typeOf = (r: { group: string; resource: string }) => (r.resource === "pods" ? { kind: "Pod" } : r.resource === "deployments" ? { kind: "Deployment" } : undefined);
+  it("takes the object's own kind, never the drawer's; nothing for a kind it doesn't know or a Secret", () => {
+    // The drawer shows a Deployment; its Pods tab asks about a pod.
+    expect(chipOf({ group: "", version: "v1", resource: "pods", namespace: "landlens-dev", name: "api-1" }, typeOf)).toEqual({ group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: "api-1" });
+    expect(chipOf({ group: "x.io", version: "v1", resource: "widgets", name: "w" }, typeOf)).toBeUndefined();
+    expect(chipOf({ group: "", version: "v1", resource: "secrets", namespace: "landlens-dev", name: "s" }, () => ({ kind: "Secret" }))).toBeUndefined();
   });
 });
 

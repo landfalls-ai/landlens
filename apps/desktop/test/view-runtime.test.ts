@@ -636,6 +636,8 @@ describe("security review of part 1", () => {
     rt.setParams(id, { ns: "shop" });
     expect(rt.shows(id, { group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: "a" })).toBe(false);
     expect(rt.data(id, "pods")!.rows).toEqual([]);
+    // Nor does a block's intent find the old read's row meanwhile (part 1's M6 rule, for intents: L2's M6 of part 3).
+    expect(rt.findRef(id, { kind: "Pod", namespace: "landlens-dev", name: "a" })).toBeUndefined();
     api.add("pods", pod("a2", { ns: "landlens-dev" })); // the old watch is still open while discovery waits
     await sleep(80);
     gate!();

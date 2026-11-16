@@ -438,6 +438,80 @@ had written it, so the document itself wasn't recorded; the test now waits for t
 out one at a time and each failed its test (own sources, rate, verb fits kind, the window's parse, no Delete for a
 block's selection); main's Secret check on a target is a second layer no row can reach (no Secret source exists).
 
+### Security review of part 3, fixed
+
+One High, two Medium and five Low, all fixed as the review proposed; where a fix chose, the item says which. Each fix
+was taken out once and its test failed: 31 mutations against the unit tests (the review's twelve survivors among
+them) and six in the built app on OrbStack, none surviving (`views.e2e` H1, M1, M2 and the text block's link). Checks:
+`pnpm typecheck` 0; `pnpm -r test` all pass (desktop 52 files, 779 tests; views 91); `electron-vite build`; every e2e file
+one at a time on OrbStack: views 14 passed and the live case skipped (twice), actions 8 after one rerun (its stale-row
+race), and `custom.e2e`'s two cases fail as before this change (they expect no checkbox column, which wave 8 part 3
+added). E2e 4's probe now also reads CSP reports through a buffered `ReportingObserver`: the CSS's `@import` is
+refused while the page is parsed, sometimes before the probe's listener exists.
+
+- [x] **H1** A view outlived a cluster switch, still "Live", and its rows acted on the new cluster's objects of the
+  same name. The window's view keeps its handle and context (`viewStore`); the page, the dock and the rows' hands use
+  it only while that handle is the cluster connected (`viewOn`); the Workspace closes it, in the window and in main,
+  when another cluster's Workspace mounts (`viewStore.bind`), and a start answering after a switch is closed. Main's
+  `close` pushes `views:state` with `closed: true` for every close (the cluster gone, a new view, the page's own), and
+  the page leaves the view with a line saying so. Second layer: `readRef` (the drawer, the menu, the row keys),
+  `viewBulk` and `viewIntent` refuse when the view isn't the connected cluster's, read at the moment of acting. The
+  header names the context. Chose both of the review's options: close on a switch, and never show another's.
+  Tests: `view-store.test.ts` (another handle's view neither shown nor acted on; closed on bind; a late start closed;
+  main's `closed` blanks the page), `views-main.test.ts` (the cluster gone and a close push `closed`); e2e H1 in an app
+  of its own with a kubeconfig naming OrbStack twice, written for the run (`orbstack`, `orbstack-b`): the header says
+  `orbstack`, and after the switch the page is blank and no row of the old view exists. Mutations: `bind`, `viewOn`,
+  the page's `closed`, the late start, main's push (each unit); in the built app the three window layers together and
+  the header (each fails e2e H1). The `readRef`/`viewBulk`/`viewIntent` layer is in the Workspace, under the others,
+  with no test of its own.
+- [x] **M1** A block could open Landlens's sheet on a timer, and the sheet took the person's keyboard: typing became
+  "Scale … to 0 replicas". (1) The host takes a block's intent only while its frame has the focus and the person just
+  acted (`personHere`: `focused()` and `navigator.userActivation.isActive`, Chromium's transient activation, which a
+  gesture in the frame gives its parent, about 5 s); a host without `focused` refuses. Chose the platform's own
+  activation over a 2 s timer of our own: the page can't see clicks inside the frame, and activation is exactly that.
+  (2) A sheet a block asked for takes no focus (`takesFocus`): not its box, not the count's field, not Apply after the
+  review unless the focus is already in the sheet. (3) The replicas field keeps the count for an empty or non-numeric
+  text (`replicasFrom`; it shows what was typed until blur), wave 8's field too. (4) An `object` intent doesn't
+  replace an open drawer, `logs` doesn't move the focus, `ask` doesn't fold the dock. Tests: `app-host.test.ts` (six
+  intents unfocused, focused with no gesture, and without `focused`: none reaches main; with both, all do),
+  `apply-rules.test.ts` (`takesFocus`, `replicasFrom`); e2e M1 (`timer-intent`: a block asks for a scale 2.5 s in while
+  the person types a question; every character in the composer, no sheet, the block refused, replicas unchanged).
+  Mutations: the gate, the gesture, focus assumed without the dep, `takesFocus`, `replicasFrom` (unit); in the built app
+  the gate alone (fails at "no sheet", the composer intact: the second wall held) and the gate with `takesFocus` (fails
+  at the composer's text).
+- [x] **M2** A block's selection became the person's with one checkbox, and Delete covered the rows the block chose.
+  The selection keeps `fromBlock` (the refKeys a block chose) and the block's title; `nextSelection` keeps the mark on
+  each block row that stays through the person's tick, untick, tick-all and the shown-rows filter; a block's select
+  replaces the selection. While any block row is selected the bar says "Chosen by a block Claude built (*block*)" or
+  "N of these chosen…", offers no Delete, and `viewBulk` refuses it again (`bulkOffered`, pure). Chose per-row
+  provenance over "a person's tick starts fresh": the rows stay ticked as the person sees them. Tests:
+  `view-store.test.ts`, `view-blocks.test.ts`; e2e M2 (`select-block`). Mutations: the mark dropped on a tick (unit and
+  e2e), `bulkOffered`.
+- [x] **L1** security.md said no row's `_ref` could name a Secret; the doctor's certificate rows do. Kept the `_ref`
+  (the native problems block opens the Secret in the drawer, as you, behind the unlock) and the check; security.md
+  corrected. Test: `views-main.test.ts` (a `doctor.problems` source with a certificate problem: `object`, `ask`, `logs`,
+  `select` naming it all refused). Mutation: the check (the review's M1) fails it.
+- [x] **L2** The twelve surviving mutations each have a killing test now: M1 (L1's test), M3 and M4
+  (`views-main.test.ts`: cordon and uncordon on a Node row resolve; a select of core's and Longhorn's `Node` refused),
+  M6 (`view-runtime.test.ts`: `findRef` while a parameter change waits on discovery), M10, M11, M12
+  (`view-store.test.ts`: a Secret's chip, 60 rows keep 50, a block's select marked the block's), M13
+  (`view-blocks.test.ts`: two groups' `nodes`), M14 (`apply-rules.test.ts`: `eyebrowOf`), M15 (the rule moved to
+  `bulkOffered` and tested), M16 (`runtime.test.ts`: `view.select` of 60 sends 50), M18 (the verb table moved to
+  `FRAME_VERB_ACTIONS` in `actionAsks.ts` and tested).
+- [x] **L3** The sheet said "Asked for by this view". `ActionDraft.block` carries the asking block's title (from
+  `ViewBlock` through the page), and the eyebrow and note say "Asked for by a block Claude built (*block*)"; a bulk
+  from a block's selection names it too. Tests: `apply-rules.test.ts`; e2e 4's card label.
+- [x] **L4** A text block's links opened on one click, any length, no dialog. `views:link` (view, block, address):
+  main opens only one of the shown version's text block's own links (`markdownLinks`), through `McpService.confirmLink`,
+  the frame's dialog (https only, at most 500 characters shown whole, its query said), asked by "A text block Claude
+  built on the Views page (*view* · *block*)". The Markdown takes a `LinkOpener` for this. Tests: `views-main.test.ts`,
+  `mcp-main.test.ts` (600 characters: no dialog, nothing opened), `preload-channels.test.ts`; e2e native blocks (the
+  600-character link: no dialog, nothing opened; the short one: the dialog names the block, Open opens). Mutations:
+  any address, any block, no limit, the asker's name (unit); the old `link:open` (e2e).
+- [x] **L5** The drawer's Ask over a view labelled another object's ref with the drawer's kind and dropped log asks.
+  `chipOf` takes the kind from the ref's own type (none for an unknown kind or a Secret); a quoted context says asking
+  about lines isn't offered over a view yet. Test: `view-blocks.test.ts`. Mutation: the drawer's kind.
+
 ## Part 4: keeping views and the connections
 
 - [ ] As section 13 lists, and e2e 8 and 10, and the live test

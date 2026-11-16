@@ -1,0 +1,56 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "a block that chooses",
+      "document": {
+        "schema": 1,
+        "title": "A block that chooses",
+        "sources": {
+          "deps": {
+            "kind": "kube.list",
+            "resource": "deployments",
+            "group": "apps",
+            "namespace": "landlens-dev",
+            "fields": {
+              "name": "$name"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "blocks": [
+          {
+            "type": "table",
+            "source": "deps",
+            "title": "Deps",
+            "select": true,
+            "columns": [
+              {
+                "field": "name",
+                "header": "Name"
+              }
+            ]
+          },
+          {
+            "type": "app",
+            "id": "chooser",
+            "title": "Chooser",
+            "uses": [
+              "deps"
+            ],
+            "html": "<button id=\"choose\" type=\"button\">choose</button>",
+            "js": "\nvar done = false;\nview.onData('deps', function (d) {\n  var a = d.rows.filter(function (r) { return r.name === 'views-e2e'; });\n  if (a.length === 1 && !done) {\n    document.body.setAttribute('data-chooser', '1');\n    document.getElementById('choose').onclick = function () {\n      done = true;\n      view.select(a.map(function (r) { return r._ref; })).then(function (r) { document.body.setAttribute('data-sel', r && r.isError ? 'refused' : 'shown'); });\n    };\n  }\n});\n"
+          }
+        ]
+      }
+    }
+  }
+]

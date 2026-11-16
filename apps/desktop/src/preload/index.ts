@@ -24,7 +24,7 @@ const CHANNELS: readonly Channel[] = [
   "gcp:status", "gcp:projects", "gcp:choose", "gcp:agent-read", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
   "gcp:cluster-view", "gcp:cluster-item",
   "views:start", "views:prompt", "views:get", "views:version", "views:param", "views:refresh", "views:visible", "views:close",
-  "views:app-open", "views:app-call", "views:intent", "views:audit",
+  "views:app-open", "views:app-call", "views:intent", "views:audit", "views:link",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",

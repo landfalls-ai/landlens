@@ -1,7 +1,7 @@
 // Your actions in the window (wave 8, D145–D148): which actions an object has, and "Ask Claude first" — a fixed
 // question per action, sent with main's title, main's facts and main's scrubbed diff as one quoted context. Nothing is
 // applied by asking, and the agent has no tool that presses Apply.
-import type { ActionFact, ActionKind, ActionReview, KubeObject, ResourceType } from "@landlens/contracts";
+import type { ActionFact, ActionKind, ActionReview, FrameVerb, KubeObject, ResourceType } from "@landlens/contracts";
 import { actionFits } from "@landlens/kube/action-kinds";
 import type { AskContext } from "./quotes";
 
@@ -17,13 +17,41 @@ export const PREVIEW_ONLY = "Development build: preview only. Nothing is sent to
 export type ActionDraft = {
   kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean; run?: string;
   /**
-   * A block on the Views page asked for this sheet (wave 10 part 3, D219): its review card says so ("Asked for by this
-   * view") and nothing else changes; the person reviews the same dry run and applies with their own access.
+   * A block on the Views page asked for this sheet (wave 10 part 3, D219), or chose some of its rows: its review card
+   * says so, naming the block Claude built (`block`, its title: security review of part 3, L3), and the sheet takes no
+   * focus from where the person is (M1). The person reviews the same dry run and applies with their own access.
    */
   asker?: "view";
+  block?: string;
 };
-/** The review card's eyebrow: whose action this is. */
-export const eyebrowOf = (d: Pick<ActionDraft, "asker">) => (d.asker === "view" ? "Asked for by this view" : "Your action");
+/** The review card's eyebrow: whose action this is. A block's is Claude's, never Landlens's own page's (L3). */
+export const eyebrowOf = (d: Pick<ActionDraft, "asker" | "block">) =>
+  d.asker === "view" ? `Asked for by a block Claude built${d.block ? ` (${d.block})` : ""}` : "Your action";
+
+/**
+ * Whether the sheet takes the keyboard when it opens (its box, the count's field, Apply after the review). A sheet a
+ * block asked for never does: the person may be typing elsewhere, and their next key or Enter mustn't land in it
+ * (security review of part 3, M1). Apply then takes a pointer press, or a key once the person moved focus into it.
+ */
+export const takesFocus = (d: Pick<ActionDraft, "asker">) => d.asker !== "view";
+
+/**
+ * The count a replicas field holds after an edit: a whole number from 0 to 1,000, and an empty or non-numeric value
+ * keeps the last count, so a stray letter never becomes 0 (security review of part 3, M1; wave 8's field too).
+ */
+export function replicasFrom(raw: string, last: number): number {
+  if (!/^\s*\d+(\.\d*)?\s*$/.test(raw)) return last;
+  return Math.max(0, Math.min(1000, Math.floor(Number(raw))));
+}
+
+/**
+ * The sheet a block's verb opens (D219): resume is suspend's other way, uncordon cordon's. Never delete or drain (main
+ * maps the same seven, `VERB_ACTION` in views.ts).
+ */
+export const FRAME_VERB_ACTIONS: Record<FrameVerb, { kind: ActionKind; flag?: boolean }> = {
+  scale: { kind: "scale" }, restart: { kind: "restart" }, trigger: { kind: "trigger" },
+  suspend: { kind: "suspend", flag: true }, resume: { kind: "suspend", flag: false }, cordon: { kind: "cordon", flag: true }, uncordon: { kind: "cordon", flag: false },
+};
 
 /** The sheet's own title for a draft, before main has reviewed it. */
 export function sheetTitle(d: ActionDraft): string {

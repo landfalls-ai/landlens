@@ -98,6 +98,17 @@ describe("view's intents (wave 10 part 3, D219)", () => {
     expect(parseIntent(posted.at(-1)!.params!.url)).toBeUndefined();
   });
 
+  it("asks for at most 50 rows in a selection (L2's M16 of part 3)", async () => {
+    const { parseIntent } = await import("../src/intent");
+    const { view, posted } = load();
+    const ref = (i: number) => ({ kind: "Deployment", namespace: "landlens-dev", name: `d${i}` });
+    view.select(Array.from({ length: 60 }, (_, i) => ref(i)));
+    const url = posted.at(-1)!.params!.url!;
+    expect(url.split("/").length - 4).toBe(100);
+    expect(url.endsWith("/landlens-dev/d49")).toBe(true);
+    expect(parseIntent(url)).toBeDefined();
+  });
+
   it("sends nothing for an empty selection", async () => {
     const { view, posted } = load();
     const n = posted.length;

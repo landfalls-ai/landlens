@@ -476,7 +476,9 @@ row keys shows `ObjectMenu` unchanged: wave 8's Scale, Restart, Delete, Trigger,
 Logs, Shell, Edit, Ask Claude, each through its existing path (`action:review` → the dry-run card → `action:apply`,
 as you). `select: true` gives wave 8 part 3's selection and bulk bar. What is offered is decided by `useCanAct`
 and the object's kind, never by the document: the document has no field that names a verb, a target or a request.
-`rowActions: false` only hides the menu.
+`rowActions: false` only hides the menu. *Amended by part 3's security review (H1, M2):* a view's rows act only on the
+cluster the view was built on (the view closes on a cluster switch, and its header names the context), and a
+selection keeps which rows a block chose: while any of them is selected, there is no Delete.
 
 **D219. App blocks: three intents, all only ever opening something of Landlens's.** Sent as `ui/open-link` with a
 `landlens://` address (the existing mechanism for `landlens://object/…`), parsed by strict patterns like
@@ -484,7 +486,8 @@ and the object's kind, never by the document: the document has no field that nam
 
 - `landlens://object/<Kind>/<ns|_>/<name>`: opens the drawer (exists).
 - `landlens://action/<verb>/<Kind>/<ns|_>/<name>`, verb ∈ `scale`, `restart`, `trigger`, `suspend`, `resume`,
-  `cordon`, `uncordon`: opens wave 8's `ActionSheet` for that object, with the eyebrow "Asked for by this view",
+  `cordon`, `uncordon`: opens wave 8's `ActionSheet` for that object, with the eyebrow "Asked for by this view" (since
+  part 3's review, "Asked for by a block Claude built (*block*)"),
   nothing prefilled but the object and verb (a scale opens at the current replica count). The person reviews the
   dry run and applies as always. **Delete and drain are not offered from a frame**: the person opens the object and
   uses its menu. (For the person to decide; this is the default.)
@@ -494,12 +497,20 @@ Six intents a minute per frame, one sheet at a time; more are dropped silently. 
 sheet, and learns nothing of the outcome (the answer to every intent is `{}`); the data updates when the cluster
 does.
 
+*Amended by part 3's security review (M1, L3):* an intent counts only in answer to the person: the frame has the focus
+and they clicked or typed in it in the last few seconds (as the host's key rule, plus Chromium's user activation); a
+sheet a block asked for takes no focus, so Apply needs the person's press or their move into the sheet; its eyebrow is
+"Asked for by a block Claude built (*block*)"; an `object` intent doesn't replace an open drawer and `ask` doesn't fold
+the dock.
+
 Anything **Claude** proposes still asks: a view session has `landlens-kube`'s write tools only as other sessions do
 (the approval broker), and no tool on `landlens-views` writes.
 
 **D220. Nothing goes outside except the existing opens.** No URL field in the document. Native blocks render no
 link elements from data; a `text` block's markdown links are shown as text with the host, and clicking one goes
-through `link:open` exactly as a link in Claude's answer does today. A frame's `openLink` is the existing
+through main's link dialog as a frame's link does (`views:link`: only one of the block's own links, at most 500
+characters shown whole, "A text block Claude built on the Views page (*view* · *block*)"; security review of part 3,
+L4), no longer `link:open` as a link in Claude's answer. A frame's `openLink` is the existing
 `ui/open-link`: https only, main's native dialog naming the host, three a minute. The dialog shows the whole address
 or none: one over 500 characters is refused without a dialog; it says when the address carries data after `?`, and
 it names the asker as "A block Claude built on the Views page (*view* · *block*)", never as Landlens's own

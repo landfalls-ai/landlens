@@ -32,6 +32,9 @@ const ASK_CHARS = 20_000;
 /** A value as JSON with every `<` escaped: it can't close a tag around it, or a fence (backticks aside, see quotedBlock). */
 const quoteJson = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u003c");
 
+/** A text block's links, as the window's Markdown finds them ([text](https://…)). */
+export const markdownLinks = (md: string): string[] => [...md.matchAll(/\[[^\]]+\]\((https:\/\/[^)\s]+)\)/g)].map((m) => m[1]!);
+
 export const VIEW_NOTES = {
   noView: "There's no view yet: call render_view first.",
   blockMoved: "The view changed since you chose that block: ask about it again.",
@@ -77,6 +80,11 @@ export type ViewServiceDeps = {
   clusters: Pick<ClusterManager, "get" | "discovery" | "onGone">;
   push: (channel: "views:state" | "views:data", payload: unknown) => void;
   now?: () => number;
+  /**
+   * Main's one link dialog (McpService.confirmLink: https only, at most 500 characters shown whole, its query said):
+   * a text block's Markdown links go through it as a frame's do (security review of part 3, L4).
+   */
+  link?: (who: string, url: string) => Promise<boolean>;
   /** How long a render waits for its sources' first read before answering Claude (ms). */
   settle?: number;
   log?: (l: string) => void;
@@ -210,12 +218,19 @@ export class ViewService {
     else this.deps.runtime.hide(w.runtime);
   }
 
-  /** Close a view: its reads stop, its token is revoked, its frames close and its session ends. */
+  /**
+   * Close a view: its reads stop, its token is revoked, its frames close and its session ends. The page hears it
+   * (`closed`), so a view main closed for any reason (its cluster gone, a new view) leaves the page rather than
+   * standing there marked Live with rows whose actions would reach another cluster (security review of part 3, H1).
+   */
   async close(view: string) {
     const w = this.views.get(view);
     if (!w) return;
+    // Without the sources' states: the runtime may have closed the view already (its cluster went first).
+    const last = this.state(w, false);
     this.views.delete(view);
     w.closed = true;
+    this.deps.push("views:state", { ...last, closed: true });
     if (w.runtime) this.deps.runtime.close(w.runtime);
     for (const f of w.frames) this.deps.frames.close(f);
     if (w.session) await this.deps.agent.close(w.session).catch(() => undefined);
@@ -299,6 +314,20 @@ export class ViewService {
     if (p.kind === "action" && (!p.verb || !actionFits(VERB_ACTION[p.verb], refs[0]!))) return {};
     if (p.kind === "select" && new Set(refs.map((r) => `${r.group}/${r.resource}`)).size !== 1) return {};
     return { intent: { kind: p.kind, ...(p.verb ? { verb: p.verb } : {}), refs } };
+  }
+
+  /**
+   * views:link: a text block's Markdown link (security review of part 3, L4). Only an address that is one of the shown
+   * version's text block's own links, and only through main's link dialog, as a frame's: anything else opens nothing.
+   */
+  async link(view: string, block: string, url: string): Promise<boolean> {
+    const w = this.view(view);
+    const cur = w.history.current();
+    const at = /^block-(\d{1,2})$/.exec(block);
+    const b = cur && at ? cur.document.blocks[Number(at[1])] : undefined;
+    if (!cur || !b || b.type !== "text" || !markdownLinks(b.markdown).includes(url)) throw fail(404, "That view has no such link.");
+    if (!this.deps.link) throw fail(503, "Landlens can't open a view's links here.");
+    return this.deps.link(`A text block Claude built on the Views page (${cur.document.title}${b.title ? ` · ${b.title}` : ""})`, url);
   }
 
   /** views:audit: the front-door requests made with the view's token since it opened (D223). */
@@ -535,7 +564,7 @@ export class ViewService {
     for (const w of this.views.values()) if (w.session === session && !w.closed) this.pushState(w);
   }
 
-  private state(w: Working): ViewState {
+  private state(w: Working, sources = true): ViewState {
     const cur = w.history.current();
     return {
       id: w.id, session: w.session, context: w.context, ...(w.namespaces ? { namespaces: w.namespaces } : {}),
@@ -544,7 +573,7 @@ export class ViewService {
       versions: w.history.versions().map((v) => ({ version: v.version, ...(v.parent !== undefined ? { parent: v.parent } : {}), ...(v.note ? { note: v.note } : {}), at: v.at, by: v.by })),
       ...(cur ? { document: cur.document } : {}),
       params: { ...w.params },
-      sources: w.runtime ? this.deps.runtime.status(w.runtime) : {},
+      sources: w.runtime && sources ? this.deps.runtime.status(w.runtime) : {},
       ...(w.refused ? { refused: w.refused } : {}),
       ask: w.ask, busy: w.busy > 0, ...(w.failed ? { failed: w.failed } : {}),
     };

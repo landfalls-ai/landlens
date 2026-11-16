@@ -96,15 +96,15 @@ afterEach(() => {
   services = [];
 });
 
-function setup(o: { now?: () => number; types?: ResourceType[] } = {}) {
+function setup(o: { now?: () => number; types?: ResourceType[]; doctor?: () => Promise<never>; link?: (who: string, url: string) => Promise<boolean> } = {}) {
   const api = new FakeApi();
   const c = fakeClusters(o.types);
   const pushes: { channel: string; payload: any }[] = [];
   let svc: ViewService | undefined;
-  const rt = new ViewRuntime({ clusters: c.clusters, frontDoor: api.door, client: (_u, t) => api.client(t), push: (p) => svc?.onPush(p), times: FAST });
+  const rt = new ViewRuntime({ clusters: c.clusters, frontDoor: api.door, client: (_u, t) => api.client(t), push: (p) => svc?.onPush(p), times: FAST, ...(o.doctor ? { doctor: o.doctor } : {}) });
   const agent = new FakeAgent();
   const frames = new AppViews();
-  svc = new ViewService({ runtime: rt, agent: agent as never, frames, clusters: c.clusters, push: (channel, payload) => pushes.push({ channel, payload }), settle: 1_000, ...(o.now ? { now: o.now } : {}) });
+  svc = new ViewService({ runtime: rt, agent: agent as never, frames, clusters: c.clusters, push: (channel, payload) => pushes.push({ channel, payload }), settle: 1_000, ...(o.now ? { now: o.now } : {}), ...(o.link ? { link: o.link } : {}) });
   services.push({ svc, rt });
   const states = () => pushes.filter((p) => p.channel === "views:state").map((p) => p.payload as ViewState);
   const text = (r: any) => (r.content as { text: string }[]).map((x) => x.text).join("\n");
@@ -381,12 +381,78 @@ describe("a block's intents (wave 10 part 3, D219)", () => {
     expect(svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api").intent).toBeDefined();
   });
 
+  it("resolves cordon and uncordon on a Node row, and refuses a select across two kinds that are both called Node (L2's M3, M4)", async () => {
+    const s = await started();
+    s.api.add("nodes", { metadata: { name: "orbstack" }, spec: {}, status: { conditions: [{ type: "Ready", status: "True" }] } });
+    s.api.add("lhnodes", { metadata: { name: "n1" }, status: { conditions: [{ type: "Ready", status: "True" }] } });
+    const doc = {
+      schema: 1, title: "Nodes",
+      sources: { nodes: { kind: "kube.list", resource: "nodes", fields: { name: "$name" } }, lh: { kind: "kube.list", resource: "lhnodes", group: "longhorn.io", fields: { name: "$name" } } },
+      blocks: [{ type: "app", id: "nodes", uses: ["nodes", "lh"], html: "<p>x</p>" }],
+    };
+    await s.claude.callTool({ name: "render_view", arguments: { document: doc } });
+    await until(() => (s.svc.get(s.view).sources.nodes?.rows ?? 0) >= 1 && (s.svc.get(s.view).sources.lh?.rows ?? 0) >= 1);
+    const f = s.svc.appOpen(s.view, "nodes");
+    const N = { group: "", version: "v1", resource: "nodes", kind: "Node", name: "orbstack" };
+    expect(s.svc.intent(f.view, "landlens://action/cordon/Node/_/orbstack")).toEqual({ intent: { kind: "action", verb: "cordon", refs: [N] } });
+    expect(s.svc.intent(f.view, "landlens://action/uncordon/Node/_/orbstack")).toEqual({ intent: { kind: "action", verb: "uncordon", refs: [N] } });
+    expect(s.svc.intent(f.view, "landlens://select/Node/_/orbstack")).toMatchObject({ intent: { kind: "select" } });
+    // Core's Node and Longhorn's Node: one kind's name, two kinds. A selection is of one.
+    expect(s.svc.intent(f.view, "landlens://select/Node/_/orbstack/_/n1")).toEqual({});
+  });
+
+  it("refuses every intent naming a doctor's certificate row: its _ref is a Secret (security review of part 3, L1)", async () => {
+    const REPORT = {
+      at: "", cut: false, checks: { pods: "ok", workloads: "ok", nodes: "ok", events: "ok", certs: "ok" },
+      problems: [{
+        id: "cert|Secret/landlens-dev/shop-tls", class: "cert", tone: "bad", kind: "Secret", namespace: "landlens-dev", name: "shop-tls",
+        group: "", version: "v1", resource: "secrets", reason: "Expiring", title: "shop-tls expires in 1d", detail: "CN shop.example.com · not after 2026-11-17",
+        pods: [], podCount: 0, facts: { events: [] }, hint: { cause: "", next: [] },
+      }],
+    };
+    const s = await started({ doctor: async () => REPORT as never });
+    const doc = {
+      schema: 1, title: "Certs", sources: { p: { kind: "doctor.problems", namespace: "landlens-dev" } },
+      blocks: [{ type: "problems", source: "p" }, { type: "app", id: "a", uses: ["p"], html: "<p>x</p>" }],
+    };
+    await s.claude.callTool({ name: "render_view", arguments: { document: doc } });
+    await until(() => (s.svc.get(s.view).sources.p?.rows ?? 0) >= 1, "the doctor's row");
+    // The row is reachable: the native problems block may open it in the drawer, as you, behind the Secret unlock.
+    expect(s.rt.findRef((s.svc as any).views.get(s.view).runtime, { kind: "Secret", namespace: "landlens-dev", name: "shop-tls" }, ["p"])).toMatchObject({ resource: "secrets" });
+    const f = s.svc.appOpen(s.view, "a");
+    for (const url of ["object", "ask", "logs", "select"].map((k) => `landlens://${k}/Secret/landlens-dev/shop-tls`)) expect(s.svc.intent(f.view, url), url).toEqual({});
+  });
+
   it("refuses a frame that isn't a view's block, and a closed view's", async () => {
     const { svc, f, frames, view } = await intents();
     const plain = frames.add({ call: "call-1", server: "landlens-kube", tool: "describe", html: "", csp: "" });
     expect(() => svc.intent(plain.id, "landlens://ask/Deployment/landlens-dev/api")).toThrow(/closed/);
     await svc.close(view);
     expect(() => svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api")).toThrow(/closed/);
+  });
+});
+
+describe("a text block's links (security review of part 3, L4)", () => {
+  const textDoc = (md: string) => ({
+    schema: 1, title: "Runbook",
+    sources: { pods: { kind: "kube.list", resource: "pods", namespace: "landlens-dev", fields: { name: "$name" } } },
+    blocks: [{ type: "table", source: "pods", columns: [{ field: "name" }] }, { type: "text", title: "Docs", markdown: md }],
+  });
+  it("opens only one of the block's own links, and only through main's link dialog, saying a block Claude built asks", async () => {
+    const asked: { who: string; url: string }[] = [];
+    const s = await started({ link: async (who, url) => (asked.push({ who, url }), false) });
+    const long = `https://docs.example.com/?d=${"x".repeat(600)}`;
+    await s.claude.callTool({ name: "render_view", arguments: { document: textDoc(`See [the runbook](https://docs.example.com/run?x=1) and [more](${long}).`) } });
+    expect(await s.svc.link(s.view, "block-1", "https://docs.example.com/run?x=1")).toBe(false);
+    expect(asked).toEqual([{ who: "A text block Claude built on the Views page (Runbook · Docs)", url: "https://docs.example.com/run?x=1" }]);
+    // The long one goes to the same dialog, which refuses anything over 500 characters before asking (mcp-main.test.ts).
+    await s.svc.link(s.view, "block-1", long);
+    expect(asked.at(-1)!.url).toBe(long);
+    // Not one of the block's links, another block, a block that isn't text: nothing asked, nothing opened.
+    for (const [block, url] of [["block-1", "https://evil.example.com/"], ["block-0", "https://docs.example.com/run?x=1"], ["block-9", "https://docs.example.com/run?x=1"]] as const) {
+      await expect(s.svc.link(s.view, block, url)).rejects.toMatchObject({ status: 404 });
+    }
+    expect(asked).toHaveLength(2);
   });
 });
 
@@ -638,6 +704,21 @@ describe("the rest of the review of part 2 (L4, L6, L7, L8; M2's caption)", () =
     expect(frames.get(f.view)).toBeUndefined();
     expect(() => svc.get(view)).toThrow(expect.objectContaining({ status: 404 }));
     await until(() => !agent.isOpen(session), "the session's end");
+  });
+
+  it("H1 (part 3): a view main closes tells the page so, whatever closed it, and names its cluster", async () => {
+    const { claude, view, svc, c, states } = await started();
+    await claude.callTool({ name: "render_view", arguments: { document: podsDoc() } });
+    expect(states().at(-1)).toMatchObject({ id: view, context: "orbstack" });
+    expect(states().at(-1)!.closed).toBeUndefined();
+    c.goneNow();
+    await until(() => states().at(-1)?.closed === true, "the closed state");
+    expect(states().at(-1)).toMatchObject({ id: view, closed: true });
+    // Closed by the page, or replaced by a new view: the same.
+    const s2 = await started();
+    await s2.svc.close(s2.view);
+    expect(s2.states().at(-1)).toMatchObject({ id: s2.view, closed: true });
+    expect(() => svc.get(view)).toThrow(expect.objectContaining({ status: 404 }));
   });
 
   it("L8: two follow-ups sent together after the session ended start one session", async () => {

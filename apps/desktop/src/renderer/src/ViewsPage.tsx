@@ -14,7 +14,7 @@ import type { RowHands } from "./blocks/hands";
 import { SelectionBar } from "./TablePickers";
 import { oneKind, refKey, refLabel, selectionActions } from "./viewBlocks";
 import { ViewBlock, type BlockDoc } from "./ViewGrid";
-import { resourceRef, useView, viewStore } from "./viewStore";
+import { chosenBy, resourceRef, useView, viewOn, viewStore } from "./viewStore";
 
 type Doc = { title: string; params?: { name: string; type: string; label?: string; options?: string[]; default?: string }[]; sources: Record<string, Record<string, unknown>>; blocks: BlockDoc[] };
 
@@ -192,13 +192,20 @@ export function ViewsPage(props: {
   hands: Omit<RowHands, "picked" | "pick">;
   /** The kind a row's object is (discovery), for what the selection bar offers. */
   typeOf: (r: Pick<RowRef, "group" | "resource">) => ResourceType | undefined;
-  /** Restart or Delete on the chosen rows: wave 8's one sheet and one review. A block's selection never gets Delete. */
-  onBulk: (kind: "restart" | "delete", refs: RowRef[], by: "you" | "block") => void;
-  /** A block's object, logs or action intent, as main accepted it (D219): the Workspace opens Landlens's own card. */
-  onIntent: (i: ViewIntent) => boolean;
+  /**
+   * Restart or Delete on the chosen rows: wave 8's one sheet and one review. A selection holding any row a block chose
+   * never gets Delete; `block` names that block on the sheet.
+   */
+  onBulk: (kind: "restart" | "delete", refs: RowRef[], by: "you" | "block", block?: string) => void;
+  /**
+   * A block's object, logs or action intent, as main accepted it (D219): the Workspace opens Landlens's own card,
+   * naming the block (`block`, its title) that asked.
+   */
+  onIntent: (i: ViewIntent, block: string) => boolean;
   now: number;
 }) {
-  const snap = useView();
+  // Only a view of the cluster connected now (security review of part 3, H1): the Workspace closes any other.
+  const snap = viewOn(useView(), props.cluster.handle);
   const v = snap.view;
   const st = v?.state;
   const doc = st?.document as Doc | undefined;
@@ -221,15 +228,19 @@ export function ViewsPage(props: {
     return keys;
   }, [v?.data, st?.version]);
   useEffect(() => {
-    if (sel && sel.refs.some((r) => !shownKeys.has(refKey(r)))) viewStore.select(sel.refs.filter((r) => shownKeys.has(refKey(r))), sel.by);
+    if (sel && sel.refs.some((r) => !shownKeys.has(refKey(r)))) viewStore.select(sel.refs.filter((r) => shownKeys.has(refKey(r))));
   }, [shownKeys]); // eslint-disable-line react-hooks/exhaustive-deps
   const hands: RowHands = { ...props.hands, picked, pick: (refs) => viewStore.select(refs, "you") };
-  /** A block's intent (D219): ask and select are the page's own; object, logs and actions go to the Workspace. */
-  const intent = (i: ViewIntent) => {
-    if (i.kind === "ask") return (i.refs.forEach((r) => viewStore.chip(r)), props.onFoldDock(), true);
-    if (i.kind === "select") return (viewStore.select(i.refs, "block"), true);
-    return props.onIntent(i);
+  /**
+   * A block's intent (D219): ask and select are the page's own; object, logs and actions go to the Workspace. An ask
+   * only adds its chip: it never folds the dock, where a question of the view's session may be waiting (M1).
+   */
+  const intent = (i: ViewIntent, block: string) => {
+    if (i.kind === "ask") return (i.refs.forEach((r) => viewStore.chip(r)), true);
+    if (i.kind === "select") return (viewStore.select(i.refs, "block", block), true);
+    return props.onIntent(i, block);
   };
+  const by = sel ? chosenBy(sel) : "you";
   const selKind = sel ? oneKind(sel.refs) : undefined;
   const selType = selKind ? props.typeOf(selKind) : undefined;
 
@@ -311,6 +322,8 @@ export function ViewsPage(props: {
       <header className="view-head">
         <div className="view-title">
           <h2>{doc.title}</h2>
+          {/* The cluster the view reads, always named (H1): its rows' actions go to this cluster only. */}
+          <span className="view-cluster small" title="The cluster this view reads; its rows act here only">{st.context}</span>
           <span className="view-live" title={newest ? `Updated ${new Date(newest).toLocaleTimeString()}` : "Reading"}><i className={"dot" + (newest ? " on" : "")} />{newest ? `Live · ${new Date(newest).toLocaleTimeString()}` : "Reading"}</span>
           <span className="dim small">v{st.version}{st.shownBy === "you" ? " · chosen by you" : ""}</span>
         </div>
@@ -341,11 +354,16 @@ export function ViewsPage(props: {
       </header>
       {st.refused ? <RefusedRow refused={st.refused} open={refusedOpen} onToggle={() => setRefusedOpen((o) => !o)} /> : null}
       {sel ? (
-        <div className={"view-selection" + (sel.by === "block" ? " by-block" : "")} role="region" aria-label="Chosen rows">
-          {sel.by === "block" ? <span className="small view-sel-who">Chosen by a block Claude built. Nothing happens until you act.</span> : null}
+        <div className={"view-selection" + (by === "block" ? " by-block" : "")} role="region" aria-label="Chosen rows">
+          {by === "block" ? (
+            <span className="small view-sel-who">
+              {sel.fromBlock.length === sel.refs.length ? "Chosen" : `${sel.fromBlock.length} of these chosen`} by a block Claude built{sel.block ? ` (${sel.block})` : ""}.
+              {sel.fromBlock.length === sel.refs.length ? " Nothing happens until you act." : " No Delete while any of them is chosen."}
+            </span>
+          ) : null}
           {!selKind ? <span className="small dim">Rows of several kinds: no action covers them all.</span> : null}
-          <SelectionBar count={sel.refs.length} actions={selectionActions(selType, sel.by)}
-            onAction={(k) => props.onBulk(k, sel.refs, sel.by)}
+          <SelectionBar count={sel.refs.length} actions={selectionActions(selType, by)}
+            onAction={(k) => props.onBulk(k, sel.refs, by, sel.block)}
             onAsk={() => (sel.refs.slice(0, 10).forEach((r) => viewStore.chip(r)), props.onFoldDock())}
             onClear={() => viewStore.select([])} />
         </div>

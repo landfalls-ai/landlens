@@ -357,7 +357,7 @@ async function start() {
   });
   liveDrains = () => actions.liveRuns();
   endDrains = () => actions.quit();
-  viewService = new ViewService({ runtime: views, agent, frames: mcp.views, clusters, push: send, log: (l) => console.warn(l) });
+  viewService = new ViewService({ runtime: views, agent, frames: mcp.views, clusters, push: send, link: (who, url) => mcpSvc.confirmLink(who, url), log: (l) => console.warn(l) });
   const viewsSvc = viewService;
   registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets, gkeHandles, viewService);
   const service = mcp;

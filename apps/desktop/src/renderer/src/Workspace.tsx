@@ -1,6 +1,6 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
-import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, FrameVerb, GcpAlert, GkeAdvice, HealthProblem, KubeContext, KubeObject, ResourceType, RowRef, ViewIntent, ViewTone } from "@landlens/contracts";
+import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, GcpAlert, GkeAdvice, HealthProblem, KubeContext, KubeObject, ResourceType, RowRef, ViewIntent, ViewTone } from "@landlens/contracts";
 import { CircleX, Lock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
@@ -16,8 +16,8 @@ import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
 import { ViewsPage } from "./ViewsPage";
-import { resourceRef, useView, viewStore } from "./viewStore";
-import { refKey } from "./viewBlocks";
+import { resourceRef, useView, viewOn, viewStore } from "./viewStore";
+import { bulkOffered, chipOf, refKey } from "./viewBlocks";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
@@ -51,7 +51,7 @@ import { TriageSheet } from "./TriageSheet";
 import { FlowSheet, type FlowSubject } from "./FlowSheet";
 import { ActionSheet } from "./ActionSheet";
 import { useDrainRuns } from "./DrainPlanView";
-import type { ActionDraft } from "./actionAsks";
+import { FRAME_VERB_ACTIONS, type ActionDraft } from "./actionAsks";
 import { ObjectMenu } from "./ObjectMenu";
 import { RecentActions, useActionLog } from "./RecentActions";
 import { isActionVerb } from "./paletteRules";
@@ -94,7 +94,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [dock, setDock] = useState(false);
   // The Views page's own chat (wave 10, D213): the dock bound to the view's session, folded to a strip at first.
   const [viewDock, setViewDock] = useState(false);
-  const viewSnap = useView();
+  // The working view only while it is this cluster's (security review of wave 10 part 3, H1): a view built on another
+  // context is closed when this cluster's Workspace mounts, and never shown or acted on under it.
+  const viewSnap = viewOn(useView(), cluster.handle);
+  useEffect(() => viewStore.bind(cluster.handle), [cluster.handle]);
+  /** Whether the working view is this cluster's, read at the moment of acting (the second layer of H1). */
+  const ownView = () => viewStore.get().view?.handle === cluster.handle;
   const [askContext, setAskContext] = useState<AskContext[]>([]);
   const [prompt, setPrompt] = useState<{ id: number; text: string; draft?: true }>();
   const [userRail, setUserRail] = useState<boolean>();
@@ -381,10 +386,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const typeOfRef = (r: Pick<RowRef, "group" | "resource"> & Partial<RowRef>): ResourceType | undefined =>
     nav.find((n) => n.type.group === r.group && n.type.resource === r.resource)?.type
     ?? (r.kind && r.version ? { group: r.group, version: r.version, resource: r.resource, kind: r.kind, namespaced: !!r.namespace, verbs: [] } : undefined);
-  /** The row's object, read now as you; a name that has gone says so. */
+  /** The row's object, read now as you; a name that has gone says so. Never for a view of another cluster (H1). */
   const readRef = async (r: RowRef): Promise<{ type: ResourceType; o: KubeObject } | undefined> => {
     const type = typeOfRef(r);
-    if (!type) return undefined;
+    if (!type || !ownView()) return undefined;
     try {
       return { type, o: (await api.invoke("resource:get", { handle: cluster.handle, ref: resourceRef(r) })).object };
     } catch (e) {
@@ -417,34 +422,40 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     key: (r: RowRef, a: "logs" | "shell" | "edit" | "delete") => void readRef(r).then((x) => x && viewRowAct(x, r, a)),
     ...(viewPick ? { selected: refKey({ group: viewPick.type.group, resource: viewPick.type.resource, name: viewPick.o.metadata.name, namespace: viewPick.o.metadata.namespace }) } : {}),
   };
-  /** Restart or Delete on a view's chosen rows: one sheet, one review (D156). A block's choice never gets Delete. */
-  const viewBulk = (kind: "restart" | "delete", refs: RowRef[], by: "you" | "block") => {
+  /**
+   * Restart or Delete on a view's chosen rows: one sheet, one review (D156). A selection holding any row a block chose
+   * never gets Delete (`bulkOffered`, M2), and its sheet names the block. Never for a view of another cluster (H1).
+   */
+  const viewBulk = (kind: "restart" | "delete", refs: RowRef[], by: "you" | "block", block?: string) => {
     const type = refs[0] ? typeOfRef(refs[0]) : undefined;
-    if (!type || (by === "block" && kind === "delete") || actionOn) return;
+    if (!type || !bulkOffered(kind, by) || actionOn || !ownView()) return;
     // The sheet names objects; main reads each again for its review, so a name is all it takes from here.
     const objects = refs.map((r) => ({ metadata: { name: r.name, uid: refKey(r), ...(r.namespace ? { namespace: r.namespace } : {}) } }) as KubeObject);
-    setActionOn({ kind, type, objects, ...(by === "block" ? { asker: "view" as const } : {}) });
+    setActionOn({ kind, type, objects, ...(by === "block" ? { asker: "view" as const, ...(block ? { block } : {}) } : {}) });
   };
   /**
-   * A block's intent as main accepted it (D219): its object in the drawer, its logs in the panel, or a non-destructive
-   * action's sheet with the eyebrow "Asked for by this view", one sheet at a time (another while one is open is
-   * dropped). The person reviews the dry run and applies, as always.
+   * A block's intent as main accepted it (D219), in answer to the person (the host's focus and gesture rule, M1): its
+   * object in the drawer (never over one already open), its logs in the panel (the focus stays where it is), or a
+   * non-destructive action's sheet saying which block Claude built asked, one sheet at a time (another while one is
+   * open is dropped). The person reviews the dry run and applies, as always. Never for a view of another cluster (H1).
    */
-  const VERB: Record<FrameVerb, { kind: ActionKind; flag?: boolean }> = {
-    scale: { kind: "scale" }, restart: { kind: "restart" }, trigger: { kind: "trigger" },
-    suspend: { kind: "suspend", flag: true }, resume: { kind: "suspend", flag: false }, cordon: { kind: "cordon", flag: true }, uncordon: { kind: "cordon", flag: false },
-  };
-  const viewIntent = (i: ViewIntent): boolean => {
+  const viewIntent = (i: ViewIntent, block: string): boolean => {
     const r = i.refs[0];
-    if (!r) return false;
-    if (i.kind === "object") return (openViewRow(r), true);
-    if (i.kind === "logs") return (void readRef(r).then((x) => x && viewRowAct(x, r, "logs")), true);
+    if (!r || !ownView()) return false;
+    if (i.kind === "object") return viewPick ? false : (openViewRow(r), true);
+    if (i.kind === "logs") {
+      void readRef(r).then((x) => {
+        const src = x && logSourceOf(x.type.kind, x.o);
+        if (src) bench.openLogs(src);
+      });
+      return true;
+    }
     if (i.kind !== "action" || !i.verb || actionOn) return false;
-    const v = VERB[i.verb];
+    const v = FRAME_VERB_ACTIONS[i.verb];
     void readRef(r).then((x) => {
       if (!x) return;
       setActionOn((cur) => cur ?? {
-        kind: v.kind, type: x.type, objects: [x.o], asker: "view",
+        kind: v.kind, type: x.type, objects: [x.o], asker: "view", block,
         ...(v.kind === "suspend" ? { suspend: !!v.flag } : {}), ...(v.kind === "cordon" ? { on: v.flag !== false } : {}),
       });
     });
@@ -878,7 +889,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           object={viewLive}
           now={now}
           onClose={() => setViewPick(undefined)}
-          onAsk={(c) => c.ref && viewStore.chip({ ...c.ref, kind: viewPick.type.kind })}
+          onAsk={(c) => {
+            // The object's own kind (L5); quoted lines have no reference and the view's composer takes references only.
+            const chip = c.ref ? chipOf(c.ref, typeOfRef) : undefined;
+            if (chip) viewStore.chip(chip);
+            else setReachError("Asking about lines or quoted text isn't offered over a view yet: ask about the object itself, or open it in its own list.");
+          }}
           onNavigate={go}
           metricsVersion={metricsVersion}
           onSettings={() => setSettings(true)}
@@ -1075,7 +1091,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       {reachError ? (
         <div className="notice reach-error" role="alert">
           <Ic icon={CircleX} size={15} className="tone-bad" />
-          <div className="notice-body"><strong>{reachError.startsWith("Prometheus:") ? "Couldn't change the Prometheus." : "Couldn't open it."}</strong><p>{reachError}</p></div>
+          <div className="notice-body"><strong>{reachError.startsWith("Prometheus:") ? "Couldn't change the Prometheus." : reachError.startsWith("Asking about") ? "Not offered here." : "Couldn't open it."}</strong><p>{reachError}</p></div>
         </div>
       ) : null}
     </div>

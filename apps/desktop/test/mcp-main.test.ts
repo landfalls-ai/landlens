@@ -185,7 +185,7 @@ describe("MCP App views on landlens-app:", () => {
 });
 
 describe("McpService", () => {
-  const service = (asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } }) => {
+  const service = (asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } }, opened: string[] = []) => {
     const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
     const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
     const svc = new McpService({
@@ -195,7 +195,7 @@ describe("McpService", () => {
       clusters: { onGone: () => {} } as never,
       metrics: async () => { throw new Error("no metrics"); },
       push: () => {},
-      ask: { confirm: (q: { message: string; detail: string }) => (asked.n++, (asked.q = q), asked.answer()), openExternal: async () => {} },
+      ask: { confirm: (q: { message: string; detail: string }) => (asked.n++, (asked.q = q), asked.answer()), openExternal: async (u: string) => void opened.push(u) },
     });
     return { st, svc };
   };
@@ -561,5 +561,19 @@ describe("McpService", () => {
     expect(await svc.viewLink(r.id, "https://docs.example.com/x")).toBe(false);
     expect(asked.q!.detail).toBe("The docs-server view (search) wants to open this address:\nhttps://docs.example.com/x");
     await expect(svc.viewLink(r.id, `${max}c`)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("asks the same way for a text block's link: a 600-character one opens no dialog and nothing (security review of wave 10 part 3, L4)", async () => {
+    const opened: string[] = [];
+    const asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } } = { n: 0, answer: async () => true };
+    const { svc } = service(asked, opened);
+    const who = "A text block Claude built on the Views page (Runbook · Docs)";
+    await expect(svc.confirmLink(who, `https://docs.example.com/?d=${"x".repeat(600)}`)).rejects.toMatchObject({ status: 400 });
+    await expect(svc.confirmLink(who, "http://docs.example.com/")).rejects.toMatchObject({ status: 400 });
+    expect(asked.n).toBe(0);
+    expect(opened).toEqual([]);
+    expect(await svc.confirmLink(who, "https://docs.example.com/run?x=1")).toBe(true);
+    expect(asked.q!.detail).toBe(`${who} wants to open this address, which carries data after the ?:\nhttps://docs.example.com/run?x=1`);
+    expect(opened).toEqual(["https://docs.example.com/run?x=1"]);
   });
 });

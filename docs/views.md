@@ -43,12 +43,19 @@ hidden (the page owns the session; **New view** closes it).
   the strip's composer as a chip ("Deployment landlens-dev/web"); the next question carries it as a reference, which
   the session reads with its own token. A table with `select` has checkboxes: the selection bar offers the kind's
   Restart and Delete (one sheet, one review, at most 50), **Ask about these** and Clear (Esc).
-  `rowActions: false` hides the menu and the checkboxes. The view's own token stays read-only throughout.
+  `rowActions: false` hides the menu and the checkboxes. The view's own token stays read-only throughout. The drawer's
+  **Ask Claude** about another object (a pod in its Pods tab) puts that object's own kind on the chip; asking about
+  quoted lines (a log's selection) isn't offered over a view yet and says so (security review of part 3, L5).
 - **Sorting a table** (its header) is your tweak: it moves no version and isn't sent to Claude; a column the shown
   version no longer has goes back to Claude's order. Kept in the window (saving it is part 4's).
 - The view lives in the window until **New view**, a reload or a disconnect; going to another page and back finds it.
 - One open view per window. Its sources run only while the page is on screen, and stop 30 s after it leaves (D210).
   A cluster that disconnects takes its view with it: its reads, token, frames and session end.
+- **A view is its cluster's** (security review of part 3, H1). The header names the context it reads beside the title.
+  Switching cluster closes the view, in the window and in main, and the Views page is blank for the new cluster; a
+  view main closes for any reason (its cluster gone, a new view) leaves the page with a line saying so, never standing
+  there marked Live. A view's rows, drawer, menu, bulk bar and a block's intents act only while the view's cluster is
+  the one connected, read again at the moment you act, so staging's `shop/api` can never become production's.
 
 ### How Claude built this
 
@@ -109,7 +116,7 @@ nothing a source delivers is ever markup.
 | `list` | Rows with a tone edge; a row opens its object, its `⋯` the menu |
 | `logs` | The log view's rules (`plain()`, `ansi()` colours), failures in the bad tone, **All** / **Failures only**, following the end |
 | `problems` | The doctor's rows as the Overview draws them, each opening its object |
-| `text` | The dock's Markdown: a link shows its host and opens through `link:open` with your yes |
+| `text` | The dock's Markdown: a link shows its host and opens only through main's link dialog, as a block's does (below): main finds the address among the block's own links, names "A text block Claude built on the Views page (*view* · *block*)", shows the address whole, says a query, and refuses one over 500 characters without a dialog (security review of part 3, L4) |
 
 
 ## App blocks
@@ -132,8 +139,8 @@ The runtime gives the script one object, `view`:
 | `view.el(tag, attrs, ...children)` | Builds DOM with text children. Makes no `script`, `iframe`, `frame`, `object`, `embed`, `link`, `meta` or `base` (it throws); drops every `on…` attribute and `srcdoc`; an address attribute (`href`, `src`, `action`, `poster`, …) only to `https:`, `mailto:`, `landlens:` or `#…`, read with tabs, newlines and control characters taken out as the URL parser does, so `java\tscript:` is `javascript:` |
 | `view.openObject(row._ref)`, `view.logs(ref)` | Opens the object's drawer over the view, or its logs in the panel (pods and workloads) |
 | `view.ask(ref)` | Puts the object on the strip's composer as a chip; sends nothing |
-| `view.select(refs)` | Chooses rows of one kind (at most 50) for the selection bar, which says "Chosen by a block Claude built" and never offers Delete |
-| `view.action(verb, ref)` | Opens wave 8's sheet for the object with "Asked for by this view": `scale`, `restart`, `trigger`, `suspend`, `resume`, `cordon`, `uncordon`. Never delete or drain |
+| `view.select(refs)` | Chooses rows of one kind (at most 50) for the selection bar, which says "Chosen by a block Claude built (*block*)" and never offers Delete. The rows stay the block's when you tick more or untick some ("1 of these chosen by a block…"): Delete comes only once none of them is in the selection (security review of part 3, M2) |
+| `view.action(verb, ref)` | Opens wave 8's sheet for the object with "Asked for by a block Claude built (*block*)": `scale`, `restart`, `trigger`, `suspend`, `resume`, `cordon`, `uncordon`. Never delete or drain |
 | `view.params`, `view.info`, `view.format.age/bytes/cpu` | The parameters, the view's id and version, Landlens's formats |
 
 A block's https link opens only after your yes in Landlens's own dialog, as any MCP App's ([mcp.md](mcp.md#mcp-apps)):
@@ -153,6 +160,14 @@ bar, or the action's sheet, one at a time (an intent while a sheet is open is dr
 intent: the person reviews the dry run and presses Apply, with their own access. The block hears `{}` when something
 was shown and an error otherwise, never the outcome. Delete and drain can't be started from a frame (the person's
 decision, 2026-11-16): the frame's `select` gets no Delete either.
+
+**An intent only in answer to you** (security review of part 3, M1). The window takes a block's intent only while its
+frame has the focus and you clicked or pressed a key in the last few seconds (Chromium's transient user activation,
+which a gesture inside the frame gives the page too); a script on a timer, or a block you haven't touched, opens
+nothing. A sheet a block asked for never takes the keyboard: the focus stays where you are typing, and Apply takes a
+pointer press, or a key once you moved into the sheet. An `object` intent never replaces a drawer already open,
+`logs` opens the panel without moving the focus, and `ask` adds its chip without folding the dock. In the replicas
+field a letter or an empty field keeps the count; it never becomes 0.
 
 Refused to a block: every other tool (`-32601`, in the window and again in main, and `mcp:app-call` refuses a block's
 frame outright), `ui/message` and `ui/update-model-context` (a block can't write to Claude), resources, any other
@@ -205,14 +220,21 @@ The e2e makes its own Deployments (one a busybox that logs a failure every third
 `landlens-dev` and removes them. Part 3's cases: the native blocks live in both themes, wide and narrow; a patch
 (`patch-restarts`: `get_view`, then `patch_view` on the version it named) with Undo and Redo; a row's menu restarting
 the test's Deployment through the review card; and an app block's intents (`intent-block`): delete, drain and a row
-it doesn't show refused with nothing opened, a restart's sheet "Asked for by this view" applied, an ask chip, a
-selection with no Delete, logs in the panel. A hostile block (e2e 4) aims each
+it doesn't show refused with nothing opened, a restart's sheet "Asked for by a block Claude built (A block that asks)"
+applied, an ask chip, a selection with no Delete, logs in the panel. From the security review of part 3: a text
+block's link through main's dialog, and its 600-character link with no dialog and nothing opened; a block on a timer
+(`timer-intent`) while the person types a question: every character stays in the composer, no sheet opens, replicas
+unchanged; a block's selection (`select-block`) with one more row ticked by hand: still no Delete, until the block's
+row is unticked; and, in an app of its own with a kubeconfig naming OrbStack twice (`orbstack`, `orbstack-b`, written
+for the run), a view built on one context and a switch to the other: the header named `orbstack`, and after the
+switch the page is blank, with no row of the old view. A hostile block (e2e 4) aims each
 attempt at a name of its own under this run's random `views-e2e-<hex>.test`: fetch, XHR, `sendBeacon`, WebSocket,
 EventSource, a worker, dynamic `import`, `FontFace`, an image, a CSS background, `@import` and `@font-face`, a
 stylesheet, prefetch and preconnect links, video, audio, a script, a frame, an object, an embed, two
 `<link rel="dns-prefetch">` (one parsed, one made by script), a form, `window.open` and top navigation; and WebRTC
 at the test's UDP listener, its parent, storage, `ui/message`, `ui/update-model-context`, another tool, an object
 not in the view and `view.el`'s refused addresses and tags. The frame's CSP violations must name each attempt the CSP
-governs with its directive, and a Chromium net log of the run (`session.netLog`) must never name the host: no
+governs with its directive (the probe listens for them and reads a buffered `ReportingObserver`, as the CSS's `@import`
+is refused before its script runs), and a Chromium net log of the run (`session.netLog`) must never name the host: no
 request, no DNS lookup. The fake agent gets only Landlens's allowlisted environment, so the test hands it the host
 and the UDP port in `agent-sessions/fake-agent-env.json`.

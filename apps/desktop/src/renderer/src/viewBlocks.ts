@@ -155,14 +155,30 @@ export function linesOf(rows: ViewRow[], x: string | undefined, ys: string[]): {
 }
 
 /**
+ * Whether a bulk may start from a view's selection: never Delete while a block chose any of its rows (D219; security
+ * review of part 3, M2). The bar offers by it and the Workspace checks it again before the sheet opens.
+ */
+export const bulkOffered = (kind: "restart" | "delete", by: "you" | "block") => !(by === "block" && kind === "delete");
+
+/**
  * What the selection bar offers (D156, D219): your own selection gets the kind's bulk actions (Restart, Delete); a
- * selection a block made never gets Delete, so nothing destructive starts from a frame, even a click away. Rows of
- * more than one kind get no action (a bulk is one kind), only Ask.
+ * selection holding any row a block chose never gets Delete, so nothing destructive starts from a frame, even a click
+ * away. Rows of more than one kind get no action (a bulk is one kind), only Ask.
  */
 export function selectionActions(type: Pick<ResourceType, "group" | "resource" | "verbs"> | undefined, by: "you" | "block"): ("restart" | "delete")[] {
   if (!type) return [];
-  const all = bulkActions(type);
-  return by === "block" ? all.filter((a) => a !== "delete") : all;
+  return bulkActions(type).filter((a) => bulkOffered(a, by));
+}
+
+/**
+ * The chip for an object the drawer over a view asks about: its kind from its own type (discovery), never the
+ * drawer's, so another object's ask isn't labelled as the drawer's kind (security review of part 3, L5). None when the
+ * kind isn't known, and never a Secret.
+ */
+export function chipOf(ref: Pick<RowRef, "group" | "version" | "resource" | "name"> & { namespace?: string | undefined }, typeOf: (r: Pick<RowRef, "group" | "resource">) => Pick<ResourceType, "kind"> | undefined): RowRef | undefined {
+  if (ref.group === "" && ref.resource === "secrets") return undefined;
+  const kind = typeOf(ref)?.kind;
+  return kind ? { group: ref.group, version: ref.version, resource: ref.resource, kind, name: ref.name, ...(ref.namespace ? { namespace: ref.namespace } : {}) } : undefined;
 }
 
 /** The one kind of a set of rows, or undefined when they are of several (or none). */
