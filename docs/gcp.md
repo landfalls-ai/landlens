@@ -196,6 +196,14 @@ parts 2–4.
   (`https://<endpoint>`) is the one the context is connected at (compared as URL origins). A context only *named* like
   a GKE cluster, or one that points somewhere else, is an ordinary cluster: it could otherwise show another cluster's
   data. When Google lists the cluster at a new address, it stops counting at the next listing.
+- Both kinds also need the cluster's own TLS identity (security review of part 1, M1): an address isn't one (a private
+  endpoint such as `172.16.0.2` is shared by clusters in different VPCs, and a kubeconfig can loosen what TLS checks).
+  The sidecar's Ready line reports the CA the context trusts (a SHA-256 of the DER of its certificates) and whether
+  `insecure-skip-tls-verify`, `tls-server-name` and `proxy-url` are set. For an IP endpoint the CA must be the one
+  Google lists (`masterAuth.clusterCaCertificate`, which `gcloud container clusters get-credentials` writes); for a
+  `gke.goog` endpoint there must be no CA of the context's own (the system roots). Either way TLS is checked: no
+  `insecure-skip-tls-verify`, no `tls-server-name`. A `proxy-url` is allowed, since TLS still ends at a certificate the
+  cluster's CA signed. A sidecar that doesn't report it counts as unknown: not GKE.
 - A GKE-shaped name of a project you haven't chosen gets one quiet line under Nodes: "This looks like a GKE cluster of
   <project>. Choose that project on the Google Cloud page to see Google's metrics, alerts and suggestions for it.",
   with **Open Google Cloud**. Anything else (Google Cloud off, gcloud missing or signed out, a listing that failed) is
@@ -217,17 +225,27 @@ visible (`googleView.ts`, `GoogleSuggests.tsx`, styles in `gcp.css`):
 - Enter or a click opens the row in place: **What Google recommends** (the recommendation's sentence and priority),
   for an API deprecation a table of the APIs (stops being served in, the callers of the last 30 days with their user
   agent, requests and last call), and "From Google's GKE recommender. Landlens doesn't mark it done or dismissed."
-- None: "Google has no suggestions for this cluster." A failed read: its sentence, with **Copy command** when it names
-  `gcloud services enable …` or `gcloud auth login`.
+- None: "Google has no suggestions for this cluster.", said only when Google's whole list was read. A failed read: its
+  sentence, with **Copy command** when it names `gcloud services enable …` or `gcloud auth login`.
+- The lists hold every cluster of the location, and Landlens reads the first 1,000 rows of each (ten pages of 100).
+  When Google has more (review of part 1, M2), the count reads "3+" and the panel says "Only the first 1,000
+  suggestions of <project> in <location> were read; this cluster may have more.", in place of the all-clear or under
+  the rows.
+- When the project's number is unknown (the project search failed or didn't list it), Landlens can't tell which
+  suggestions are this cluster's, so the panel says "Landlens couldn't read <project>'s number, so it can't tell which
+  suggestions are this cluster's." (kept a minute, like a failure) rather than an empty list (L1).
 
 What is read (`packages/gcp/src/recommender.ts`): the ACTIVE insights and recommendations of the cluster's location,
-two GETs of at most two pages each. Only this cluster's are kept: an insight whose `targetResources` is exactly
+two GETs of at most ten pages each, each page with its own 10 s limit. Only this cluster's are kept: an insight whose `targetResources` is exactly
 `//container.googleapis.com/projects/<project id or number>/(locations|zones)/<location>/clusters/<name>` (another
 cluster of the location, and another project's cluster of the same name, are dropped), and a recommendation joined to
-a kept insight. Each row passes a schema on its own (an odd row is dropped, the rest show). Google's sentences are
+a kept insight by the insight's whole name (the project by id or number), never only its last segment (L5). Each row
+passes a schema on its own (an odd row is dropped, the rest show). Google's sentences are
 cut to 300 characters, an API to 200, at most 10 APIs with 5 callers each; a user agent, written by whoever called the
-cluster's API server, is cut to 120 and redacted. All of it is shown as text: no Markdown, nothing becomes a link,
-control and format characters (a bidi override, a newline) are removed. Landlens never marks a suggestion accepted,
+cluster's API server, is redacted and only then cut to 120, so a credential across the cut shows nothing of itself
+(L3). All of it is shown as text: no Markdown, nothing becomes a link, and every control, format and
+line/paragraph-separator character (`\p{Cc}\p{Cf}\p{Zl}\p{Zp}`: a bidi override, a newline, U+2028, the invisible tag
+block U+E0000–U+E007F) is removed (L2). Landlens never marks a suggestion accepted,
 claimed, dismissed, succeeded or failed: those are POSTs, and the package has none. Ask Claude on a suggestion comes
 with part 3.
 

@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { channels, CLOUD_DECLINED } from "@landlens/contracts";
-import { ADVICE_FAILED_TTL, ADVICE_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
+import { ADVICE_FAILED_TTL, ADVICE_TTL, connectedOf, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_VIEWS, numberUnknown, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
+import { caFingerprint } from "@landlens/gcp";
 import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
@@ -635,7 +636,9 @@ describe("Fable's security review of part 5, fixed", () => {
 
 describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
   const PROD = "gke_demo-shop_us-central1_shop-prod";
-  const at = (server: string, viaLandlens = false) => ({ context: PROD, server, viaLandlens });
+  /** What the sidecar reports for a kubeconfig that trusts the fake's shop-prod CA, as gcloud writes it. */
+  const TLS = { ca: caFingerprint(FAKE_CLUSTER_CA), insecure: false, serverName: false, proxy: false };
+  const at = (server: string, viaLandlens = false, tls: typeof TLS | null = TLS) => ({ context: PROD, server, viaLandlens, ...(tls ? { tls } : {}) });
   const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
 
   it("a cluster Landlens connected from its listing is GKE, at the listed address", async () => {
@@ -760,6 +763,123 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     await svc.status(true);
     expect(views.size).toBe(0);
     await expect(svc.clusterView({ project: "payments-core", location: "us-central1", name: "x" })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("M1 (review of part 1): your own context must also trust the listed CA, with TLS checked; the address alone isn't enough", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const other = { ...TLS, ca: "0".repeat(64) };
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, TLS))).toEqual(shop);
+    // The listed address with another CA (a private address another VPC's cluster also has), with TLS unchecked, with
+    // the name on the certificate overridden, or from a sidecar that didn't say: not this cluster.
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, other))).toBeUndefined();
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, { ...TLS, ca: "" }))).toBeUndefined();
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, { ...TLS, insecure: true }))).toBeUndefined();
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, { ...TLS, serverName: true }))).toBeUndefined();
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, null))).toBeUndefined();
+    // Through a proxy, TLS still ends at a certificate the cluster's own CA signed: the same cluster.
+    expect(await svc.gkeOf(at("https://203.0.113.17", false, { ...TLS, proxy: true }))).toEqual(shop);
+    // The same holds for a cluster Landlens connected from its listing.
+    await svc.gkeContexts();
+    expect(await svc.gkeOf(at("https://203.0.113.17", true, other))).toBeUndefined();
+    expect(await svc.gkeOf(at("https://203.0.113.17", true, TLS))).toEqual(shop);
+  });
+
+  it("M1: a gke.goog endpoint is GKE only with the system roots: no CA of the context's own, no override", async () => {
+    const dns = "gke-0a1b2c3d4e-482913570214.us-central1.gke.goog";
+    fake.clusters.set("demo-shop", [{ name: "shop-prod", location: "us-central1", status: "RUNNING", controlPlaneEndpointsConfig: { dnsEndpointConfig: { endpoint: dns } } }]);
+    try {
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      const roots = { ca: "", insecure: false, serverName: false, proxy: false };
+      expect(await svc.gkeOf(at(`https://${dns}`, false, roots))).toEqual(shop);
+      expect(await svc.gkeOf(at(`https://${dns}`, false, TLS))).toBeUndefined();
+      expect(await svc.gkeOf(at(`https://${dns}`, false, { ...roots, insecure: true }))).toBeUndefined();
+      expect(await svc.gkeOf(at(`https://${dns}`, false, { ...roots, serverName: true }))).toBeUndefined();
+    } finally {
+      fake.clusters.delete("demo-shop");
+    }
+  });
+
+  it("L1 (review of part 1): without the project's number the advice is a sentence, kept a minute, never an empty list", async () => {
+    let t = 1_000_000;
+    // Chosen before this run, so the project search hasn't been read yet; then it fails.
+    const { svc } = service({ now: () => t, kept: { projects: ["demo-shop"], agentRead: false, confirmed: [] } });
+    fake.fail.set("*projects", { status: 403 });
+    const v = await svc.view(at("https://203.0.113.17"));
+    if (!v.gke) throw new Error("not GKE");
+    expect(v.advice).toEqual({ error: numberUnknown("demo-shop") });
+    expect(numberUnknown("demo-shop")).toBe("Landlens couldn't read demo-shop's number, so it can't tell which suggestions are this cluster's.");
+    expect(fake.hits("/insights")).toHaveLength(0);
+    fake.fail.clear();
+    t += ADVICE_FAILED_TTL - 1;
+    expect(((await svc.view(at("https://203.0.113.17"))) as { advice: unknown }).advice).toEqual({ error: numberUnknown("demo-shop") });
+    t += 2;
+    expect(((await svc.view(at("https://203.0.113.17"))) as { advice: { items: unknown[]; cut: boolean } }).advice).toMatchObject({ items: [{}, {}], cut: false });
+  });
+
+  it("M2: the view carries Google's cut", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const other = (i: number) => ({ name: `projects/482913570214/locations/us-central1/insightTypes/google.container.DiagnosisInsight/insights/o${i}`, targetResources: [`//container.googleapis.com/projects/demo-shop/locations/us-central1/clusters/other-${i}`], stateInfo: { state: "ACTIVE" } });
+    fake.advice.set("demo-shop/us-central1", { insights: Array.from({ length: 1001 }, (_, i) => other(i)), recommendations: [] });
+    const v = await svc.view(at("https://203.0.113.17"));
+    if (!v.gke || "error" in v.advice) throw new Error("no advice");
+    expect(v.advice).toMatchObject({ items: [], cut: true });
+  });
+
+  it("T3: a read in flight when the account changes isn't kept, and a newer read for the same cluster stays", async () => {
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop"]);
+    const views = (svc as unknown as { advice: Map<string, unknown> }).advice;
+    fake.slowMs = 300;
+    const first = svc.clusterView(shop);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    expect(views.size).toBe(0);
+    await first;
+    expect(views.size).toBe(0);
+    // Again, but a read for the same cluster starts after the change, before the old one ends: the old read's end
+    // leaves the newer one alone.
+    writeFileSync(join(dir, "account"), "");
+    await svc.status(true);
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    const old = svc.clusterView(shop);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(dir, "account"), "a-third@example.com");
+    await svc.status(true);
+    const newer = svc.clusterView(shop);
+    await old;
+    expect([...views.keys()]).toEqual(["demo-shop/us-central1/shop-prod"]);
+    await newer;
+    expect(views.size).toBe(1);
+  });
+
+  it("T4: at most MAX_VIEWS clusters' views are kept, the oldest going first", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const views = (svc as unknown as { advice: Map<string, unknown> }).advice;
+    for (let i = 0; i <= MAX_VIEWS; i++) await svc.clusterView({ ...shop, name: `c-${i}` });
+    expect(views.size).toBe(MAX_VIEWS);
+    expect(views.has("demo-shop/us-central1/c-0")).toBe(false);
+    expect(views.has(`demo-shop/us-central1/c-${MAX_VIEWS}`)).toBe(true);
+  });
+
+  it("T5: the channel's cluster is the handle's own: Landlens's GKE handle only when it connected that handle", () => {
+    const tls = { ...TLS, proxy: true };
+    const entries: Record<string, { info: { context: string; server: string }; sidecar: { tls?: typeof TLS } }> = {
+      viaLandlens: { info: { context: PROD, server: "https://203.0.113.17" }, sidecar: { tls } },
+      own: { info: { context: PROD, server: "https://203.0.113.17" }, sidecar: { tls } },
+      older: { info: { context: PROD, server: "https://203.0.113.17" }, sidecar: {} },
+    };
+    const clusters = { get: (h: string) => entries[h] ?? (() => { throw Object.assign(new Error("cluster is not connected"), { status: 404 }); })() };
+    const gkeHandles = new Set(["viaLandlens"]);
+    expect(connectedOf(clusters, gkeHandles, "viaLandlens")).toEqual({ context: PROD, server: "https://203.0.113.17", viaLandlens: true, tls });
+    expect(connectedOf(clusters, gkeHandles, "own")).toEqual({ context: PROD, server: "https://203.0.113.17", viaLandlens: false, tls });
+    expect(connectedOf(clusters, gkeHandles, "older")).toEqual({ context: PROD, server: "https://203.0.113.17", viaLandlens: false });
+    expect(() => connectedOf(clusters, gkeHandles, "gone")).toThrow("cluster is not connected");
   });
 
   it("the channel takes the handle only: the page can't name a project, a location or a cluster", () => {

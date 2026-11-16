@@ -4,6 +4,7 @@
 import type { GcpClusterView } from "@landlens/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type ApiError } from "./api";
+import { latestOnly } from "./googleRules";
 
 export type GoogleView = { view?: GcpClusterView; error?: ApiError; loading: boolean; refresh: () => void };
 
@@ -13,24 +14,19 @@ export function useGoogleView(handle: string): GoogleView {
   const [view, setView] = useState<GcpClusterView>();
   const [error, setError] = useState<ApiError>();
   const [loading, setLoading] = useState(true);
-  const seq = useRef(0);
+  // One for the hook's life, so a late answer for the previous handle is dropped too (latestOnly).
+  const ask = useRef<(handle: string, fresh: boolean) => void>(undefined);
+  ask.current ??= latestOnly(
+    (h: string, fresh: boolean) => api.invoke("gcp:cluster-view", { handle: h, ...(fresh ? { fresh: true } : {}) }),
+    {
+      value: (v) => (setView(v), setError(undefined), setLoading(false)),
+      error: (e) => (setError(e as ApiError), setLoading(false)),
+    },
+  );
 
   const load = useCallback((fresh: boolean) => {
-    const mine = ++seq.current;
     setLoading(true);
-    api.invoke("gcp:cluster-view", { handle, ...(fresh ? { fresh: true } : {}) }).then(
-      (v) => {
-        if (mine !== seq.current) return;
-        setView(v);
-        setError(undefined);
-        setLoading(false);
-      },
-      (e: ApiError) => {
-        if (mine !== seq.current) return;
-        setError(e);
-        setLoading(false);
-      },
-    );
+    ask.current!(handle, fresh);
   }, [handle]);
 
   useEffect(() => {

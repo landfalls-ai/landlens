@@ -793,7 +793,11 @@ export type GcpClusterView =
   | {
       gke: true;
       cluster: { project: string; location: string; name: string };
-      advice: { items: GkeAdvice[]; at: string } | { error: string };
+      /**
+       * `cut`: Google had more pages of the location's suggestions than Landlens reads, so this cluster may have more
+       * than `items` (review of part 1, M2); the panel then never says there are none.
+       */
+      advice: { items: GkeAdvice[]; cut: boolean; at: string } | { error: string };
       alerts: { items: GcpAlert[]; others: number; cut: boolean; at: string } | { error: string };
     };
 /** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
@@ -807,6 +811,11 @@ export type ClusterStatusEvent = { handle: string; context: string; state: "disc
 /** The most resources Landlens reads in one project (10 pages of 500), and the most one gcp:resources answer holds. */
 export const GCP_MAX_RESOURCES = 5000;
 export const GCP_PAGE = 500;
+/**
+ * The most rows of each of a location's two recommender lists Landlens reads (ten pages of 100; review of wave 9 part 1,
+ * M2). The lists hold every cluster of the location; past this a view says `cut`.
+ */
+export const GKE_ADVICE_READ = 1000;
 
 // The autonomous mode (docs/connections.md, D82–D84): per session, per connection, turned on in the dock, never
 // stored. It covers GitHub and Linear writes only; cluster writes always go through the approval broker.

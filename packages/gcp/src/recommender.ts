@@ -1,15 +1,16 @@
 // GKE's own suggestions for one cluster (wave 9, D176): the diagnosis recommender's ACTIVE insights and
-// recommendations for the cluster's location, read with two GETs (at most two pages each, 10 s a page), parsed with
-// zod, and cut to this cluster's. Landlens never marks one accepted, claimed, dismissed, succeeded or failed: those
+// recommendations for the cluster's location, read with two GETs (at most ten pages of 100 each, 10 s a page), parsed
+// with zod, and cut to this cluster's. The lists hold every cluster of the location, so a page left unread may hold
+// this cluster's rows: then the answer says `cut` and the panel never says "no suggestions" (review of part 1, M2). Landlens never marks one accepted, claimed, dismissed, succeeded or failed: those
 // are POSTs, and there is no POST in this package.
 //
 // Only this cluster's: an insight is kept when one of its targetResources is exactly this cluster
 // (//container.googleapis.com/projects/<project id or number>/(locations|zones)/<location>/clusters/<name>). Another
 // cluster of the location, and another project's cluster of the same name, are dropped. A recommendation joins its
-// insight by associatedInsights[].insight (or the insight's associatedRecommendations); one with no kept insight is
-// dropped. Every string of Google's is cleaned (control and format characters out) and cut; a user agent is the
-// caller's own text, so it is redacted as well.
-import type { GkeAdvice, GkeRef } from "@landlens/contracts";
+// insight by associatedInsights[].insight, the whole name (or the insight's associatedRecommendations); one with no kept
+// insight is dropped. Every string of Google's is cleaned (control, format and line-separator characters out) and cut;
+// a user agent is the caller's own text, so it is redacted as well, before it is cut.
+import { GKE_ADVICE_READ, type GkeAdvice, type GkeRef } from "@landlens/contracts";
 import { redactText } from "@landlens/kube/redact";
 import { z } from "zod";
 import { checkProject, clean } from "./assets.js";
@@ -22,7 +23,8 @@ export const RECOMMENDER = "google.container.DiagnosisRecommender";
 /** The only filter sent: Google's documented example (D176). */
 export const ACTIVE_FILTER = "stateInfo.state = ACTIVE";
 export const ADVICE_PAGE = 100;
-export const ADVICE_PAGES = 2;
+/** Pages read of each list (the location's every cluster): past them the answer says `cut` (review of part 1, M2). */
+export const ADVICE_PAGES = GKE_ADVICE_READ / ADVICE_PAGE;
 export const ADVICE_LIMIT_MS = 10_000;
 /** The most suggestions one cluster shows. */
 export const MAX_ADVICE = 50;
@@ -81,19 +83,29 @@ export function clusterTargets(c: GkeRef): Set<string> {
   return out;
 }
 
-/** Up to two pages of one list, ACTIVE only, 10 s a page. */
-async function pages(client: GcpClient, c: GkeRef, path: string, key: "insights" | "recommendations"): Promise<unknown[]> {
-  const out: unknown[] = [];
+/** Up to ADVICE_PAGES pages of one list, ACTIVE only, 10 s a page; `cut` when Google had more. */
+async function pages(client: GcpClient, c: GkeRef, path: string, key: "insights" | "recommendations"): Promise<{ list: unknown[]; cut: boolean }> {
+  const list: unknown[] = [];
   let token: string | undefined;
   for (let i = 0; i < ADVICE_PAGES; i++) {
     const r = Page.safeParse(await client.get("recommender", path, { pageSize: String(ADVICE_PAGE), filter: ACTIVE_FILTER, pageToken: token }, c.project, { limitMs: ADVICE_LIMIT_MS }));
     if (!r.success) throw new GcpError(200, SENTENCES.answer, "schema");
-    out.push(...(r.data[key] ?? []));
-    token = r.data.nextPageToken;
-    if (!token) break;
+    list.push(...(r.data[key] ?? []));
+    token = r.data.nextPageToken || undefined;
+    if (!token) return { list, cut: false };
   }
-  return out;
+  return { list, cut: true };
 }
+
+/** A user agent: cleaned, redacted, and only then cut, so a credential across the cut is still taken whole (L3). */
+export const userAgent = (ua: string) => clean(redactText(clean(ua.replace(/\s+/g, " "), 4096)), 120);
+
+/**
+ * A recommender resource name with this cluster's project written one way: Google names a project by id or number
+ * (review of part 1, L5), and the join compares whole names.
+ */
+const canonical = (name: string, c: GkeRef) =>
+  name.replace(/^projects\/([^/]+)\//, (m, p: string) => (p === c.project || (!!c.number && p === c.number) ? "projects/=/" : m));
 
 /** An API deprecation's APIs and callers (D176), or undefined for any other shape. */
 function apisOf(content: unknown): GkeAdvice["apis"] {
@@ -111,7 +123,7 @@ function apisOf(content: unknown): GkeAdvice["apis"] {
       const n = typeof x.numberOfRequestsLast30Days === "string" && /^\d{1,15}$/.test(x.numberOfRequestsLast30Days) ? Number(x.numberOfRequestsLast30Days) : x.numberOfRequestsLast30Days;
       const last = iso(x.lastRequestTime);
       clients.push({
-        agent: redactText(clean(x.userAgent.replace(/\s+/g, " "), 120)),
+        agent: userAgent(x.userAgent),
         ...(typeof n === "number" && Number.isFinite(n) && n >= 0 ? { requests: n } : {}),
         ...(last ? { last } : {}),
       });
@@ -159,28 +171,32 @@ export function sortAdvice(list: GkeAdvice[]): GkeAdvice[] {
     || (b.refreshed ?? "").localeCompare(a.refreshed ?? "")).slice(0, MAX_ADVICE);
 }
 
-/** The ACTIVE insights and recommendations of GKE's diagnosis recommender for this one cluster (D176). */
-export async function gkeAdvice(client: GcpClient, c: GkeRef): Promise<GkeAdvice[]> {
+/**
+ * The ACTIVE insights and recommendations of GKE's diagnosis recommender for this one cluster (D176). `cut`: a list had
+ * more pages than are read, so this cluster may have more suggestions than `items` (M2).
+ */
+export async function gkeAdvice(client: GcpClient, c: GkeRef): Promise<{ items: GkeAdvice[]; cut: boolean }> {
   checkProject(c.project);
   if (!GKE_LOCATION.test(c.location) || !GKE_NAME.test(c.name)) throw new GcpError(400, "That isn't a GKE cluster.");
   const base = `/v1/projects/${c.project}/locations/${c.location}`;
-  const [rawInsights, rawRecs] = await Promise.all([
+  const [insightPages, recPages] = await Promise.all([
     pages(client, c, `${base}/insightTypes/${INSIGHT_TYPE}/insights`, "insights"),
     pages(client, c, `${base}/recommenders/${RECOMMENDER}/recommendations`, "recommendations"),
   ]);
   const targets = clusterTargets(c);
   // ACTIVE again here: a filter Google ignored doesn't bring back a dismissed or claimed row.
-  const insights = rows(Insight, rawInsights).filter((i) => i.stateInfo?.state === "ACTIVE" && (i.targetResources ?? []).some((t) => targets.has(t)));
-  const recs = rows(Recommendation, rawRecs).filter((r) => r.stateInfo?.state === "ACTIVE");
+  const insights = rows(Insight, insightPages.list).filter((i) => i.stateInfo?.state === "ACTIVE" && (i.targetResources ?? []).some((t) => targets.has(t)));
+  const recs = rows(Recommendation, recPages.list).filter((r) => r.stateInfo?.state === "ACTIVE");
   const out: GkeAdvice[] = [];
   const seen = new Set<string>();
   for (const i of insights) {
     const id = lastId(i.name);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const named = new Set((i.associatedRecommendations ?? []).map((r) => r.recommendation).filter((r): r is string => !!r));
-    const rec = recs.find((r) => (r.associatedInsights ?? []).some((a) => a.insight?.endsWith(`/insights/${id}`))) ?? recs.find((r) => named.has(r.name));
+    const named = new Set((i.associatedRecommendations ?? []).map((r) => r.recommendation).filter((r): r is string => !!r).map((r) => canonical(r, c)));
+    const me = canonical(i.name, c);
+    const rec = recs.find((r) => (r.associatedInsights ?? []).some((a) => !!a.insight && canonical(a.insight, c) === me)) ?? recs.find((r) => named.has(canonical(r.name, c)));
     out.push(toAdvice(i, id, rec));
   }
-  return sortAdvice(out);
+  return { items: sortAdvice(out), cut: insightPages.cut || recPages.cut };
 }

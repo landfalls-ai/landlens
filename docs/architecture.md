@@ -55,7 +55,7 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 |---|---|
 | `packages/contracts/src/index.ts` | IPC channels, their zod schemas and response types; the bridge interface |
 | `packages/kube/src/catalog.ts` | Contexts from your kubeconfig files (names and servers only) |
-| `packages/kube/src/sidecar.ts` | Start and stop `landlens-kube-proxy`; `loopbackCert` |
+| `packages/kube/src/sidecar.ts` | Start and stop `landlens-kube-proxy`; its Ready line's `tls` (the CA the context trusts and whether TLS is loosened, `readyTls`); `loopbackCert` |
 | `packages/kube/src/client.ts` | Requests through a sidecar; API paths; `slim`, `withoutSecretValues` |
 | `packages/kube/src/discovery.ts` | API discovery (aggregated v2, else per group), with each kind a CRD defines marked `custom` |
 | `packages/kube/src/search.ts` | The ⌘K palette's names: metadata-only lists of the common kinds, kind, name and namespace out |
@@ -88,7 +88,7 @@ The one local entry for tools and, from wave 2, the agent: `https://127.0.0.1:<p
 | `apps/desktop/src/renderer/src/ConnectionsPage.tsx` | The Connections page: a card per provider (sign-in, level, switches, tools, drift review) |
 | `packages/gcp/src/` | Google Cloud, read-only: gcloud's account and token (`auth.ts`), the pinned GET client (`client.ts`), projects and Cloud Asset search (`assets.ts`), GKE clusters and Landlens's GKE kubeconfig with its exec plugin (`gke.ts`), what Claude may see of a resource (`scrub.ts`), the error sentences (`errors.ts`), GKE's diagnosis recommender for one cluster (`recommender.ts`, wave 9) ([gcp.md](gcp.md)) |
 | `packages/gcp-mcp/src/` | `landlens-gcp`: the agent's five read-only Google Cloud tools, over a `GcpReader` main gives it |
-| `apps/desktop/src/main/gcp.ts` | `GcpService`: on or off (`gcpMode`, the development overrides), the chosen projects, Claude's switch and the GKE yeses (`gcp.json`), the caches and read limits, the `gcp:*` answers, the GKE catalog entries and how to connect one, the agent's reader, Ask Claude's brief; which connected cluster is a GKE cluster of a chosen project (`gkeOf`) and Google's view of it (`clusterView`, wave 9) |
+| `apps/desktop/src/main/gcp.ts` | `GcpService`: on or off (`gcpMode`, the development overrides), the chosen projects, Claude's switch and the GKE yeses (`gcp.json`), the caches and read limits, the `gcp:*` answers, the GKE catalog entries and how to connect one, the agent's reader, Ask Claude's brief; which connected cluster is a GKE cluster of a chosen project (`gkeOf`, by name, address and the sidecar's CA; `connectedOf` for the IPC handle) and Google's view of it (`clusterView`, wave 9) |
 | `apps/desktop/src/renderer/src/GcpPage.tsx` | The Google Cloud page (projects, types, resources), its drawer (Open in Landlens, Ask Claude), the chooser, the Connections card and its switch for Claude |
 | `apps/desktop/src/renderer/src/GoogleSuggests.tsx`, `googleView.ts`, `googleRules.ts` | Wave 9: "Google suggests" on the Overview and the hint line; `useGoogleView` (`gcp:cluster-view`, once per visit and every 10 minutes); the badge words, meta line and copyable commands |
 | `apps/desktop/src/main/agent.ts` | `AgentService`: the agent in main |

@@ -2,7 +2,7 @@
 // the only commands a sentence offers to copy.
 import type { GkeAdvice } from "@landlens/contracts";
 import { describe, expect, it } from "vitest";
-import { adviceMeta, copyableCommand, daysAgo, sentenceParts, SEVERITY_BADGE, subtypeWords } from "../src/renderer/src/googleRules";
+import { ALL_CLEAR, adviceCount, adviceLine, adviceMeta, copyableCommand, daysAgo, latestOnly, sentenceParts, SEVERITY_BADGE, subtypeWords } from "../src/renderer/src/googleRules";
 
 const NOW = Date.parse("2026-11-16T12:00:00Z");
 const a = (over: Partial<GkeAdvice> = {}): GkeAdvice => ({
@@ -34,5 +34,48 @@ describe("Google suggests", () => {
       expect(copyableCommand(`Run ${bad}.`), bad).toBeUndefined();
     }
     expect(sentenceParts("Run `gcloud auth login`.")).toEqual([{ text: "Run ", code: false }, { text: "gcloud auth login", code: true }, { text: ".", code: false }]);
+  });
+
+  it("M2 (review of part 1): a cut list never shows the all-clear; it says what was read, alone or under the rows", () => {
+    const where = { project: "demo-shop", location: "us-central1" };
+    expect(adviceLine(0, false, where)).toEqual({ allClear: true, text: ALL_CLEAR });
+    expect(adviceLine(3, false, where)).toBeUndefined();
+    const cut = adviceLine(0, true, where)!;
+    expect(cut.allClear).toBe(false);
+    expect(cut.text).toBe("Only the first 1,000 suggestions of demo-shop in us-central1 were read; this cluster may have more.");
+    expect(cut.text).not.toContain(ALL_CLEAR);
+    expect(adviceLine(2, true, where)).toEqual(cut);
+    expect([adviceCount(0, false), adviceCount(3, false), adviceCount(3, true), adviceCount(0, true)]).toEqual(["0", "3", "3+", undefined]);
+  });
+
+  it("T6 (review of part 1): only the latest call's answer is handed on, however late an earlier one arrives", async () => {
+    const pending: { h: string; ok: (v: string) => void; no: (e: Error) => void }[] = [];
+    const got: string[] = [];
+    const load = latestOnly(
+      (h: string) => new Promise<string>((ok, no) => void pending.push({ h, ok, no })),
+      { value: (v) => got.push(`value ${v}`), error: (e) => got.push(`error ${(e as Error).message}`) },
+    );
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    // The cluster switches from a to b while a's read is out; a answers last, then fails: neither is shown.
+    load("a");
+    load("b");
+    pending[1]!.ok("b's view");
+    await tick();
+    pending[0]!.ok("a's view");
+    pending[0]!.no(new Error("a failed"));
+    await tick();
+    expect(got).toEqual(["value b's view"]);
+    // A late error for an overtaken read doesn't hide the newer answer either.
+    load("b");
+    load("b");
+    pending[3]!.ok("b again");
+    pending[2]!.no(new Error("overtaken"));
+    await tick();
+    expect(got).toEqual(["value b's view", "value b again"]);
+    // In order, each answer is shown.
+    load("c");
+    pending[4]!.no(new Error("c failed"));
+    await tick();
+    expect(got.at(-1)).toBe("error c failed");
   });
 });

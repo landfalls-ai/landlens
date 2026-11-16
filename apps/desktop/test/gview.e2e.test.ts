@@ -8,7 +8,8 @@
 //     as plain text, and a disabled API as its sentence with Copy.
 // (b) OrbStack opened as a context of your own named gke_demo-shop_us-central1_shop-prod, from a temporary kubeconfig
 //     (0600, in this test's folder, removed after; the catalog honours KUBECONFIG): it is GKE only while the listing's
-//     address is the one it is connected at. A GKE-shaped name of a project you haven't chosen gets one quiet line.
+//     address is the one it is connected at and the CA it trusts is the one Google lists (review of part 1, M1). A
+//     GKE-shaped name of a project you haven't chosen gets one quiet line.
 // Every request the fake recorded is a GET with gcloud's token; nothing else is written to OrbStack.
 // LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/gview.e2e.test.ts  (screenshots to $LANDLENS_SHOTS, g9-)
 import { execFileSync } from "node:child_process";
@@ -298,5 +299,33 @@ describe.runIf(run)("(b) a context of your own is GKE only at the listing's addr
     }, { timeout: 40_000, interval: 2_000 }).toBe(0);
     await expect(page.locator(".gs-hint").count()).resolves.toBe(0);
     expect(fake.requests.every((r) => r.method === "GET" && r.authorization === `Bearer ${GCP_TOKEN}`)).toBe(true);
+  });
+
+  it("M1: the same name at the same address, once Google lists another CA for shop-prod, is an ordinary cluster", async () => {
+    const list = (clusterCaCertificate: string) => {
+      fake.clusters.set("demo-shop", [{ name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint, masterAuth: { clusterCaCertificate } }]);
+    };
+    const reopen = async () => {
+      // A new choice drops the cached listing; switching away and back asks for the view again.
+      await invoke("gcp:choose", { projects: ["demo-shop", "payments-core"] });
+      await invoke("gcp:choose", { projects: ["demo-shop"] });
+      await switchTo(SHOP, ORBIT);
+      await switchTo(ORBIT, SHOP);
+      await page.getByRole("button", { name: "Overview", exact: true }).click().catch(() => undefined);
+    };
+    // OrbStack's address, but the fake's own CA, not the one the kubeconfig trusts.
+    list(FAKE_CLUSTER_CA);
+    const before = fake.requests.length;
+    await reopen();
+    await expect.poll(() => fake.requests.slice(before).some((r) => r.path === "/v1/projects/demo-shop/locations/-/clusters"), { timeout: 30_000 }).toBe(true);
+    await page.waitForTimeout(2_000);
+    await expect(panel(page).count()).resolves.toBe(0);
+    await expect(page.locator(".gs-hint").count()).resolves.toBe(0);
+    expect(fake.requests.slice(before).some((r) => r.path.includes("/insights"))).toBe(false);
+    // Listed again with the CA OrbStack serves: Google suggests is back.
+    list(ca);
+    await reopen();
+    await panel(page).waitFor({ timeout: 30_000 });
+    await expect(rows(page).count()).resolves.toBe(2);
   });
 });

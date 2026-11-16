@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -239,3 +241,88 @@ func TestLocalAddresses(t *testing.T) {
 		t.Error("an address that isn't one should be refused")
 	}
 }
+
+// The fake Google's shop-prod CA (packages/gcp/test/fake-gcp.ts FAKE_CLUSTER_CA) and its fingerprint, which
+// packages/gcp's caFingerprint must give too: the two sides compare these.
+const (
+	fakeClusterCA   = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJkRENDQVJxZ0F3SUJBZ0lVS21ab2hnZGZMbkt6MUlBdW9LbHo3Vk1zWVNFd0NnWUlLb1pJemowRUF3SXcKSHpFZE1Cc0dBMVVFQXd3VWJHRnVaR3hsYm5NdFptRnJaUzFuYTJVdFkyRXdJQmNOTWpZeE1URTFNVE15T0RBNQpXaGdQTWpFeU5qRXdNakl4TXpJNE1EbGFNQjh4SFRBYkJnTlZCQU1NRkd4aGJtUnNaVzV6TFdaaGEyVXRaMnRsCkxXTmhNRmt3RXdZSEtvWkl6ajBDQVFZSUtvWkl6ajBEQVFjRFFnQUVjUDJqQ3Y1N1Q4RW5UOEJWTFR3TFJET3QKczhPYXl1NjRUeThwbkdZVVpGdmQxa24rU3NOVXEzZ2JGRllvdHBKL25BSVk2VUlnYml4YTUvSncvY0ZiNktNeQpNREF3SFFZRFZSME9CQllFRlA0YXlDRkRhUDVzUmZjVERRUGV4azJIVDQ4cU1BOEdBMVVkRXdFQi93UUZNQU1CCkFmOHdDZ1lJS29aSXpqMEVBd0lEU0FBd1JRSWhBTEJSVGcwRW1CKysrYWJta3JKT3pFUU1aejlyMEQwRzhHZS8KVHFROCtmN2VBaUJZVFRvVXc0UFVKR0l6TmRWbmhHTjY5bnFVQ1g1VWJjdVo4MGVFTDFwYW9nPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo="
+	fakeClusterCAFP = "a20a863e00045e5b656f2018980676f61dda45d44e12af370e874bca5b5eed97"
+)
+
+// readyFor loads a one-context kubeconfig whose cluster entry is `cluster` and returns the Ready line's tls part.
+func readyFor(t *testing.T, cluster string) ReadyTLS {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config")
+	cfg := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: c
+  cluster: %s
+users:
+- name: u
+  user: {token: t}
+contexts:
+- name: ctx
+  context: {cluster: c, user: u}
+current-context: ctx
+`, cluster)
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := loadConfig(path, "ctx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := readyTLS(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// Security review of wave 9 part 1, M1: Ready says which CA the context trusts and whether TLS checking is loosened,
+// so Landlens can tie a context of your own to the GKE cluster Google lists only by its CA, not its address alone.
+func TestReadySaysWhomTheContextTrusts(t *testing.T) {
+	// certificate-authority-data: the CA's fingerprint, nothing loosened.
+	got := readyFor(t, fmt.Sprintf(`{server: "https://203.0.113.17", certificate-authority-data: %q}`, fakeClusterCA))
+	if got != (ReadyTLS{CA: fakeClusterCAFP}) {
+		t.Fatalf("data: %+v", got)
+	}
+	// The same CA from a file gives the same fingerprint.
+	pemPath := filepath.Join(t.TempDir(), "ca.crt")
+	raw, _ := base64Decode(fakeClusterCA)
+	if err := os.WriteFile(pemPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readyFor(t, fmt.Sprintf(`{server: "https://203.0.113.17", certificate-authority: %q}`, pemPath)); got.CA != fakeClusterCAFP {
+		t.Fatalf("file: %+v", got)
+	}
+	// Another CA, another fingerprint.
+	other, err := newLoopbackCert(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readyFor(t, fmt.Sprintf(`{server: "https://203.0.113.17", certificate-authority-data: %q}`, base64Encode([]byte(other.CA)))); got.CA == fakeClusterCAFP || len(got.CA) != 64 {
+		t.Fatalf("another CA: %+v", got)
+	}
+	// No CA (the system roots): "".
+	if got := readyFor(t, `{server: "https://gke-0123.us-central1.gke.goog"}`); got != (ReadyTLS{}) {
+		t.Fatalf("no CA: %+v", got)
+	}
+	// insecure-skip-tls-verify, tls-server-name and proxy-url are each reported.
+	if got := readyFor(t, `{server: "https://203.0.113.17", insecure-skip-tls-verify: true}`); got != (ReadyTLS{Insecure: true}) {
+		t.Fatalf("insecure: %+v", got)
+	}
+	if got := readyFor(t, fmt.Sprintf(`{server: "https://203.0.113.17", certificate-authority-data: %q, tls-server-name: kubernetes.default, proxy-url: "http://127.0.0.1:3128"}`, fakeClusterCA)); got != (ReadyTLS{CA: fakeClusterCAFP, ServerName: true, Proxy: true}) {
+		t.Fatalf("server name and proxy: %+v", got)
+	}
+	// The line itself carries them.
+	line, _ := json.Marshal(Ready{Listening: "127.0.0.1:1", Context: "ctx", Server: "https://203.0.113.17", TLS: ReadyTLS{CA: fakeClusterCAFP, Insecure: true}})
+	want := `{"listening":"127.0.0.1:1","context":"ctx","server":"https://203.0.113.17","tls":{"ca":"` + fakeClusterCAFP + `","insecure":true,"serverName":false,"proxy":false}}`
+	if string(line) != want {
+		t.Fatalf("Ready line:\n%s\nwant\n%s", line, want)
+	}
+}
+
+func base64Decode(s string) ([]byte, error) { return base64.StdEncoding.DecodeString(s) }
+func base64Encode(b []byte) string          { return base64.StdEncoding.EncodeToString(b) }

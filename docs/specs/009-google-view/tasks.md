@@ -24,7 +24,7 @@ its tests green, its docs moved and a Fable security review. No test reaches Goo
   [design.md](../../design.md), [architecture.md](../../architecture.md), [development.md](../../development.md),
   [limitations.md](../../limitations.md), [roadmap.md](../../roadmap.md), [plan.md](../../plan.md), this folder,
   [history.md](../../history.md)
-- [ ] Fable's security review of part 1, and its fixes
+- [x] Fable's security review of part 1, and its fixes (below)
 
 ### Where part 1 departs from the spec
 
@@ -67,6 +67,36 @@ its tests green, its docs moved and a Fable security review. No test reaches Goo
 - **[check 5]** (other subtypes' `content`): as specced, only the API deprecations' content is read.
 - **[check 6]** (quotas): advice is kept 10 minutes and read only while an Overview of the cluster is open.
 - [check 1–3] are parts 2 and 3; [check 7] is the person's live check.
+
+### Security review of part 1, fixed
+
+No High; two Medium, five Low and seven missing tests, all fixed. Each test was seen to fail with its fix taken out.
+
+- [x] **M1** An own context counted as GKE by address alone. The sidecar's Ready line now carries `tls`: the SHA-256 of
+  the DER of the certificates the context trusts (data, else the file; "" for the system roots) and whether
+  `insecure-skip-tls-verify`, `tls-server-name` and `proxy-url` are set (`main.go` `readyTLS`, `main_test.go`).
+  `sidecar.ts` takes it (`readyTls`; another shape is unknown), `connectedOf` passes it with the handle, and `gkeOf`
+  requires, for both kinds, TLS checked (neither of the first two) against the listed CA: `caFingerprint(listed.ca)`
+  for an IP endpoint, "" for a `gke.goog` name. A proxy is allowed (TLS still ends at the cluster's CA); no report is
+  not GKE. Tests: `gcp-service.test.ts`, `gke.test.ts` (the fingerprint pinned to `main_test.go`'s),
+  `sidecar.test.ts`, `gview.e2e` (b) (OrbStack's address with the fake's CA: no panel; OrbStack's CA: back).
+- [x] **M2** Rows past page 2 were dropped silently. Ten pages of 100 (`GKE_ADVICE_READ` = 1,000) and `cut` when a
+  token is left: `gkeAdvice` returns `{ items, cut }`, the view's advice carries it, and the panel says "Only the first
+  1,000 suggestions of <project> in <location> were read; this cluster may have more." in place of the all-clear or
+  under the rows, with "3+" as the count (`adviceLine`, `adviceCount`). The test that pinned the silent cut is
+  replaced.
+- [x] **L1** No project number gave an empty list: the view's advice is now "Landlens couldn't read <project>'s number,
+  so it can't tell which suggestions are this cluster's." (`numberUnknown`), kept a minute, with no request.
+- [x] **L2** `clean` is `/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu`: the astral tag block and U+2028/U+2029 go too. Its other
+  callers (`gke.ts`, `scrub.ts`, `gcp-mcp`'s `v`, `toResource`) only lose more invisible characters; their tests pass.
+- [x] **L3** A user agent is cleaned (to 4,096), redacted, and only then cut to 120 (`userAgent`).
+- [x] **L4** A call's limit narrows only when it is a finite number above 0 (`lower`).
+- [x] **L5** A recommendation joins on the insight's whole name, the project by id or number written one way
+  (`canonical`), never on the last segment.
+- [x] **T1–T7**: T1 the 10 s page limit (spied `AbortSignal.timeout` under a 60 s client); T2 a JWT in a user agent
+  redacted; T3 a read in flight at an account change isn't kept, and its end removes only its own entry (an identity
+  check, as the review noted was meant); T4 `MAX_VIEWS`; T5 `connectedOf` (the handler's `viaLandlens`, now a unit);
+  T6 `latestOnly` (the hook's sequence guard, now a pure helper); T7 the silent-cut test replaced (M2).
 
 ## Part 2: Cloud Monitoring as a metrics source (D179–D184)
 

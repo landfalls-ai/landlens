@@ -166,6 +166,15 @@ describe("Fable's security review of part 4, fixed", () => {
     expect(JSON.parse(r.json!)).toEqual({ description: "safe\u202egnp.exe", note: "a\u200bb\u2066c" });
   });
 
+  it("L2 (review of wave 9 part 1): astral format characters and line separators go too; visible text stays", () => {
+    // The tag block (U+E0049 U+E0067: invisible "Ig"), a musical format mark (U+1D173), U+2028, U+2029, and the old ones.
+    const hidden = "a\u{E0001}\u{E0049}\u{E0067}\u{E007F}b\u{1D173}c\u2028d\u2029e\u202ef\u200bg\u0007h\u00adi\ufeffj";
+    expect(clean(hidden)).toBe("abcdefghij");
+    expect(clean(hidden)).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
+    // Letters, marks, emoji (with their variation selector) and spaces are kept.
+    expect(clean("Zürich é 東京 😀 ❤️ 👍🏽 a b")).toBe("Zürich é 東京 😀 ❤️ 👍🏽 a b");
+  });
+
   it("L4: a cut never splits a character in two", () => {
     const out = clean("a".repeat(298) + "😀😀", 300);
     expect(out).toBe(`${"a".repeat(298)}😀😀`);

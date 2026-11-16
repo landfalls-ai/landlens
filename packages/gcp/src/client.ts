@@ -33,6 +33,13 @@ const BASE: Record<GcpApi, keyof GcpEndpoints> = {
 /** A call's own limits (D174): lower than the client's, never higher. */
 export type CallLimits = { limitMs?: number; maxBytes?: number };
 
+/**
+ * The client's limit, lowered by a call's only when that is a finite number above 0 (review of wave 9 part 1, L4):
+ * `Math.min(cap, NaN)` is NaN, and `size > NaN` is never true, so a NaN would have lifted the cap.
+ */
+export const lower = (own: number, asked: number | undefined) =>
+  typeof asked === "number" && Number.isFinite(asked) && asked > 0 ? Math.min(own, asked) : own;
+
 export type TokenSource = { token(): Promise<string>; drop(): void };
 
 export class GcpClient {
@@ -50,12 +57,13 @@ export class GcpClient {
   /**
    * GET `path` (already built from checked names) on `api`'s origin. `project` is the project the request is about:
    * it is the X-Goog-User-Project (gcloud's own client project has most APIs off) and it names the project in errors.
-   * `o` may lower this call's time and size limits; a higher value is ignored (`Math.min`).
+   * `o` may lower this call's time and size limits; a higher value, or one that isn't a finite number above 0, is
+   * ignored (`lower`).
    */
   async get(api: GcpApi, path: string, query: Record<string, string | undefined>, project?: string, o: CallLimits = {}): Promise<unknown> {
     const limits = {
-      limitMs: Math.min(this.o.limitMs ?? REQUEST_LIMIT_MS, o.limitMs ?? Infinity),
-      maxBytes: Math.min(this.o.maxBytes ?? PAGE_LIMIT_BYTES, o.maxBytes ?? Infinity),
+      limitMs: lower(this.o.limitMs ?? REQUEST_LIMIT_MS, o.limitMs),
+      maxBytes: lower(this.o.maxBytes ?? PAGE_LIMIT_BYTES, o.maxBytes),
     };
     const url = new URL(path, this.ep[BASE[api]]);
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, v);

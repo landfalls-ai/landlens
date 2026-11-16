@@ -3,11 +3,11 @@
 // with what Google recommends and, for an API deprecation, who still calls the API. Landlens never marks a suggestion
 // done or dismissed. Ask Claude on a suggestion comes with wave 9 part 3 (D189).
 import type { GkeAdvice } from "@landlens/contracts";
-import { ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Cloud, Copy, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleX, Clock, Cloud, Copy, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Ic, type LucideIcon } from "./icons";
 import { copyText } from "./present";
-import { adviceMeta, copyableCommand, sentenceParts, SEVERITY_BADGE } from "./googleRules";
+import { adviceCount, adviceLine, adviceMeta, copyableCommand, sentenceParts, SEVERITY_BADGE } from "./googleRules";
 import type { GoogleView } from "./googleView";
 
 const TONE_ICON: Record<"bad" | "warn" | "muted", LucideIcon> = { bad: CircleX, warn: Clock, muted: CircleDashed };
@@ -19,12 +19,16 @@ export function GoogleSuggests({ g, now }: { g: GoogleView; now: number }) {
   if (!v || !v.gke) return null;
   const advice = v.advice;
   const items = "error" in advice ? [] : advice.items;
+  const cut = "error" in advice ? false : advice.cut;
+  // Never the all-clear when Google's list was cut (review of part 1, M2).
+  const line = "error" in advice ? undefined : adviceLine(items.length, cut, v.cluster);
+  const count = "error" in advice ? undefined : adviceCount(items.length, cut);
   return (
     <section className="panel gs" aria-label="Google suggests">
       <header className="panel-head">
         <Ic icon={Cloud} size={15} className="gs-cloud" />
         <h3>Google suggests</h3>
-        {"error" in advice ? null : <span className="count-badge">{items.length}</span>}
+        {count === undefined ? null : <span className="count-badge">{count}</span>}
         <span className="gs-where">GKE · {v.cluster.project} · {v.cluster.location}</span>
         <span className="grow" />
         <button className="icon-btn" onClick={g.refresh} disabled={g.loading} aria-label="Check Google's suggestions again" title="Check again">
@@ -33,12 +37,16 @@ export function GoogleSuggests({ g, now }: { g: GoogleView; now: number }) {
       </header>
       {"error" in advice ? (
         <GoogleError sentence={advice.error} what={`Couldn't read Google's suggestions for ${v.cluster.name}.`} />
-      ) : items.length ? (
-        <ul className="ov-list gs-list">
-          {items.map((a) => <Suggestion key={a.id} a={a} now={now} open={open === a.id} onToggle={() => setOpen((o) => (o === a.id ? undefined : a.id))} />)}
-        </ul>
       ) : (
-        <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>Google has no suggestions for this cluster.</span></div>
+        <>
+          {items.length ? (
+            <ul className="ov-list gs-list">
+              {items.map((a) => <Suggestion key={a.id} a={a} now={now} open={open === a.id} onToggle={() => setOpen((o) => (o === a.id ? undefined : a.id))} />)}
+            </ul>
+          ) : null}
+          {line?.allClear ? <div className="ov-empty"><Ic icon={CircleCheck} size={20} /><span>{line.text}</span></div> : null}
+          {line && !line.allClear ? <p className="gs-cut" role="note"><Ic icon={CircleAlert} size={14} className="tone-warn" /><span>{line.text}</span></p> : null}
+        </>
       )}
     </section>
   );

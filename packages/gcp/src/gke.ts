@@ -5,7 +5,7 @@
 // is needed (not gke-gcloud-auth-plugin); client-go runs the plugin again on a 401.
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { randomBytes, X509Certificate } from "node:crypto";
+import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import type { GkeCluster } from "@landlens/contracts";
 import { stringify } from "yaml";
 import { z } from "zod";
@@ -99,6 +99,17 @@ export function checkCa(ca: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A CA's fingerprint as landlens-kube-proxy reports the CA a context trusts (its Ready line, review of wave 9 part 1
+ * M1): the hex SHA-256 of the DER bytes of every CERTIFICATE block of the PEM, in order. `ca` is base64 of the PEM, as
+ * Google lists it (masterAuth.clusterCaCertificate) and as `certificate-authority-data` carries it.
+ */
+export function caFingerprint(ca: string): string {
+  const pem = Buffer.from(ca, "base64").toString("latin1");
+  const ders = [...pem.matchAll(/-----BEGIN CERTIFICATE-----([A-Za-z0-9+/=\s]*?)-----END CERTIFICATE-----/g)].map((m) => Buffer.from(m[1]!.replace(/\s+/g, ""), "base64"));
+  return createHash("sha256").update(Buffer.concat(ders)).digest("hex");
 }
 
 /** A GKE cluster as main keeps it: what the page gets, and the CA the kubeconfig needs (base64 PEM; not sent on). */

@@ -154,7 +154,9 @@ Wave 9 ([specs/009-google-view](specs/009-google-view/tasks.md)): `packages/gcp/
 GET only, a call's limits) and `recommender.test.ts` (GKE's suggestions for one cluster: ACTIVE, this cluster's only,
 the join, the cuts), more cases in `errors.test.ts`, the fake's recommender routes (`fake-gcp.ts`), and in
 `apps/desktop/test` the `gkeOf` and `clusterView` cases of `gcp-service.test.ts` and `google-rules.test.ts` (the
-panel's words). The e2e `test/gview.e2e.test.ts` (`LANDLENS_INTEGRATION=orbstack`, after `pnpm -s build`; screenshots
+panel's words, the cut line, the latest-only loader). The CA a context trusts is reported by the sidecar
+(`sidecar/kube-proxy/main_test.go`, `packages/kube/test/sidecar.test.ts`), and `gke.test.ts` pins the fingerprint both
+sides compute for the fake's CA. The e2e `test/gview.e2e.test.ts` (`LANDLENS_INTEGRATION=orbstack`, after `pnpm -s build`; screenshots
 `g9-*`, also at 1024×700) makes its own throwaway ServiceAccount, Role and RoleBinding in `landlens-dev` (deleted
 after) for case (a), and for case (b) writes a temporary kubeconfig (0600, in its own folder, removed after) that
 names OrbStack `gke_demo-shop_us-central1_shop-prod` and `gke_orbit-analytics_us-central1_shop-prod`, passed to the

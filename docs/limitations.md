@@ -158,8 +158,11 @@ person's check reads them), and Ask Claude sends one problem at a time.
   never marks a suggestion done, claimed or dismissed (no writes); only the sentence is shown for subtypes other than
   API deprecations; no Ask Claude on a suggestion yet (part 3); Cloud Monitoring's metrics and alerts are parts 2 and
   3. A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
-  counts only when its server is the address Google lists (an IP spelled as a DNS name, or the reverse, doesn't).
-  Read once per Overview visit and every 10 minutes, kept 10 minutes. Nothing was checked against the real
+  counts only when its server is the address Google lists (an IP spelled as a DNS name, or the reverse, doesn't) and
+  it trusts the CA Google lists with TLS checked (a CA bundle holding more than the cluster's CA, an
+  `insecure-skip-tls-verify` or a `tls-server-name` doesn't). The first 1,000 rows of each of the location's lists are
+  read; past them the panel says this cluster may have more. Read once per Overview visit and every 10 minutes, kept
+  10 minutes. Nothing was checked against the real
   Recommender API.
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known

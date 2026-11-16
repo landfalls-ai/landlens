@@ -98,4 +98,20 @@ describe("a call's limits (D174)", () => {
     const small = clientFor(fake, { maxBytes: 2048 }).client;
     expect((await failWith(() => small.get("cloudasset", big, { pageSize: "500" }, "orbit-analytics", { maxBytes: 64 * 1024 * 1024 }))).message).toBe(SENTENCES.tooBig);
   });
+
+  it("L4 (review of wave 9 part 1): a limit that isn't a finite number above 0 is ignored, never lifting the cap", async () => {
+    const big = "/v1/projects/orbit-analytics:searchAllResources";
+    const small = clientFor(fake, { maxBytes: 2048 }).client;
+    for (const maxBytes of [NaN, -1, 0, Infinity]) {
+      const e = await failWith(() => small.get("cloudasset", big, { pageSize: "500" }, "orbit-analytics", { maxBytes }));
+      expect(e.message, String(maxBytes)).toBe(SENTENCES.tooBig);
+    }
+    // A NaN or negative time limit is the client's own: the call still runs, and still stops at the client's limit.
+    const { client } = clientFor(fake);
+    for (const limitMs of [NaN, -1, 0]) await expect(client.get("cloudresourcemanager", "/v3/projects:search", {}, undefined, { limitMs }), String(limitMs)).resolves.toBeTruthy();
+    fake.slowMs = 300;
+    const tight = clientFor(fake, { limitMs: 100 }).client;
+    expect((await failWith(() => tight.get("cloudresourcemanager", "/v3/projects:search", {}, undefined, { limitMs: NaN }))).message).toBe(SENTENCES.timeout);
+    fake.slowMs = 0;
+  });
 });

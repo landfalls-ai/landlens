@@ -17,10 +17,11 @@ import {
   type GkeRef, type KubeContext, type Responses,
 } from "@landlens/contracts";
 import {
-  ACCOUNT_SHAPE, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK,
+  ACCOUNT_SHAPE, caFingerprint, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK,
   rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
 } from "@landlens/gcp";
 import type { GcpReader } from "@landlens/gcp-mcp";
+import type { SidecarTls } from "@landlens/kube";
 
 /**
  * Where Google Cloud is on (spec D86). A packaged app always talks to Google, with the gcloud on your PATH. An
@@ -70,11 +71,31 @@ export const ADVICE_FAILED_TTL = 60_000;
 /** "Check again" reads at once, but at most once in 10 seconds per cluster. */
 export const FRESH_EVERY = 10_000;
 /** Clusters whose view is kept; the oldest goes first. */
-const MAX_VIEWS = 50;
-type Advice = { items: GkeAdvice[]; at: string } | { error: string };
+export const MAX_VIEWS = 50;
+type Advice = { items: GkeAdvice[]; cut: boolean; at: string } | { error: string };
 type HeldAdvice = { at: number; ok: boolean; read: Promise<Advice> };
-/** A connected cluster as main knows it (D173): its context, the address it was connected at, and how. */
-export type ConnectedCluster = { context: string; server: string; viaLandlens: boolean };
+/**
+ * A connected cluster as main knows it (D173): its context, the address it was connected at, how, and whom its sidecar
+ * trusts to be the cluster (the CA's fingerprint and whether TLS checking is loosened; review of part 1, M1).
+ */
+export type ConnectedCluster = { context: string; server: string; viaLandlens: boolean; tls?: SidecarTls };
+
+/**
+ * `gcp:cluster-view`'s cluster, from the handle alone: its context and address and its sidecar's trust as the sidecar
+ * reported them, and `viaLandlens` only when Landlens connected that very handle from its GKE kubeconfig (a context of
+ * yours by the same name isn't one).
+ */
+export function connectedOf(
+  clusters: { get(handle: string): { info: { context: string; server: string }; sidecar: { tls?: SidecarTls } } },
+  gkeHandles: ReadonlySet<string>,
+  handle: string,
+): ConnectedCluster {
+  const c = clusters.get(handle);
+  return { context: c.info.context, server: c.info.server, viaLandlens: gkeHandles.has(handle), ...(c.sidecar.tls ? { tls: c.sidecar.tls } : {}) };
+}
+
+/** What a GKE cluster's view says when the project's number is unknown (review of part 1, L1). */
+export const numberUnknown = (project: string) => `Landlens couldn't read ${project}'s number, so it can't tell which suggestions are this cluster's.`;
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 /** An address's origin, or "" when it isn't a URL. */
@@ -568,7 +589,11 @@ export class GcpService {
    * A context of your own kubeconfig: only when its name is gcloud's shape for a chosen project, the last listing (60 s)
    * has a cluster of exactly that name, and the listing's checked address is the one the cluster is connected at. A
    * name alone isn't enough: a context only named like a GKE cluster, or pointing elsewhere, could otherwise draw
-   * another cluster's graphs and alerts. A GKE-shaped name of a project you haven't chosen gets a hint; anything else
+   * another cluster's graphs and alerts. Nor is the address (review of part 1, M1): a private endpoint such as
+   * 172.16.0.2 is shared by clusters in different VPCs, and a kubeconfig can loosen what TLS checks. So both kinds also
+   * need the sidecar to verify TLS (no insecure-skip-tls-verify, no tls-server-name) against the CA Google lists: for an
+   * IP endpoint the CA's fingerprint must be the listing's masterAuth CA's; for a gke.goog name, no CA of its own (the
+   * system roots). With TLS checked against the cluster's own CA, a proxy-url can't change who answers. A GKE-shaped name of a project you haven't chosen gets a hint; anything else
    * (Google Cloud off, gcloud missing or signed out, a failed listing) is undefined, silently.
    */
   async gkeOf(c: ConnectedCluster): Promise<GkeRef | { hint: string } | undefined> {
@@ -584,6 +609,8 @@ export class GcpService {
       : (await this.clustersFull().catch(() => undefined))?.clusters.find((x) => x.context === c.context);
     if (!listed || !listed.endpoint || listed.project !== project || listed.location !== location || listed.name !== name) return undefined;
     if (originOf(`https://${listed.endpoint}`) !== originOf(c.server)) return undefined;
+    const t = c.tls;
+    if (!t || t.insecure || t.serverName || t.ca !== (listed.ca ? caFingerprint(listed.ca) : "")) return undefined;
     const number = await this.numberOf(project);
     return { project, ...(number ? { number } : {}), location, name };
   }
@@ -619,17 +646,27 @@ export class GcpService {
 
   private readAdvice(key: string, ref: GkeRef): Promise<Advice> {
     const gen = this.gen;
-    const entry: HeldAdvice = { at: this.now(), ok: true, read: Promise.resolve({ items: [], at: "" }) };
-    entry.read = this.client()
-      .then((client) => this.slot(() => gkeAdvice(client, ref)))
-      .then((items): Advice => ({ items, at: new Date(this.now()).toISOString() }))
+    const entry: HeldAdvice = { at: this.now(), ok: true, read: Promise.resolve({ items: [], cut: false, at: "" }) };
+    // Without the project's number Landlens can't tell which suggestions are this cluster's (Google names clusters by
+    // it): a sentence, kept a minute like a failure, never an empty list that reads as "nothing" (review of part 1, L1).
+    const read: Promise<Advice> = ref.number
+      ? this.client()
+        .then((client) => this.slot(() => gkeAdvice(client, ref)))
+        .then(({ items, cut }): Advice => ({ items, cut, at: new Date(this.now()).toISOString() }))
+      : Promise.resolve({ error: numberUnknown(ref.project) });
+    entry.read = read
+      .then((r) => {
+        if ("error" in r) entry.ok = false;
+        return r;
+      })
       .catch((e: unknown): Advice => {
         entry.ok = false;
         return { error: this.failed(`recommender ${ref.project}/${ref.location}`, e).message };
       })
       .then((r) => {
-        // Kept only if nothing was forgotten meanwhile (another account, another gcloud) and the project is still chosen.
-        if (gen !== this.gen || !this.kept.projects.includes(ref.project)) this.advice.delete(key);
+        // Kept only if nothing was forgotten meanwhile (another account, another gcloud) and the project is still chosen;
+        // and only this read's own entry goes, never a newer one for the same cluster (review of part 1, T3).
+        if ((gen !== this.gen || !this.kept.projects.includes(ref.project)) && this.advice.get(key) === entry) this.advice.delete(key);
         return r;
       });
     this.advice.delete(key);

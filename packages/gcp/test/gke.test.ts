@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { checkCa, checkEndpoint, GKE_CONTEXT, gkeKubeconfig, listClusters, writeGkeKubeconfig, type GkeClusterFull } from "../src/gke.js";
+import { caFingerprint, checkCa, checkEndpoint, GKE_CONTEXT, gkeKubeconfig, listClusters, writeGkeKubeconfig, type GkeClusterFull } from "../src/gke.js";
 import { FAKE_CLUSTER_CA, FAKE_LEAF_CERT, FakeGcp, GCP_ACCOUNT, GCP_TOKEN } from "./fake-gcp.js";
 import { clientFor, FAKE_GCLOUD, sdkDir } from "./helpers.js";
 
@@ -69,6 +69,15 @@ describe("listClusters", () => {
     expect(checkEndpoint("127.0.0.1:26443", true)).toBe("127.0.0.1:26443");
     expect(checkEndpoint("localhost:6443", true)).toBe("");
     expect(checkEndpoint("203.0.113.17:0443")).toBe("");
+  });
+
+  it("M1 (review of wave 9 part 1): a CA's fingerprint is the one landlens-kube-proxy reports (main_test.go)", () => {
+    // The same constant as sidecar/kube-proxy/main_test.go's fakeClusterCAFP: the two sides compare these.
+    expect(caFingerprint(FAKE_CLUSTER_CA)).toBe("a20a863e00045e5b656f2018980676f61dda45d44e12af370e874bca5b5eed97");
+    expect(caFingerprint(FAKE_LEAF_CERT)).not.toBe(caFingerprint(FAKE_CLUSTER_CA));
+    // Line endings and wrapping don't change it: only the certificates' bytes count.
+    const pem = Buffer.from(FAKE_CLUSTER_CA, "base64").toString("latin1");
+    expect(caFingerprint(Buffer.from(pem.replace(/\n/g, "\r\n")).toString("base64"))).toBe(caFingerprint(FAKE_CLUSTER_CA));
   });
 
   it("L2 (review of part 5): an IP endpoint needs a valid cluster CA; a gke.goog DNS endpoint uses the system roots", async () => {

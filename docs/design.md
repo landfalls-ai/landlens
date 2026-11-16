@@ -154,7 +154,9 @@ all N) and Recent warnings; Nodes. It reads
   lines, the meta line in `--ink-3` ("Deprecation · reliability · refreshed 2 days ago"), and a chevron. Enter, Space
   or a click opens the row in place (`.gs-detail`, a `--bg-1` well indented under the sentence): "What Google
   recommends", the APIs as a small fixed table (`.gs-apis`; the API and user agent in mono, breaking anywhere), and
-  the source line. Empty: `.ov-empty` "Google has no suggestions for this cluster."; a failure: a `.notice` with the
+  the source line. Empty: `.ov-empty` "Google has no suggestions for this cluster.", only when Google's whole list was
+  read; when it was cut, a `.gs-cut` note (`role="note"`, `CircleAlert` in `.tone-warn`) says what was read, alone or
+  under the rows, and the count reads "3+"; a failure: a `.notice` with the
   sentence, its command as `code`, and **Copy command**. On a GKE-looking cluster of an unchosen project, one quiet
   `.gs-hint` line (`role="note"`) under Nodes with a **Open Google Cloud** `.link-btn`. No Ask yet (wave 9 part 3).
 - **Problems** (`Problems.tsx`, `problemRules.ts`; CSS `.pb-*` in `workbench.css`; [doctor.md](doctor.md#the-problems-page)):

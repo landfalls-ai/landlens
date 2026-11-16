@@ -15,7 +15,7 @@ import type { WorkbenchService } from "./workbench";
 import { flowOwners, type ConnectionsService } from "./connections";
 import type { FamilyService } from "./family";
 import type { LandflowActions } from "./landflow";
-import type { GcpService } from "./gcp";
+import { connectedOf, type GcpService } from "./gcp";
 import type { TelemetryService } from "./telemetry";
 import type { BrainService } from "./brain";
 import { isAppUrl } from "./security";
@@ -264,10 +264,8 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "gcp:clusters": () => gcp.clusters(),
     // Google's view of a connected cluster (wave 9, D173–D177): the page names only the handle. Whether it is a GKE
     // cluster of a chosen project is main's answer, from how it was connected and the address it was connected at.
-    "gcp:cluster-view": ({ handle, fresh }) => {
-      const { context, server } = clusters.get(handle).info;
-      return gcp.view({ context, server, viaLandlens: gkeHandles.has(handle) }, !!fresh);
-    },
+    // The sidecar's report of whom it trusts goes with it: an own context must verify TLS against the listed CA (M1).
+    "gcp:cluster-view": ({ handle, fresh }) => gcp.view(connectedOf(clusters, gkeHandles, handle), !!fresh),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

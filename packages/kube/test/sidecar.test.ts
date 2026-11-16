@@ -3,11 +3,33 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { startSidecar, withoutLandlensSecrets } from "../src/sidecar.js";
+import { readyTls, startSidecar, withoutLandlensSecrets } from "../src/sidecar.js";
 
 const SIDECAR = resolve(__dirname, "../../../sidecar/kube-proxy/bin/landlens-kube-proxy");
 
 describe("startSidecar", () => {
+  it("M1 (review of wave 9 part 1): carries whom the context trusts from the Ready line, and nothing it can't read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-sidecar-"));
+    const kubeconfig = join(dir, "config");
+    writeFileSync(kubeconfig, [
+      "apiVersion: v1", "kind: Config", "current-context: t",
+      "clusters: [{name: t, cluster: {server: 'https://127.0.0.1:1', insecure-skip-tls-verify: true, proxy-url: 'http://127.0.0.1:3128'}}]",
+      "users: [{name: t, user: {token: dummy}}]",
+      "contexts: [{name: t, context: {cluster: t, user: t}}]",
+    ].join("\n"));
+    const sc = await startSidecar({ binary: SIDECAR, context: "t", kubeconfig });
+    try {
+      expect(sc.tls).toEqual({ ca: "", insecure: true, serverName: false, proxy: true });
+    } finally {
+      await sc.stop();
+    }
+    const fp = "a".repeat(64);
+    expect(readyTls({ ca: fp, insecure: false, serverName: true, proxy: false })).toEqual({ ca: fp, insecure: false, serverName: true, proxy: false });
+    for (const bad of [undefined, null, "x", { ca: "A".repeat(64), insecure: false, serverName: false, proxy: false }, { ca: fp, insecure: "no", serverName: false, proxy: false }, { ca: fp, insecure: false, serverName: false }]) {
+      expect(readyTls(bad)).toBeUndefined();
+    }
+  });
+
   it("hands the secret over stdin, never in the environment another process can read", async () => {
     const dir = mkdtempSync(join(tmpdir(), "landlens-sidecar-"));
     const kubeconfig = join(dir, "config");

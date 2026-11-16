@@ -31,10 +31,14 @@ const SearchResult = z.object({
 }).passthrough();
 const SearchPage = z.object({ results: z.array(SearchResult).optional(), nextPageToken: str.optional() });
 
-/** Control and format characters (bidi overrides, zero-width) out, then at most `max` characters. */
+/**
+ * Control, format and line/paragraph-separator characters out (bidi overrides, zero-width, U+2028/U+2029, and the
+ * astral ones: the tag block U+E0000–U+E007F, which a person can't see and a model reads, and musical format marks),
+ * then at most `max` characters. By Unicode property with the `u` flag, so nothing outside the BMP slips past (review
+ * of wave 9 part 1, L2).
+ */
 export function clean(s: string, max = 300): string {
-  // eslint-disable-next-line no-control-regex
-  const out = s.replace(/[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g, "");
+  const out = s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "");
   if (out.length <= max) return out;
   // Cut by code point, so a pair (an emoji) is never split into a lone surrogate (review of part 4, L4).
   const points = Array.from(out);
