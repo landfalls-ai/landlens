@@ -370,9 +370,12 @@ namespaces at once.
 
 - **Selection** (D156). A 28 px checkbox column on the left; the head's checkbox (tri-state, "Select every row
   shown") takes or drops the rows the filter shows. Shift+click on a checkbox takes the range from the last row you
-  toggled. On a focused row `x` or Space toggles it, ⌘A (Ctrl+A) takes every row shown; Esc clears the selection
-  before it closes the drawer. Rows are selected by uid: a row that leaves the watch leaves the selection, and the
-  selection is cleared when you change kind or namespaces. While rows are selected the toolbar's right side is the
+  toggled. On a focused row `x` or Space toggles it, ⌘A (Ctrl+A) takes every row shown (on the row itself, not from
+  a field inside one); Esc clears the selection before it closes the drawer. Rows are selected by uid, and only rows
+  the table shows stay selected: a row that leaves the watch, the filter or the Pods status segment (switched, or
+  its state changed) leaves the selection, so the count and a bulk action are of rows you can see. A selection
+  belongs to its list: it is empty after a change of kind or namespaces. A row's menu belongs to its list too: a
+  change of page, kind or namespaces closes it. While rows are selected the toolbar's right side is the
   selection bar: "3 selected", the kind's bulk actions (**Restart** for Deployments, StatefulSets and DaemonSets;
   **Delete…** for any kind main deletes in bulk, not the cluster-wide ones such as Namespaces or Nodes), **Ask
   Claude** (not on Secrets) and Clear. In a narrow pane the buttons are their icons. Past 50 the actions are off ("At
@@ -382,24 +385,33 @@ namespaces at once.
   digest-checked, and main's own dialog by the same rules as any action (a delete of more than one object always
   asks; a restart of more than 3; the window's budget of 3 changed objects a minute). An object the dry run refuses
   is left out of the bulk, and the card says so ("2 of 3 can be deleted. Left out, in the cluster's words:" and the
-  cluster's message); main's dialog, title and Recent actions name only the objects Apply sends. When every object is
-  refused there is nothing to apply.
+  cluster's message, twenty at most, then "And 10 more refused."); the sheet's heading, main's dialog, the card's
+  title and Recent actions name only the objects Apply sends. When every object is refused there is nothing to apply.
+  The first press of Apply on a folded card unfolds it (and shows each long diff whole); only the next can send.
 - **Columns and sort** (D157). The Columns button (after Refresh) lists the kind's columns as checkboxes; Name is
   always shown; Reset shows them all. A header click sorts, and the sort is kept per kind. Both are stored in
   `localStorage` under `landlens.table.v1` (per kind key `resource` or `resource.group`), with the namespaces chosen
-  per context, read through a tolerant parser (`tableState.ts`): at most 200 kinds and contexts, 40 column ids, 50
-  namespaces, Kubernetes names only; anything else is dropped and a damaged value is no choices.
+  per cluster (its API server and context name, so two kubeconfigs with a context of the same name keep their own),
+  read through a tolerant parser (`tableState.ts`): at most 200 kinds and clusters, 40 column ids, 50 namespaces,
+  Kubernetes names only; anything else is dropped and a damaged value is no choices. Each choice is applied to the
+  value as stored, read again just before, so two windows keep each other's choices; a value written is never larger
+  than a read takes (the oldest entries go first). Every lookup is of the map's own keys, so a context or kind named
+  `constructor` or `toString` is just a name. Namespaces chosen before this was keyed by server are forgotten once.
 - **Several namespaces** (D158). The namespace button opens a popover: a filter, **All namespaces**, a checkbox per
   namespace (the chosen first) and **Only** on hover; Only and All choose and close. The button reads "All
   namespaces", the one name, or "3 namespaces". Two to eight are watched one watch each, merged by uid; more than
   eight use the all-namespaces watch filtered in the window, and if your account can't list across namespaces, the
-  first eight (the status bar says how many are left out). Helm releases and the Problems list keep the chosen
+  first eight in the order you chose them (the status bar says how many are left out, and its title, the namespace
+  button's title and the popover's "not watched" mark name them; a namespace whose own watch was refused is named the
+  same way). With one watch per namespace, rows show as soon as one namespace has some, without waiting for the
+  slowest. Helm releases and the Problems list keep the chosen
   namespaces (problems with no namespace stay); the Overview shows the whole cluster and says so ("3 namespaces
   selected: this page shows the whole cluster"). A link to an object outside the chosen set adds its namespace when
   several are chosen, and moves to it when one is.
 
-Code: `apps/desktop/src/renderer/src/tableState.ts` (the stored state, the parser, the watch plan, the selection's
-rules, `bulkActions`), `TablePickers.tsx` (the namespace popover, the column picker, the selection bar),
+Code: `apps/desktop/src/renderer/src/tableState.ts` (the stored state, the parser, the watch plan and the merge of
+several watches, the selection's rules, `bulkActions`), `applyRules.ts` (a card's Apply, the left-out note),
+`TablePickers.tsx` (the namespace popover, the column picker, the selection bar),
 `ResourceTable.tsx`, `rowKeys.ts`, `api.ts` (`useWatchMany`), `Workspace.tsx`, and main's `keptTargets` in
 `apps/desktop/src/main/actions.ts`.
 
@@ -557,16 +569,23 @@ one use), the renderer's `SecretData.tsx` (the Data section, `SecretValue`), `Ce
   chip, the re-opened sheet, Stop and the ending; the node and every landlens-dev pod's uid as they were). A real
   drain runs only against the fake.
 - Tables and asks (wave 8 part 3): `apps/desktop` `table-state.test.ts` (the parser: caps, names, `__proto__`;
-  Name never hidden; the watch plan; Shift ranges, pruning, the head's tri-state; the bulk actions per kind),
+  Name never hidden; the watch plan; Shift ranges, pruning, the head's tri-state; the bulk actions per kind; and the
+  security review's: own keys only, per-cluster namespaces, the re-read before a write, the write cap, the in-window
+  filter and the 403 fallback naming what it left out, rows before the slowest namespace, a selection read for
+  another list, more than 50), `apply-rules.test.ts` (folded is capped, the first press unfolds; the left-out note
+  and its count past twenty; the sheet's heading),
   `ask-presets.test.ts` (the presets per kind, failing first, none on Secrets, the fixed questions; the selection's
   quote: names and status words only, a marker in labels, annotations, env and a status message never in it, odd
-  words read Unknown, 50 lines, never for Secrets; the quote's head), `row-keys.test.ts` (`x`, Space and ⌘A),
-  `actions-main.test.ts` (a refused object left out and never named by main's dialog, title or log; every object
-  refused; across namespaces) and, on OrbStack, `tables.e2e.test.ts` (it makes ConfigMaps `hands-bulk-1..6` in
+  words read Unknown, 50 lines, never for Secrets; the quote's head; a namespace-limited session sent no name from
+  outside it; a sentence as a Status word; a Secret's preset refused), `row-keys.test.ts` (`x`, Space and ⌘A, ⌘A
+  only on the row), `actions-main.test.ts` (a refused object left out and never named by main's dialog, title or
+  log; every object refused; across namespaces; a restart of five with one refused asks, four with one refused
+  doesn't) and, on OrbStack, `tables.e2e.test.ts` (it makes ConfigMaps `hands-bulk-1..6` in
   landlens-dev and removes them: three selected by click and Shift+click deleted through one card, main's dialog
   answered Cancel then yes, the other three still there; `x`, ⌘A, Esc; Age hidden and the sort kept across a reload;
   landlens-dev and default together; Summarize from a row's menu reaching the fake agent with the object attached;
-  Ask Claude about these 2 leaving its question selected and sending nothing; a Secret's selection with no ask; ⌘K's
+  Ask Claude about these 2 leaving its question selected and sending nothing; selected pods leaving the selection
+  when the Failing segment stops showing them; a row's menu gone after ⌘2; a Secret's selection with no ask; ⌘K's
   presets).
 - Your actions (wave 8): `packages/kube` `actions.test.ts` (each body, kubectl's Job, the kind table and refusals,
   every fact, no copied text), `edits.test.ts` (`reviewOps`, apply each, the digest, a Secret's delete), on OrbStack

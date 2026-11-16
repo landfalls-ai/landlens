@@ -184,7 +184,8 @@ function toolLabel(t: Tool): { label: string; detail?: string; icon: LucideIcon;
   const m = /^mcp__([a-z0-9-]+)__([\w.-]+)/.exec(name);
   const a = (t.input ?? {}) as Record<string, unknown>;
   const own = m?.[1] === BUILTIN_MCP_SERVER;
-  const icon = (own && MCP_ICON[m![2]!]) || KIND_ICON[t.kind ?? ""] || (m ? Plug : Wrench);
+  // Own keys only: an agent's tool kind or name like `constructor` is no icon, not a crash (review of part 3, L1).
+  const icon = (own && Object.hasOwn(MCP_ICON, m![2]!) && MCP_ICON[m![2]!]) || (Object.hasOwn(KIND_ICON, t.kind ?? "") && KIND_ICON[t.kind ?? ""]) || (m ? Plug : Wrench);
   if (m) {
     const target = [a.kind ?? a.what ?? a.scope, [a.namespace, a.name].filter(Boolean).join("/")].filter(Boolean).join(" ") + (a.previous ? " · previous" : "");
     const tool = m[2]!.replace(/_/g, " ");

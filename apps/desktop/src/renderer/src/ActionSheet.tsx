@@ -6,7 +6,7 @@
 import type { ActionResult, ActionReview, ClusterInfo, KubeObject } from "@landlens/contracts";
 import { CircleCheck, CircleX, Minus, Plus, TriangleAlert, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { askFirst, PREVIEW_ONLY, verbOf, type ActionDraft } from "./actionAsks";
+import { askFirst, PREVIEW_ONLY, sheetHeading, verbOf, type ActionDraft } from "./actionAsks";
 import { api, type ApiError } from "./api";
 import type { NavTarget } from "./Details";
 import { DrainSheet } from "./DrainPlanView";
@@ -27,19 +27,6 @@ const refOf = (d: ActionDraft, o: KubeObject) => ({
   group: d.type.group, version: d.type.version, resource: d.type.resource, name: o.metadata.name,
   ...(o.metadata.namespace && d.type.namespaced ? { namespace: o.metadata.namespace } : {}),
 });
-
-export function sheetTitle(d: ActionDraft): string {
-  const one = d.objects.length === 1 ? d.objects[0]!.metadata.name : `${d.objects.length} ${d.type.resource}`;
-  switch (d.kind) {
-    case "scale": return `Scale ${one}`;
-    case "restart": return `Restart ${one}`;
-    case "delete": return `Delete ${one}`;
-    case "trigger": return `Run ${one} now`;
-    case "suspend": return `${d.suspend ? "Suspend" : "Resume"} ${one}`;
-    case "cordon": return `${d.on === false ? "Uncordon" : "Cordon"} ${one}`;
-    case "drain": return `Drain ${one}`;
-  }
-}
 
 export type SheetProps = {
   cluster: ClusterInfo;
@@ -166,7 +153,7 @@ function ChangeSheet(props: SheetProps) {
         }}>
         <header className="dialog-head">
           <Ic icon={Zap} size={15} className="dim" />
-          <h2 id="action-title" className="grow">{sheetTitle(d)}</h2>
+          <h2 id="action-title" className="grow">{sheetHeading(d, stage.s === "review" || stage.s === "applying" ? stage.review : undefined)}</h2>
           <button className="icon-btn sm" aria-label="Close" disabled={busy} onClick={close}><Ic icon={X} size={14} /></button>
         </header>
         <div className="dialog-body action-body">
@@ -191,7 +178,7 @@ function ChangeSheet(props: SheetProps) {
           ) : stage.s === "review" || stage.s === "applying" ? (
             <ReviewCard
               eyebrow="Your action"
-              title={stage.review.title ?? sheetTitle(d)}
+              title={sheetHeading(d, stage.review)}
               review={stage.review}
               {...(stage.review.facts?.length ? { facts: stage.review.facts } : {})}
               {...(stage.review.native ? { nativeLabel: `${d.kind === "delete" ? "Delete" : d.kind === "restart" ? "Restart" : "Apply"}${(stage.review.operations?.length ?? 0) > 1 ? ` ${stage.review.operations!.length}` : ""}…` } : {})}

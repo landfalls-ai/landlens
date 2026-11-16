@@ -52,12 +52,14 @@ export const RESOURCE_OF_KIND: Record<string, string> = {
   Ingress: "ingresses", ServiceAccount: "serviceaccounts",
 };
 
+// Own keys only: a resource or kind named like an Object.prototype member (`constructor`) is no icon, not a crash
+// (security review of part 3, L1).
 export function kindIcon(resource: string): LucideIcon {
-  return BY_RESOURCE[resource] ?? Shapes;
+  return (Object.hasOwn(BY_RESOURCE, resource) ? BY_RESOURCE[resource] : undefined) ?? Shapes;
 }
 
 export function iconOfKind(kind: string): LucideIcon {
-  return kindIcon(RESOURCE_OF_KIND[kind] ?? "");
+  return kindIcon((Object.hasOwn(RESOURCE_OF_KIND, kind) ? RESOURCE_OF_KIND[kind] : undefined) ?? "");
 }
 
 /** The status shapes: never colour alone. */

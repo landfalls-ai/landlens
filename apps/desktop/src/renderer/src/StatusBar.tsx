@@ -2,12 +2,12 @@
 import { Activity, ArrowLeftRight, CircleX, Database, History, LoaderCircle, PlugZap, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import { Ic } from "./icons";
 
-export function StatusBar(props: { server: string; watching: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void; actions?: number; actionsOpen?: boolean; onActions?: () => void; drains?: { run: string; node: string }[]; onDrain?: (run: string) => void }) {
+export function StatusBar(props: { server: string; watching: string; watchingTitle?: string; claude?: string; bad: number; warn: number; onProblems: (tone: "bad" | "warn") => void; clickland?: boolean; onMetrics: () => void; sessions?: number; panelOpen?: boolean; onSessions?: () => void; forwards?: number; onForwards?: () => void; actions?: number; actionsOpen?: boolean; onActions?: () => void; drains?: { run: string; node: string }[]; onDrain?: (run: string) => void }) {
   return (
     <footer className="statusbar">
       <span className="sb-item"><i className="dot tone-ok" aria-hidden="true" />Connected</span>
       <span className="sb-item mono sb-url">{props.server}</span>
-      <span className="sb-item"><Ic icon={Activity} size={11} />{props.watching}</span>
+      <span className="sb-item" {...(props.watchingTitle ? { title: props.watchingTitle } : {})}><Ic icon={Activity} size={11} />{props.watching}</span>
       <span className="grow" />
       {props.sessions ? (
         <button className="sb-item sessions" onClick={props.onSessions} title={props.panelOpen ? "Go to the panel (⌘`)" : "Show the panel (⌘`)"}><Ic icon={SquareTerminal} size={11} />{props.sessions} session{props.sessions === 1 ? "" : "s"}</button>

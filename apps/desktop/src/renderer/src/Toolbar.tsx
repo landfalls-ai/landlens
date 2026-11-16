@@ -16,7 +16,7 @@ export function Toolbar(props: {
   updatedAt?: string;
   seg?: { value: StatusFilter; all: number; bad: number; warn: number; onChange: (v: StatusFilter) => void };
   /** The namespaces chosen (none: all), several at once (D158). */
-  namespaces?: { list: string[]; value: string[]; onChange: (ns: string[]) => void };
+  namespaces?: { list: string[]; value: string[]; onChange: (ns: string[]) => void; unwatched?: string[] };
   /** The kind's columns, and the ones you hid (D157). */
   columns?: { all: { id: string; label: string }[]; hidden: string[]; onChange: (hidden: string[]) => void };
   /** Rows selected (D156): the selection bar takes the right side. */

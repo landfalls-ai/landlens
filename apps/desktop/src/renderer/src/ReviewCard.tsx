@@ -6,11 +6,8 @@ import type { ActionFact, ChangeRisk, EditOwner, EditReview } from "@landlens/co
 import { Check, CircleX, Info, ShieldCheck, Sparkles, TriangleAlert, User } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Diff, ORDER, RISK } from "./ChangeCard";
+import { applyStep, cardCapped, leftOutNote, OPEN_OPS, SHORT } from "./applyRules";
 import { Ic } from "./icons";
-
-const SHORT = 40;
-/** Several operations (a bulk action, D145, D156): the first three open, the rest folded to their head lines. */
-const OPEN_OPS = 3;
 
 /** The dry run, as a card of your own (D27): no iris ring, "Your edit", the diff, Apply or Back to editing. */
 export function ReviewCard(props: {
@@ -61,17 +58,20 @@ export function ReviewCard(props: {
     window.addEventListener("keydown", down, true);
     return () => window.removeEventListener("keydown", down, true);
   }, []);
-  // Folded operations count as capped: the whole change is on screen before Apply can send it.
-  const capped = folded || ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
+  // Folded operations count as capped: the whole change is on screen before Apply can send it (applyRules.ts).
+  const capped = cardCapped(ops.map((op) => ({ lines: op.diff.lines.length })), unfolded, uncapped);
+  const left = props.leftOut ? leftOutNote(props.leftOut) : undefined;
   const apply = (e: React.MouseEvent) => {
-    if (props.previewOnly) return;
     // A keyboard press (detail 0) in the first half second is a key meant for something else; a click is deliberate.
-    if (e.detail === 0 && (repeating.current || Date.now() - shownAt.current < 500)) return;
-    // The whole change is on screen before it can be sent.
-    if (capped) return (setUnfolded(true), setUncapped(new Set(ops.map((_, i) => i))));
-    // A review main asks about in its own dialog (D143) has that as its second step, not the card's.
-    if (danger && !confirm && !props.nativeLabel) return setConfirm(true);
-    props.onApply();
+    // The whole change is on screen before it can be sent. A review main asks about in its own dialog (D143) has that
+    // as its second step, not the card's.
+    const step = applyStep({
+      previewOnly: !!props.previewOnly, keyboard: e.detail === 0, repeating: repeating.current, shownFor: Date.now() - shownAt.current,
+      capped, danger, confirmed: confirm, native: !!props.nativeLabel,
+    });
+    if (step === "unfold") return (setUnfolded(true), setUncapped(new Set(ops.map((_, i) => i))));
+    if (step === "confirm") return setConfirm(true);
+    if (step === "apply") props.onApply();
   };
   return (
     <section className="change mine" aria-label={`Review ${(props.eyebrow ?? "Your edit").toLowerCase()}`}
@@ -100,12 +100,12 @@ export function ReviewCard(props: {
           })}
         </ul>
       ) : null}
-      {props.leftOut ? (
+      {left ? (
         <div className="change-warn warn left-out" role="note">
           <Ic icon={TriangleAlert} size={13} />
           <div>
-            <b>{props.leftOut.kept} of {props.leftOut.of} can be {props.leftOut.verb}.</b> Left out, in the cluster's words:
-            <ul>{props.leftOut.messages.slice(0, 20).map((m, i) => <li key={i} className="small">{m}</li>)}</ul>
+            <b>{left.head}</b> Left out, in the cluster's words:
+            <ul>{left.lines.map((m, i) => <li key={i} className="small">{m}</li>)}{left.more ? <li className="small dim">{left.more}</li> : null}</ul>
           </div>
         </div>
       ) : null}

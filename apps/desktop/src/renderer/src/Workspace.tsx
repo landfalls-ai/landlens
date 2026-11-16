@@ -49,8 +49,11 @@ import type { ActionDraft } from "./actionAsks";
 import { ObjectMenu } from "./ObjectMenu";
 import { RecentActions, useActionLog } from "./RecentActions";
 import { isActionVerb } from "./paletteRules";
-import { bulkActions, kindKey, loadTableState, pruned, saveTableState, withHidden, withNamespaces, withSort, type Sort, type TableState } from "./tableState";
-import { objectContext, presetById, SELECTION_QUESTION, selectionContext, type PresetId } from "./askPresets";
+import {
+  bulkActions, chosenSort, hiddenOf, kindKey, listKey, loadTableState, namespacesOf, nsKey, own, pruned, selectionFor, unwatchedTitle, updateTableState,
+  withHidden, withNamespaces, withSort, type Selection, type Sort, type TableState,
+} from "./tableState";
+import { objectContext, presetAsk, SELECTION_QUESTION, selectionContext, type PresetId } from "./askPresets";
 
 const FIRST_QUESTION = "What's wrong in this cluster right now?";
 
@@ -59,14 +62,17 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [nav, setNav] = useState<NavItem[]>([]);
   const [navError, setNavError] = useState<string>();
   const [current, setCurrent] = useState<Current>("overview");
-  // What the tables remember (wave 8 part 3, D155): columns hidden and sort per kind, namespaces per context. Written
-  // back on each choice, never from inside a state updater.
+  // What the tables remember (wave 8 part 3, D155): columns hidden and sort per kind, namespaces per cluster. Each
+  // choice is applied to the value as stored, read again first, so another window's choices stay (review of part 3,
+  // L8); written back on each choice, never from inside a state updater.
   const [tables, setTables] = useState<TableState>(() => loadTableState(localStorage));
-  const changeTables = (next: TableState) => (saveTableState(localStorage, next), setTables(next));
+  const changeTables = (change: (s: TableState) => TableState) => setTables(updateTableState(localStorage, tables, change));
   // The namespaces chosen (D158): none is every namespace. `namespace` is the one chosen when exactly one is, for
   // everything that takes one scope (health, Helm, Create, triage, flows); with several those see the whole cluster.
-  const namespaces = useMemo(() => tables.ns[cluster.context] ?? [], [tables, cluster.context]);
-  const setNamespaces = (ns: string[]) => changeTables(withNamespaces(tables, cluster.context, ns));
+  // Kept per cluster (its context and server), read as the map's own key only (L1, L8).
+  const tablesKey = nsKey(cluster.context, cluster.server);
+  const namespaces = useMemo(() => namespacesOf(tables, cluster.context, cluster.server), [tables, cluster.context, cluster.server]);
+  const setNamespaces = (ns: string[]) => changeTables((s) => withNamespaces(s, tablesKey, ns));
   const namespace = namespaces.length === 1 ? namespaces[0]! : "";
   const several = namespaces.length > 1;
   const [filter, setFilter] = useState("");
@@ -126,7 +132,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   };
   const forwardsRunning = useForwards(cluster.context).filter((f) => f.state === "running" || f.state === "reconnecting" || f.state === "starting").length;
   // The object menu (wave 8, D146): a row's right-click or Shift+F10, or the drawer's ⋯ (which leaves out its tabs).
-  const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number; drawer?: true }>();
+  // It belongs to the list it was opened on (`lk`): a change of page, kind or namespaces closes it, so its actions
+  // never take the next list's kind (security review of part 3, L2).
+  const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number; drawer?: true; lk: string }>();
   // Your actions (wave 8, D145, D147): the sheet, and Recent actions read again after each apply.
   const [actionOn, setActionOn] = useState<ActionDraft>();
   const [actionsVersion, setActionsVersion] = useState(0);
@@ -190,14 +198,20 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const watch = useWatchMany(list ? { handle: cluster.handle, group: list.type.group, version: list.type.version, resource: list.type.resource } : undefined, list?.type.namespaced ? namespaces : []);
   // The kind's remembered columns and sort (D157).
   const kk = list ? kindKey(list.type) : "";
-  const hidden = useMemo(() => tables.hidden[kk] ?? [], [tables, kk]);
-  const sort: Sort = tables.sort[kk] ?? { id: "name", dir: 1 };
-  // The selection (D156): uids of this list only. It empties when the kind, the namespaces or the cluster change, and
-  // a uid that leaves the watch leaves it.
-  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [kk, namespaces.join(",")]);
-  useEffect(() => setPicked((p) => pruned(p, watch.items.map((o) => o.metadata.uid))), [watch.items]);
-  const pickedObjects = useMemo(() => watch.items.filter((o) => picked.has(o.metadata.uid)), [watch.items, picked]);
+  const hidden = useMemo(() => hiddenOf(tables, kk), [tables, kk]);
+  const sort: Sort = chosenSort(tables, kk);
+  // The selection (D156): uids of this list only. It is read for the list it was made on (`lk`), so it is empty after a
+  // change of kind or namespaces (the cluster's own Workspace is keyed by its handle); a row the table stops showing
+  // leaves it (below, review of part 3, M2).
+  const lk = listKey(kk, namespaces);
+  const [sel, setSel] = useState<Selection>({ key: "", uids: new Set() });
+  const picked = selectionFor(sel, lk);
+  const setPicked = (next: ReadonlySet<string> | ((p: ReadonlySet<string>) => ReadonlySet<string>)) => setSel((s) => {
+    const cur = selectionFor(s, lk);
+    const uids = typeof next === "function" ? next(cur) : next;
+    return uids === cur && s.key === lk ? s : { key: lk, uids };
+  });
+  useEffect(() => setRowMenu(undefined), [current, lk]);
   const pods = list?.type.resource === "pods" && list.type.group === "";
   // A custom kind's columns come from its definition's printer columns (D40).
   const crd = useCrd(cluster.handle, list);
@@ -212,6 +226,10 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       (!f || o.metadata.name.toLowerCase().includes(f) || (o.metadata.namespace ?? "").toLowerCase().includes(f)) &&
       (!pods || status === "all" || tones.get(o.metadata.uid) === status));
   }, [watch.items, filter, status, pods, tones]);
+  // The selection is of rows shown (review of part 3, M2, amending D156): a row that leaves the filter, the status
+  // segment or the watch leaves the selection, so the bar's count and a bulk are of rows you can see.
+  useEffect(() => setPicked((p) => pruned(p, shown.map((o) => o.metadata.uid))), [shown]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickedObjects = useMemo(() => shown.filter((o) => picked.has(o.metadata.uid)), [shown, picked]);
   const segCounts = useMemo(() => {
     let bad = 0, warn = 0;
     for (const t of tones.values()) t === "bad" ? bad++ : t === "warn" ? warn++ : 0;
@@ -221,11 +239,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   // Keep the drawer showing the live object; open the one a link or an Overview row asked for once its list arrives.
   const live = selected && watch.items.find((o) => o.metadata.uid === selected.metadata.uid);
   useEffect(() => {
-    if (!want || !list || watch.loading) return;
+    // Wait for every namespace's watch (L6 shows rows before all have answered).
+    if (!want || !list || watch.loading || watch.partial) return;
     const o = watch.items.find((x) => x.metadata.name === want.name && (!want.namespace || x.metadata.namespace === want.namespace));
     if (o) setSelectedNow(o);
     setWant(undefined);
-  }, [want, watch.items, watch.loading, list]);
+  }, [want, watch.items, watch.loading, watch.partial, list]);
 
   const sections = useMemo(() => {
     const by = new Map<string, NavItem[]>();
@@ -268,7 +287,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const openSubject = (p: HealthProblem) => go({ kind: p.kind, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) });
   const navItem = (resource: string) => nav.find((n) => n.type.resource === resource && (n.type.group === "" || n.type.group === "apps"));
   const go = (t: NavTarget) => {
-    const n = navItem(RESOURCE_OF_KIND[t.kind] ?? "");
+    const n = navItem(own(RESOURCE_OF_KIND, t.kind) ?? "");
     if (!n) return;
     pick(n);
     if (n.type.namespaced && t.namespace && namespaces.length && !namespaces.includes(t.namespace)) setNamespaces(several ? [...namespaces, t.namespace] : [t.namespace]);
@@ -309,9 +328,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
    * once (or left in the box while a turn runs). Never a Secret: the menus don't offer it, and this refuses it too.
    */
   const askPreset = (ctx: AskContext, id: PresetId) => {
-    const p = presetById(id);
-    if (!p || (ctx.ref?.group === "" && ctx.ref.resource === "secrets")) return;
-    ask(ctx);
+    const p = presetAsk(ctx, id);
+    if (!p) return;
+    ask(p.context);
     setPrompt({ id: Date.now(), text: p.question });
   };
   /** Restart or Delete on the selected rows (D156): one sheet, one review with a target per object. */
@@ -380,7 +399,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
    * at once (or left in the box when a turn is running). The drawer passes the log lines it has read.
    */
   const askProblem = (p: HealthProblem, evidence?: DoctorEvidence) => {
-    const n = navItem(RESOURCE_OF_KIND[p.kind] ?? "");
+    const n = navItem(own(RESOURCE_OF_KIND, p.kind) ?? "");
     const ref = n ? { group: n.type.group, version: n.type.version, resource: n.type.resource, name: p.name, ...(p.namespace ? { namespace: p.namespace } : {}) } : undefined;
     // One problem at a time: an earlier problem's chip gives way to this one.
     setAskContext((cs) => [...cs.filter((c) => c.kind !== "problem"), problemContext(p, ref, evidence)]);
@@ -510,8 +529,11 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           title={label}
           {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && !connPage && !gcpPage && (!list || list.type.namespaced) ? { namespaces: { list: nsList, value: namespaces, onChange: (ns: string[]) => leaveEdit(() => { setNamespaces(ns); setSelectedNow(undefined); setProblemSel(undefined); }) } } : {})}
-          {...(list && !watch.error ? { columns: { all: columns.map((c) => ({ id: c.id, label: c.label })), hidden: [...hidden], onChange: (ids: string[]) => changeTables(withHidden(tables, kk, ids)) } } : {})}
+          {...(!mcp && !agentPage && !connPage && !gcpPage && (!list || list.type.namespaced) ? { namespaces: {
+            list: nsList, value: namespaces, onChange: (ns: string[]) => leaveEdit(() => { setNamespaces(ns); setSelectedNow(undefined); setProblemSel(undefined); }),
+            ...(list ? { unwatched: [...(watch.left ?? []), ...(watch.refused ?? [])] } : {}),
+          } } : {})}
+          {...(list && !watch.error ? { columns: { all: columns.map((c) => ({ id: c.id, label: c.label })), hidden: [...hidden], onChange: (ids: string[]) => changeTables((s) => withHidden(s, kk, ids)) } } : {})}
           {...(list && picked.size ? { selection: {
             count: picked.size, actions: bulkActions(list.type), onAction: startBulk, onClear: () => setPicked(new Set()),
             ...(list.type.group === "" && list.type.resource === "secrets" ? {} : { onAsk: askSelection }),
@@ -614,14 +636,14 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             oneNamespace={!!scoped}
             hidden={hidden}
             sort={sort}
-            onSort={(s) => changeTables(withSort(tables, kk, s))}
+            onSort={(s) => changeTables((t) => withSort(t, kk, s))}
             selection={{ uids: picked, onChange: setPicked }}
             empty={{
               title: `No ${list.label.toLowerCase()}${scoped ? ` in ${scoped}` : list.type.namespaced && several ? ` in ${namespaces.length} namespaces` : ""}${filter.trim() ? ` matching “${filter.trim()}”` : status !== "all" ? ` ${status === "bad" ? "failing" : "pending"}` : ""}`,
               ...(filter.trim() || status !== "all" ? { onClear: () => (setFilter(""), setStatus("all")) } : {}),
             }}
             onSelect={setSelected}
-            onMenu={(o, x, y) => setRowMenu({ o, x, y })}
+            onMenu={(o, x, y) => setRowMenu({ o, x, y, lk })}
             onAction={act}
           />
           </Boundary>
@@ -629,6 +651,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       </main>
       <StatusBar
           server={cluster.server}
+          {...(list && unwatchedTitle(watch) ? { watchingTitle: unwatchedTitle(watch)! } : {})}
           watching={list ? (watch.error ? "Not watching" : watch.cut ? `Watching ${list.label.toLowerCase()} in the first 8 namespaces · ${watch.cut} left out: your role can't list across namespaces` : watch.failed ? `Watching ${list.label.toLowerCase()} · live · ${watch.failed} namespace${watch.failed === 1 ? "" : "s"} refused` : `Watching ${list.label.toLowerCase()} · live`) : mcp ? "MCP calls · live" : connPage ? "Connections" : gcpPage ? "Google Cloud · read-only" : helmPage ? (helm.error ? "Not reading" : "Reading Helm releases every 30s") : agentPage ? "Agent settings" : "Checking health every 10s"}
           {...(claude ? { claude } : {})}
           bad={bad}
@@ -681,7 +704,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             if (n) pick(n);
           }}
           onLogsInPanel={(s) => (bench.openLogs(s), focusBench())}
-          onMenu={(x, y) => setRowMenu({ o: live ?? selected, x, y, drawer: true })}
+          onMenu={(x, y) => setRowMenu({ o: live ?? selected, x, y, drawer: true, lk })}
           onPreset={(id) => askPreset(objectContext(list.type, live ?? selected), id)}
           {...(show ? { show } : {})}
           {...(lf.flows ? { onFlow: () => setFlowOn({ kind: list.type.kind, ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: selected.metadata.name, ...(selected.metadata.namespace ? { namespace: selected.metadata.namespace } : {}) } }) } : {})}
@@ -736,7 +759,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       {settings ? (
         <ClicklandSettings handle={cluster.handle} context={cluster.context} onClose={() => setSettings(false)} onSaved={(v) => (setClickland(v), setMetricsVersion((n) => n + 1))} />
       ) : null}
-      {rowMenu && list ? (
+      {rowMenu && list && rowMenu.lk === lk ? (
         <ObjectMenu at={rowMenu} handle={cluster.handle} type={list.type} object={rowMenu.o} pods={!!pods} onClose={() => setRowMenu(undefined)}
           tone={tones.get(rowMenu.o.metadata.uid)}
           onPreset={(id) => askPreset(objectContext(list.type, rowMenu.o), id)}

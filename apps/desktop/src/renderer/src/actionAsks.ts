@@ -16,6 +16,26 @@ export const PREVIEW_ONLY = "Development build: preview only. Nothing is sent to
  */
 export type ActionDraft = { kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean; run?: string };
 
+/** The sheet's own title for a draft, before main has reviewed it. */
+export function sheetTitle(d: ActionDraft): string {
+  const one = d.objects.length === 1 ? d.objects[0]!.metadata.name : `${d.objects.length} ${d.type.resource}`;
+  switch (d.kind) {
+    case "scale": return `Scale ${one}`;
+    case "restart": return `Restart ${one}`;
+    case "delete": return `Delete ${one}`;
+    case "trigger": return `Run ${one} now`;
+    case "suspend": return `${d.suspend ? "Suspend" : "Resume"} ${one}`;
+    case "cordon": return `${d.on === false ? "Uncordon" : "Cordon"} ${one}`;
+    case "drain": return `Drain ${one}`;
+  }
+}
+
+/**
+ * The sheet's heading: main's title once there is a review, so a bulk that left objects out says "Delete 5" above a
+ * card of five, not the six selected (security review of part 3, L4); the draft's own title before.
+ */
+export const sheetHeading = (d: ActionDraft, review?: Pick<ActionReview, "title">): string => review?.title ?? sheetTitle(d);
+
 /** The question each action's "Ask Claude first" sends (Landlens's own words). */
 export const ACTION_ASKS: Record<ActionVerb, { label: string; question: string }> = {
   scale: { label: "Ask Claude first", question: "Is it safe to scale this to that many replicas now? Check autoscalers, disruption budgets and what depends on it. Answer yes or no first, then why." },

@@ -13,8 +13,8 @@ export type AskContext = {
   /** Log lines from Clickland's history (wave 7 part 3): the head says so, and main holds the session's autonomy. */
   from?: "clickland";
   /**
-   * The namespaces the quoted text is from ("" for cluster-scoped): an action's diff. A session limited to some
-   * namespaces isn't sent text from outside them (security review of wave 8 part 1, L11).
+   * The namespaces the quoted text is from ("" for cluster-scoped): an action's diff, a selection's names. A session
+   * limited to some namespaces isn't sent text from outside them (security review of wave 8 part 1, L11; part 3, M1).
    */
   namespaces?: string[];
 };
@@ -30,6 +30,12 @@ export function inSession(c: AskContext, limit: string[] | undefined): boolean {
   if (!limit?.length || !c.namespaces) return true;
   return c.namespaces.every((ns) => !!ns && limit.includes(ns));
 }
+
+/**
+ * The contexts the dock sends with a question (and the chips it doesn't dim): none about a Secret (D166), and no quoted
+ * text from outside a namespace-limited session's namespaces (L11; a selection's names too, review of part 3, M1).
+ */
+export const sendable = (cs: AskContext[], limit: string[] | undefined): AskContext[] => cs.filter((c) => inSession(c, limit) && !aboutSecret(c));
 
 /**
  * The question, with the lines the person chose quoted under it (redacted as get_logs is; the prompt's 20,000 cap

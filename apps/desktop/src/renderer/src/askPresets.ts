@@ -6,7 +6,7 @@
 import type { KubeObject, ResourceType } from "@landlens/contracts";
 import type { Tone } from "@landlens/kube/status";
 import type { Column } from "./kinds";
-import type { AskContext } from "./quotes";
+import { aboutSecret, type AskContext } from "./quotes";
 
 export type PresetId = "summarize" | "failing" | "logs" | "metrics" | "related" | "drain";
 export type Preset = { id: PresetId; label: string; question: string; fits: (key: string) => boolean };
@@ -47,6 +47,15 @@ export function presetsFor(t: Pick<ResourceType, "group" | "resource">, tone?: T
 
 export const presetById = (id: string): Preset | undefined => PRESETS.find((p) => p.id === id);
 
+/**
+ * What a preset sends (D159): the object as Ask Claude attaches it, and the preset's fixed question. Never about a
+ * Secret: the menus don't offer one, and this refuses one too, whatever path (⌘K included) built the context.
+ */
+export function presetAsk(ctx: AskContext, id: string): { context: AskContext; question: string } | undefined {
+  const p = presetById(id);
+  return p && !aboutSecret(ctx) ? { context: ctx, question: p.question } : undefined;
+}
+
 /** The object Ask Claude attaches (D159): a reference, read by the agent with the session's token. */
 export function objectContext(t: Pick<ResourceType, "group" | "version" | "resource" | "kind">, o: Pick<KubeObject, "metadata">): AskContext {
   return {
@@ -58,18 +67,27 @@ export function objectContext(t: Pick<ResourceType, "group" | "version" | "resou
 /** The first message of "Ask Claude about these N" (D160): left in the box, selected, for you to overwrite. */
 export const SELECTION_QUESTION = "What do these have in common?";
 export const MAX_SELECTION_LINES = 50;
-/** A status or Ready word the selection quotes: short, plain words; anything else reads "Unknown". */
-export const STATUS_WORD = /^[A-Za-z][A-Za-z0-9 :/()-]{0,60}$/;
+/**
+ * A status word the selection quotes: one token, as Kubernetes's reasons are (`CrashLoopBackOff`, `Init:0/2`,
+ * `ExitCode:137`), no space, so no sentence a custom resource's printer column or a condition's reason carries passes
+ * (security review of part 3, M3); or one of Landlens's own words with a space or a comma, by exact match. Anything
+ * else reads "Unknown".
+ */
+export const STATUS_WORD = /^[A-Za-z][A-Za-z0-9:/()-]{0,60}$/;
+/** Landlens's own Status words that aren't one token: a condition's "Not ready" / "Not available", a node's pair. */
+export const OWN_STATUS_WORDS: ReadonlySet<string> = new Set(["Not ready", "Not available", "Ready,SchedulingDisabled", "NotReady,SchedulingDisabled"]);
 /** A Ready count ("1/2"). */
 export const READY_WORD = /^\d{1,6}\/\d{1,6}$/;
 const NAME = /^[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?$/;
 const KIND = /^[A-Z][A-Za-z0-9]{0,62}$/;
-const word = (s: string | undefined, re = STATUS_WORD) => (s !== undefined && re.test(s) ? s : "Unknown");
+const word = (s: string | undefined, re = STATUS_WORD) => (s !== undefined && (re.test(s) || (re === STATUS_WORD && OWN_STATUS_WORDS.has(s))) ? s : "Unknown");
 
 /**
  * "Ask Claude about these N" (D160): one quoted context, a line per object (at most 50): `namespace/name`, then the
  * table's Status and Ready words where it has them. No labels, annotations or spec; no object attached (the agent reads
- * what it needs with its own token). Undefined for Secrets, and for nothing selected.
+ * what it needs with its own token). Undefined for Secrets, and for nothing selected. `namespaces` names every
+ * selected object's namespace ("" for a cluster-scoped one), all of them, not only the 50 listed: a session limited to
+ * some namespaces isn't sent the quote when any is outside them (security review of part 3, M1; `inSession`).
  */
 export function selectionContext(t: Pick<ResourceType, "group" | "resource" | "kind">, objects: KubeObject[], columns: Column[], now: number): AskContext | undefined {
   if (secret(t) || !objects.length) return undefined;
@@ -90,5 +108,6 @@ export function selectionContext(t: Pick<ResourceType, "group" | "resource" | "k
     text: lines.join("\n") + (cut > 0 ? `\n(and ${cut} more not listed)` : ""),
     kind: "selection",
     source: `${objects.length} ${kind}`,
+    namespaces: [...new Set(objects.map((o) => o.metadata.namespace ?? ""))],
   };
 }

@@ -29,4 +29,10 @@ describe("a row's keys", () => {
     expect(key(" ", { repeat: true })).toBeUndefined();
     expect(key("a")).toBeUndefined();
   });
+
+  it("L7 of part 3's review: ⌘A from a field inside a row is the field's select-all, not the table's", () => {
+    expect(key("a", { metaKey: true, onRow: false })).toBeUndefined();
+    expect(key("A", { ctrlKey: true, onRow: false })).toBeUndefined();
+    expect(key("a", { metaKey: true, onRow: true })).toBe("all");
+  });
 });

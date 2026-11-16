@@ -664,6 +664,28 @@ describe("part 3: a bulk action from the table's selection (D156)", () => {
     expect(r.problems).toHaveLength(2);
   });
 
+  it("security review of part 3, M4: a bulk restart from the selection asks in main's dialog at four kept, not at three kept of four", async () => {
+    const { svc } = setup();
+    const a = window();
+    for (const n of ["w1", "w2", "w3", "w4", "w5"]) putDep(n);
+    const DEPS = "/apis/apps/v1/namespaces/landlens-dev/deployments/";
+    refuse = (q) => (q.method === "PATCH" && q.path.startsWith(`${DEPS}w2`) ? 403 : undefined);
+    // Five selected, one refused at its dry run: four kept, so main's dialog asks, naming the four.
+    const five = await svc.review({ handle: "h1234567", action: { kind: "restart", targets: ["w1", "w2", "w3", "w4", "w5"].map(depAt) } }, a);
+    expect(five.operations!.map((o) => o.name)).toEqual(["w1", "w3", "w4", "w5"]);
+    expect(five.native).toBe(true);
+    const asked: any[] = [];
+    sent.length = 0;
+    await expect(svc.apply({ handle: "h1234567", id: five.id!, digest: five.digest! }, a, async (q) => (asked.push(q), false))).rejects.toThrow(/Cancelled/);
+    expect(asked[0]).toMatchObject({ message: "Restart 4 Deployments in landlens-dev on orbstack?", yes: "Restart 4" });
+    expect(asked[0].detail).not.toContain("w2");
+    expect(sent.filter((x) => x.method === "PATCH")).toEqual([]);
+    // Four selected, one refused: three kept, the card is enough.
+    const four = await svc.review({ handle: "h1234567", action: { kind: "restart", targets: ["w1", "w2", "w3", "w4"].map(depAt) } }, a);
+    expect(four.operations).toHaveLength(3);
+    expect(four.native).toBeUndefined();
+  });
+
   it("a bulk delete across namespaces (several chosen) still asks, naming each namespace", async () => {
     const { svc } = setup();
     objects["/api/v1/namespaces/default/configmaps/hands-cm-9"] = { ...cm(9), metadata: { ...cm(9).metadata, namespace: "default" } };

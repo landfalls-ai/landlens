@@ -118,6 +118,10 @@ Departures from the spec, and why:
 - **Only and All namespaces** choose and close the popover; a checkbox keeps it open.
 - **A link to an object** outside several chosen namespaces adds its namespace (one chosen: moves to it); the
   Problems list keeps problems with no namespace when several are chosen.
+- [x] Fable's security review of part 3 fixed (no High, 4 Medium, 9 Low; 16 Nov 2026;
+  [security.md](../../security.md#your-actions)): D155, D156, D158 and D160 amended in [spec.md](spec.md). M1 the
+  selection's ask carries its namespaces; M2 the selection is of shown rows; M3 one-token Status words; M4 a test per
+  named rule (`apply-rules.test.ts` new); L1–L9 as listed in [history.md](../../history.md).
 
 ## Part 4: Secrets (D161–D168)
 

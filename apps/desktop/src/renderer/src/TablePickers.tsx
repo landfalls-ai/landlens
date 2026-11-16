@@ -4,7 +4,7 @@
 import { Check, ChevronDown, Columns3, Folder, Minus, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Ic } from "./icons";
-import { MAX_BULK, MAX_NAMESPACES, namespacesLabel } from "./tableState";
+import { bulkAllowed, MAX_BULK, MAX_NAMESPACES, namespacesLabel } from "./tableState";
 
 function Popover({ anchor, width, label, role, onClose, children }: {
   anchor: RefObject<HTMLButtonElement | null>; width: number; label: string; role: "menu" | "dialog"; onClose: () => void; children: ReactNode;
@@ -59,9 +59,11 @@ function tickKeys(on: () => void) {
 
 /**
  * The namespace button and its popover (D158): a filter, All namespaces, a checkbox per namespace with Only on hover,
- * arrow keys and Space. At most 50 chosen. Only and All namespaces choose and close.
+ * arrow keys and Space. At most 50 chosen. Only and All namespaces choose and close. A chosen namespace the list isn't
+ * watching (`unwatched`: past the first eight on a 403, or its own watch refused) says so on its row and in the
+ * button's title (security review of part 3, L5).
  */
-export function NamespacePicker({ list, value, onChange }: { list: string[]; value: string[]; onChange: (ns: string[]) => void }) {
+export function NamespacePicker({ list, value, onChange, unwatched = [] }: { list: string[]; value: string[]; onChange: (ns: string[]) => void; unwatched?: string[] }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const btn = useRef<HTMLButtonElement>(null);
@@ -81,7 +83,7 @@ export function NamespacePicker({ list, value, onChange }: { list: string[]; val
   const close = () => setOpen(false);
   return (
     <>
-      <button ref={btn} className="field select ns-btn" aria-haspopup="dialog" aria-expanded={open} aria-label={`Namespaces: ${label}`} title={value.length > 1 ? value.join(", ") : label}
+      <button ref={btn} className="field select ns-btn" aria-haspopup="dialog" aria-expanded={open} aria-label={`Namespaces: ${label}`} title={(value.length > 1 ? value.join(", ") : label) + (unwatched.length ? `. Not watched: ${unwatched.join(", ")}` : "")}
         onClick={() => setOpen((o) => !o)}>
         <Ic icon={Folder} size={13} />
         <span className="ns-label">{label}</span>
@@ -108,6 +110,7 @@ export function NamespacePicker({ list, value, onChange }: { list: string[]; val
                   onClick={(e) => !(e.target as HTMLElement).closest(".only") && toggle(n)} onKeyDown={tickKeys(() => toggle(n))}>
                   <span className={`tick${on ? " on" : ""}`} aria-hidden="true">{on ? <Ic icon={Check} size={11} /> : null}</span>
                   <span className="grow mono">{n}</span>
+                  {on && unwatched.includes(n) ? <span className="badge warn small" title="This list isn't watching this namespace">not watched</span> : null}
                   <button className="only link-btn small" tabIndex={-1} aria-label={`Only ${n}`} onClick={() => (onChange([n]), close())}>Only</button>
                 </div>
               );
@@ -167,7 +170,7 @@ export function ColumnPicker({ all, hidden, onChange }: { all: { id: string; lab
 export function SelectionBar({ count, actions, onAction, onAsk, onClear }: {
   count: number; actions: ("restart" | "delete")[]; onAction: (k: "restart" | "delete") => void; onAsk?: () => void; onClear: () => void;
 }) {
-  const over = count > MAX_BULK;
+  const over = !bulkAllowed(count);
   return (
     <div className="selection-bar" role="toolbar" aria-label="Selection">
       <span className="sel-count" aria-live="polite"><Ic icon={count ? Check : Minus} size={13} />{count} selected</span>

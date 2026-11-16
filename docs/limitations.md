@@ -78,11 +78,16 @@ person's check reads them), and Ask Claude sends one problem at a time.
   revealed, `tls.key` included. A value you retype into the dock isn't recognised, only one Landlens copied. Secrets
   can't be edited or created; the certificate panel reads `tls.crt` and `ca.crt` only (not a PEM under another key,
   not cert-manager `Certificate`s) and doesn't check that the key matches.
-- **Tables** (wave 8 part 3): columns can be hidden but not resized or reordered; what tables remember is per
-  window's `localStorage`, not synced. Under several namespaces the Overview shows the whole cluster (it says so), and
-  past eight namespaces an account that can't list across them sees the first eight only. A selection is cleared when
-  you change kind or namespaces. "Ask Claude about these N" sends names and status words only, so Claude reads
-  anything more with its own tools; presets are a fixed list (none of your own yet).
+- **Tables** (wave 8 part 3): columns can be hidden but not resized or reordered; what tables remember is in
+  `localStorage`, read again before each choice is written, but a window already open doesn't see another's choice
+  until it makes one of its own. Namespaces are kept per cluster (context and server), so choices made before that
+  are forgotten once. Under several namespaces the Overview shows the whole cluster (it says so), and past eight
+  namespaces an account that can't list across them sees the first eight only (named in the status bar's title and
+  the popover). A selection is cleared when you change kind or namespaces, and holds only rows the table shows: a
+  row that leaves the filter or the status segment leaves it (a bulk never takes a row you can't see). "Ask Claude
+  about these N" sends names and one-token status words only, so Claude reads anything more with its own tools, and
+  a session limited to some namespaces isn't sent a selection that reaches outside them (it is dropped whole, not
+  trimmed to the session's namespaces); presets are a fixed list (none of your own yet).
 - **The welcome page doesn't show your kubeconfig's path**, only how many contexts it has (`catalog:list` doesn't
   carry the path).
 - **Your actions are one object at a time** (wave 8 part 1): the menu, the drawer and ⌘K act on the object in

@@ -86,7 +86,7 @@ every other node write and eviction): leave it unset. OrbStack's one node runs t
 (landflow-dev, clickland-dev, kube-system); never cordon or drain it.
 
 Tables and asks ([workbench.md](workbench.md#tables-selection-columns-namespaces)): unit tests `table-state.test.ts`,
-`ask-presets.test.ts`, `row-keys.test.ts` and the part 3 block of `actions-main.test.ts`; after `pnpm -s build`, in
+`ask-presets.test.ts`, `row-keys.test.ts`, `apply-rules.test.ts` and the part 3 block of `actions-main.test.ts`; after `pnpm -s build`, in
 `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/tables.e2e.test.ts`
 (screenshots `w8p3-*`). It makes ConfigMaps `hands-bulk-1..6` in landlens-dev and deletes them, and uses the fake ACP
 agent (it says "Attached: <uris>." for what a prompt attached). The namespace control is a popover now: e2e tests

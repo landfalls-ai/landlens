@@ -2,7 +2,7 @@
 import type { KubeObject, LandlensBridge, WatchEvent, WatchRequest } from "@landlens/contracts";
 import { useEffect, useState } from "react";
 import { toApiError, type ApiError } from "./apiError";
-import { watchPlan } from "./tableState";
+import { allAnswer, mergeEach, watchPlan, type ManyWatch } from "./tableState";
 
 declare global {
   interface Window {
@@ -92,10 +92,11 @@ const STALE: WatchState = { items: [], loading: true };
 /**
  * A list in several namespaces (wave 8 part 3, D158), as `watchPlan` says: none chosen, the whole cluster; one, that
  * namespace; two to eight, one watch each merged by uid (which also works for a role that can't list across
- * namespaces); more, the whole cluster filtered here, and if that is refused (403) the first eight, with `cut` saying
- * how many were left out. `failed`: namespaces whose own watch was refused while others answered.
+ * namespaces); more, the whole cluster filtered here, and if that is refused (403) the first eight, with `cut` and
+ * `left` saying how many and which were left out. `failed` and `refused`: namespaces whose own watch was refused while
+ * others answered. The filter and the merge are `allAnswer` and `mergeEach` (tableState.ts), tested there.
  */
-export type ManyState = WatchState & { cut?: number; failed?: number };
+export type ManyState = ManyWatch;
 export function useWatchMany(base: WatchRequest | undefined, namespaces: readonly string[]): ManyState {
   const key = base ? JSON.stringify([base, namespaces]) : "";
   const [state, setState] = useState<ManyState & { key: string }>({ items: [], loading: true, key: "" });
@@ -110,29 +111,16 @@ export function useWatchMany(base: WatchRequest | undefined, namespaces: readonl
     };
     const start = (plan: ReturnType<typeof watchPlan>) => {
       if ("all" in plan) {
-        const only = plan.filter ? new Set(plan.filter) : undefined;
         closers.push(subscribe(whole, (s) => {
+          const a = allAnswer(plan, s, namespaces);
           // The account can't list across namespaces: watch the first eight one by one (D158).
-          if (only && s.error?.status === 403) return (closeAll(), start(watchPlan([...namespaces], true)));
-          setState({ ...s, items: only ? s.items.filter((o) => only.has(o.metadata.namespace ?? "")) : s.items, key });
+          if ("fallback" in a) return (closeAll(), start(a.fallback));
+          setState({ ...a.state, key });
         }));
         return;
       }
       const per = new Map<string, WatchState>();
-      const merge = () => {
-        const answered = [...per.values()];
-        const errors = answered.filter((x) => x.error);
-        const byUid = new Map<string, KubeObject>();
-        for (const x of answered) for (const o of x.items) byUid.set(o.metadata.uid, o);
-        const allFailed = errors.length === plan.each.length;
-        setState({
-          items: [...byUid.values()], loading: answered.length < plan.each.length, key,
-          ...(allFailed ? { error: errors[0]!.error! } : {}),
-          ...(plan.cut ? { cut: plan.cut } : {}),
-          ...(errors.length && !allFailed ? { failed: errors.length } : {}),
-        });
-      };
-      for (const ns of plan.each) closers.push(subscribe({ ...whole, namespace: ns }, (s) => (per.set(ns, s), merge())));
+      for (const ns of plan.each) closers.push(subscribe({ ...whole, namespace: ns }, (s) => (per.set(ns, s), setState({ ...mergeEach(plan, per, namespaces), key }))));
     };
     start(watchPlan([...namespaces]));
     return closeAll;

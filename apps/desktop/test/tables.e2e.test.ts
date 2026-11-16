@@ -3,7 +3,8 @@
 // none, yes deletes the three, the other three stay); Esc, x and ⌘A; Age hidden in the column picker and the sort,
 // both still there after a reload; landlens-dev and default together; "Summarize" from a row's menu reaching the agent
 // as its fixed question with the object attached; "Ask Claude about these N" leaving its question in the box, nothing
-// sent; a Secret's selection with no ask. The agent is test/fixtures/fake-acp-agent.mjs (LANDLENS_ACP_AGENT).
+// sent; a Secret's selection with no ask. The security review of part 3: a row's menu closes when the list changes
+// (L2), and a selected row the status segment stops showing leaves the selection (M2). The agent is test/fixtures/fake-acp-agent.mjs (LANDLENS_ACP_AGENT).
 // Its objects are ConfigMaps hands-bulk-1..6 it makes in landlens-dev and removes. 1024×700, as docs/design.md asks.
 // Screenshots go to $LANDLENS_SHOTS (w8p3-*, dark and light).
 // LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/tables.e2e.test.ts
@@ -136,6 +137,18 @@ describe.runIf(run)("tables and asks on OrbStack", () => {
     await page.locator(".drawer").waitFor({ state: "detached" });
   }, 60_000);
 
+  it("a row's menu closes when the list changes: ⌘2 to Pods and back to ConfigMaps shows no menu (review of part 3, L2)", async () => {
+    await row("hands-bulk-4").click({ button: "right" });
+    await page.getByRole("menu", { name: /ConfigMap hands-bulk-4/ }).waitFor();
+    await page.keyboard.press("Meta+2");
+    await page.getByRole("heading", { name: "Pods" }).waitFor();
+    expect(await page.getByRole("menu").count()).toBe(0);
+    await open("ConfigMaps", "hands-bulk");
+    await row("hands-bulk-6").waitFor({ timeout: 30_000 });
+    await page.waitForTimeout(300);
+    expect(await page.getByRole("menu").count()).toBe(0);
+  }, 60_000);
+
   it("hides Age in the column picker and sorts by name downwards; both are still there after a reload", async () => {
     await page.getByRole("columnheader", { name: "Age" }).waitFor();
     await page.getByRole("button", { name: "Columns" }).click();
@@ -212,6 +225,20 @@ describe.runIf(run)("tables and asks on OrbStack", () => {
     await page.locator(".tr").first().focus();
     await page.keyboard.press("Escape");
   }, 90_000);
+
+  it("a selected row the status segment stops showing leaves the selection (review of part 3, M2)", async () => {
+    await open("Pods", "hands-web");
+    await page.locator(".tr", { hasText: "hands-web" }).nth(1).waitFor({ timeout: 30_000 });
+    await page.getByRole("checkbox", { name: "Select every row shown" }).click();
+    await expect.poll(() => bar().innerText()).toMatch(/2 selected/);
+    const seg = page.getByRole("group", { name: "Status" });
+    // The hands-web pods run: Failing shows none of them, so none stays selected, and All brings none back.
+    await seg.getByRole("button", { name: /^Failing/ }).click();
+    await expect.poll(() => bar().count()).toBe(0);
+    await seg.getByRole("button", { name: /^All/ }).click();
+    await page.locator(".tr", { hasText: "hands-web" }).nth(1).waitFor();
+    expect(await bar().count()).toBe(0);
+  }, 60_000);
 
   it("a Secret's selection has Delete and no Ask Claude", async () => {
     await open("Secrets", "hands-secret");
