@@ -484,8 +484,61 @@ cordon's facts, `schedulable`), `frontdoor.ts` (`nodeWrite`, the front door's ru
 (the drain sheet, `useDrainRuns`), `drainRuns.ts` (the sheet's sequencing), `StatusBar.tsx` (the chip) and
 `ActionSheet.tsx` (cordon's card).
 
+## Secrets and certificates
+
+Wave 8 part 4 (D161–D168). A Secret's values stay in main, as before, except one key at a time, on your click, after
+main's own dialog; a copy never reaches the window at all. [security.md](security.md#secret-values) has every rule and
+its test.
+
+- **Data.** A Secret's drawer Overview lists its keys in mono with their sizes, each with **Copy** and **Reveal**. Your
+  role must be able to `get secrets` in the namespace (asked once a minute through `cluster:access`); if not, both are
+  off and say why. A Helm release record (`helm.sh/release.v1`) shows "Helm's release record: open it under Helm" and
+  no buttons; main refuses it too. The YAML tab stays `••••••`, and there is still no Ask Claude on a Secret.
+- **Unlock.** The first press of either asks main, which reads the Secret (as you, one GET) and shows its own dialog on
+  your window: "Show values of Secret landlens-dev/hands-secret?", "Values are shown to you only, for 30 seconds at a
+  time. Claude never sees them. On orbstack.", **Show values** or **Cancel** (the default). Yes unlocks that Secret,
+  by uid, for that window on that cluster, for 5 minutes; a chip in the section's head counts down ("Unlocked ·
+  4:12") with **Lock now**. The unlock ends at its time, on Lock now, when the window reloads or goes, when the
+  cluster disconnects, and when the window connects another cluster. At most 5 Secrets unlocked a window.
+- **Reveal** shows that key's value under its row, in mono, for 30 seconds (a thin countdown line and "Hides in 23 s"),
+  then it goes; **Hide** ends it sooner, and so does the window losing focus or being hidden, closing the drawer,
+  changing object or tab, the Secret changing (its `resourceVersion`), Lock now and the unlock's end. One value at a
+  time: revealing another hides the first. It can't be selected, copied, dragged or right-clicked out; control and
+  format characters (a bidi override, zero-width) are drawn as escapes (`\u{202E}`). A value that isn't UTF-8 shows
+  only its size ("Not text: copy it as base64"); one over 64 KiB, "copy it instead". If the Secret was replaced under
+  the same name since the unlock: "It changed since you unlocked it: unlock again."
+- **Copy** puts the value on the system clipboard from main: the window never has it. On macOS the clipboard write
+  carries the concealed marker (`org.nspasteboard.ConcealedType`) so clipboard managers that honour it skip it. The
+  row says "Copied. Clears in 30 s" and counts down; 30 s later, and when Landlens quits, main clears the clipboard
+  if it still holds that value (never something you copied since). A binary value offers **Copy as base64**. While
+  the clipboard holds it, a message to Claude (or a change's note, or a brain summary) that contains it is refused:
+  "That is a Secret value Landlens copied for you: it isn't sent to Claude."
+- **10 values a minute** a window (reveals and copies); each reveal and copy is a row in Recent actions ("Revealed key
+  `password` of landlens-dev/hands-secret"): the key's name, never its value or length. Telemetry counts neither.
+- **Certificates.** A `kubernetes.io/tls` Secret shows **Certificates** on open; other Secrets have a quiet **Look for
+  certificates** link, so main doesn't read every Secret you click. Main reads `tls.crt` and `ca.crt` only (never
+  `tls.key`) and gives one card per certificate, the leaf first: the subject's CN, **expires in 12 days** (ok, warn
+  under 30 days, bad under 7 or expired, with an icon and words), CA and self-signed badges, issuer, names (SANs,
+  folded past 6), valid from–to, key (`EC prime256v1`, `RSA 2048`), serial and SHA-256 with a copy button each, and
+  a chain line ("leaf → R11 → ISRG Root X1") when `tls.crt` holds more than one. No unlock: only public halves leave
+  main. Everything on a card is the certificate's own text.
+
+Code: `apps/desktop/src/main/secrets.ts` (`SecretService`: unlock, lock, reveal, copy, certs, the clipboard and the
+prompt guard), `packages/kube/src/certs.ts` (`certDetails`), `policy.ts` (the `object` policy) and `frontdoor.ts` (its
+one use), the renderer's `SecretData.tsx` (the Data section, `SecretValue`), `CertPanel.tsx` and `secretText.ts`.
+
 ## Tests
 
+- Secrets and certificates (wave 8 part 4): `packages/kube` `policy.test.ts` and `frontdoor.test.ts` (the `object`
+  policy's one GET, used once; no upgrade; the audit without a value), `certs.test.ts` (`certDetails`: public halves,
+  never `tls.key`, a spy on `createPrivateKey`, caps); `apps/desktop` `secrets-main.test.ts` (unlock, its endings,
+  reveal, copy and the clipboard's clear, the rate, the log rows, fixed sentences, certificates, the prompt guard; a
+  marker searched for in errors, rows and every console line), `telemetry-main.test.ts` (no record for a reveal),
+  `quotes.test.ts` (no quote about a Secret), `secret-text.test.ts`, and on OrbStack `secrets.e2e.test.ts` (it makes
+  throwaway Secrets `hands-reveal-e2e` and `hands-reveal-tls` in landlens-dev and removes them: nothing before a
+  reveal, the dialog's words, Reveal and Hide, 30 s, blur, a tab change, a bidi override, Copy with the concealed
+  marker and the cleared clipboard, the dock's refusal, the certificate panel, Lock now, and a `grep -rlF` of the
+  whole profile, the fake agent's prompts included).
 - Nodes (wave 8 part 2): `packages/kube` `drain.test.ts` (every class and block from table-driven pods, the ticks,
   partial past the caps and on a 403; against the in-memory `fake-api.ts`: a review sends only GETs and dry runs and
   spends nothing, a run cordons first, evicts only the reviewed uids, retries a 429 and ends it blocked, treats a

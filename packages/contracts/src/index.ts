@@ -809,6 +809,11 @@ export const AutonomyRequest = z.object({ session: SessionId, provider: ConnProv
 export const ContainerName = z.string().max(63).regex(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/, "not a container name");
 /** A log stream's or terminal's id, made by main. */
 export const KindName = z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,62}$/, "not a kind");
+/** A Secret's key: Kubernetes's rule (1–253 of `[-._a-zA-Z0-9]`). */
+export const SecretKey = z.string().regex(/^[-._a-zA-Z0-9]{1,253}$/, "not a Secret key");
+/** A Secret, by namespace and name only: the kind is always core v1 `secrets`, decided in main, never by the window (D163). */
+export const SecretRef = z.object({ namespace: NamespaceName, name: ObjectName }).strict();
+export type SecretRef = z.infer<typeof SecretRef>;
 export const EditId = z.string().regex(/^ed[A-Za-z0-9_-]{8,32}$/, "not an edit id");
 export const StreamId = z.string().regex(/^[A-Za-z0-9_-]{8,40}$/);
 
@@ -1091,6 +1096,15 @@ export const channels = {
   "action:runs": z.object({ handle: Handle }).strict(),
   /** The connected cluster's rows: its context and its API server's hash both match (security review, L7). */
   "action:log": z.object({ handle: Handle, limit: z.number().int().min(1).max(200).optional() }).strict(),
+  // Secret values (wave 8 part 4, D161–D168; docs/workbench.md#secrets-and-certificates): main's own dialog unlocks
+  // one Secret for this window; a reveal answers one key's value to this window only; a copy goes to the clipboard
+  // from main and never to the window; certificates are public halves only. Strict.
+  "secret:unlock": z.object({ handle: Handle, secret: SecretRef }).strict(),
+  /** No `secret`: every unlock this window holds. */
+  "secret:lock": z.object({ handle: Handle, secret: SecretRef.optional() }).strict(),
+  "secret:reveal": z.object({ handle: Handle, secret: SecretRef, key: SecretKey }).strict(),
+  "secret:copy": z.object({ handle: Handle, secret: SecretRef, key: SecretKey, as: z.enum(["text", "base64"]).optional() }).strict(),
+  "secret:certs": z.object({ handle: Handle, secret: SecretRef }).strict(),
   "forward:list": z.object({}),
   /** The local port to offer for a remote one (free now). */
   "forward:suggest": z.object({ port: RemotePort }),
@@ -1265,6 +1279,12 @@ export type Responses = {
   "action:stop": { ok: true };
   "action:runs": { runs: DrainRun[] };
   "action:log": { entries: ActionLogEntry[] };
+  /** `left`: milliseconds until the unlock ends, by main's clock. */
+  "secret:unlock": { unlocked: true; until: string; left: number };
+  "secret:lock": { ok: true };
+  "secret:reveal": Revealed;
+  "secret:copy": { copied: true; clearsIn: number };
+  "secret:certs": { certs: CertDetail[]; skipped?: string };
   "forward:list": ForwardsPush;
   "forward:suggest": { port: number };
   "forward:check": { free: boolean; next?: number };
@@ -1543,6 +1563,33 @@ export type CertFact = {
   selfSigned: boolean;
   unreadable?: true;
 };
+/**
+ * One certificate of a Secret, for the drawer's certificate panel (wave 8 part 4, D167): public material only, from
+ * `tls.crt` and `ca.crt`; `tls.key` and every other key are never decoded. Names are the certificate's own text.
+ */
+export type CertDetail = {
+  key: "tls.crt" | "ca.crt";
+  /** Its place in the key's PEM: 0 is the first (the leaf, in `tls.crt`). */
+  index: number;
+  subject: string;
+  issuer: string;
+  sans: string[];
+  notBefore: string;
+  notAfter: string;
+  /** Hex, at most 64 characters. */
+  serial: string;
+  /** The SHA-256 fingerprint, hex. */
+  sha256: string;
+  ca: boolean;
+  selfSigned: boolean;
+  publicKey?: { type: "rsa" | "ec" | "ed25519" | "other"; bits?: number; curve?: string };
+  unreadable?: true;
+};
+/** One Secret value, to the window that unlocked it (D164): text when it is UTF-8 and at most 64 KiB, else only its size. */
+export type Revealed =
+  | { kind: "text"; text: string; bytes: number }
+  | { kind: "binary"; bytes: number }
+  | { kind: "large"; bytes: number };
 export type ProblemEvent = { at: string; reason: string; message: string; count: number };
 /** Small, structured evidence: what the row, the drawer and the agent's brief read. No env, labels or annotations. */
 export type ProblemFacts = {

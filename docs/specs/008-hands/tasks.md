@@ -121,4 +121,25 @@ Departures from the spec, and why:
 
 ## Part 4: Secrets (D161–D168)
 
-- [ ] Reveal per key by the person only, copy through main, the certificate panel
+- [x] Reveal per key by the person only, copy through main, the certificate panel (16 Nov 2026;
+  [workbench.md](../../workbench.md#secrets-and-certificates), [security.md](../../security.md#secret-values)).
+- **[check] settled**: Electron 45's clipboard is async and W3C-like (no `writeText`/`writeBuffer` on the main
+  module's sync API as in older Electron). `clipboard.write([new ClipboardItem({ "text/plain": value,
+  'electron application/osclipboard;format="org.nspasteboard.ConcealedType"': "" })])` writes the text and the
+  marker in one change, and `has(marker)` is then true; writing the marker separately after the text replaces the
+  text. Main uses the one write on macOS (checked with a dummy value in a scratch Electron app, and in `secrets.e2e`).
+Departures:
+- **`secret:*` take a namespace and a name** (`SecretRef`), not a `ResourceRef`: the kind is always core v1
+  `secrets`, decided in main, so the window can't name another resource.
+- **The certificate panel reads `tls.crt` and `ca.crt` only**, not every key: a PEM pasted under another key isn't
+  shown (the brief's narrower rule).
+- **The value lives in a ref and one text node**, not component state: React keeps old state in its alternate fibers,
+  so state would hold the value past Hide.
+- **The `object` token is single-use**: the front door forgets it after its one GET, and main revokes it as well.
+- **Helm release records are refused** in main (they hold a whole release, base64 and gzip), with a pointer to Helm.
+- **Main guards prompts**: while the clipboard holds a value main copied, a dock message, a change's note or a brain
+  summary containing it is refused; a prompt that attaches a Secret is refused too.
+- **Reveal and copy share one budget** (10 a minute a window); a window holds at most 5 unlocks and one dialog at a time.
+- **The unlock answer carries `left`** (milliseconds), and the window remembers each unlock's end by
+  handle/namespace/name (a time only) so the chip survives the drawer closing; a reveal main refuses as locked asks
+  main's dialog again.

@@ -92,6 +92,15 @@ Tables and asks ([workbench.md](workbench.md#tables-selection-columns-namespaces
 agent (it says "Attached: <uris>." for what a prompt attached). The namespace control is a popover now: e2e tests
 choose one with `chooseNamespace(page, ns)` from `test/e2e-helpers.ts` ("" for all).
 
+Secrets and certificates ([workbench.md](workbench.md#secrets-and-certificates)): unit tests `secrets-main.test.ts`,
+`secret-text.test.ts`, `quotes.test.ts`, `telemetry-main.test.ts`, and in `packages/kube` `policy.test.ts`,
+`frontdoor.test.ts`, `certs.test.ts`; after `pnpm -s build`, in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx
+vitest run --no-file-parallelism test/secrets.e2e.test.ts` (screenshots `w8p4-*`, dummy values only). It makes
+throwaway Secrets `hands-reveal-e2e` (a random marker per run) and `hands-reveal-tls` (a fresh self-signed EC
+certificate) in landlens-dev and deletes them, stubs main's dialog, saves and restores your clipboard (it writes to
+it), and reads the fake ACP agent's `agent-sessions/fake-agent-prompts.jsonl` (every prompt it got, kept beside the
+session folders).
+
 The agent tests need the scenario workload: `kubectl --context orbstack apply -f deploy/scenarios/crashloop.yaml`
 (namespace `landlens-dev`; delete the namespace to remove it). The graphs use `deploy/scenarios/metrics.yaml` too: a
 healthy two-replica `catalog-api` with requests, limits and an uneven load.

@@ -306,6 +306,18 @@ then the presets with the sparkle; the drawer's Ask is a split button (`.ask-spl
 several namespaces shows a chip with the layers icon. A bulk card folds operations past three (`.change-folded`) and
 lists what was left out (`.left-out`).
 
+### Secrets (wave 8 part 4)
+
+A Secret's Data section lists keys as rows (`.secret-keys`, `.secret-row`): the key in mono, its size dim, then
+small `.secondary` **Copy** and **Reveal** buttons. The unlock chip (`.lock-chip`, warn tone, an open padlock, the
+countdown in mono, a "Lock now" link) sits in the section's head. A revealed value is a `pre.secret-value`
+(`data-private`, mono, at most 8 lines then it scrolls, `user-select: none`) with a 2 px warn-coloured countdown
+line under it and "Hides in N s"; copy's status is a dim line with a padlock ("Copied. Clears in 30 s"). Certificates
+are `.cert-card`s under a "Certificates" head: the CN in bold with a shield, the key and "leaf" dim in mono, expiry as
+a `.badge` (ok, warn, bad, with a check, clock or cross icon), CA and self-signed as muted badges, then `.facts`
+(issuer, names as mono chips folded past 6, valid, key, serial and SHA-256 with an icon copy button); the chain is a
+mono line with arrows. Other Secrets show a quiet `.link-btn` "Look for certificates".
+
 ## Components
 
 Reuse these classes before writing new ones: `button.primary`, `.secondary`, `.ask-btn`, `.icon-btn`, `.link-btn`;
@@ -375,7 +387,7 @@ checkboxes "Select <name>" and "Select every row shown", toolbar "Selection" wit
 Claude", "Clear the selection"; button "Namespaces: <label>" and dialog "Namespaces" with searchbox "Filter
 namespaces", checkboxes by namespace and "All namespaces", buttons "Only <ns>"; button "Columns" and menu "Columns"
 with menuitemcheckboxes; menu "Ask Claude" (the submenu) and button "Preset asks"; e2e helpers `chooseNamespace` and
-`chosenNamespaces` in `test/e2e-helpers.ts`): heading "Pick a cluster"; buttons "Pods", "Deployments",
+`chosenNamespaces` in `test/e2e-helpers.ts`; part 4 adds region "Data" with buttons "Reveal <key>", "Hide <key>", "Copy <key>", "Copy <key> as base64", status "Unlocked for m:ss" with button "Lock now", `pre.secret-value` labelled "Value of <key>", region "Certificates" with `.cert-card`, button "Look for certificates"): heading "Pick a cluster"; buttons "Pods", "Deployments",
 "Secrets", "Ask Claude", "Stop", "Send"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's

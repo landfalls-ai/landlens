@@ -1,9 +1,17 @@
+import { generateKeyPairSync, X509Certificate } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The panel never loads a private key (D167): a spy on every way node:crypto could.
+const keyLoads = vi.hoisted(() => ({ n: 0 }));
+vi.mock("node:crypto", async (orig) => {
+  const real = await orig<typeof import("node:crypto")>();
+  return { ...real, createPrivateKey: (...a: Parameters<typeof real.createPrivateKey>) => (keyLoads.n++, real.createPrivateKey(...a)) };
+});
 import type { CertInput } from "../src/doctor.js";
 import { KubeError } from "../src/client.js";
-import { certFacts, parseSans, pemBlocks, readCerts } from "../src/certs.js";
+import { certDetails, certFacts, parseSans, pemBlocks, readCerts } from "../src/certs.js";
 
 // Public certificates only: the fixtures hold no keys.
 const dir = join(import.meta.dirname, "fixtures", "doctor");
@@ -95,5 +103,47 @@ describe("certFacts", () => {
     const s = await readCerts(client, "shop", new Map(), { signal: stopped.signal });
     expect(gets).toEqual([]);
     expect(s.failed).toBe(4);
+  });
+});
+
+describe("certDetails (wave 8 part 4, D167)", () => {
+  const keyPem = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+  it("reads tls.crt and ca.crt: the leaf first, names, dates, serial, fingerprint, key type; nothing of tls.key", () => {
+    keyLoads.n = 0;
+    const r = certDetails({ data: { "tls.crt": b64(leaf + ca), "ca.crt": b64(ca), "tls.key": b64(keyPem + ca + MARKER), extra: b64(leaf) } });
+    expect(r.skipped).toBeUndefined();
+    expect(r.certs.map((c) => [c.key, c.index, c.subject])).toEqual([["tls.crt", 0, "shop.example.test"], ["tls.crt", 1, "Landlens Test CA"], ["ca.crt", 0, "Landlens Test CA"]]);
+    const l = r.certs[0]!;
+    expect(l).toMatchObject({ issuer: "Landlens Test CA", sans: ["shop.example.test", "www.shop.example.test", "10.0.0.7"], notBefore: "2026-01-01T00:00:00.000Z", notAfter: "2026-12-01T00:00:00.000Z", ca: false, selfSigned: false });
+    expect(l.serial).toMatch(/^[0-9a-f]{1,64}$/);
+    expect(l.sha256).toBe(new X509Certificate(leaf).fingerprint256.replace(/:/g, "").toLowerCase());
+    expect(l.publicKey?.type).toMatch(/^(rsa|ec|ed25519)$/);
+    expect(r.certs[1]).toMatchObject({ ca: true, selfSigned: true });
+    // The private key was never loaded, and no word of it or of tls.key's other text left.
+    expect(keyLoads.n).toBe(0);
+    expect(JSON.stringify(r)).not.toMatch(new RegExp(`${MARKER}|PRIVATE|BEGIN`));
+    expect(r.certs.filter((c) => c.key !== "tls.crt" && c.key !== "ca.crt")).toEqual([]);
+  });
+
+  it("8 a key and 16 in all, a key over 256 KiB not read, garbage unreadable with nothing of its text", () => {
+    const nine = certDetails({ data: { "tls.crt": b64(leaf.repeat(9)) } });
+    expect(nine.certs).toHaveLength(8);
+    expect(nine.skipped).toMatch(/more than 8/);
+    const both = certDetails({ data: { "tls.crt": b64(leaf.repeat(8)), "ca.crt": b64(ca.repeat(9)) } });
+    expect(both.certs).toHaveLength(16);
+    const big = certDetails({ data: { "tls.crt": b64(leaf + "x".repeat(300 * 1024)) } });
+    expect(big.certs).toEqual([]);
+    expect(big.skipped).toMatch(/over 256 KiB/);
+    const junk = certDetails({ data: { "tls.crt": b64(`-----BEGIN CERTIFICATE-----\n${MARKER}\n-----END CERTIFICATE-----`) } });
+    expect(junk.certs).toEqual([expect.objectContaining({ key: "tls.crt", index: 0, unreadable: true, subject: "" })]);
+    expect(JSON.stringify(junk)).not.toContain(MARKER);
+    expect(certDetails(undefined)).toEqual({ certs: [] });
+    expect(certDetails({ data: { password: b64(leaf) } })).toEqual({ certs: [] });
+  });
+
+  it("cleans the certificate's own text: control and format characters, 253 characters", () => {
+    const r = certDetails({ data: { "tls.crt": b64(leaf) } });
+    for (const c of r.certs) for (const t of [c.subject, c.issuer, ...c.sans]) expect(t).not.toMatch(/[\p{Cc}\p{Cf}]/u);
   });
 });

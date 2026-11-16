@@ -23,6 +23,8 @@ import { PortLine, useCanForward } from "./Forwards";
 import type { ClusterInfo } from "@landlens/contracts";
 import { CRD, printerFacts } from "./custom";
 import { printerColumns, type PrinterColumn } from "./printer";
+import { SecretData } from "./SecretData";
+import { CertPanel } from "./CertPanel";
 
 type Tab = "overview" | "events" | "yaml" | "metrics" | "logs" | "traces";
 export type NavTarget = { kind: string; name: string; namespace?: string };
@@ -209,7 +211,7 @@ export function Details(props: {
         {tab === "logs" && logs ? (
           <LogsView key={`${o.metadata.uid}`} handle={props.handle} source={{ ...logs, ...(logContainer ? { container: logContainer } : {}) }} place="drawer" onAsk={props.onAsk} onOpenInPanel={props.onLogsInPanel} />
         ) : null}
-        {tab === "overview" && <Overview o={view} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
+        {tab === "overview" && <Overview o={view} {...(isSecret(type) ? { secret: o, handle: props.handle } : {})} type={type} now={now} onNavigate={props.onNavigate} cluster={props.cluster}
           onLogs={showLogs} onShell={(c) => props.onShell(targetOf(o, c, "auto"))} canExec={canExec}
           {...(props.printer?.length ? { printer: props.printer } : {})} {...(props.onOpenKind ? { onOpenKind: props.onOpenKind } : {})} />}
         {tab === "events" && <Events events={events} now={now} />}
@@ -245,8 +247,10 @@ function readyOf(o: KubeObject): string | undefined {
   return undefined;
 }
 
-function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster, printer, onOpenKind }: {
+function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster, printer, onOpenKind, secret, handle }: {
   o: KubeObject; type: ResourceType; now: number; onNavigate: (t: NavTarget) => void;
+  /** A Secret as main sent it (keys and sizes, never a value), for its Data and Certificates (wave 8 part 4). */
+  secret?: KubeObject; handle?: string;
   onLogs: (container: string) => void; onShell: (container: string) => void; canExec: boolean | undefined; cluster: ClusterInfo;
   printer?: PrinterColumn[]; onOpenKind?: (group: string, resource: string) => void;
 }) {
@@ -296,6 +300,8 @@ function Overview({ o, type, now, onNavigate, onLogs, onShell, canExec, cluster,
         <dd>{age(created, now)} ago <span className="dim mono">· {o.metadata.creationTimestamp?.replace("T", " ")}</span></dd>
       </dl>
       {definition ? <Definition crd={o} {...(onOpenKind ? { onOpenKind } : {})} /> : null}
+      {secret && handle ? <SecretData key={secret.metadata.uid} handle={handle} object={secret} /> : null}
+      {secret && handle ? <CertPanel key={`c${secret.metadata.uid}`} handle={handle} object={secret} now={now} /> : null}
       {pod ? <Containers pod={o} now={now} onLogs={onLogs} onShell={onShell} canExec={canExec} cluster={cluster} canForward={canForward} /> : null}
       {service ? <ServicePorts svc={o} cluster={cluster} canForward={canForward} /> : null}
       {conditions.length ? (

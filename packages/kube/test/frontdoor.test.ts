@@ -225,6 +225,56 @@ describe("FrontDoor", () => {
   });
 });
 
+describe("FrontDoor: an object token (wave 8 part 4, D162)", () => {
+  const SECRET_PATH = "/api/v1/namespaces/landlens-dev/secrets/hands-secret";
+  const MARK = "LLMARK-frontdoor-object-token-test-0000";
+  const policy = { access: "object" as const, object: { group: "", resource: "secrets", namespace: "landlens-dev", name: "hands-secret" } };
+
+  it("lets one GET of its object through, unscrubbed, and is unknown after it", async () => {
+    sidecar.removeAllListeners("request");
+    sidecar.on("request", (req, res) => {
+      seen.push(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ kind: "Secret", metadata: { name: "hands-secret", namespace: "landlens-dev", uid: "u1" }, data: { password: Buffer.from(MARK).toString("base64") } }));
+    });
+    const token = door.issueToken({ label: "you · orbstack · secret landlens-dev/hands-secret", policy, clusters: [HANDLE] });
+    const first = await call(`/c/${HANDLE}${SECRET_PATH}`, token);
+    expect(first.status).toBe(200);
+    expect(Buffer.from((await first.json()).data.password, "base64").toString()).toBe(MARK);
+    const second = await call(`/c/${HANDLE}${SECRET_PATH}`, token);
+    expect(second.status).toBe(401);
+    expect(seen).toHaveLength(1);
+    // The audit names the Secret and its policy, and holds nothing of its body.
+    const mine = audit.filter((e) => e.label.includes("hands-secret"));
+    expect(mine[0]).toMatchObject({ method: "GET", path: SECRET_PATH, allowed: true, status: 200, access: "object" });
+    expect(JSON.stringify(audit)).not.toContain(MARK);
+    expect(JSON.stringify(audit)).not.toContain(Buffer.from(MARK).toString("base64"));
+  });
+
+  it("refuses another object, a list, a watch and a write, and these don't use it up", async () => {
+    const token = door.issueToken({ label: "you · secret", policy, clusters: [HANDLE] });
+    for (const [m, p] of [["GET", "/api/v1/namespaces/landlens-dev/secrets/other"], ["GET", "/api/v1/namespaces/landlens-dev/secrets"], ["GET", `${SECRET_PATH}?watch=1`], ["DELETE", SECRET_PATH], ["GET", "/version"]] as const) {
+      expect((await call(`/c/${HANDLE}${p}`, token, m)).status, `${m} ${p}`).toBe(403);
+    }
+    expect(seen).toHaveLength(0);
+    expect((await call(`/c/${HANDLE}${SECRET_PATH}`, token)).status).toBe(200);
+  });
+
+  it("opens no upgraded connection", async () => {
+    const token = door.issueToken({ label: "you · secret", policy, clusters: [HANDLE] });
+    const res = await new Promise<string>((resolve) => {
+      const s = connect({ port: Number(new URL(door.url).port), host: "127.0.0.1", ca: tls.ca }, () => {
+        s.write(`GET /c/${HANDLE}${SECRET_PATH} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      });
+      let buf = "";
+      s.on("data", (d) => (buf += d));
+      s.on("close", () => resolve(buf));
+    });
+    expect(res).toMatch(/^HTTP\/1.1 403/);
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe("FrontDoor scrubbing for agent tokens", () => {
   /** What the fake cluster answers next: content type, body (string or chunks), extra headers. */
   let answer: { type: string; body: string | string[]; headers?: Record<string, string> };

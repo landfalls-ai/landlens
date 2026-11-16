@@ -17,7 +17,7 @@ import { slashOptions, slashQuery, SlashMenu, type AgentCommand, type SlashOptio
 
 export type { AskContext } from "./quotes";
 
-import { inSession, quoteHead, withQuotes, type AskContext } from "./quotes";
+import { aboutSecret, inSession, quoteHead, withQuotes, type AskContext } from "./quotes";
 export { withQuotes };
 
 const SUGGESTIONS = ["What's wrong in this cluster right now?", "Which pods restarted in the last hour, and why?"];
@@ -309,7 +309,8 @@ export function AgentDock(props: {
     const s = session.current;
     if (!s || !text.trim() || busy) return;
     // Quoted text from outside a namespace-limited session's namespaces stays here (L11).
-    const context = props.context.filter((c) => inSession(c, info?.namespaces));
+    // Nothing about a Secret goes (D166).
+    const context = props.context.filter((c) => inSession(c, info?.namespaces) && !aboutSecret(c));
     setItems((xs) => [...xs, { type: "user", text, context }]);
     setDraft("");
     props.onContextChange([]);

@@ -70,6 +70,14 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   On the Problems page, **Open full logs** opens the pod's Logs tab on its current run (choose Previous there), ⌘K's
   recent items don't keep problems. The agent sees certificates only for namespaces a Landlens window is showing (the
 person's check reads them), and Ask Claude sends one problem at a time.
+- **Secret values** (wave 8 part 4, [security.md](security.md#secret-values)): a revealed value is in the page's memory
+  for up to 30 s (a JavaScript string can't be wiped; the garbage collector frees it later) and on your screen, where
+  a screen recorder or someone beside you sees it. A copy is on the system clipboard for 30 s: a clipboard manager
+  that ignores the macOS concealed marker (or any app reading the pasteboard) may keep it; on Linux and Windows there
+  is no marker. Main receives the whole Secret to serve one key (the API has no field projection). Any key can be
+  revealed, `tls.key` included. A value you retype into the dock isn't recognised, only one Landlens copied. Secrets
+  can't be edited or created; the certificate panel reads `tls.crt` and `ca.crt` only (not a PEM under another key,
+  not cert-manager `Certificate`s) and doesn't check that the key matches.
 - **Tables** (wave 8 part 3): columns can be hidden but not resized or reordered; what tables remember is per
   window's `localStorage`, not synced. Under several namespaces the Overview shows the whole cluster (it says so), and
   past eight namespaces an account that can't list across them sees the first eight only. A selection is cleared when
@@ -79,7 +87,8 @@ person's check reads them), and Ask Claude sends one problem at a time.
   carry the path).
 - **Your actions are one object at a time** (wave 8 part 1): the menu, the drawer and ⌘K act on the object in
   front of you, and a table's selection (part 3) takes Restart and Delete only, at most 50, one kind in one list;
-  revealing a Secret's value comes in part 4. A Secret can be deleted (its review shows keys and sizes) but not otherwise acted on.
+  a Secret can be deleted (its review shows keys and sizes) and its values revealed or copied one key at a time
+  (part 4), but not edited.
   Recent actions keeps no diff and no undo; Rollback, a Helm rollback and an action on several clusters are later
   waves (10, 12). A card's facts are read at review and can be up to 15 minutes old at Apply; lists stop at 500 (the
   card says so). The action log is a convenience record on this computer, not evidence: anything running as you can

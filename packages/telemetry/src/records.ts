@@ -21,7 +21,7 @@ export const VERBS = ["create", "update", "patch", "delete"] as const;
 /** A change's end: approved (applied), rejected, failed, expired (withdrawn counts as expired). */
 export const OUTCOMES = ["approved", "rejected", "failed", "expired"] as const;
 /** The front door's token policies (packages/kube/src/policy.ts), and `unknown` for a request no token matched. */
-export const POLICIES = ["full", "read", "write", "exec", "forward", "unknown"] as const;
+export const POLICIES = ["full", "read", "write", "exec", "forward", "object", "unknown"] as const;
 export const TOKEN_TYPES = ["input", "output"] as const;
 export const PROBLEM_CLASSES = ["crashloop", "start", "image", "config", "oom", "pending", "probe", "notready", "restarts", "unavailable", "node", "warning", "cert"] as const;
 export const TONES = ["bad", "warn"] as const;

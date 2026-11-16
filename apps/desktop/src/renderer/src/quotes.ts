@@ -19,6 +19,12 @@ export type AskContext = {
   namespaces?: string[];
 };
 
+/**
+ * A context about a Secret never goes to Claude (wave 8 part 4, D166): no Ask is offered on one, and this guard holds
+ * if a path ever builds one anyway. Main refuses a Secret attached to a prompt as well.
+ */
+export const aboutSecret = (c: AskContext) => c.ref?.group === "" && c.ref.resource === "secrets";
+
 /** Whether a quoted context may go to a session limited to `limit` namespaces (none: no limit). */
 export function inSession(c: AskContext, limit: string[] | undefined): boolean {
   if (!limit?.length || !c.namespaces) return true;
@@ -32,7 +38,7 @@ export function inSession(c: AskContext, limit: string[] | undefined): boolean {
  * finding 8). Over the cap, the quotes are cut, never their closing fences.
  */
 export function withQuotes(text: string, context: AskContext[]): string {
-  const quotes = context.filter((c) => c.text).map((c) => ({
+  const quotes = context.filter((c) => c.text && !aboutSecret(c)).map((c) => ({
     head: `\n\n${quoteHead(c)}\n`,
     // A run of backticks longer than 16 is cut to 16, so a fence is at most 17 and the room below is exact (review
     // of wave 5 part 4, L1: a 3,900-backtick line made a fence the cap then cut).

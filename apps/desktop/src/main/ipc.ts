@@ -20,11 +20,12 @@ import type { TelemetryService } from "./telemetry";
 import type { BrainService } from "./brain";
 import { isAppUrl } from "./security";
 import { nativeConfirm as confirmOn } from "./native-confirm";
+import type { SecretService } from "./secrets";
 import type { ActionService } from "./actions";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService, secrets: SecretService) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
@@ -79,6 +80,8 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       const gke = own ? undefined : await gcp.gkeConnect(context, nativeConfirm(event));
       if (!own && !gke) throw ipcError(404, `no context named ${context} in your kubeconfig`);
       const info = await clusters.connect(context, gke ?? {});
+      // A window that connects another cluster keeps no Secret unlocked (D163).
+      secrets.lockWindow(event.sender);
       if (gke) gkeHandles.add(info.handle);
       // Kept forwards for this context start again (D37), without opening anything.
       forwards.restore(info);
@@ -132,12 +135,16 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       return { ok: true };
     },
     "agent:start": ({ handle, namespaces }) => agent.start(handle, namespaces),
-    "agent:prompt": ({ session, text, context }) => agent.prompt(session, text, context),
+    // No Secret is attached, and no value Landlens copied is sent (wave 8 part 4, D168): the dock, a quote, a paste.
+    "agent:prompt": async ({ session, text, context }) => {
+      await secrets.refusePrompt({ text, ...(context ? { context } : {}) });
+      return agent.prompt(session, text, context);
+    },
     "agent:cancel": async ({ session }) => (await agent.cancel(session), { ok: true }),
     "agent:mode": async ({ session, mode }) => (await agent.setMode(session, mode), { ok: true }),
     "agent:config": async ({ session, config, value }) => (await agent.setConfig(session, config, value), { ok: true }),
     "agent:answer": async ({ request, option }) => (agent.answer(request, option), { ok: true }),
-    "agent:decide": async ({ change, decision, note }) => (agent.decide(change, decision, note), { ok: true }),
+    "agent:decide": async ({ change, decision, note }) => (await secrets.refuseCopied([note]), agent.decide(change, decision, note), { ok: true }),
     "agent:history": async ({ context }) => ({ sessions: agent.history(context) }),
     "agent:resume": async ({ handle, session }) => agent.resume(handle, session),
     "agent:forget": async ({ session }) => (await agent.forget(session), { ok: true }),
@@ -239,7 +246,7 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "brain:ask": ({ sheet }, event) => report.brain.ask(sheet, event.sender),
     "brain:cancel": ({ sheet }, event) => report.brain.cancel(sheet, event.sender),
     // Team or org: main's own dialog shows the text and who will see it (review of part 5, M4).
-    "brain:send": (req, event) => report.brain.send(req, event.sender, nativeConfirm(event)),
+    "brain:send": async (req, event) => (await secrets.refuseCopied([req.title, req.summary]), report.brain.send(req, event.sender, nativeConfirm(event))),
     "brain:remove": ({ session }) => report.brain.remove(session),
     // Google Cloud (docs/gcp.md): read-only, with gcloud's sign-in; reads go only to the projects you chose.
     "gcp:status": ({ fresh }) => gcp.status(!!fresh),
@@ -276,6 +283,13 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     "action:stop": async ({ run }, event) => (actions.stop(run, event.sender), { ok: true }),
     "action:runs": async ({ handle }, event) => ({ runs: actions.runsOf(handle, event.sender) }),
     "action:log": async ({ handle, limit }) => ({ entries: actions.history(handle, limit) }),
+    // Secret values (wave 8 part 4, D161–D168): main's dialog unlocks one Secret for this window; values go to this
+    // window only (reveal) or to the clipboard from main (copy); certificates are public halves.
+    "secret:unlock": (r, event) => secrets.unlock(r, event.sender, nativeConfirm(event)),
+    "secret:lock": async (r, event) => (secrets.lock(r, event.sender), { ok: true }),
+    "secret:reveal": (r, event) => secrets.reveal(r, event.sender),
+    "secret:copy": (r, event) => secrets.copy(r, event.sender),
+    "secret:certs": (r) => secrets.certs(r),
     // Port-forwards belong to the app, not a window (docs/workbench.md#port-forward).
     "forward:list": async () => ({ forwards: forwards.list() }),
     "forward:suggest": ({ port }) => forwards.suggest(port),

@@ -152,6 +152,11 @@ export class FrontDoor {
     for (const close of closers ?? []) close();
   }
 
+  /** Take a grant back by itself (an object token's one use): its token is unknown from now on. */
+  private forget(grant: TokenGrant) {
+    for (const [k, g] of this.grants) if (g === grant) this.grants.delete(k);
+  }
+
   /** Close this connection when its token is revoked; returns the function to call when it ends by itself. */
   private track(grant: TokenGrant, close: () => void): () => void {
     let set = this.open.get(grant);
@@ -203,6 +208,12 @@ export class FrontDoor {
     const parsed = parseRequest(req.method ?? "GET", path);
     const decision = authorize(grant.policy, parsed, upstream.scopeOf);
     if (!decision.allow) return { ok: false, status: 403, reason: decision.reason, label, handle, path, access: grant.policy.access };
+    // An object token (D162) is one plain GET: never an upgraded connection, and gone once that GET is let through, so
+    // a token that leaked is worth one read of one object, already made.
+    if (grant.policy.access === "object") {
+      if (upgrade) return { ok: false, status: 403, reason: "an object token opens no connection", label, handle, path, access: grant.policy.access };
+      this.forget(grant);
+    }
     // A forward token opens only the WebSocket port-forward (v4.channel.k8s.io), where the kubelet takes the port from
     // the query the policy checked. SPDY, and SPDY tunnelled over a WebSocket, name the port inside the stream.
     if (grant.policy.access === "forward") {

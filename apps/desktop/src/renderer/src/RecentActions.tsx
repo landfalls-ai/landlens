@@ -24,7 +24,7 @@ const OUTCOME: Record<ActionLogEntry["outcome"], { word: string; tone: string; i
 /** The row's sentence, from its fields only. */
 export function sentence(e: ActionLogEntry): string {
   const what = e.names.length === 1 ? `${e.kind} ${e.namespace ? `${e.namespace}/` : ""}${e.names[0]}` : `${e.names.length} ${e.kind}s${e.namespace ? ` in ${e.namespace}` : ""}`;
-  const verb = { scale: "Scaled", restart: "Restarted", delete: "Deleted", trigger: "Ran", suspend: "Suspended", resume: "Resumed", cordon: "Cordoned", uncordon: "Uncordoned", drain: "Drained", reveal: "Revealed a key of", copy: "Copied a key of" }[e.action];
+  const verb = { scale: "Scaled", restart: "Restarted", delete: "Deleted", trigger: "Ran", suspend: "Suspended", resume: "Resumed", cordon: "Cordoned", uncordon: "Uncordoned", drain: "Drained", reveal: e.key ? `Revealed key ${e.key} of` : "Revealed a key of", copy: e.key ? `Copied key ${e.key} of` : "Copied a key of" }[e.action];
   return `${verb} ${what}${e.detail ? ` · ${e.detail}` : ""}`;
 }
 

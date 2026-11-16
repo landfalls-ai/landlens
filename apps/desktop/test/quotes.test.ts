@@ -110,3 +110,18 @@ describe("security review of wave 8 part 1, L11: an action's diff stays out of a
     expect(inSession({ label: "logs", text: "x", kind: "logs" }, ["shop"])).toBe(true);
   });
 });
+
+describe("wave 8 part 4, D166: nothing about a Secret is quoted", () => {
+  it("a context whose ref is a Secret is left out of the question, text and all; others stay", async () => {
+    const { aboutSecret } = await import("../src/renderer/src/quotes");
+    const MARK = "LLMARK-quotes-0123456789abcdef0123456789";
+    const secret = { ref: { group: "", version: "v1", resource: "secrets", namespace: "landlens-dev", name: "hands-secret" }, label: "Secret hands-secret", text: MARK, kind: "logs" as const };
+    const cm = { ref: { group: "", version: "v1", resource: "configmaps", namespace: "landlens-dev", name: "hands-cm-1" }, label: "ConfigMap", text: "plain words", kind: "logs" as const };
+    const q = withQuotes("What is this?", [secret, cm]);
+    expect(q).not.toContain(MARK);
+    expect(q).toContain("plain words");
+    expect(aboutSecret(secret)).toBe(true);
+    expect(aboutSecret(cm)).toBe(false);
+    expect(aboutSecret({ ...cm, ref: { ...cm.ref, group: "example.com", resource: "secrets" } })).toBe(false);
+  });
+});

@@ -25,7 +25,7 @@ export type Policy = {
    * "full": anything the user's RBAC allows. "read": get/list/watch only. "write": exactly what the approval broker
    * sends (one object's get, patch and delete, creates, ReplicaSet lists): no subresources, no non-resource writes.
    */
-  access: "full" | "read" | "write" | "exec" | "forward";
+  access: "full" | "read" | "write" | "exec" | "forward" | "object";
   /**
    * For "exec": the one pod whose exec this token may open (a pod shell's token; nothing else, not even a read). For
    * "forward": the one pod whose port-forward it may open, on `port` only.
@@ -33,6 +33,12 @@ export type Policy = {
   pod?: { namespace: string; name: string };
   /** For "forward": the one port. */
   port?: number;
+  /**
+   * For "object" (wave 8 part 4, D162): the one object this token may GET, and nothing else: no list, watch,
+   * subresource, other verb, other name, namespace or kind, no non-resource path. The front door also takes the token
+   * back after its first allowed request, so it is worth one read.
+   */
+  object?: { group: string; resource: string; namespace?: string; name: string };
   /** Resources this token may never touch, as `resource` or `resource.group` (e.g. "secrets"). */
   deniedResources?: string[];
   /** If set, namespaced requests must be in one of these namespaces, and all-namespace reads are refused. */
@@ -165,6 +171,13 @@ export type ScopeOf = (key: string) => boolean | undefined;
 
 /** Decide whether a token with this policy may make this request. */
 export function authorize(policy: Policy, req: ParsedRequest, scopeOf: ScopeOf = () => undefined): Decision {
+  if (policy.access === "object") {
+    const o = policy.object;
+    const ok = !!o && req.kind === "resource" && req.verb === "get" && !req.subresource
+      && req.group === o.group && req.resource === o.resource && req.name === o.name && req.namespace === o.namespace
+      && !policy.deniedResources?.includes(key(o.resource, o.group));
+    return ok ? { allow: true } : { allow: false, reason: "this token may only read its one object, once" };
+  }
   if (req.kind === "nonResource") {
     if (policy.access === "full") return { allow: true };
     if (req.verb === "get" && isReadableNonResource(req.path)) return { allow: true };
