@@ -3,6 +3,7 @@
 // that (one prompt), never an edit by Landlens. The name is the person's and never goes to Claude. Main checks it all
 // again: this sheet only says why before it asks.
 import type { ViewState } from "@landlens/contracts";
+import { literalWords } from "@landlens/views/literal";
 import { Bookmark, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ApiError } from "./api";
@@ -14,19 +15,6 @@ import { sheetKeys } from "./TriageSheet";
 export const NAMESPACE_CHOICE =
   "Replace the literal namespaces and object names in this view's sources with a `namespace` param (a choice on the page), so it can be saved for any cluster.";
 
-/** What ties a document to one cluster, as main's literalNames: a literal namespace, a pod, a workload or a series' object. */
-export function literalNames(doc: { sources?: Record<string, Record<string, unknown>> } | undefined): string[] {
-  const out: string[] = [];
-  for (const s of Object.values(doc?.sources ?? {})) {
-    if (typeof s.namespace === "string" && s.namespace !== "*") out.push(`namespace ${s.namespace}`);
-    if (typeof s.pod === "string") out.push(`pod ${s.pod}`);
-    const w = s.workload as { kind?: string; name?: string } | undefined;
-    if (w && typeof w.name === "string") out.push(`${w.kind ?? "workload"} ${w.name}`);
-    if (s.kind === "metrics.series" && typeof s.name === "string") out.push(`${String(s.scope)} ${s.name}`);
-  }
-  return [...new Set(out)];
-}
-
 export function SaveViewSheet(props: { state: ViewState; onClose: () => void; onSaved: () => void; onChoice: () => void }) {
   const st = props.state;
   const [name, setName] = useState(st.saved?.name ?? st.title.slice(0, 60));
@@ -35,7 +23,8 @@ export function SaveViewSheet(props: { state: ViewState; onClose: () => void; on
   const [saving, setSaving] = useState(false);
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => field.current?.select(), []);
-  const literal = literalNames(st.document as never);
+  // Main's own rule, from the one place it is written (security review of wave 10 part 4, L1).
+  const literal = literalWords(st.document as never);
   const anyRefused = scope === "any" && literal.length > 0;
   const ok = name.trim().length > 0 && name.length <= 60 && !/[\u0000-\u001f\u007f]/.test(name) && !anyRefused;
   const save = () => {
@@ -75,7 +64,7 @@ export function SaveViewSheet(props: { state: ViewState; onClose: () => void; on
             </p>
             {anyRefused ? (
               <div className="notice warn small" role="note">
-                <span>This view names {literal.slice(0, 3).join(", ")}{literal.length > 3 ? " and more" : ""}, which another cluster may not have.</span>
+                <span>This view names {literal.slice(0, 3).join(", ")}{literal.length > 3 ? ` and ${literal.length - 3} more` : ""}, which another cluster may not have.</span>
                 <button className="link-btn" onClick={() => (props.onChoice(), props.onClose())}>Make the namespace a choice</button>
               </div>
             ) : null}

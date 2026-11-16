@@ -4,7 +4,8 @@
 // (Claude's last line and a composer), and the dock opens beside the view with ⌘J. Undo and Redo are the person's
 // (D214); "How Claude built this" says what each source reads, with whose access, and the requests behind it (D223).
 import type { AgentUpdate, ClusterInfo, ResourceType, RowRef, SourceData, ViewAuditEntry, ViewIntent, ViewState } from "@landlens/contracts";
-import { ArrowUp, Bookmark, ChevronDown, CircleX, Code, Copy, Download, List, MessageSquare, Plus, Redo2, ScrollText, ShieldAlert, Undo2, X } from "lucide-react";
+import { authoredBy } from "@landlens/contracts";
+import { ArrowUp, Bookmark, ChevronDown, CircleX, Code, Copy, Download, FileInput, List, MessageSquare, Plus, Redo2, ScrollText, ShieldAlert, Undo2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { ObjectTarget } from "./app-host";
@@ -104,7 +105,14 @@ function Composer(props: { placeholder: string; onSend: (text: string) => void; 
   );
 }
 
-/** "How Claude built this" (D223): each source in words and as Claude wrote it, its state, whose access, the requests. */
+/**
+ * The disclosure's name (D223): "How Claude built this", or for a view from a file "How this view reads", since Claude
+ * didn't build it (security review of wave 10 part 4, M6).
+ */
+export const disclosureName = (s: Pick<ViewState, "origin">) => (s.origin === "imported" ? "How this view reads" : "How Claude built this");
+/** Who wrote a source as it stands (M6). */
+const wroteIt = (s: Pick<ViewState, "author">) => (s.author === "file" ? "As the file wrote it" : s.author === "file-changed" ? "As written (a file Claude changed)" : "As Claude wrote it");
+
 /** A connection's source says whose text it is (D212), as main's line to Claude does (`sourceLine`). */
 function fromLine(s: Record<string, unknown>): string | undefined {
   const kind = String(s.kind);
@@ -151,13 +159,13 @@ function Disclosure(props: { state: ViewState; data: (s: string) => SourceData |
   const steps = (s: Record<string, unknown>) => (Array.isArray(s.pipe) ? s.pipe.map((p) => Object.keys(p as object)[0]).join(", then ") : "");
   const app = doc.blocks.filter((b) => b.type === "app") as (BlockDoc & { html: string; css?: string; js?: string })[];
   return (
-    <aside className="drawer views-drawer" aria-label="How Claude built this">
+    <aside className="drawer views-drawer" aria-label={disclosureName(props.state)}>
       <div className="drawer-head">
         <div className="drawer-top">
           <span className="dim small grow">{doc.title} · v{props.state.version}</span>
           <button className="icon-btn" aria-label="Close" onClick={props.onClose}><Ic icon={X} size={15} /></button>
         </div>
-        <div className="drawer-title">How Claude built this</div>
+        <div className="drawer-title">{disclosureName(props.state)}</div>
       </div>
       <div className="drawer-body">
         <h3>Sources</h3>
@@ -174,7 +182,7 @@ function Disclosure(props: { state: ViewState; data: (s: string) => SourceData |
               <p className="dim small">Read with {whose(s.kind)}.{st?.at ? ` Changed ${new Date(st.at).toLocaleTimeString()}.` : ""}</p>
               {fromLine(s) ? <p className="small dim">{fromLine(s)}</p> : null}
               {st?.message ? <p className="small">{st.message}</p> : null}
-              <details><summary className="small">As Claude wrote it</summary><pre className="vd-json">{JSON.stringify(s, null, 2)}</pre></details>
+              <details><summary className="small">{wroteIt(props.state)}</summary><pre className="vd-json">{JSON.stringify(s, null, 2)}</pre></details>
             </div>
           );
         })}
@@ -386,6 +394,12 @@ export function ViewsPage(props: {
           <h2>{doc.title}</h2>
           {/* The cluster the view reads, always named (H1): its rows' actions go to this cluster only. */}
           <span className="view-cluster small" title="The cluster this view reads; its rows act here only">{st.context}</span>
+          {/* A view from a file says so for as long as it is open, not only while something of it waits (M6). */}
+          {st.origin === "imported" ? (
+            <span className="view-file small" title={st.author === "file-changed" ? "This view came from a file, and Claude changed it since" : "Someone else wrote this view: it came from a file"}>
+              <Ic icon={FileInput} size={12} />{st.author === "file-changed" ? "From a file · changed by Claude" : "From a file"}
+            </span>
+          ) : null}
           <span className="view-live" title={newest ? `Updated ${new Date(newest).toLocaleTimeString()}` : "Reading"}><i className={"dot" + (newest ? " on" : "")} />{newest ? `Live · ${new Date(newest).toLocaleTimeString()}` : "Reading"}</span>
           <span className="dim small">v{st.version}{st.shownBy === "you" ? " · chosen by you" : ""}</span>
         </div>
@@ -406,7 +420,7 @@ export function ViewsPage(props: {
         <div className="view-actions">
         <button className="icon-btn" aria-label="Undo" title="Undo (⌘Z)" disabled={!st.canUndo} onClick={() => { const to = undoTo(st); if (to !== undefined) void viewStore.version(to); }}><Ic icon={Undo2} size={15} /></button>
         <button className="icon-btn" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!st.canRedo} onClick={() => { const to = redoTo(st); if (to !== undefined) void viewStore.version(to); }}><Ic icon={Redo2} size={15} /></button>
-        <button className="secondary small" onClick={() => setDisclose((d) => !d)} aria-expanded={disclose}><Ic icon={ScrollText} size={13} />How Claude built this</button>
+        <button className="secondary small" onClick={() => setDisclose((d) => !d)} aria-expanded={disclose}><Ic icon={ScrollText} size={13} />{disclosureName(st)}</button>
         <button className="secondary small" title="Save this view (⌘S)" onClick={() => setSaving(true)}><Ic icon={Bookmark} size={13} />{st.saved ? "Saved" : "Save"}</button>
         <div className="menu-wrap">
           <button className="icon-btn" aria-label="More" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}><Ic icon={ChevronDown} size={15} /></button>
@@ -423,12 +437,12 @@ export function ViewsPage(props: {
       </header>
       {st.refused ? <RefusedRow refused={st.refused} open={refusedOpen} onToggle={() => setRefusedOpen((o) => !o)} /> : null}
       {note ? <p className={`view-note small tone-${note.tone}`} role={note.tone === "bad" ? "alert" : "status"}>{note.text}<button className="icon-btn sm" aria-label="Dismiss" onClick={() => setNote(undefined)}><Ic icon={X} size={12} /></button></p> : null}
-      {st.appsHeld ? <HeldBanner state={st} /> : null}
+      {st.held ? <HeldBanner state={st} /> : null}
       {sel ? (
         <div className={"view-selection" + (by === "block" ? " by-block" : "")} role="region" aria-label="Chosen rows">
           {by === "block" ? (
             <span className="small view-sel-who">
-              {sel.fromBlock.length === sel.refs.length ? "Chosen" : `${sel.fromBlock.length} of these chosen`} by a block Claude built{sel.block ? ` (${sel.block})` : ""}.
+              {sel.fromBlock.length === sel.refs.length ? "Chosen" : `${sel.fromBlock.length} of these chosen`} by {authoredBy(st.author)}{sel.block ? ` (${sel.block})` : ""}.
               {sel.fromBlock.length === sel.refs.length ? " Nothing happens until you act." : " No Delete while any of them is chosen."}
             </span>
           ) : null}
@@ -442,7 +456,7 @@ export function ViewsPage(props: {
       <div className={"view-grid" + (single ? " single" : "")}>
         {blocks.map((b, i) => (
           <ViewBlock key={`${st.version}-${i}`} view={v!.id} version={st.version} b={b} i={i} data={data} single={single} height={fillHeight}
-            hands={hands} onIntent={intent} now={props.now} held={!!st.appsHeld}
+            hands={hands} onIntent={intent} now={props.now} held={b.type === "app" && !!st.held?.blocks.includes(b.id!)} {...(st.author ? { author: st.author } : {})}
             onOpenObject={props.onOpenObject} onAsk={(block, title) => (setAbout({ block, title, version: st.version }), props.onFoldDock())} />
         ))}
       </div>
@@ -477,22 +491,29 @@ export function ViewsPage(props: {
 }
 
 /**
- * An imported view's banner (D217): its custom blocks were written by someone else and wait. Run custom blocks asks in
- * main's native dialog, which names them and what they read; only its yes lets them run.
+ * An imported view's banner (D217): what of it waits for the person's yes, because someone else wrote it. Its custom
+ * blocks, and its connection sources with what each reads (security review of wave 10 part 4, M5). The button asks in
+ * main's native dialog, which names each of them and everything they read; only its yes lets them run.
  */
 function HeldBanner(props: { state: ViewState }) {
-  const doc = props.state.document as Doc;
-  const apps = doc.blocks.filter((b) => b.type === "app");
+  const held = props.state.held ?? { blocks: [], sources: [] };
+  const n = held.blocks.length;
   const [error, setError] = useState<string>();
   return (
-    <div className="notice warn view-held" role="note" aria-label="Custom blocks from a file">
+    <div className="notice warn view-held" role="note" aria-label="Waiting from a file">
       <Ic icon={ShieldAlert} size={15} />
       <div className="notice-body">
-        <strong>This view came from a file. It has {apps.length} custom {apps.length === 1 ? "block" : "blocks"} (Claude didn't build {apps.length === 1 ? "it" : "them"} here).</strong>
-        <span className="small">They run in a sandbox with no network and read only this view's sources. Its tables and charts already show.</span>
+        <strong>This view came from a file: someone else wrote it. {n ? `${n} custom ${n === 1 ? "block waits" : "blocks wait"}` : ""}{n && held.sources.length ? " and " : ""}{held.sources.length ? `${held.sources.length} ${held.sources.length === 1 ? "read with your connections waits" : "reads with your connections wait"}` : ""} for your yes.</strong>
+        {n ? <span className="small">Custom blocks run in a sandbox with no network and read only this view's sources.</span> : null}
+        {held.sources.length ? (
+          <ul className="small view-held-reads" aria-label="Reads waiting">
+            {held.sources.map((s) => <li key={s.id}><span className="mono">{s.id}</span>: {s.words}</li>)}
+          </ul>
+        ) : null}
+        <span className="small dim">Its tables and charts of this cluster already show.</span>
         {error ? <span className="small tone-bad">{error}</span> : null}
       </div>
-      <button className="secondary small" onClick={() => void api.invoke("views:trust-apps", { view: props.state.id }).catch((e: Error) => setError(e.message))}>Run custom blocks</button>
+      <button className="secondary small" onClick={() => void api.invoke("views:trust-apps", { view: props.state.id }).catch((e: Error) => setError(e.message))}>{n ? "Run custom blocks" : "Run these reads"}…</button>
     </div>
   );
 }

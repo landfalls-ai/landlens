@@ -154,9 +154,11 @@ const ClicklandWorkload = z.object({ kind: z.enum(["Deployment", "StatefulSet", 
 /**
  * An argument's name may never say it carries a credential (part 4): a view is saved, exported and shared, so a token
  * Claude (or a file) put in a tool call's arguments would travel with it. The tool reads with the connection's own key,
- * which never leaves main.
+ * which never leaves main. A plain `key`, `pass`, `auth` or `pat`, and an access, signing or private key, too
+ * (security review of wave 10 part 4, L4).
  */
-export const CREDENTIAL_KEY = /token|secret|passw|pwd|authori[sz]ation|api[-_]?key|apikey|cookie|credential|session|bearer|private[-_]?key/i;
+export const CREDENTIAL_KEY =
+  /token|secret|passw|pwd|^pass$|^pass_|_pass$|passphrase|passcode|authori[sz]ation|^auth$|^auth_|_auth$|auth[-_]?(?:header|key|code)|api[-_]?key|apikey|^key$|(?:access|signing|master|private|encryption)[-_]?key|^pat$|_pat$|cookie|credential|session|bearer/i;
 const ArgName = z.string().min(1).max(64).regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "not an argument name")
   .refine((k) => !INHERITED.has(k), "not an argument name Landlens allows")
   .refine((k) => !CREDENTIAL_KEY.test(k), "a view can't carry credentials: name no token, key or password");

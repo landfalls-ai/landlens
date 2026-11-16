@@ -597,3 +597,77 @@ connection; inherited names in a tool's rows (`view-connections.test.ts`); `read
 clipboard only in an unpackaged build (`secrets-main.test.ts`). The first run left four alive (the gateway's built-in,
 read-only and sibling checks behind the allow list, and `readRaw`): tests that put a builtin's tool and a write in the
 allow list by hand, take a sibling out of `readsFree`, and read `toString` and `constructor` paths now kill them.
+
+### Security review of part 4, fixed
+
+No High, six Medium and five Low, all fixed as the review proposed; where a fix chose, the item says which. Each fix
+and each of the review's sixteen surviving mutations was taken out once and its test failed: 46 mutations against the
+unit tests, none surviving (the first run left Q10 alive: the cluster's going closed the view sessions twice, once in
+`onGone` and once in `closeConsole`, so taking one out changed nothing; the duplicate is gone and the remaining one is
+what Q10 mutates).
+
+- [x] **M1** Importing a link to `/dev/zero` or a FIFO froze main and grew its memory. `readImport`
+  (`main/view-file-read.ts`): `lstat` (a link, FIFO, device or directory refused), open with `O_NOFOLLOW` and
+  `O_NONBLOCK` (a link swapped in after the `lstat` fails with `ELOOP`), `fstat` of the open descriptor (a regular
+  file, its size at most 512,000), a read into a buffer of the limit plus one, never the file's size; a refusal is the
+  import's issue. Tests: `view-file-read.test.ts` (a link to `/dev/zero` refused in under 100 ms, a link to a regular
+  file, `/dev/zero`, a directory, a FIFO via `mkfifo` in under 500 ms, a sparse 2 GB file refused by its size with
+  under 64 MB more memory, the limit and one past, a missing file); `views-saved.test.ts` (the refusal shown).
+- [x] **M2** The dialog named a block's own sources, not what their joins pulled in. `trustItems` and `reach`
+  (`packages/views/src/trust.ts`) follow joins transitively; `sourceWords` names each with its kind and target (a
+  tool's server, tool and every argument, whole). Tests: `part4.test.ts`; `views-saved.test.ts` (a block on `pods`
+  joining a GitHub read: the dialog names both).
+- [x] **M3** `get_view` gave Claude an imported document as its own, and a file with no custom block could get one
+  through Claude with no dialog. The yes is kept as trust keys (SHA-256 over a block and every source it reaches, or
+  over what a connection source reads; `trusted` in the store, an old `appsTrusted` read as no yes), so a version
+  that adds or changes a block or a read holds it and asks again; a yes after the shown version changed or the view
+  closed trusts nothing; `appOpen` refuses a block not trusted. The file's line (with the reads still waiting) is on
+  the document in `get_view`, `view_context`, a follow-up, a render's or patch's answer and a quoted block, after the
+  yes too (stricter than the review's "until accepted": the text is still someone else's). Tests:
+  `views-saved.test.ts` (a patch adding a block held and asked; a render during the dialog; a close during it; each
+  place the line appears).
+- [x] **M4** The view's gateway session kept running a server's reads after the person turned them off. `autoRun`,
+  `enable`, `save`, Test as saved and a connection's change close the view sessions, the cluster's going closes its
+  own (through `closeConsole`), and each read compares the session's remotes (`remotesDigest`: address, read address,
+  header hash, pins, origins, no-views, provider rules) with the store's and reopens on a difference. Tests:
+  `mcp-main.test.ts` ("McpService's view session", against a loopback MCP server).
+- [x] **M5** A file's connection sources ran on open with the file's arguments. They are trust items too: the runtime
+  holds them (`held`, `off` with `SENTENCES.heldFromFile`) from the open, through every version, until the yes; the
+  banner (**Waiting from a file**) lists them; the same dialog asks ("Run 1 custom block and 1 connection read from a
+  view file?"). Chose one dialog for both. Tests: `views-saved.test.ts` (a tool, Google Cloud and Clickland source
+  held with nothing asked; a source Claude adds to an imported view held); `view-connections.test.ts` (the runtime).
+- [x] **M6** An imported view was "Claude built" everywhere. `ViewState.author` (`claude`, `file`, `file-changed`),
+  `authoredBy` and `authorCaption` in contracts: the header's **From a file** chip, the disclosure **How this view
+  reads**, a frame's caption, the link dialogs (text block and frame), the action sheet's eyebrow, the selection bar.
+  Tests: `views-saved.test.ts`, `mcp-main.test.ts`, `apply-rules.test.ts`; e2e (the chip, the disclosure, the frame's
+  caption).
+- [x] **L1** An import with literal names is saved for This cluster (the context and server it was imported on); one
+  `literalNames` (`packages/views/src/literal.ts`) for main and the Save sheet, now with field selectors on an
+  object's name, namespace or node, a Google Cloud cluster and every tool argument. Label selectors aren't counted
+  (stated in security.md). Tests: `part4.test.ts`, `views-saved.test.ts`.
+- [x] **L2** `gcp.metrics`'s read is keyed by its namespace parameter's value. Test: `view-connections.test.ts`.
+- [x] **L3** A table's name and namespace columns show the row's own object when the view's text differs, with a
+  title saying so. Test: `view-blocks.test.ts`.
+- [x] **L4** The credential check finds a credential split across an object's strings, base64 or base64url of a known
+  token shape, and names such as `key`, `pass`, `auth`, `pat`, `passphrase`, `access_key`. No general high-entropy
+  check (it would refuse commit hashes and ids). Tests: `part4.test.ts`.
+- [x] **L5** Each survivor has a test that kills it: Q1 the file line on a quoted block, Q2 and Q3 a quoted Google
+  Cloud and Clickland block's hold, Q4 the Google Cloud line, Q19 a This-cluster save's namespaces, Q16 a close
+  during the dialog (`views-saved.test.ts`); Q5 `gcp.metrics`' project, Q6 its namespace limit, Q20 a tool row's
+  `_`-names (`view-connections.test.ts`); Q8 a built-in refused, Q9 origin `view`, Q10 the cluster gone, Q11 a
+  connection change (`mcp-main.test.ts`); Q12 the file's name, Q13 a key, Q14 the store's name check (`part4.test.ts`,
+  `views-saved.test.ts`).
+
+Checks: `pnpm typecheck` 0; `pnpm -r test` all pass (desktop 56 files, 846 tests; views 112; gateway 103 with 3
+skipped and 3 todo; the rest as before); `npx electron-vite build`; on OrbStack, one file at a time: views 20 (the
+live case skipped), app 15 (5 skipped), connections 6 (4), family 12 (1), gke 7 (1), gview 16 (1), secrets 10, each
+on its first run.
+
+Mutations (each KILLED): M1 the regular-file checks, the size check, the refusal shown; M2 joins reached, a tool's
+arguments named; M3 the line in `get_view`, in `view_context` and answers, `appOpen`'s hold, the dialog's version, a
+block's key over what it reaches; M4 the check at each read, and it with the store-change closes; M5 the runtime's
+hold, held at open, held with a new version, connection sources as trust items; M6 the text block's link, the
+frame's author, McpService's frame link, the eyebrow, the state's author; L1 the import's scope, field selectors, a
+GKE cluster, tool arguments; L2 the key; L3 the row's own name; L4 base64, split, the names; Q1–Q6, Q8–Q14, Q16, Q19,
+Q20. One layer survives alone, by design: taking out only `autoRun`'s and `enable`'s closes leaves every test passing,
+because the check at each read sees the store's change and reopens the session; with both layers out the tests fail.

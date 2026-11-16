@@ -74,7 +74,7 @@ export function ViewsList(props: { handle: string; context: string; namespaces: 
             ) : (
               <button className="views-saved-open grow" onClick={() => open(v.id)}>
                 <span className="name">{v.name}</span>
-                <span className="dim small">{v.scope === "any" ? "Any cluster" : "This cluster"}{v.origin === "imported" ? " · from a file" : ""}{v.apps && !v.appsTrusted ? ` · ${v.apps} custom ${v.apps === 1 ? "block" : "blocks"} waiting` : ""}</span>
+                <span className="dim small">{v.scope === "any" ? "Any cluster" : "This cluster"}{v.origin === "imported" ? " · from a file" : ""}{v.waiting ? ` · ${v.waiting} waiting for your yes` : ""}</span>
               </button>
             )}
             {deleting === v.id ? (

@@ -13,6 +13,8 @@ export const SENTENCES = {
   scopeCluster: (limit: readonly string[]) => `This view can't read the whole cluster: its session is limited to ${limit.join(", ")}.`,
   rbac: (resource: string) => `You can't list ${resource} here (your cluster access).`,
   connectionOff: (name: string) => `${name} isn't readable by Claude right now. Turn it on in Connections.`,
+  /** An imported view's connection source before the person's yes (security review of wave 10 part 4, M5). */
+  heldFromFile: "This view came from a file: this read waits until the person allows it.",
   toolNotFree: (server: string, tool: string) => `${server} · ${tool} isn't a read that runs without asking.`,
   overLimit: (things: string, n: number, m: number) => `Too many ${things}: ${n}, the limit is ${m}.`,
   failed: (source: string, status: number) => `${source} couldn't be read (HTTP ${status}).`,

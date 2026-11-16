@@ -736,11 +736,15 @@ describe.runIf(run)("saved views and view files (part 4), with the fake agent, o
     await setDialog(app, "openPath", resolve(__dirname, "fixtures/shared-view.landlens-view.json"));
     await list.getByRole("button", { name: "Choose a file…" }).click();
     await expect.poll(() => rowsOf("Deployments").count(), { timeout: 30_000 }).toBe(1);
-    const held = page.getByRole("note", { name: "Custom blocks from a file" });
+    const held = page.getByRole("note", { name: "Waiting from a file" });
     await held.waitFor();
     await page.waitForTimeout(1_000);
     expect(viewFrames(page)).toHaveLength(0);
     expect(await askedOf(app)).toHaveLength(0);
+    // A file's view says so while it is open, and is never called Claude's (security review of part 4, M6).
+    await head().getByText("From a file", { exact: true }).waitFor();
+    await head().getByRole("button", { name: "How this view reads" }).waitFor();
+    expect(await head().getByRole("button", { name: "How Claude built this" }).count()).toBe(0);
     await shoot(page, "w10p4-07-imported-held", [1280, 720]);
     // No, then yes: main asks, naming what the block reads; only a yes runs it.
     await setDialog(app, "yes", false);
@@ -757,11 +761,16 @@ describe.runIf(run)("saved views and view files (part 4), with the fake agent, o
     const f = await frameWith(page, "#n");
     await expect.poll(() => f.locator("#n").innerText(), { timeout: 20_000 }).toBe("1 deployments");
     await held.waitFor({ state: "detached" });
+    // Its frame's ring names the file, not Claude (M6).
+    await page.locator(".app-third-cap").filter({ hasText: "From a view file" }).first().waitFor();
+    expect(await page.locator(".app-third-cap").filter({ hasText: "Built by Claude" }).count()).toBe(0);
     await shoot(page, "w10p4-08-imported-run", [1280]);
     const kept = JSON.parse(readFileSync(join(userData, "views.json"), "utf8")) as any[];
     const imp = kept.find((v) => v.origin === "imported");
     expect(imp.scope).toEqual({ kind: "any" });
-    expect(imp.appsTrusted).toBe(true);
+    // The yes is kept as the trust key of exactly the block the dialog named (M3).
+    expect(imp.trusted).toHaveLength(1);
+    expect(imp.trusted[0]).toMatch(/^b:[0-9a-f]{64}$/);
   });
 });
 

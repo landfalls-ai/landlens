@@ -5,7 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { NamespaceName } from "@landlens/contracts";
-import { credentialIssues, parseDocument, SavedName, Tweaks, VIEW_LIMITS, type ViewDocument } from "@landlens/views";
+import { credentialIssues, parseDocument, SavedName, TRUST_KEY, trustItems, Tweaks, VIEW_LIMITS, type ViewDocument } from "@landlens/views";
 import { z } from "zod";
 
 export type SavedScope = { kind: "cluster"; context: string; server: string } | { kind: "any" };
@@ -18,12 +18,17 @@ export type SavedView = {
   /** A cluster-scoped view's namespace limit, as the session it was built in had; an import's, as the person chose. */
   namespaces?: string[];
   origin: "claude" | "imported";
-  /** An imported view's app blocks: the person said Run custom blocks in the native dialog (D217). */
-  appsTrusted?: boolean;
+  /**
+   * An imported view's custom blocks and connection sources the person said yes to in main's dialog (D217), by their
+   * trust keys (packages/views' trustItems): each covers exactly what the dialog named (security review of part 4, M3).
+   */
+  trusted?: string[];
   savedAt: number;
 };
 /** What the sidebar, ⌘K and the list show: names, never documents. */
-export type SavedSummary = { id: string; name: string; scope: "cluster" | "any"; context?: string; origin: "claude" | "imported"; savedAt: number; apps: number; appsTrusted: boolean };
+export type SavedSummary = { id: string; name: string; scope: "cluster" | "any"; context?: string; origin: "claude" | "imported"; savedAt: number; apps: number; appsTrusted: boolean; waiting: number };
+/** The most trust keys kept with a view: the newest stay. */
+const TRUSTED_KEEP = 100;
 
 const Id = z.string().regex(/^[0-9a-f]{16}$/);
 const Scope = z.discriminatedUnion("kind", [
@@ -32,7 +37,10 @@ const Scope = z.discriminatedUnion("kind", [
 ]);
 const Entry = z.object({
   id: Id, name: SavedName, document: z.unknown(), tweaks: Tweaks.optional(), scope: Scope,
-  namespaces: z.array(NamespaceName).min(1).max(20).optional(), origin: z.enum(["claude", "imported"]), appsTrusted: z.boolean().optional(),
+  namespaces: z.array(NamespaceName).min(1).max(20).optional(), origin: z.enum(["claude", "imported"]),
+  trusted: z.array(z.string().regex(TRUST_KEY)).max(TRUSTED_KEEP).optional(),
+  // Part 4 before its security review kept one switch for every block: read, never trusted (each is asked again).
+  appsTrusted: z.boolean().optional(),
   savedAt: z.number().int().nonnegative(),
 }).strict();
 
@@ -141,8 +149,9 @@ export class ViewStore {
     this.update(id, (v) => ({ ...v, tweaks: t.data }), false);
   }
 
-  trustApps(id: string): void {
-    this.update(id, (v) => ({ ...v, appsTrusted: true }), false);
+  /** The person's yes in main's dialog: these trust keys, kept with the view (the newest TRUSTED_KEEP). */
+  trust(id: string, keys: readonly string[]): void {
+    this.update(id, (v) => ({ ...v, trusted: [...new Set([...(v.trusted ?? []), ...keys.filter((k) => TRUST_KEY.test(k))])].slice(-TRUSTED_KEEP) }), false);
   }
 
   private update(id: string, f: (v: SavedView) => SavedView, touch = true): SavedView {
@@ -163,14 +172,16 @@ function checked(e: unknown): SavedView | undefined {
   if (!d.ok || credentialIssues(d.document).length || credentialIssues(r.data.name).length) return undefined;
   // A namespace limit is the building session's (This cluster) or the person's choice at import (D217), nothing else.
   if (r.data.namespaces && r.data.scope.kind !== "cluster" && r.data.origin !== "imported") return undefined;
-  const { document: _d, ...rest } = r.data;
+  const { document: _d, appsTrusted: _a, ...rest } = r.data;
   return { ...rest, document: d.document } as SavedView;
 }
 
 function summary(v: SavedView): SavedSummary {
   const apps = v.document.blocks.filter((b) => b.type === "app").length;
+  const trusted = new Set(v.trusted ?? []);
+  const waiting = v.origin === "imported" ? trustItems(v.document).filter((t) => !trusted.has(t.key)) : [];
   return {
     id: v.id, name: v.name, scope: v.scope.kind, ...(v.scope.kind === "cluster" ? { context: v.scope.context } : {}), origin: v.origin, savedAt: v.savedAt,
-    apps, appsTrusted: v.origin === "claude" || !!v.appsTrusted,
+    apps, appsTrusted: !waiting.some((t) => t.kind === "block"), waiting: waiting.length,
   };
 }

@@ -39,7 +39,10 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
   Claude Code ask, and the ask shows in the dock as for any tool. The gateway checks it too: an agent call to a tool
   that isn't pre-allowed runs only with the permit main hands over when you answer the ask (by tool call id, once, or
   for the session with "always"); without one it is refused and logged. Calls from a view to a tool that doesn't say
-  it only reads get a native dialog first. From the MCP page (Preview) only read-only tools run.
+  it only reads get a native dialog first. From the MCP page (Preview) only read-only tools run. A view's reads go
+  through the cluster's view session (`view · <context>`, origin `"view"`, [views.md](views.md#connections-in-a-view-part-4));
+  it closes when a server's unasked reads or the server are turned off, the server is edited or saved, a connection
+  changes or the cluster goes, and each read checks its servers against the store's and reopens on a difference.
 - **Connections' servers** (`github`, `linear`): every session, on every cluster, gets each ready connection with
   "Give to Claude sessions" on, after the servers you added. Main adds the token, pins every request to the provider's
   origins (`RemoteSpec.origins`), and hands Linear's OAuth sign-in to the transport as its `authProvider`. Which tools

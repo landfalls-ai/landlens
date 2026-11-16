@@ -737,6 +737,6 @@ describe("the rest of the review of part 2 (L4, L6, L7, L8; M2's caption)", () =
     const { claude, view, svc, frames } = await started();
     await claude.callTool({ name: "render_view", arguments: { document: appDoc() } });
     const f = svc.appOpen(view, "count");
-    expect(frames.get(f.view)?.block).toEqual({ view, block: "count", caption: "Pods in landlens-dev · count" });
+    expect(frames.get(f.view)?.block).toEqual({ view, block: "count", caption: "Pods in landlens-dev · count", by: "A block Claude built" });
   });
 });

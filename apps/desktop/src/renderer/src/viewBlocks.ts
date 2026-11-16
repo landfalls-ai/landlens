@@ -104,6 +104,10 @@ export function tableColumns(cols: ColumnDoc[]): Column[] {
         const v = row[c.field];
         const text = cellWords(v, format, now);
         const tone = tonePick(row);
+        // A row's name and namespace are its object's, whatever the view wrote over them (rename, derive, a join's
+        // take): the cell shows what the row's actions act on (security review of wave 10 part 4, L3).
+        const own = row._ref && (c.field === "name" ? row._ref.name : c.field === "namespace" ? row._ref.namespace ?? "" : undefined);
+        if (own !== undefined && own !== text) return { text: own, sort: own, ...(tone ? { tone } : {}), title: `This row is ${refLabel(row._ref!)}; the view's text here was "${text}"` };
         return { text, sort: sortKey(v, format), ...(tone ? { tone } : {}), ...(format === "age" && typeof v === "number" ? { title: new Date(v).toLocaleString() } : {}) };
       },
     };

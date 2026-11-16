@@ -2,8 +2,9 @@
 // draws the native blocks with Landlens's own components (blocks/): the table on ResourceTable, the stat, the chart on
 // the Overview's chart code, the list, the log on the log view's rules, the doctor's rows, Claude's text through the
 // dock's Markdown. Every cell is a React text node: nothing a source delivers is ever markup. An app block is a
-// sandboxed frame (AppFrame, D204) in the quieter ring captioned "Built by Claude"; its intents come up to the page.
-import type { SourceData, ViewIntent } from "@landlens/contracts";
+// sandboxed frame (AppFrame, D204) in the quieter ring captioned by who wrote it ("Built by Claude", "From a view file";
+// security review of part 4, M6); its intents come up to the page.
+import type { SourceData, ViewAuthor, ViewIntent } from "@landlens/contracts";
 import { CircleX, MessageSquarePlus } from "lucide-react";
 import type { ObjectTarget } from "./app-host";
 import { AppFrame } from "./AppFrame";
@@ -33,8 +34,13 @@ export function ViewBlock(props: {
   view: string; version: number; b: BlockDoc; i: number; data: (source: string) => SourceData | undefined;
   hands: RowHands; onOpenObject: (t: ObjectTarget) => void; onIntent: (i: ViewIntent, block: string) => boolean;
   onAsk: (block: string, title: string) => void; single: boolean; height: number; now: number;
-  /** An imported view's custom blocks wait for Run custom blocks (D217): no frame is opened, nothing of it runs. */
+  /**
+   * An imported view's custom block that waits for Run custom blocks (D217): no frame is opened, nothing of it runs.
+   * Main holds it too, whatever the page shows: a block Claude added or changed since the yes waits again (M3).
+   */
   held?: boolean;
+  /** Who wrote the view's shown version (M6): its frame's caption says so. */
+  author?: ViewAuthor;
 }) {
   const { b } = props;
   const key = blockKey(b, props.i);
@@ -71,7 +77,7 @@ export function ViewBlock(props: {
         <div className="vb-held small dim" role="note">A custom block from a file: it runs only after you choose Run custom blocks above.</div>
       ) : b.type === "app" ? (
         <AppFrame
-          block={{ view: props.view, block: b.id!, uses: b.uses ?? [], version: props.version, ...(b.fill && props.single ? { fill: props.height } : {}) }}
+          block={{ view: props.view, block: b.id!, uses: b.uses ?? [], version: props.version, ...(props.author ? { author: props.author } : {}), ...(b.fill && props.single ? { fill: props.height } : {}) }}
           onOpenObject={props.onOpenObject}
           onIntent={(i) => props.onIntent(i, name)}
         />

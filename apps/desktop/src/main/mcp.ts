@@ -5,6 +5,7 @@
 import { BUILTIN_MCP_SERVER, CONN_NOTES, FAMILY_NOTES, GCP_MCP_SERVER, VIEWS_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type FamilyInfo, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries, type Sibling } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
+import { createHash } from "node:crypto";
 import { BuiltinUpstream, isBuiltin, isSibling, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, WHY, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import { gcpMcpServer, type GcpReader } from "@landlens/gcp-mcp";
 import type { SessionGoogle, SessionMcp } from "@landlens/acp-host";
@@ -52,8 +53,13 @@ export class McpService {
   readonly gateway: McpGateway;
   readonly views = new AppViews();
   private readonly consoles = new Map<string, Promise<{ session: GatewaySession; revoke(): void }>>(); // handle → yours
-  /** The Views page's gateway sessions (wave 10 part 4, D212), handle → `view · <context>`, origin "view". */
-  private readonly viewSessions = new Map<string, Promise<GatewaySession>>();
+  /**
+   * The Views page's gateway sessions (wave 10 part 4, D212), handle → `view · <context>`, origin "view", with the
+   * digest of the remotes it was opened with: a session whose cluster's remotes changed since (a server's switch, its
+   * address or header, Run read-only tools without asking, a connection or a sibling) is closed and opened again as
+   * things are now before its next read (security review of part 4, M4).
+   */
+  private readonly viewSessions = new Map<string, Promise<{ session: GatewaySession; digest: string }>>();
   /** What each sibling was for sessions at its last push, so a push that changes nothing leaves Preview open (L6). */
   private readonly familyWas = new Map<Sibling, string>();
   private builtinTools: Promise<McpServerInfo["tools"]> | undefined;
@@ -109,7 +115,8 @@ export class McpService {
       ...(deps.pushAutonomy ? { onAutonomy: deps.pushAutonomy } : {}),
     });
     this.gateway.log.subscribe(deps.push);
-    deps.clusters.onGone((handle) => (void this.closeConsole(handle), void this.closeViewSessions(handle)));
+    // closeConsole ends the cluster's view sessions too.
+    deps.clusters.onGone((handle) => void this.closeConsole(handle));
   }
 
   /**
@@ -120,7 +127,8 @@ export class McpService {
    */
   async viewRead(handle: string, server: string, tool: string, args: Record<string, unknown>): Promise<ViewToolAnswer> {
     if (isBuiltin(server) || server.startsWith("landlens")) return { off: `${server} isn't a server a tool source reads: use its own source kinds.` };
-    const s = await this.viewSession(handle);
+    // The person's switches as they are at this call (M4): never a session opened before one of them changed.
+    const s = await this.viewSession(handle, true);
     if (!s.upstreams.has(server)) return { off: `${server} isn't connected for this cluster's Claude sessions.` };
     if (!s.allow.includes(`mcp__${server}__${tool}`)) return { off: `${server} · ${tool} isn't a read that runs without asking.` };
     const r = (await s.call(server, tool, args, "view")) as McpToolResult;
@@ -150,7 +158,7 @@ export class McpService {
 
   /** The gateway reads a view's tool source may use on this cluster now (view_context's list): `server · tool`. */
   async viewReads(handle: string): Promise<string[]> {
-    const s = await this.viewSession(handle).catch(() => undefined);
+    const s = await this.viewSession(handle, true).catch(() => undefined);
     if (!s) return [];
     return s.allow
       .map((r) => /^mcp__([a-z][a-z0-9-]*)__(.+)$/.exec(r))
@@ -159,28 +167,46 @@ export class McpService {
       .slice(0, 60);
   }
 
-  private viewSession(handle: string): Promise<GatewaySession> {
+  /**
+   * The cluster's view session. `fresh`: its remotes are read again and compared with the ones it was opened with; a
+   * difference closes it and opens another, so a read runs only as the person's switches are now (M4).
+   */
+  private async viewSession(handle: string, fresh = false): Promise<GatewaySession> {
+    const info = this.deps.clusters.get(handle).info;
     let v = this.viewSessions.get(handle);
+    if (v && fresh) {
+      const was = await v.catch(() => undefined);
+      const now = remotesDigest(await this.remotesFor(info.context));
+      if (!was || was.digest !== now) {
+        if (this.viewSessions.get(handle) === v) this.viewSessions.delete(handle);
+        await was?.session.close();
+        v = this.viewSessions.get(handle);
+      }
+    }
     if (!v) {
       v = (async () => {
-        const info = this.deps.clusters.get(handle).info;
+        const remotes = await this.remotesFor(info.context);
         // No cluster behind it (landlens-kube answers nothing here) and no built-ins: a view reads its cluster with its
         // own token in the runtime, and Google Cloud through its own sources.
-        return this.gateway.open({ label: `view · ${info.context}`, context: info.context, origin: "view", cluster: stubCluster(), remotes: await this.remotesFor(info.context) });
+        const session = await this.gateway.open({ label: `view · ${info.context}`, context: info.context, origin: "view", cluster: stubCluster(), remotes });
+        return { session, digest: remotesDigest(remotes) };
       })();
       this.viewSessions.set(handle, v);
       v.catch(() => this.viewSessions.delete(handle));
     }
-    return v;
+    return (await v).session;
   }
 
-  /** The view sessions end with the consoles: a connection, a sibling or a server changed, or the cluster went. */
+  /**
+   * The view sessions end with the consoles: a connection, a sibling or a server changed (its switch for a cluster, its
+   * address or header, Run read-only tools without asking), or the cluster went (M4).
+   */
   private async closeViewSessions(handle?: string) {
     for (const [h, p] of [...this.viewSessions]) {
       if (handle && h !== handle) continue;
       this.viewSessions.delete(h);
       const s = await p.catch(() => undefined);
-      await s?.close();
+      await s?.session.close();
     }
   }
 
@@ -436,6 +462,8 @@ export class McpService {
 
   save(input: Parameters<McpServerStore["save"]>[0], context?: string): McpServerInfo {
     const s = this.deps.store.save(input);
+    // A new address or header: no view session keeps the old one (M4).
+    void this.closeViewSessions();
     return this.deps.store.info(s.id, context);
   }
 
@@ -472,18 +500,25 @@ export class McpService {
         status: r.ok ? "ready" : "failed", ...(r.ok ? {} : { detail: r.steps.at(-1)?.detail ?? "failed" }),
         ...(tools ? { tools } : {}), ...(r.tools ? { listing: listingHash(r.tools) } : {}),
       });
+      // A listing that changed takes Run read-only tools without asking away: the view sessions follow (M4).
+      void this.closeViewSessions();
     }
     return { ok: r.ok, steps: r.steps, ...(tools ? { tools } : {}) };
   }
 
   /** "Run read-only tools without asking" for a server, pinned to the tools the page shows. */
   autoRun(id: string, on: boolean, context?: string): McpServerInfo {
-    return this.deps.store.setAutoRun(id, on, context);
+    const s = this.deps.store.setAutoRun(id, on, context);
+    // A view's reads of the server stop (or may start) at once, not when its session ends (M4).
+    void this.closeViewSessions();
+    return s;
   }
 
   enable(id: string, context: string, on: boolean): McpServerInfo {
     const s = this.deps.store.enable(id, context, on);
     void this.closeConsoleFor(context); // Preview picks up the change next time
+    // A cluster with no Preview console still has its view session: it ends too (M4).
+    void this.closeViewSessions();
     return s;
   }
 
@@ -607,7 +642,8 @@ export class McpService {
     if (!v) throw fail(404, "That view has closed.");
     if (this.linkAsked) throw fail(429, "Landlens is already asking about a link.");
     if (!this.views.allowLink(viewId)) throw fail(429, "That view is opening links too often.");
-    const who = v.block ? `A block Claude built on the Views page (${v.block.caption ?? v.block.block})` : `The ${v.server} view (${v.tool})`;
+    // Who wrote the block, as ViewService said when it opened it (security review of wave 10 part 4, M6).
+    const who = v.block ? `${v.block.by ?? "A block Claude built"} on the Views page (${v.block.caption ?? v.block.block})` : `The ${v.server} view (${v.tool})`;
     return this.confirmLink(who, raw);
   }
 
@@ -682,6 +718,23 @@ export function moveClicklandServer(o: {
   for (const s of old) o.store.remove(s.id);
   o.log?.(`[mcp] moved ${old.map((s) => s.name).join(", ")} (${url}) to the Land family's clickland server; see Connections → Land family`);
   return true;
+}
+
+/**
+ * What a view session's reads depend on in its remotes (M4): each one's name, addresses, a hash of its headers, its pins
+ * and its provider's rules. Its OAuth provider is left out (a function): Linear's sign-in changes reach sessions as a
+ * connection change.
+ */
+function remotesDigest(remotes: RemoteSpec[]): string {
+  const h = createHash("sha256");
+  for (const r of remotes) {
+    h.update(JSON.stringify([
+      r.name, r.url, r.readUrl ?? null, r.headers ? createHash("sha256").update(JSON.stringify(r.headers)).digest("hex") : null, r.pin ?? null, r.readPin ?? null,
+      r.pinTools ?? null, r.origins ?? null, r.noViews ?? null,
+      r.provider ? [r.provider.id, r.provider.mode, r.provider.readsAuto, [...(r.provider.readTools ?? [])].sort()] : null,
+    ]));
+  }
+  return h.digest("hex");
 }
 
 /** A cluster that answers nothing: enough to list landlens-kube's tools for the MCP page. */

@@ -1241,8 +1241,18 @@ export type ViewState = {
   saved?: { id: string; name: string; scope: "cluster" | "any" };
   /** Claude built it here, or it came from a file (D217). */
   origin?: "claude" | "imported";
-  /** An imported view's custom blocks wait for Run custom blocks and main's dialog (D217). */
+  /**
+   * Who the shown version is by, in every place that names its author (security review of wave 10 part 4, M6): Claude,
+   * a view file, or a view file Claude changed since. Never "Claude built" for a file's text or blocks.
+   */
+  author?: ViewAuthor;
+  /** An imported view's custom blocks wait for main's dialog (D217): some of them are held. */
   appsHeld?: boolean;
+  /**
+   * What of an imported view waits for the person's yes in main's dialog (D217; M3, M5): its custom blocks (ids) and
+   * its connection sources (ids, with what each reads in words). Main holds them whatever the page shows.
+   */
+  held?: { blocks: string[]; sources: { id: string; words: string }[] };
   /** The person's sort and column widths per block (D214): never sent to Claude. */
   tweaks?: Record<string, ViewTweak>;
 };
@@ -1253,7 +1263,18 @@ export type SavedViewSummary = {
   id: string; name: string; scope: "cluster" | "any"; context?: string; origin: "claude" | "imported"; savedAt: number;
   /** Its custom (app) blocks, and whether they may run (Claude's, or an import the person said yes to). */
   apps: number; appsTrusted: boolean;
+  /** An imported view's custom blocks and connection sources that wait for the person's yes (M5). */
+  waiting: number;
 };
+
+/** Who wrote what a view shows (security review of wave 10 part 4, M6). */
+export type ViewAuthor = "claude" | "file" | "file-changed";
+/** A view's block (or `noun`) by its author, in words: "a block Claude built", "a block from a view file", … */
+export const authoredBy = (author: ViewAuthor | undefined, noun = "block"): string =>
+  author === "file" ? `a ${noun} from a view file` : author === "file-changed" ? `a ${noun} of a view file Claude changed` : `a ${noun} Claude built`;
+/** A block's ring caption on the Views page. */
+export const authorCaption = (author: ViewAuthor | undefined): string =>
+  author === "file" ? "From a view file" : author === "file-changed" ? "From a view file, changed by Claude" : "Built by Claude";
 const SavedViewName = z.string().min(1).max(60).regex(/^[^\u0000-\u001f\u007f\u2028\u2029]+$/, "one line");
 const ViewField = z.string().regex(/^[a-z][A-Za-z0-9_]{0,40}$/, "not a field");
 /** A source's new data for the page (D210), stamped with the view's version so the page drops a push of an older one. */

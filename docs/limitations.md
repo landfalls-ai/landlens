@@ -127,8 +127,11 @@ person's check reads them), and Ask Claude sends one problem at a time.
   starts a new one. A This-cluster view opens only on its own context at its own API server, so a renamed context or
   a moved server needs it saved again; Any cluster is refused while the document names a literal namespace or object.
   Rename, Duplicate and Delete are on the page's list, not the sidebar's rows; column widths take a pointer, not keys.
-  An imported file is saved for Any cluster and its custom blocks wait for your yes; its native blocks read what its
-  sources name within the view's access. A connection is read only where a Claude session could read it without
+  An imported file is saved for Any cluster (This cluster when it names literal names); its custom blocks and its
+  Google Cloud, Clickland and tool reads wait for your yes, which covers exactly what the dialog named; its native
+  blocks read what its Kubernetes sources name within the view's access. A label selector isn't counted as a literal
+  name, there is no general high-entropy credential check, and a This-cluster view knows its cluster by context name
+  and API server only. A connection is read only where a Claude session could read it without
   asking: Google Cloud under your grant (polled every 5 minutes), Clickland's logs and traces of one pod or workload
   (every 30 s), a gateway read (every 2 minutes; GitHub's answers seen only through the fake, as text, so one row).
   A view shows what Claude could read, so env values show as `<redacted>` and Secrets never appear; usage over time

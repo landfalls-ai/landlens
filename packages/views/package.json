@@ -27,6 +27,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
-    "./intent": "./src/intent.ts"
+    "./intent": "./src/intent.ts",
+    "./literal": "./src/literal.ts"
   }
 }

@@ -71,6 +71,12 @@ describe("a sheet a block asked for (security review of wave 10 part 3, M1, L3; 
     expect(eyebrowOf({ asker: "view" })).toBe("Asked for by a block Claude built");
   });
 
+  it("M6 (security review of wave 10 part 4): a block from a view file is named as the file's, never Claude's", () => {
+    expect(eyebrowOf({ asker: "view", author: "file", block: "Pods" })).toBe("Asked for by a block from a view file (Pods)");
+    expect(eyebrowOf({ asker: "view", author: "file-changed" })).toBe("Asked for by a block of a view file Claude changed");
+    expect(eyebrowOf({ asker: "view", author: "claude", block: "Pods" })).toBe("Asked for by a block Claude built (Pods)");
+  });
+
   it("takes no focus from where the person is typing; your own sheet does", () => {
     expect(takesFocus({ asker: "view" })).toBe(false);
     expect(takesFocus({})).toBe(true);

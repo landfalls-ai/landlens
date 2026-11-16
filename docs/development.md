@@ -224,7 +224,9 @@ and a ConfigMap in `landlens-dev`. With `LANDLENS_INTEGRATION=orbstack,claude`, 
 Claude for a view of `landlens-dev` in native blocks, saves it, and, with `LANDLENS_SHOTS`, writes what it built to
 `w10p3-live-view.json` (the document read from a stubbed clipboard in the page and over `views:get`, never your
 clipboard). Part 4 adds `packages/views/test/part4.test.ts` (the connection kinds, view files, `literalNames`, tweaks,
-a rows path) and in desktop `views-saved.test.ts` (the store, save, open, export, import, the custom-block hold),
+a rows path; its security review's literals, credential shapes and trust items) and in desktop `views-saved.test.ts`
+(the store, save, open, export, import, the hold of a file's custom blocks and connection reads, the trust dialog),
+`view-file-read.test.ts` (import's read: links, devices, a FIFO via `mkfifo`, a sparse 2 GB file),
 `view-connections.test.ts` (Google Cloud, Clickland and tool sources against fakes), `view-examples.test.ts`; the
 gateway's `providers.test.ts` and `family.test.ts` cover origin `"view"`. Its e2e describes run in apps of their own:
 saved views across a restart (`saved-pods`, the Deployment `views-e2e-saved`), Export and Import with main's dialogs

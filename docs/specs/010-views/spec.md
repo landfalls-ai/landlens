@@ -356,6 +356,9 @@ do the same read **without asking**, checked each time the source runs:
   `list_branches` is one row; the real servers' JSON is still to settle.)*
 - Text from a sibling or connection is drawn as text; in the "How Claude built this" panel the source carries the
   existing line ("From GitHub: content written by other people.").
+- An imported view's connection reads wait for the person's yes (D217, security review of part 4, M5). The view's
+  gateway session closes when the person turns a server's unasked reads or the server off, edits it, or a connection
+  changes, and each read checks its servers again (M4).
 - A view's connection reads never touch a session's autonomy holds: the data goes to the page, not the conversation.
   If the person then quotes a row into the chat, the existing quoting rules apply (D215).
 
@@ -574,7 +577,7 @@ type SavedView = {
   document: ViewDocument; tweaks?: Tweaks; versions?: never;   // history is not kept across saves
   scope: { kind: "cluster"; context: string; server: string } | { kind: "any" };
   namespaces?: string[];            // the building session's limit (scope "cluster"), or the picker's at import
-  origin: "claude" | "imported"; appsTrusted?: boolean;        // D217
+  origin: "claude" | "imported"; trusted?: string[];          // D217: trust keys (security review of part 4, M3)
   savedAt: number;
 };
 ```
@@ -603,6 +606,12 @@ type SavedView = {
   don't run** until the person presses **Run custom blocks** on the view's banner ("This view came from a file. It
   has 2 custom blocks (Claude didn't build them here). They run in a sandbox with no network and read only: …the
   sources in words…") and confirms in main's native dialog. The choice is kept (`appsTrusted`).
+  *Security review of part 4 (M1–M6):* the import reads a regular file only, no link followed, bounded; the
+  connection sources (`gcp.*`, `clickland.*`, `tool`) wait too and the same dialog names them (server, tool,
+  arguments); the dialog names every source a block reaches through joins; the yes is kept as one trust key per item
+  (`trusted`), so a later version that adds or changes one asks again; the document stays under the file's line
+  wherever Claude sees it; and the view is labelled "From a file", never "Claude built". An import naming literal
+  names is saved for This cluster (L1).
 - Why hold a sandboxed frame at all: the sandbox stops exfiltration, not persuasion; an imported frame is the one
   place where someone else's script draws cluster data for the person.
 

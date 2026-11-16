@@ -207,3 +207,74 @@ describe("when a view may read Clickland (D212, as a Claude session's reads with
     ]) expect(clicklandReadsFree({ ...ready, ...off } as FamilyInfo), JSON.stringify(off)).toBe(false);
   });
 });
+
+// ---- security review of wave 10 part 4 (M5, L2, and L5's survivors) ---------------------------------------------
+
+describe("held sources (M5)", () => {
+  it("a held source reads nothing and says so; let go, it reads; held again, it stops", async () => {
+    const calls: unknown[] = [];
+    const { rt, wait } = setup({ tool: async (_h, server, tool, args) => (calls.push({ server, tool, args }), { text: "[]" }) });
+    const v = rt.open({ handle: H, document: doc({ kind: "tool", server: "fetch", tool: "fetch", arguments: { url: "https://attacker.example/" } }), held: ["s"] });
+    expect(await wait(v, (d) => d.state !== "loading")).toMatchObject({ state: "off", message: SENTENCES.heldFromFile });
+    await sleep(120);
+    expect(calls).toEqual([]);
+    rt.setHeld(v, []);
+    await wait(v, (d) => d.state === "ok", "reads once let go");
+    expect(calls.length).toBeGreaterThan(0);
+    rt.setHeld(v, ["s"]);
+    await wait(v, (d) => d.state === "off", "held again");
+    const n = calls.length;
+    await sleep(150);
+    expect(calls.length).toBe(n);
+  });
+
+  it("a version and its held sources change together: the new version's held source never reads", async () => {
+    const calls: string[] = [];
+    const { rt, wait } = setup({ tool: async (_h, _s, tool) => (calls.push(tool), { text: "[]" }) });
+    const v = rt.open({ handle: H, document: doc({ kind: "tool", server: "github", tool: "a" }) });
+    await wait(v, (d) => d.state === "ok");
+    rt.update(v, doc({ kind: "tool", server: "fetch", tool: "b" }), ["s"]);
+    await wait(v, (d) => d.state === "off", "held");
+    await sleep(120);
+    expect(calls).not.toContain("b");
+  });
+});
+
+describe("gcp.metrics (L2, L5 Q5 and Q6)", () => {
+  const chart = (s: Record<string, unknown>, params?: unknown[]) => ({ ...doc(s), ...(params ? { params } : {}), blocks: [{ type: "chart", source: "s", kind: "line", y: ["cpu"] }] });
+
+  it("L2: a new choice of namespace reads that namespace at once, never the old one's series under its name", async () => {
+    const asked: string[] = [];
+    const r = reader({ metrics: (async (q: { namespace?: string }) => (asked.push(q.namespace ?? "-"), { series: { source: "cloud-monitoring", from: 0, to: 1, step: 60, cpu: { series: [] }, memory: { series: [] }, probe: q.namespace } })) as never });
+    const { rt, wait } = setup({ gcp: async () => r, times: { ...FAST, gcp: 300_000 } });
+    const v = rt.open({ handle: H, document: chart({ kind: "gcp.metrics", cluster: CTX, scope: "namespace", namespace: { param: "ns" }, range: "1h" }, [{ name: "ns", type: "namespace", default: "shop" }]) });
+    await wait(v, (d) => d.state === "ok");
+    rt.setParams(v, { ns: "billing" });
+    const d = await wait(v, (x) => x.state === "ok" && (x.series as unknown as { probe?: string })?.probe === "billing", "billing's series");
+    expect(asked).toEqual(["shop", "billing"]);
+    expect((d.series as unknown as { probe: string }).probe).toBe("billing");
+  });
+
+  it("Q5: reads a cluster only of a project the person chose (from its context)", async () => {
+    const { rt, wait } = setup({ gcp: async () => reader({ chosen: ["my-project"] }) });
+    const v = rt.open({ handle: H, document: chart({ kind: "gcp.metrics", cluster: "gke_other-project_europe-west1_prod", scope: "cluster", range: "1h" }) });
+    expect(await wait(v, (d) => d.state !== "loading")).toMatchObject({ state: "off", message: SENTENCES.gcpProject("other-project") });
+  });
+
+  it("Q6: a limited view reads only its own namespaces' usage", async () => {
+    const { rt, wait } = setup({ gcp: async (_h, ns) => reader({ limit: ns }) });
+    const v = rt.open({ handle: H, document: chart({ kind: "gcp.metrics", cluster: CTX, scope: "namespace", namespace: "payments", range: "1h" }), namespaces: ["shop"] });
+    expect(await wait(v, (d) => d.state !== "loading")).toMatchObject({ state: "forbidden", message: SENTENCES.gcpScope(["shop"]) });
+    const ok = rt.open({ handle: H, document: chart({ kind: "gcp.metrics", cluster: CTX, scope: "namespace", namespace: "shop", range: "1h" }), namespaces: ["shop"] });
+    expect((await wait(ok, (d) => d.state !== "loading")).state).toBe("ok");
+  });
+});
+
+describe("tool rows (L5 Q20)", () => {
+  it("a tool's row can't bring a tone or an object reference of its own: only field-named keys become cells", async () => {
+    const { rt, wait } = setup({ tool: async () => ({ text: JSON.stringify([{ name: "x", _tone: "bad", _ref: { group: "", resource: "pods", name: "victim", namespace: "prod" }, Upper: 1 }]) }) });
+    const v = rt.open({ handle: H, document: doc({ kind: "tool", server: "github", tool: "list" }) });
+    const d = await wait(v, (x) => x.state === "ok");
+    expect(d.rows).toEqual([{ name: "x" }]);
+  });
+});

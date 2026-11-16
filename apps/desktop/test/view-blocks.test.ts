@@ -78,6 +78,17 @@ describe("tableColumns: a view's columns for ResourceTable", () => {
     // "excellent" isn't a tone: no class from data.
     expect(cols[3]!.cell(objs[1]!, NOW).tone).toBeUndefined();
   });
+
+  it("L3 (security review of wave 10 part 4): a row's name and namespace are its object's, whatever the view wrote over them", () => {
+    const renamed: ViewRow[] = [{ name: "test-pod-7", namespace: "sandbox", _ref: ref("payments-db", { namespace: "prod" }) }];
+    const [o] = rowObjects(renamed, "name");
+    const c = tableColumns([{ field: "name" }, { field: "namespace" }]);
+    expect(c[0]!.cell(o!, NOW)).toMatchObject({ text: "payments-db", title: 'This row is Deployment prod/payments-db; the view\'s text here was "test-pod-7"' });
+    expect(c[1]!.cell(o!, NOW)).toMatchObject({ text: "prod" });
+    // A row with no object, or one whose name is its own, shows what it holds.
+    expect(c[0]!.cell(rowObjects([{ name: "free text" }], "name")[0]!, NOW).text).toBe("free text");
+    expect(c[0]!.cell(objs[0]!, NOW)).toEqual({ text: "api", sort: "api" });
+  });
 });
 
 describe("stat, charts and logs", () => {

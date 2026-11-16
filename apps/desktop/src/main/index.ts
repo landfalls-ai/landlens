@@ -2,7 +2,7 @@
 import { checkAccess, ClusterManager, FrontDoor, listReleases, loopbackCert, WatchHub } from "@landlens/kube";
 import { MetricsService } from "@landlens/metrics";
 import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, safeStorage, shell } from "electron";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { adapterEntry, AgentService } from "./agent";
@@ -25,9 +25,9 @@ import { connectionOverrides, ConnectionsService } from "./connections";
 import { connectedOf, gcpMode, GcpService } from "./gcp";
 import { cloudMonitoringSource, sessionSeries } from "./metrics-source";
 import { clicklandReadsFree, ViewRuntime } from "./view-runtime";
+import { readImport } from "./view-file-read";
 import { ViewService } from "./views";
 import { ViewStore } from "./views-store";
-import { VIEW_LIMITS } from "@landlens/views";
 import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
 import { FamilySentStore } from "@landlens/connections";
@@ -394,10 +394,8 @@ async function start() {
         const r = win && !win.isDestroyed() ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
         const path = r.canceled ? undefined : r.filePaths[0];
         if (!path) return undefined;
-        // At most 512,000 bytes are read: a larger file is refused by its size, never read whole.
-        const size = statSync(path).size;
-        if (size > VIEW_LIMITS.importBytes) return new Uint8Array(size);
-        return readFileSync(path);
+        // A regular file only, at most 512,000 bytes read, off main's thread (security review of part 4, M1).
+        return readImport(path);
       },
       save: async (name, text) => {
         const opts = { title: "Export this view", defaultPath: join(app.getPath("downloads"), name), filters: [{ name: "Landlens view", extensions: ["json"] }] };

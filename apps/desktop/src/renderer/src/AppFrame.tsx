@@ -2,8 +2,8 @@
 // frames it with sandbox="allow-scripts" only. No allow-same-origin: the view's origin is opaque, so it can't reach
 // this page, window.landlens or any storage; no allow-popups, allow-forms or allow-top-navigation. Messages are taken
 // only from this frame's own window, and app-host.ts answers them.
-import type { McpAppView, ViewIntent } from "@landlens/contracts";
-import { BUILTIN_MCP_SERVER, VIEWS_MCP_SERVER } from "@landlens/contracts";
+import type { McpAppView, ViewAuthor, ViewIntent } from "@landlens/contracts";
+import { authorCaption, BUILTIN_MCP_SERVER, VIEWS_MCP_SERVER } from "@landlens/contracts";
 
 /** The one tool a block of a view may call (D204). */
 const VIEW_TOOLS: ReadonlySet<string> = new Set(["view_data"]);
@@ -31,13 +31,17 @@ function hostContext(width?: number, max = MAX_HEIGHT, fixed?: number): HostCont
   };
 }
 
-/** A block Claude wrote on the Views page (wave 10, D204): its view, block, the sources it reads, and a fixed height. */
-export type BlockFrame = { view: string; block: string; uses: string[]; version: number; fill?: number };
+/**
+ * A block on the Views page (wave 10, D204): its view, block, the sources it reads, a fixed height, and who wrote it
+ * (Claude, a view file, or a view file Claude changed; security review of wave 10 part 4, M6).
+ */
+export type BlockFrame = { view: string; block: string; uses: string[]; version: number; fill?: number; author?: ViewAuthor };
 
 /**
  * `cap`: show at most this many pixels until "Show all" (the dock caps views so the answer stays near). A view from a
  * server you added sits in a quieter ring with "View from <server>" above it, so it never reads as Landlens's own; a
- * block Claude wrote sits in the same ring captioned "Built by Claude" (D204). A block may call only view_data, its
+ * block on the Views page sits in the same ring captioned by who wrote it: "Built by Claude" (D204), or "From a view
+ * file" for one that came from a file (security review of wave 10 part 4, M6). A block may call only view_data, its
  * data arrives from the page's store, and the objects it opens are checked by main (views:intent).
  */
 export function AppFrame(props: {
@@ -141,7 +145,7 @@ export function AppFrame(props: {
         src={view.url}
         sandbox="allow-scripts"
         referrerPolicy="no-referrer"
-        title={b ? `Built by Claude: ${b.block}` : `${view.server} · ${view.tool.name} view`}
+        title={b ? `${authorCaption(b.author)}: ${b.block}` : `${view.server} · ${view.tool.name} view`}
         style={{ height: shown }}
       />
       {clipped ? (
@@ -156,7 +160,7 @@ export function AppFrame(props: {
   if (view.server === VIEWS_MCP_SERVER && !b) return frameEl;
   return (
     <div className={"app-third" + (b ? " built" : "")}>
-      <div className="app-third-cap">{b ? <>Built by Claude</> : <>View from <b>{view.server}</b></>}</div>
+      <div className="app-third-cap">{b ? <>{authorCaption(b.author)}</> : <>View from <b>{view.server}</b></>}</div>
       {frameEl}
     </div>
   );

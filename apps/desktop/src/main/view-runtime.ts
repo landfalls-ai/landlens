@@ -89,6 +89,7 @@ const OpenRequest = z.object({
   document: z.unknown(),
   namespaces: z.array(NamespaceName).min(1).max(50).optional(),
   params: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,30}$/), z.string().max(253)).optional(),
+  held: z.array(z.string().max(64)).max(100).optional(),
 }).strict();
 const Params = z.record(z.string().regex(/^[a-z][a-z0-9-]{0,30}$/), z.string().max(253));
 
@@ -365,6 +366,11 @@ type View = {
   client: KubeClient;
   namespaces?: string[];
   document: ViewDocument;
+  /**
+   * Sources that wait for the person's yes (an imported view's connection sources, D217; security review of wave 10
+   * part 4, M5): they read nothing and say so, until ViewService lets them.
+   */
+  held: Set<string>;
   /** By name, with no prototype: a parameter named like an Object method reads nothing inherited (L5). */
   params: Record<string, string>;
   /**
@@ -421,7 +427,7 @@ export class ViewRuntime {
   }
 
   /** Open a view: mint its token, start its sources. The document is validated again here, whoever built it. */
-  open(req: { handle: string; document: unknown; namespaces?: string[]; params?: Record<string, string> }): string {
+  open(req: { handle: string; document: unknown; namespaces?: string[]; params?: Record<string, string>; held?: string[] }): string {
     const r = OpenRequest.safeParse(req);
     if (!r.success) throw fail(400, "not a valid view request");
     const parsed = parseDocument(r.data.document);
@@ -442,7 +448,7 @@ export class ViewRuntime {
       while (this.views.has(id));
       const view: View = {
         id, handle: r.data.handle, context: c.info.context, token, client, ...(namespaces ? { namespaces } : {}),
-        document: parsed.document, params, picked, gen: 0, ready: 0, budget: new WatchBudget(this.L.viewObjects, this.L.viewChars),
+        document: parsed.document, held: new Set(r.data.held ?? []), params, picked, gen: 0, ready: 0, budget: new WatchBudget(this.L.viewObjects, this.L.viewChars),
         dirty: new Set(), feeds: new Map(), sources: new Map(), running: false, visible: true, lastRefresh: 0, closed: false,
       };
       this.views.set(id, view);
@@ -462,16 +468,27 @@ export class ViewRuntime {
    * as it was. A value the person picked that the new version's parameter doesn't take is let go, and the parameter
    * reads its default. Answers the picks kept.
    */
-  update(viewId: string, document: unknown): Record<string, string> {
+  update(viewId: string, document: unknown, held?: readonly string[]): Record<string, string> {
     const v = this.view(viewId);
     const parsed = parseDocument(document);
     if (!parsed.ok) throw Object.assign(fail(400, "the view document isn't valid"), { issues: parsed.issues });
     const { params, picked } = this.checkParams(parsed.document, v.picked, false);
     v.document = parsed.document;
+    // The held sources of this version, with it: none of them reads for a moment between the two (M5).
+    if (held) v.held = new Set(held);
     v.params = params;
     v.picked = picked;
     void this.sync(v);
     return { ...picked };
+  }
+
+  /** The sources that wait for the person's yes (M5): a source let go starts reading; one held stops. */
+  setHeld(viewId: string, held: readonly string[]) {
+    const v = this.view(viewId);
+    const next = new Set(held);
+    if (next.size === v.held.size && [...next].every((h) => v.held.has(h))) return;
+    v.held = next;
+    void this.sync(v);
   }
 
   /** The person picked a parameter's value: checked against the parameter's type, or refused. Answers the picks. */
@@ -772,6 +789,8 @@ export class ViewRuntime {
    */
   private plan(v: View, run: SourceRun, types: ResourceType[], reads: Read[]) {
     const s = run.source;
+    // An imported view's source that waits for the person's yes reads nothing (M5).
+    if (v.held.has(run.id)) return void (run.refused = { state: "off", message: SENTENCES.heldFromFile });
     const changed = (key: string) => () => this.feedChanged(v, key);
     const want = (key: string, make: () => Feed) => (reads.push({ watch: false, key, make }), key);
     const watch = (t: { group: string; version: string; resource: string }, ns: string | undefined, sel: { labelSelector?: string; fieldSelector?: string } = {}, keep: Keep = BASE_KEEP) => {
@@ -886,8 +905,11 @@ export class ViewRuntime {
       case "gcp.recommendations":
       case "gcp.metrics": {
         if (!this.deps.gcp) return void (run.refused = { state: "off", message: SENTENCES.connectionOff("Google Cloud") });
-        const key = `g|${JSON.stringify(s)}|${JSON.stringify(v.namespaces ?? [])}`;
-        run.feeds.push(want(key, () => new PollFeed(key, () => this.readGcp(v, s), this.T.gcp, changed(key))));
+        // A parameter's value is in the key, as metrics.series has it (security review of wave 10 part 4, L2): a new
+        // choice is a new read, never the old namespace's series drawn under the new one's name until the next poll.
+        const ns = s.kind === "gcp.metrics" ? paramValue(v, s.namespace) : undefined;
+        const key = `g|${JSON.stringify(s)}|${JSON.stringify(ns ?? null)}|${JSON.stringify(v.namespaces ?? [])}`;
+        run.feeds.push(want(key, () => new PollFeed(key, () => this.readGcp(v, s, ns), this.T.gcp, changed(key))));
         return;
       }
       case "clickland.logs":
@@ -916,7 +938,7 @@ export class ViewRuntime {
    * namespaces' alerts and no cluster-wide usage, as a session limited to them would (D195). Rows are cells; anything
    * that fails is one of D222's fixed sentences, never Google's text.
    */
-  private async readGcp(v: View, s: Extract<Source, { kind: `gcp.${string}` }>): Promise<ConnRead> {
+  private async readGcp(v: View, s: Extract<Source, { kind: `gcp.${string}` }>, namespace?: string): Promise<ConnRead> {
     const reader = await this.deps.gcp!(v.handle, v.namespaces).catch(() => undefined);
     if (!reader) throw refusal("off", SENTENCES.connectionOff("Google Cloud"));
     const project = s.kind === "gcp.metrics" ? s.cluster.split("_")[1]! : s.project;
@@ -1010,7 +1032,7 @@ export class ViewRuntime {
       case "gcp.metrics": {
         // D195, as gcp_metrics: a limited view reads only its namespaces, never the whole cluster or a node.
         const limit = await reader.limit(s.cluster).catch(() => v.namespaces);
-        const ns = s.namespace === undefined ? undefined : typeof s.namespace === "string" ? s.namespace : (Object.hasOwn(v.params, s.namespace.param) ? v.params[s.namespace.param] : undefined);
+        const ns = namespace;
         if (limit?.length && (s.scope === "cluster" || s.scope === "node" || !ns || !limit.includes(ns))) throw refusal("forbidden", SENTENCES.gcpScope(limit));
         const r = await g(reader.metrics({ cluster: s.cluster, scope: s.scope, range: s.range, ...(ns ? { namespace: ns } : {}), ...(s.name ? { name: s.name } : {}) }));
         return { rows: [], notes, series: r.series };
@@ -1407,6 +1429,9 @@ function joinOrder(sources: ReadonlyMap<string, SourceRun>): string[] {
   return out;
 }
 
+/** A namespace a source names, its parameter's value read from the view's own (no prototype: L5). */
+const paramValue = (v: View, n: string | { param: string } | undefined): string | undefined =>
+  n === undefined ? undefined : typeof n === "string" ? n : Object.hasOwn(v.params, n.param) ? v.params[n.param] : undefined;
 const joinsOf = (src: Source): string[] => ("pipe" in src ? (src.pipe ?? []) : []).flatMap((st) => ("join" in st ? [st.join.with] : []));
 
 /** How many of the rows fit in `max` characters (cell text, keys, about 100 for a `_ref`). */

@@ -434,7 +434,8 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     if (!type || !bulkOffered(kind, by) || actionOn || !ownView()) return;
     // The sheet names objects; main reads each again for its review, so a name is all it takes from here.
     const objects = refs.map((r) => ({ metadata: { name: r.name, uid: refKey(r), ...(r.namespace ? { namespace: r.namespace } : {}) } }) as KubeObject);
-    setActionOn({ kind, type, objects, ...(by === "block" ? { asker: "view" as const, ...(block ? { block } : {}) } : {}) });
+    const author = viewStore.get().view?.state?.author;
+    setActionOn({ kind, type, objects, ...(by === "block" ? { asker: "view" as const, ...(block ? { block } : {}), ...(author ? { author } : {}) } : {}) });
   };
   /**
    * A block's intent as main accepted it (D219), in answer to the person (the host's focus and gesture rule, M1): its
@@ -455,10 +456,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     }
     if (i.kind !== "action" || !i.verb || actionOn) return false;
     const v = FRAME_VERB_ACTIONS[i.verb];
+    // Who wrote the asking block, as main says (M6): a file's block is never named as Claude's.
+    const author = viewStore.get().view?.state?.author;
     void readRef(r).then((x) => {
       if (!x) return;
       setActionOn((cur) => cur ?? {
-        kind: v.kind, type: x.type, objects: [x.o], asker: "view", block,
+        kind: v.kind, type: x.type, objects: [x.o], asker: "view", block, ...(author ? { author } : {}),
         ...(v.kind === "suspend" ? { suspend: !!v.flag } : {}), ...(v.kind === "cordon" ? { on: v.flag !== false } : {}),
       });
     });

@@ -5,6 +5,7 @@ import { appBlocks, credentialIssues, literalNames, readViewFile, Tweaks, viewFi
 import { VIEW_LIMITS } from "../src/limits.js";
 import { parsePath, readRaw, type ParsedPath } from "../src/path.js";
 import { CONNECTION_KINDS, parseDocument, type ViewDocument } from "../src/schema.js";
+import { reach, sourceWords, TRUST_KEY, trustItems } from "../src/trust.js";
 import { full, small } from "./docs.js";
 
 const issues = (d: unknown) => {
@@ -131,5 +132,108 @@ describe("a tool answer's rows path (D212)", () => {
       expect(readRaw(answer, pp), p).toBeUndefined();
     }
     expect(readRaw({ a: 1 }, path("$name"))).toBeUndefined();
+  });
+});
+
+// ---- security review of wave 10 part 4 (L1, L4, M2, M3, and L5's Q12, Q13) ---------------------------------------
+
+describe("literalNames (L1): every place a source names one cluster's things", () => {
+  const lit = (src: Record<string, unknown>, block?: Record<string, unknown>) => literalNames(ok(one(src, block))).map((l) => l.what);
+  const chart = { type: "chart", source: "s", kind: "line", y: ["cpu"] };
+  it("a field selector on a name, a namespace or a node", () => {
+    expect(lit({ kind: "kube.list", resource: "pods", fieldSelector: "metadata.name=api-1" })).toEqual(["metadata.name api-1"]);
+    expect(lit({ kind: "kube.list", resource: "pods", fieldSelector: "metadata.namespace=kube-system" })).toEqual(["metadata.namespace kube-system"]);
+    expect(lit({ kind: "kube.list", resource: "pods", fieldSelector: "status.phase=Running,spec.nodeName!=node-1" })).toEqual(["spec.nodeName not node-1"]);
+    expect(lit({ kind: "kube.list", resource: "pods", fieldSelector: "status.phase=Running" })).toEqual([]);
+  });
+
+  it("a GKE cluster and the objects gcp.metrics names", () => {
+    expect(lit({ kind: "gcp.metrics", cluster: "gke_my-project_europe-west1_prod", scope: "node", name: "gke-prod-pool-1-abc", range: "1h" }, chart)).toEqual(["node gke-prod-pool-1-abc", "cluster gke_my-project_europe-west1_prod"]);
+    expect(lit({ kind: "gcp.alerts", project: "my-project", cluster: "gke_my-project_europe-west1_prod" })).toEqual(["cluster gke_my-project_europe-west1_prod"]);
+    expect(lit({ kind: "gcp.recommendations", project: "my-project", cluster: "gke_my-project_europe-west1_prod" })).toEqual(["cluster gke_my-project_europe-west1_prod"]);
+    expect(lit({ kind: "gcp.alerts", project: "my-project" })).toEqual([]);
+  });
+
+  it("every argument of a tool source", () => {
+    expect(lit({ kind: "tool", server: "clickland", tool: "search_logs", arguments: { cluster: "prod-eu", namespace: "payments" } })).toEqual([
+      'clickland · search_logs argument cluster="prod-eu"', 'clickland · search_logs argument namespace="payments"',
+    ]);
+    expect(lit({ kind: "tool", server: "github", tool: "list_issues" })).toEqual([]);
+  });
+});
+
+describe("the credential scan (L4)", () => {
+  const tok = "ghp_0123456789abcdefghijABCDEFGHIJ012345";
+  const args = (a: Record<string, unknown>) => one({ kind: "tool", server: "mine", tool: "read", arguments: a });
+  it("refuses a token split across two arguments, and one base64-encoded", () => {
+    const split = readViewFile(file(args({ a: tok.slice(0, 20), b: tok.slice(20) })));
+    expect(!split.ok && split.issues.map(issueLine)).toEqual(["/document/sources/s/arguments: holds text that looks like a credential: a view file never carries one"]);
+    const b64 = readViewFile(file(args({ q: Buffer.from(tok).toString("base64") })));
+    expect(!b64.ok && b64.issues.map(issueLine)).toEqual(["/document/sources/s/arguments/q: holds text that looks like a credential: a view file never carries one"]);
+    const url = readViewFile(file(args({ q: Buffer.from(`password=${"h".repeat(12)}`).toString("base64url") })));
+    expect(url.ok).toBe(false);
+  });
+
+  it("refuses arguments named key, pass, auth or pat, and access or private keys", () => {
+    for (const k of ["key", "pass", "auth", "pat", "access_key", "accessKey", "signing_key", "auth_header", "authKey", "user_pass", "passphrase"]) {
+      expect(issues(args({ [k]: "0123456789abcdef0123456789abcdef" }))[0]).toMatch(/a view can't carry credentials/);
+    }
+    // Names that only look alike stay: an issue key, a sort key, a bypass flag.
+    ok(args({ issue_key: "ENG-1", sort_key: "created", bypass: false, compass: "n", monkey: 1 }));
+  });
+
+  it("passes ordinary text: a commit, a base64 that holds no credential, two plain arguments", () => {
+    ok(args({ sha: "0123456789abcdef0123456789abcdef01234567", q: Buffer.from("just some ordinary words here").toString("base64"), owner: "acme", repo: "infra" }));
+    expect(credentialIssues(ok(args({ owner: "acme", repo: "infra" })))).toEqual([]);
+  });
+
+  it("Q12, Q13: refuses a file whose name, or a key in its document, looks like a credential", () => {
+    const named = readViewFile(file(small(), { name: tok }));
+    expect(!named.ok && named.issues.map(issueLine)).toEqual(["/name: holds text that looks like a credential: a view file never carries one"]);
+    const keyed = readViewFile(file(args({ [tok]: "x" })));
+    expect(!keyed.ok && keyed.issues.map(issueLine)).toEqual(["/document/sources/s/arguments/<redacted github token>: holds text that looks like a credential: a view file never carries one"]);
+  });
+});
+
+describe("trust items (M2, M3): what an imported view runs only after the person's yes", () => {
+  const joined = () => ok({
+    schema: 1, title: "T",
+    sources: {
+      pods: { kind: "kube.list", resource: "pods", fields: { name: "$name" }, pipe: [{ join: { with: "ev", on: { left: "name", right: "name" }, take: { note: "msg" } } }] },
+      ev: { kind: "kube.events", fields: { name: "involvedObject.name", msg: "message" }, pipe: [{ join: { with: "gh", on: { left: "name", right: "name" }, take: { msg: "title" } } }] },
+      gh: { kind: "tool", server: "github", tool: "get_file_contents", arguments: { owner: "acme", path: "prod.env" } },
+      other: { kind: "kube.list", resource: "nodes" },
+    },
+    blocks: [{ type: "app", id: "count", title: "Count", uses: ["pods"], html: "<p></p>", js: "1" }],
+  });
+
+  it("reach: a block's sources and every source they join, transitively", () => {
+    expect(reach(joined(), ["pods"])).toEqual(["pods", "ev", "gh"]);
+    expect(reach(joined(), ["other"])).toEqual(["other"]);
+  });
+
+  it("one item per app block (with what it reaches) and per connection source; a change to either is a new key", () => {
+    const d = joined();
+    const items = trustItems(d);
+    expect(items.map((t) => [t.kind, t.id])).toEqual([["block", "count"], ["source", "gh"]]);
+    expect(items[0]).toMatchObject({ title: "Count", reaches: ["pods", "ev", "gh"] });
+    for (const t of items) expect(t.key).toMatch(TRUST_KEY);
+    const js = ok({ ...d, blocks: [{ ...d.blocks[0], js: "2" }] });
+    expect(trustItems(js)[0]!.key).not.toBe(items[0]!.key);
+    // A source the block reaches changes what it reads: the block's key changes too.
+    const ev = ok({ ...d, sources: { ...d.sources, ev: { ...d.sources.ev!, namespace: "kube-system" } } });
+    expect(trustItems(ev)[0]!.key).not.toBe(items[0]!.key);
+    const arg = ok({ ...d, sources: { ...d.sources, gh: { kind: "tool", server: "github", tool: "get_file_contents", arguments: { owner: "acme", path: "other.env" } } } });
+    expect(trustItems(arg)[1]!.key).not.toBe(items[1]!.key);
+    expect(trustItems(ok(small()))).toEqual([]);
+  });
+
+  it("sourceWords names each kind with its target, a tool's arguments whole", () => {
+    expect(sourceWords(ok(one({ kind: "tool", server: "github", tool: "get_file_contents", arguments: { owner: "acme", per_page: 5, open: true } })).sources.s)).toBe('github · get_file_contents with owner="acme", per_page=5, open=true');
+    expect(sourceWords(ok(one({ kind: "gcp.resources", project: "my-project", query: "state:RUNNABLE" })).sources.s)).toBe('Google Cloud resources in project my-project matching "state:RUNNABLE"');
+    expect(sourceWords(ok(one({ kind: "clickland.traces", namespace: "shop", workload: { kind: "Deployment", name: "api" }, range: "1h" })).sources.s)).toBe("Clickland traces of Deployment api in shop");
+    expect(sourceWords(ok(one({ kind: "kube.list", resource: "pods", namespace: "shop", labelSelector: "app=x", fieldSelector: "metadata.name=y" })).sources.s)).toBe("pods in shop labelled app=x where metadata.name=y");
+    const long = "z".repeat(500);
+    expect(sourceWords(ok(one({ kind: "tool", server: "mine", tool: "t", arguments: { q: long } })).sources.s)).toBe(`mine · t with q="${long}"`);
   });
 });

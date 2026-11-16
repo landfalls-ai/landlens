@@ -1,7 +1,8 @@
 // Your actions in the window (wave 8, D145–D148): which actions an object has, and "Ask Claude first" — a fixed
 // question per action, sent with main's title, main's facts and main's scrubbed diff as one quoted context. Nothing is
 // applied by asking, and the agent has no tool that presses Apply.
-import type { ActionFact, ActionKind, ActionReview, FrameVerb, KubeObject, ResourceType } from "@landlens/contracts";
+import type { ActionFact, ActionKind, ActionReview, FrameVerb, KubeObject, ResourceType, ViewAuthor } from "@landlens/contracts";
+import { authoredBy } from "@landlens/contracts";
 import { actionFits } from "@landlens/kube/action-kinds";
 import type { AskContext } from "./quotes";
 
@@ -18,15 +19,20 @@ export type ActionDraft = {
   kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean; run?: string;
   /**
    * A block on the Views page asked for this sheet (wave 10 part 3, D219), or chose some of its rows: its review card
-   * says so, naming the block Claude built (`block`, its title: security review of part 3, L3), and the sheet takes no
-   * focus from where the person is (M1). The person reviews the same dry run and applies with their own access.
+   * says so, naming the block (`block`, its title: security review of part 3, L3) and who wrote it (`author`: Claude,
+   * a view file, or a view file Claude changed; security review of part 4, M6), and the sheet takes no focus from where
+   * the person is (M1). The person reviews the same dry run and applies with their own access.
    */
   asker?: "view";
   block?: string;
+  author?: ViewAuthor;
 };
-/** The review card's eyebrow: whose action this is. A block's is Claude's, never Landlens's own page's (L3). */
-export const eyebrowOf = (d: Pick<ActionDraft, "asker" | "block">) =>
-  d.asker === "view" ? `Asked for by a block Claude built${d.block ? ` (${d.block})` : ""}` : "Your action";
+/**
+ * The review card's eyebrow: whose action this is. A block's is its author's (Claude's, or a view file's: never
+ * "Claude built" for a file's block, M6), never Landlens's own page's (L3).
+ */
+export const eyebrowOf = (d: Pick<ActionDraft, "asker" | "block" | "author">) =>
+  d.asker === "view" ? `Asked for by ${authoredBy(d.author)}${d.block ? ` (${d.block})` : ""}` : "Your action";
 
 /**
  * Whether the sheet takes the keyboard when it opens (its box, the count's field, Apply after the review). A sheet a

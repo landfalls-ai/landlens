@@ -16,4 +16,5 @@ export * from "./status.js";
 export * from "./catalog.js";
 export * from "./intent.js";
 export * from "./file.js";
+export * from "./trust.js";
 export * from "./app/page.js";
