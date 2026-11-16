@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MetricsService, NOT_GRANTED } from "../src/service.js";
+import { HAS_DATA_TTL, MetricsService, NO_DATA_TTL, NOT_GRANTED } from "../src/service.js";
 import { fakeClickland, KEY } from "./fakes.js";
 
 const NOW = Date.parse("2026-11-14T12:00:00Z");
@@ -242,5 +242,70 @@ describe("Cloud Monitoring in the order (wave 9, D182)", () => {
     expect(order[0]).toBe("hold");
     expect(order.filter((x) => x === "hold")).toHaveLength(1);
     expect(order.length).toBeGreaterThan(2);
+  });
+
+  describe("Fable's security review of part 2, fixed", () => {
+    const hasData = (s: MetricsService) => (s as unknown as { hasData: Map<string, unknown> }).hasData;
+
+    it("L3: an answer whose series all lost this cluster's labels is a failure with its sentence, metrics-server next, nothing kept", async () => {
+      const log: string[] = [];
+      const byNumber = async (q: string) => {
+        log.push(q);
+        return { status: "success", data: { resultType: "matrix", result: [{ metric: { ...id, project_id: "482913570214", node_name: "gke-n-1" }, values: [[NOW / 1000, "1"]] }] } };
+      };
+      const s = svc({ dep: use(byNumber) });
+      const out = await s.series(req);
+      expect(out.source).toBe("metrics-server");
+      expect(out.reasons[1]).toEqual({ code: "cloud-monitoring-failed", message: "Cloud Monitoring (demo-shop) answered without this cluster's labels, so nothing of it is drawn." });
+      expect(hasData(s).size).toBe(0);
+      // Only the container queries lost them (the node query keeps them): a pod is the same failure, never an empty chart.
+      const pods = async (q: string) => (q.includes("node_name") ? m("node_name", ["gke-n-1"]) : { status: "success", data: { resultType: "matrix", result: [{ metric: { ...id, container_name: "app" }, values: [[NOW / 1000, "1"]] }] } });
+      const t = svc({ dep: use(pods) });
+      const pod = await t.series({ handle: "hhhhhhhhhhhh", scope: "pod", namespace: "shop", name: "new-pod", range: "1h" });
+      expect(pod.source).toBe("metrics-server");
+      expect(codes(pod)).toEqual(["clickland-off", "cloud-monitoring-failed", "live-only"]);
+      expect(hasData(t).size).toBe(0);
+    });
+
+    it("L7: a kept no lasts a minute; a kept yes five", async () => {
+      let t = NOW;
+      let nodes: string[] = [];
+      const log: string[] = [];
+      const ask = async (q: string) => (log.push(q), q.includes("node_name") ? m("node_name", nodes) : m("container_name", []));
+      const s = new MetricsService({ clickland: () => ({ clusterName: (c) => c }), cluster: () => ({ context: "x", get: kube(true) }), cloudMonitoring: use(ask), now: () => t, sampler: { timers: { set: () => 1, clear: () => {} }, now: () => t } });
+      const pod = { handle: "hhhhhhhhhhhh", scope: "pod", namespace: "shop", name: "new-pod", range: "1h" } as const;
+      const checks = () => log.filter((q) => q.includes("node_cpu_core_usage_time")).length;
+      expect(codes(await s.series(pod))).toContain("cloud-monitoring-no-data");
+      expect(checks()).toBe(1);
+      // System metrics turned on: within the minute the no still holds; after it, asked again.
+      nodes = ["gke-n-1"];
+      t += NO_DATA_TTL - 1;
+      expect(codes(await s.series(pod))).toContain("cloud-monitoring-no-data");
+      expect(checks()).toBe(1);
+      t += 2;
+      expect((await s.series(pod)).source).toBe("cloud-monitoring");
+      expect(checks()).toBe(2);
+      // A yes is kept five minutes.
+      t += HAS_DATA_TTL - 1;
+      expect((await s.series(pod)).source).toBe("cloud-monitoring");
+      expect(checks()).toBe(2);
+    });
+
+    it("T4: whether a cluster has data is kept per cluster: one without data doesn't answer for one with", async () => {
+      const B = { project: "demo-shop", location: "europe-west1-b", name: "shop-staging" };
+      const idOf = (c: typeof C) => ({ project_id: c.project, location: c.location, cluster_name: c.name });
+      const ask = (c: typeof C, nodes: string[]) => async (q: string) => ({ status: "success", data: { resultType: "matrix", result: q.includes("node_name") ? nodes.map((node_name) => ({ metric: { ...idOf(c), node_name }, values: [[NOW / 1000, "1"]] })) : [] } });
+      const s = new MetricsService({
+        clickland: () => ({ clusterName: (c) => c }),
+        cluster: () => ({ context: "x", get: kube(true) }),
+        cloudMonitoring: async (handle) => (handle === "bbbbbbbbbbbb" ? { cluster: B, ask: ask(B, []) } : { cluster: C, ask: ask(C, ["gke-n-1"]) }),
+        now: () => NOW,
+        sampler: { timers: { set: () => 1, clear: () => {} }, now: () => NOW },
+      });
+      const pod = (handle: string) => ({ handle, scope: "pod", namespace: "shop", name: "new-pod", range: "1h" }) as const;
+      expect(codes(await s.series(pod("bbbbbbbbbbbb")))).toContain("cloud-monitoring-no-data");
+      expect((await s.series(pod("hhhhhhhhhhhh"))).source).toBe("cloud-monitoring");
+      expect(hasData(s).size).toBe(2);
+    });
   });
 });

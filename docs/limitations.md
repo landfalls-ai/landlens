@@ -251,8 +251,12 @@ person's check reads them), and Ask Claude sends one problem at a time.
   or uptime checks. Only for a GKE cluster of a project you chose, and a context of your own only at the address and
   CA Google lists; a cluster outside the chosen projects gets metrics-server. A chosen Prometheus stays ahead of it.
   Claude's `metrics` tool reads none of it until wave 9 part 4's grant (it answers from metrics-server and says why).
-  Whether the real API keeps `project_id`, `location` and `cluster_name` through `sum by` is unchecked ([check 1]: if
-  not, the charts are empty with their reason); nothing was checked against the real Monitoring API.
+  Whether the real API keeps `project_id`, `location` and `cluster_name` (and `namespace_name`, `pod_name`) through
+  `sum by` is unchecked ([check 1]: if not, the chart says Cloud Monitoring answered without this cluster's labels and
+  draws from metrics-server); nothing was checked against the real Monitoring API. A 403 or 429 is kept a minute, so
+  turning the API on or getting Monitoring Viewer shows within a minute. A session's `metrics` call on a context named
+  like a GKE cluster of a chosen project is told "Cloud Monitoring may have this cluster's history" from the name
+  alone (main asks Google nothing for a session yet).
 - **Requests and limits are drawn at their latest value**, not as they changed over the range (a rollout that changed
   them shows the new values across the whole chart).
 - **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten

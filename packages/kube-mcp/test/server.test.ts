@@ -205,7 +205,7 @@ describe("landlens-kube MCP server", () => {
       expect(cm.content[0].text).toContain("Memory (non-evictable)");
       cluster.metrics = async () => ({
         source: "metrics-server", from: 0, to: 60_000, step: 30, by: "node", cpu: { series: [] }, memory: { series: [] },
-        reasons: [{ code: "cloud-monitoring-not-granted", message: "Cloud Monitoring has this cluster's history, but Claude may not read Google Cloud." }, { code: "live-only", message: "Sampled live." }],
+        reasons: [{ code: "cloud-monitoring-not-granted", message: "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud." }, { code: "live-only", message: "Sampled live." }],
       } as any);
       const ms: any = await client.callTool({ name: "metrics", arguments: {} });
       expect(ms.content[0].text).toContain("Claude may not read Google Cloud.");

@@ -85,9 +85,9 @@ project: `metrics:series` is unchanged, and main decides from the handle.
 
 | Scope | One series per | CPU (cores) | Memory (bytes) |
 |---|---|---|---|
-| Pod | container | `sum by (G,container_name) (rate(kubernetes_io:container_cpu_core_usage_time{S,namespace_name,pod_name}[w]))` | `sum by (G,container_name) (kubernetes_io:container_memory_used_bytes{S,namespace_name,pod_name,memory_type="non-evictable"})` |
-| Deployment, StatefulSet, DaemonSet | pod | as above by `pod_name`, with `pod_name=~"<its pods>"` | same |
-| Namespace | pod | as above by `pod_name`, the whole namespace | same |
+| Pod | container | `sum by (G,namespace_name,pod_name,container_name) (rate(kubernetes_io:container_cpu_core_usage_time{S,namespace_name,pod_name}[w]))` | `sum by (G,namespace_name,pod_name,container_name) (kubernetes_io:container_memory_used_bytes{S,namespace_name,pod_name,memory_type="non-evictable"})` |
+| Deployment, StatefulSet, DaemonSet | pod | as above by `namespace_name,pod_name`, with `pod_name=~"<its pods>"` | same |
+| Namespace | pod | as above by `namespace_name,pod_name`, the whole namespace | same |
 | Cluster | node | `sum by (G,node_name) (rate(kubernetes_io:node_cpu_core_usage_time{S}[w]))` | `sum by (G,node_name) (kubernetes_io:node_memory_used_bytes{S,memory_type="non-evictable"})` |
 | Node | node | the cluster's with `node_name` | same |
 | Cluster → Top namespaces | namespace | the container CPU query by `namespace_name` | the container memory query by `namespace_name` |
@@ -105,29 +105,36 @@ GKE's shapes. Nothing anyone types becomes PromQL.
 **The metrics-scope leak.** A PromQL query on project P answers for every project in P's metrics scope, and two
 projects can each hold a cluster of the same name in the same location. So every selector names all three of
 `project_id`, `location` and `cluster_name`, every aggregation keeps them, and the answer keeps a series only when it
-carries exactly this cluster's three values; a series missing one is dropped too. If Google ever answered without
-them, the chart would be empty with its reason, never another cluster's line. More than 200 of this cluster's series
-draws 200 and says so ("Cloud Monitoring had more than 200 series for this scope; the first 200 are drawn.").
+carries exactly this cluster's three values; a series missing one is dropped too. A pod's, a workload's and a
+namespace's queries keep `namespace_name` (a pod's `pod_name` too) the same way, so a matcher Google didn't honour
+can't draw another namespace's pod of the same name. If Google ever answered without the labels (by project number,
+under another name), nothing of it is drawn and the reason says "Cloud Monitoring (demo-shop) answered without this
+cluster's labels, so nothing of it is drawn."; metrics-server is next. More than 200 of the scope's series (counted
+after a workload's or node's own cut) draws 200 and says so ("Cloud Monitoring had more than 200 series for this
+scope; the first 200 are drawn.", in the source line's tooltip). On the Overview, Top namespaces failing alone leaves
+the nodes drawn from Cloud Monitoring, and the tooltip says "Top namespaces couldn't be read: …".
 
 **The reasons**, in the no-metrics notice and the live line's tooltip, and **Open Google Cloud** or **Copy command**
 beside them:
 
 | Code | Says |
 |---|---|
-| `cloud-monitoring-failed` | "Cloud Monitoring (demo-shop) didn't answer: <Google's error as Landlens's fixed sentence>", e.g. the API off (with its `gcloud services enable` command and Copy), the Monitoring Viewer role missing, or "Cloud Monitoring didn't accept Landlens's query." Google's own text, which echoes the query, is never shown or logged |
-| `cloud-monitoring-no-data` | "Cloud Monitoring has no GKE system metrics for shop-prod in demo-shop in the last hour." Asked only when a scope comes back empty: no node CPU for the whole cluster in the last hour (kept five minutes) means system metrics are off, and metrics-server is next. With node data, an empty scope is a new pod, and the chart says "no samples yet" as for any source |
+| `cloud-monitoring-failed` | "Cloud Monitoring (demo-shop) didn't answer: <Google's error as Landlens's fixed sentence>", e.g. the API off (with its `gcloud services enable` command and Copy), the Monitoring Viewer role missing, or "Cloud Monitoring didn't accept Landlens's query." Google's own text, which echoes the query, is never shown or logged. Also an answer without this cluster's labels (above), "Cloud Monitoring is busy …" (more than 40 queries waiting), and, beside a drawn Overview, "Top namespaces couldn't be read: …" |
+| `cloud-monitoring-no-data` | "Cloud Monitoring has no GKE system metrics for shop-prod in demo-shop in the last hour." Asked only when a scope comes back empty: no node CPU for the whole cluster in the last hour (a no kept a minute, a yes five) means system metrics are off, and metrics-server is next. With node data, an empty scope is a new pod, and the chart says "no samples yet" as for any source |
 | `cloud-monitoring-not-chosen` | The hint, with Open Google Cloud |
-| `cloud-monitoring-not-granted` | The agent's `metrics` tool only: "Cloud Monitoring has this cluster's history, but Claude may not read Google Cloud. …". Until wave 9 part 4 gives sessions a grant that covers metrics (D190, D194), no session reads Cloud Monitoring, and its tool answers from metrics-server |
+| `cloud-monitoring-not-granted` | The agent's `metrics` tool only: "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud. …". Until wave 9 part 4 gives sessions a grant that covers metrics (D190, D194), no session reads Cloud Monitoring, and its tool answers from metrics-server. Main decides it from the context's name and the chosen projects before asking anything: a session's call makes no gcloud run and no Google request |
 | `cloud-monitoring-cut` | More than 200 series (above) |
 
 **Main** (`GcpService.promAsk`) hands `packages/metrics` a function, never the client or the token. Each answer is kept
-25 s under the project, the query, the step and the start in steps (at most 200, the oldest first; a failure isn't
-kept), so the two charts of a view, the 30 s refresh and the agent don't each pay for one query. Queries run four at
-once in their own slot, only for a project still chosen, each with a 10 s limit and the client's 8 MB cap. An account
-change or a project taken out forgets them. Nothing is asked unless a chart asked.
+25 s under the project, the query, the step and the start in steps (at most 40, the oldest first, and those past
+25 s leave at the next ask), so the two charts of a view, the 30 s refresh and the agent don't each pay for one query.
+A 403 or 429 (the API off, the role missing, Google's rate limit) is kept a minute for the project and given again
+without asking; no other failure is kept. Queries run four at once in their own slot with at most 40 waiting, only
+for a project still chosen, each with a 10 s limit and the client's 8 MB cap. An account change or a project taken
+out forgets the answers and the failures. Nothing is asked unless a chart asked.
 
 The source line reads "Cloud Monitoring shop-prod", its tooltip "Cloud Monitoring, GKE system metrics of shop-prod in
-demo-shop (us-central1), 60s steps". The agent's `metrics` tool names it "Cloud Monitoring (GKE system metrics, 60 s
+demo-shop (us-central1), 60s steps", then its own reasons (a cut, Top namespaces that failed). The agent's `metrics` tool names it "Cloud Monitoring (GKE system metrics, 60 s
 samples)" and its memory "non-evictable".
 
 ## Setup

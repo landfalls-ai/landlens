@@ -5,7 +5,7 @@
 import type { GkeRef } from "@landlens/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeGcp, GCP_TOKEN } from "../../gcp/test/fake-gcp";
-import { CUT_REASON, cloudMonitoringSeries, gkeHasData, gkeQueries, gkeStep, parseGkeMatrix, POD_REGEX_MAX, type PromAsk } from "../src/cloud-monitoring.js";
+import { AskFailed, CUT_REASON, cloudMonitoringSeries, gkeHasData, gkeQueries, gkeStep, LabelsLost, parseGkeMatrix, parseGkeMatrixCut, POD_REGEX_MAX, type PromAsk } from "../src/cloud-monitoring.js";
 
 const NOW = Date.parse("2026-11-16T09:00:00Z");
 const C: GkeRef = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
@@ -59,19 +59,22 @@ describe("the queries (D180)", () => {
   it("are each scope's, exactly, with the three labels in every selector and every by", () => {
     expect(gkeQueries(C, { scope: "pod", namespace: "shop", name: "orders-api-7c9f-x2x4q", range: "1h" }, 60)).toEqual({
       label: "container_name",
-      cpu: `sum by (${G},container_name) (rate(kubernetes_io:container_cpu_core_usage_time{${S},namespace_name="shop",pod_name="orders-api-7c9f-x2x4q"}[300s]))`,
-      memory: `sum by (${G},container_name) (kubernetes_io:container_memory_used_bytes{${S},namespace_name="shop",pod_name="orders-api-7c9f-x2x4q",memory_type="non-evictable"})`,
+      cpu: `sum by (${G},namespace_name,pod_name,container_name) (rate(kubernetes_io:container_cpu_core_usage_time{${S},namespace_name="shop",pod_name="orders-api-7c9f-x2x4q"}[300s]))`,
+      memory: `sum by (${G},namespace_name,pod_name,container_name) (kubernetes_io:container_memory_used_bytes{${S},namespace_name="shop",pod_name="orders-api-7c9f-x2x4q",memory_type="non-evictable"})`,
+      labels: { namespace_name: "shop", pod_name: "orders-api-7c9f-x2x4q" },
     });
     expect(gkeQueries(C, { scope: "deployment", namespace: "shop", name: "orders-api", range: "6h" }, 90, ["a-1", "b.2"])).toEqual({
       label: "pod_name",
-      cpu: `sum by (${G},pod_name) (rate(kubernetes_io:container_cpu_core_usage_time{${S},namespace_name="shop",pod_name=~"a-1|b\\\\.2"}[300s]))`,
-      memory: `sum by (${G},pod_name) (kubernetes_io:container_memory_used_bytes{${S},namespace_name="shop",pod_name=~"a-1|b\\\\.2",memory_type="non-evictable"})`,
+      cpu: `sum by (${G},namespace_name,pod_name) (rate(kubernetes_io:container_cpu_core_usage_time{${S},namespace_name="shop",pod_name=~"a-1|b\\\\.2"}[300s]))`,
+      memory: `sum by (${G},namespace_name,pod_name) (kubernetes_io:container_memory_used_bytes{${S},namespace_name="shop",pod_name=~"a-1|b\\\\.2",memory_type="non-evictable"})`,
       only: new Set(["a-1", "b.2"]),
+      labels: { namespace_name: "shop" },
     });
     expect(gkeQueries(C, { scope: "namespace", namespace: "shop", range: "24h" }, 360)).toEqual({
       label: "pod_name",
-      cpu: `sum by (${G},pod_name) (rate(kubernetes_io:container_cpu_core_usage_time{${S},namespace_name="shop"}[720s]))`,
-      memory: `sum by (${G},pod_name) (kubernetes_io:container_memory_used_bytes{${S},namespace_name="shop",memory_type="non-evictable"})`,
+      cpu: `sum by (${G},namespace_name,pod_name) (rate(kubernetes_io:container_cpu_core_usage_time{${S},namespace_name="shop"}[720s]))`,
+      memory: `sum by (${G},namespace_name,pod_name) (kubernetes_io:container_memory_used_bytes{${S},namespace_name="shop",memory_type="non-evictable"})`,
+      labels: { namespace_name: "shop" },
     });
     expect(gkeQueries(C, { scope: "cluster", range: "1h" }, 60)).toEqual({
       label: "node_name",
@@ -235,7 +238,7 @@ describe("a scope's series from Cloud Monitoring", () => {
     const id = { project_id: "demo-shop", location: "us-central1", cluster_name: "shop-prod" };
     const many = Array.from({ length: 120 }, (_, i) => `orders-api-7c9f-${String(i).padStart(5, "0")}-abcdefghij`);
     const big = async (p: string): Promise<any> => (p.includes("labelSelector") ? { items: many.map((name) => ({ metadata: { name } })) } : cluster().get(p));
-    const ask = vi.fn(async () => matrix([...many.slice(0, 3), "cart-6d5b-9wq7z", "web-frontend-84d6-4mz9t"].map((pod_name) => ({ ...id, pod_name }))));
+    const ask = vi.fn(async () => matrix([...many.slice(0, 3), "cart-6d5b-9wq7z", "web-frontend-84d6-4mz9t"].map((pod_name) => ({ ...id, namespace_name: "shop", pod_name }))));
     const s = await cloudMonitoringSeries(big, ask, C, { scope: "deployment", namespace: "shop", name: "orders-api", range: "1h" }, NOW);
     expect((ask.mock.calls[0] as unknown[])[0]).not.toContain("pod_name=~");
     expect(keys(s.cpu.series)).toEqual(many.slice(0, 3));
@@ -264,5 +267,118 @@ describe("a scope's series from Cloud Monitoring", () => {
     } finally {
       fake.gke.set("demo-shop/us-central1/shop-prod", saved);
     }
+  });
+});
+
+describe("Fable's security review of part 2, fixed", () => {
+  const id = { project_id: "demo-shop", location: "us-central1", cluster_name: "shop-prod" };
+  const W = { scope: "deployment", namespace: "shop", name: "orders-api", range: "1h" } as const;
+  const many = Array.from({ length: 120 }, (_, i) => `orders-api-7c9f-${String(i).padStart(5, "0")}-abcdefghij`);
+  const big = async (p: string): Promise<any> => (p.includes("labelSelector") ? { items: many.map((name) => ({ metadata: { name } })) } : cluster().get(p));
+
+  it("L1: the 200-series cap counts only the workload's pods: 300 other pods first don't cut its 120", async () => {
+    const others = Array.from({ length: 300 }, (_, i) => `other-${i}`);
+    const ask = vi.fn(async () => matrix([...others, ...many].map((pod_name) => ({ ...id, namespace_name: "shop", pod_name }))));
+    const s = await cloudMonitoringSeries(big, ask, C, W, NOW);
+    expect((ask.mock.calls[0] as unknown[])[0]).not.toContain("pod_name=~");
+    expect(keys(s.cpu.series)).toEqual([...many].sort());
+    expect(s.reasons).toEqual([]);
+  });
+
+  it("L2: with the namespace (and pod) matcher taken out, a pod of the same name in another namespace isn't drawn", async () => {
+    // shop-prod gains a namespace `payments` with a pod of orders-api's name, whose container is `intruder`.
+    const key = "demo-shop/us-central1/shop-prod";
+    const saved = fake.gke.get(key)!;
+    fake.gke.set(key, { ...saved, pods: [...saved.pods, { namespace: "payments", pod: "orders-api-7c9f-x2x4q", containers: ["intruder"] }, { namespace: "payments", pod: "ledger-0", containers: ["ledger"] }] });
+    try {
+      const c = cluster();
+      const pod = { scope: "pod", namespace: "shop", name: "orders-api-7c9f-x2x4q", range: "1h" } as const;
+      const ns = { scope: "namespace", namespace: "shop", range: "1h" } as const;
+      for (const r of [pod, ns, W]) {
+        const clean = await cloudMonitoringSeries(c.get, fakeAsk(), C, r, NOW);
+        const strip = [',namespace_name="shop"', ',pod_name="orders-api-7c9f-x2x4q"'];
+        const ask = fakeAsk((q) => strip.reduce((x, m) => x.split(m).join(""), q));
+        const out = await cloudMonitoringSeries(c.get, ask, C, r, NOW);
+        expect(ask.queries.every((q) => !q.includes('namespace_name="shop"')), r.scope).toBe(true);
+        expect(out.cpu.series, r.scope).toEqual(clean.cpu.series);
+        expect(out.memory.series, r.scope).toEqual(clean.memory.series);
+        expect(keys(out.cpu.series), r.scope).not.toContain("intruder");
+        expect(keys(out.cpu.series), r.scope).not.toContain("ledger-0");
+      }
+    } finally {
+      fake.gke.set(key, saved);
+    }
+  });
+
+  it("L3: series that all lost this cluster's labels are LabelsLost, not an empty chart; another cluster's series alone are not", async () => {
+    const byNumber = matrix([{ ...id, project_id: "482913570214", node_name: "gke-n-1" }, { location: "us-central1", cluster_name: "shop-prod", node_name: "gke-n-2" }]);
+    expect(parseGkeMatrixCut(byNumber, C, "node_name")).toMatchObject({ lines: [], total: 2, unlabelled: 2 });
+    await expect(cloudMonitoringSeries(cluster().get, async () => byNumber, C, { scope: "cluster", range: "1h" }, NOW)).rejects.toBeInstanceOf(LabelsLost);
+    await expect(gkeHasData(async () => byNumber, C, NOW)).rejects.toThrow("Cloud Monitoring (demo-shop) answered without this cluster's labels, so nothing of it is drawn.");
+    // Only the container queries lost them (the namespace label missing): a pod is LabelsLost too.
+    const noNs = matrix([{ ...id, pod_name: "orders-api-7c9f-x2x4q", container_name: "api" }]);
+    await expect(cloudMonitoringSeries(cluster().get, async () => noNs, C, { scope: "pod", namespace: "shop", name: "orders-api-7c9f-x2x4q", range: "1h" }, NOW)).rejects.toBeInstanceOf(LabelsLost);
+    // Another project's cluster only (labels present, other values): no data, not a failure.
+    const other = matrix([{ ...id, project_id: "orbit-analytics", node_name: "gke-n-1" }]);
+    expect(await gkeHasData(async () => other, C, NOW)).toBe(false);
+    expect((await cloudMonitoringSeries(cluster().get, async () => other, C, { scope: "cluster", range: "1h" }, NOW)).cpu.series).toEqual([]);
+    // An empty answer is no data either.
+    expect(await gkeHasData(async () => matrix([]), C, NOW)).toBe(false);
+  });
+
+  it("L6: Top namespaces failing alone keeps the nodes from Cloud Monitoring and says so", async () => {
+    const real = fakeAsk();
+    const ask: PromAsk = async (q, ...rest) => {
+      if (q.includes("by (project_id,location,cluster_name,namespace_name)")) throw new AskFailed("Google didn't answer in time.");
+      return real(q, ...rest);
+    };
+    const s = await cloudMonitoringSeries(cluster().get, ask, C, { scope: "cluster", range: "1h" }, NOW);
+    expect(s.source).toBe("cloud-monitoring");
+    expect(keys(s.cpu.series)).toEqual(["gke-shop-prod-default-pool-1a2b", "gke-shop-prod-default-pool-3c4d"]);
+    expect(s.namespaces).toBeUndefined();
+    expect(s.reasons).toEqual([{ code: "cloud-monitoring-failed", message: "Top namespaces couldn't be read: Google didn't answer in time." }]);
+    // Another error's own text isn't passed on.
+    const odd: PromAsk = async (q, ...rest) => (q.includes("namespace_name)") ? Promise.reject(new Error("raw <html> text")) : real(q, ...rest));
+    const t = await cloudMonitoringSeries(cluster().get, odd, C, { scope: "cluster", range: "1h" }, NOW);
+    expect(t.reasons[0]!.message).toBe("Top namespaces couldn't be read: Landlens couldn't read its answer.");
+    // The nodes failing still fails the whole.
+    const nodes: PromAsk = async (q, ...rest) => (q.includes("node_name)") ? Promise.reject(new AskFailed("x")) : real(q, ...rest));
+    await expect(cloudMonitoringSeries(cluster().get, nodes, C, { scope: "cluster", range: "1h" }, NOW)).rejects.toBeInstanceOf(AskFailed);
+  });
+
+  it("T1: the reader's own read of a pod, a workload, its pods or a node is the gate: a 403 on any asks Google nothing", async () => {
+    const forbid = (path: string) => async (p: string): Promise<any> => (p === path ? Promise.reject(Object.assign(new Error("forbidden"), { status: 403 })) : cluster().get(p));
+    for (const [path, r] of [
+      ["/api/v1/namespaces/shop/pods/orders-api-7c9f-x2x4q", { scope: "pod", namespace: "shop", name: "orders-api-7c9f-x2x4q", range: "1h" }],
+      ["/apis/apps/v1/namespaces/shop/deployments/orders-api", W],
+      ["/api/v1/namespaces/shop/pods?labelSelector=app=orders-api", W],
+      ["/api/v1/nodes/gke-shop-prod-default-pool-1a2b", { scope: "node", name: "gke-shop-prod-default-pool-1a2b", range: "1h" }],
+      ["/api/v1/nodes", { scope: "cluster", range: "1h" }],
+    ] as const) {
+      const ask = vi.fn();
+      await expect(cloudMonitoringSeries(forbid(path), ask, C, r, NOW), path).rejects.toMatchObject({ status: 403 });
+      expect(ask, path).not.toHaveBeenCalled();
+    }
+  });
+
+  it("T5: a workload that fits the regex keeps only its pods, even when the answer has another pod of the namespace", async () => {
+    const ask = vi.fn(async () => matrix(["orders-api-7c9f-x2x4q", "orders-api-7c9f-b8k2m", "cart-6d5b-9wq7z"].map((pod_name) => ({ ...id, namespace_name: "shop", pod_name }))));
+    const s = await cloudMonitoringSeries(cluster().get, ask, C, W, NOW);
+    expect((ask.mock.calls[0] as unknown[])[0]).toContain("pod_name=~");
+    expect(keys(s.cpu.series)).toEqual(["orders-api-7c9f-b8k2m", "orders-api-7c9f-x2x4q"]);
+  });
+
+  it("T6: a listed pod whose name isn't a Kubernetes name is left out of the query, not a 400", async () => {
+    const odd = async (p: string): Promise<any> => (p.includes("labelSelector") ? { items: [{ metadata: { name: "orders-api-7c9f-x2x4q" } }, { metadata: { name: 'Bad"|.*' } }] } : cluster().get(p));
+    const ask = fakeAsk();
+    const s = await cloudMonitoringSeries(odd, ask, C, W, NOW);
+    expect(s.source).toBe("cloud-monitoring");
+    expect(ask.queries[0]).toContain('pod_name=~"orders-api-7c9f-x2x4q"}');
+    expect(keys(s.cpu.series)).toEqual(["orders-api-7c9f-x2x4q"]);
+  });
+
+  it("T7: NaN, infinite, odd and non-array points are dropped; the finite ones kept", () => {
+    const raw = { status: "success", data: { resultType: "matrix", result: [{ metric: { ...id, node_name: "n" }, values: [[NOW / 1000, "NaN"], [NOW / 1000, "+Inf"], [NOW / 1000, "-Inf"], "x", [NOW / 1000], ["t", "1"], null, [NOW / 1000, "0.5"]] }] } };
+    expect(parseGkeMatrix(raw, C, "node_name")).toEqual([{ key: "n", points: [[NOW, 0.5]] }]);
   });
 });

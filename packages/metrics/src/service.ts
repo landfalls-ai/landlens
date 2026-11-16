@@ -2,7 +2,7 @@
 // Prometheus, if you chose it; else Cloud Monitoring, for a GKE cluster of a project you chose on the Google Cloud page
 // (wave 9, D182); else metrics-server sampled while Landlens is open; else nothing, with every reason and what fixes it.
 import type { ClicklandTest, GkeRef, MetricsReason, MetricsRequest, MetricsSeries } from "@landlens/contracts";
-import { cloudMonitoringSeries, gkeHasData, NOT_METRICS, type PromAsk } from "./cloud-monitoring.js";
+import { AskFailed, cloudMonitoringSeries, gkeHasData, LabelsLost, NOT_METRICS, type PromAsk } from "./cloud-monitoring.js";
 import { ClicklandClient, ClicklandError, FILTERS_MISSING, honoursFilters, type ClicklandConfig } from "./clickland.js";
 import { clicklandSeries, RANGE_MS } from "./clickland-series.js";
 import { liveSeries } from "./live-series.js";
@@ -35,13 +35,19 @@ export type MetricsDeps = {
  */
 export type AgentGoogle = { projects: string[]; hold: () => void };
 
-/** What a session without the grant for the cluster's project is told (D182, D194). */
-export const NOT_GRANTED = "Cloud Monitoring has this cluster's history, but Claude may not read Google Cloud. The person can turn on 'Claude can read these projects'.";
+/**
+ * What a session without the grant for the cluster's project is told (D182, D194). "May": main decides a session's call
+ * from the context's name and the chosen projects alone, before anything asks Google which cluster it is (review of
+ * part 2, M1).
+ */
+export const NOT_GRANTED = "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud. The person can turn on 'Claude can read these projects'.";
 /** Whether a GKE cluster has any system metrics is asked again after five minutes. */
-const HAS_DATA_TTL = 300_000;
-
-/** A failure of main's `ask` (Google, or main's own refusal), told apart from a failed read of the cluster. */
-class AskFailed extends Error {}
+export const HAS_DATA_TTL = 300_000;
+/**
+ * A "no system metrics" answer is kept only a minute (review of part 2, L7): the service isn't told of an account change
+ * or the person turning system metrics on, and a kept no says "no GKE system metrics" for any empty scope.
+ */
+export const NO_DATA_TTL = 60_000;
 
 const originOf = (u: string) => {
   try {
@@ -243,6 +249,8 @@ export class MetricsService {
       reasons.push({ code: "cloud-monitoring-no-data", message: `Cloud Monitoring has no GKE system metrics for ${ref.name} in ${ref.project} in the last hour.` });
     } catch (err) {
       if (err instanceof AskFailed) failed(`Cloud Monitoring (${ref.project}) didn't answer: ${err.message}`);
+      // Series came back, but none with this cluster's labels (L3): said, metrics-server next, nothing kept of it.
+      else if (err instanceof LabelsLost) failed(err.message);
       else if ((err as { status?: number }).status === 400) throw err;
       else if (typeof (err as { status?: unknown }).status === "number") failed(`Cloud Monitoring (${ref.project}) wasn't asked: reading this scope from the cluster failed (HTTP ${(err as { status: number }).status}).`);
       else failed(`Cloud Monitoring (${ref.project}) didn't answer: ${(err as Error)?.message === NOT_METRICS ? NOT_METRICS : "Landlens couldn't read its answer."}`);
@@ -250,11 +258,11 @@ export class MetricsService {
     return undefined;
   }
 
-  /** Whether the cluster has any system metrics in the last hour, kept five minutes; a failure isn't kept. */
+  /** Whether the cluster has any system metrics in the last hour, kept five minutes (a no, a minute); a failure isn't kept. */
   private async gkeHasData(ref: GkeRef, ask: PromAsk): Promise<boolean> {
     const key = `${ref.project}/${ref.location}/${ref.name}`;
     const known = this.hasData.get(key);
-    if (known && this.now() - known.at < HAS_DATA_TTL) return known.ok;
+    if (known && this.now() - known.at < (known.ok ? HAS_DATA_TTL : NO_DATA_TTL)) return known.ok;
     const ok = await gkeHasData(ask, ref, this.now());
     this.hasData.set(key, { at: this.now(), ok });
     while (this.hasData.size > 100) this.hasData.delete(this.hasData.keys().next().value!);

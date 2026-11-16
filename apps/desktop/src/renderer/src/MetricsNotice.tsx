@@ -89,8 +89,10 @@ export function MetricsSource({ data, onSettings, onOpenClickland }: { data: Met
     return <span className="metrics-src" title={`The cluster's Prometheus (${data.prometheus}), cAdvisor series, ${data.step}s steps`}><Ic icon={Flame} size={12} />Prometheus<span className="dim mono">{data.prometheus?.split("/")[1]}</span><button className="link-btn" onClick={() => choosePrometheus(null)}>Stop using</button></span>;
   if (data.source === "cloud-monitoring" && data.gke) {
     const g = data.gke;
+    // Its own reasons (more than 200 series, Top namespaces that failed alone) are in the tooltip too.
+    const own = data.reasons.filter((r) => r.code.startsWith("cloud-monitoring-")).map((r) => `\n${r.message}`).join("");
     return (
-      <span className="metrics-src" title={`Cloud Monitoring, GKE system metrics of ${g.name} in ${g.project} (${g.location}), ${data.step}s steps`}>
+      <span className="metrics-src" title={`Cloud Monitoring, GKE system metrics of ${g.name} in ${g.project} (${g.location}), ${data.step}s steps${own}`}>
         <Ic icon={Cloud} size={12} />Cloud Monitoring<span className="dim mono">{g.name}</span>
         {data.prometheusFound ? <PrometheusOffer found={data.prometheusFound} /> : null}
       </span>

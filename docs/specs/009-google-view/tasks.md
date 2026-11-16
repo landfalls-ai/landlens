@@ -114,13 +114,14 @@ No High; two Medium, five Low and seven missing tests, all fixed. Each test was 
   [architecture.md](../../architecture.md), [development.md](../../development.md),
   [limitations.md](../../limitations.md), [roadmap.md](../../roadmap.md), [plan.md](../../plan.md),
   [history.md](../../history.md))
-- [ ] Fable's security review of part 2, and its fixes
+- [x] Fable's security review of part 2, and its fixes (below)
 
 ### Where part 2 departs from the spec
 
 1. **The agent's rule lives in `MetricsService`** (D182/D194 put it in main's `cloudMonitoring`), so it is one tested
    place: a call with `agent` reads Google only for a project in `agent.projects`, and `hold()` runs once, before the
-   first query leaves. Main's dep still receives `o.agent`.
+   first query leaves. Main's dep still receives `o.agent`. *Since the review's M1, main's dep decides first too* (as
+   D183 says): a project the session may not read never reaches `gkeOf`; the service's check is the second lock.
 2. **No session reads Cloud Monitoring in part 2.** The grant that covers metrics (D190) and the session's projects
    and hold (D194) are part 4's, so `sessionSeries` (new `apps/desktop/src/main/metrics-source.ts`) passes every
    session's `metrics` tool `projects: []`: it answers from metrics-server with `cloud-monitoring-not-granted`. That
@@ -164,6 +165,62 @@ No High; two Medium, five Low and seven missing tests, all fixed. Each test was 
 - **[check 6]** (quotas): PromQL answers are kept 25 s, four at once, and nothing is asked unless a chart asks; the
   "is there data" check is kept five minutes per cluster.
 - [check 7] is still the person's live check; [check 2] and [check 3] are part 3's.
+
+### Security review of part 2, fixed
+
+No High; one Medium, seven Low and eight missing tests, all fixed. Each test was seen to fail with its fix taken out
+(17 mutations, one per fix or rule, each run against its own test, then restored).
+
+- [x] **M1** A session's `metrics` call ran `gkeOf` (gcloud, every chosen project's GKE listing, the project search)
+  before the agent rule, so Google was asked as the person with no grant and no hold. `cloudMonitoringSource` now
+  decides a call with `agent` first, from what main holds: `GcpService.chosenProjectOf(context)` (Google Cloud on,
+  gcloud's `gke_<project>_…` name, the project chosen; no gcloud, no request). Not chosen or not GKE's name: nothing;
+  chosen but not in `agent.projects`: `cloud-monitoring-not-granted`; only a project the session may read goes on to
+  `gkeOf`. `MetricsService`'s check after the lookup stays as the second lock. `NOT_GRANTED` now says Cloud Monitoring
+  "may have" the history, since it is said from the name alone. Tests: `metrics-source.test.ts` (`gkeOf` never called
+  for a session without the project); `gcp-service.test.ts` (a real `GcpService` with demo-shop kept from an earlier
+  run, the fake and a real `MetricsService`: a session's call records no request at the fake and no gcloud run; the
+  IDE's chart of the same cluster does ask, so the test can see one).
+- [x] **L1** `only` is passed into the parse and applied before the 200 are counted (`GkeWant`). Test: the namespace
+  fallback with 300 other pods first, then the workload's 120: all 120 drawn, no cut.
+- [x] **L2** A pod's, a workload's and a namespace's `by` keep `namespace_name` (a pod's `pod_name` too), and the parse
+  requires them equal to the request's (`labels`). Test: against the fake, with a pod of orders-api's name and an
+  `intruder` container in namespace `payments`, the namespace and pod matchers stripped by the rewrite: the pod, the
+  namespace and the workload equal the clean answers.
+- [x] **L3** The parse counts `unlabelled` (a label missing, not a string, or `project_id` not a project id, as a
+  number is); a query whose answer had series, kept none and lost labels on some throws `LabelsLost`, and the service
+  says "Cloud Monitoring (<project>) answered without this cluster's labels, so nothing of it is drawn." and goes on
+  to metrics-server, never asking or keeping `gkeHasData`. *Departure:* the review's rule was "every series dropped";
+  that would also call an answer holding only another cluster's series (the leak, with this cluster's scope empty) a
+  lost-label failure, so another cluster's series (labels present, other values) still count as no data. Tests:
+  `cloud-monitoring.test.ts` (rows by number for the series and `gkeHasData`; a pod whose rows lost `namespace_name`;
+  another project's rows alone: no data), `service.test.ts` (the sentence, metrics-server, `hasData` empty; also when
+  only the container queries lost them).
+- [x] **L4** Every ask first drops answers past `PROM_TTL` from the front of the map (it is in insertion order: an
+  entry is deleted before it is set again), and `MAX_PROMS` is 40. Test: 50 asks, the clock past 25 s, one more:
+  one kept.
+- [x] **L5** A 403 or 429 is kept a minute per project (`PROM_FAILED_TTL`) and given again with no request; no other
+  status is kept; one read across an account change isn't kept (`gen`). At most four running and 40 waiting
+  (`PROMS_WAITING`): past them `PROM_BUSY`, no request. `forget()` and `choose()` clear the failures. Tests: a 403 and
+  a 429 refused again within the minute with no request (another query of the project too) and asked after it; a 500
+  not kept; a 403 straddling an account change not kept; 60 at once with a slow fake: 44 asked, 16 busy, then asking
+  works again. The existing "a failure isn't kept" test now waits out the minute.
+- [x] **L6** Top namespaces fail on their own: the node queries' failure still fails the whole, but a namespace query
+  failing leaves the nodes drawn, no `namespaces`, and `cloud-monitoring-failed` "Top namespaces couldn't be read:
+  <sentence>" (main's sentence, a lost-labels or not-metrics sentence, else "Landlens couldn't read its answer.";
+  `failedSentence`). `AskFailed` moved into `cloud-monitoring.ts` so the sentence can be told from another error's text.
+  The source line's tooltip now lists Cloud Monitoring's own reasons (the cut and this), which no part of the window
+  showed while Cloud Monitoring drew. Test: an `ask` that rejects only the `namespace_name` queries.
+- [x] **L7** A kept "no system metrics" lasts a minute (`NO_DATA_TTL`); a yes five. Test: a no, system metrics turned
+  on, 59.999 s still no, past a minute asked again and drawn; a yes kept five minutes.
+- [x] **T1** 403s on a pod's GET, a Deployment's GET, its pod list, a node's GET and the node list each reject with
+  `ask` not called. **T2** The generation check on a finished answer is gone (the review's first option): `forget()`
+  clears the map and the identity check keeps a newer entry; the generation now guards the kept 403/429 (tested in L5).
+  **T3** `metrics-source.test.ts` reads `index.ts`: `series = sessionSeries(metrics)`, both `McpService` and
+  `AgentService` take `metrics: series`, and `metrics.series` appears nowhere. **T4** two clusters, one without data:
+  each its own answer. **T5** a workload that fits the regex, answered with another pod of the namespace. **T6** a
+  listed pod that isn't a name is left out of the query, not a 400. **T7** `NaN`, `+Inf`, `-Inf`, a string, a short
+  and a `null` point dropped. **T8** is M1's tests.
 
 ## Part 3: alerts (D185–D189)
 

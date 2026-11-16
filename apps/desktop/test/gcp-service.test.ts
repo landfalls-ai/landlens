@@ -1,12 +1,14 @@
 // GcpService in main (docs/gcp.md) against the loopback fake and the fake gcloud: off in development without an
 // override, the states, reads only for chosen projects, the caches and the read limits, errors as sentences, and no
 // token in the file or the log.
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { channels, CLOUD_DECLINED } from "@landlens/contracts";
-import { ADVICE_FAILED_TTL, ADVICE_TTL, connectedOf, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_TTL, PROMS_AT_ONCE, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
+import { ADVICE_FAILED_TTL, ADVICE_TTL, connectedOf, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
+import { MetricsService } from "@landlens/metrics";
+import { cloudMonitoringSource, sessionSeries } from "../src/main/metrics-source";
 import { caFingerprint } from "@landlens/gcp";
 import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, PROMQL_MARKER } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
@@ -915,7 +917,7 @@ describe("Cloud Monitoring's PromQL from main (wave 9 part 2, D183)", () => {
     expect((svc as unknown as { proms: Map<string, unknown> }).proms.size).toBe(0);
   });
 
-  it("keeps each answer 25 s under project, query, step and the start in steps; a failure isn't kept", async () => {
+  it("keeps each answer 25 s under project, query, step and the start in steps; a 403 is kept a minute", async () => {
     let t = 5_000_000;
     const { svc } = service({ now: () => t });
     await svc.choose(["demo-shop"]);
@@ -936,11 +938,14 @@ describe("Cloud Monitoring's PromQL from main (wave 9 part 2, D183)", () => {
     t += PROM_TTL;
     await expect(ask(NODE_CPU, T0 - 3_600_000, T0, 60)).rejects.toThrow("The Cloud Monitoring API is off in demo-shop.");
     fake.fail.clear();
+    // Turned on: asked again once the minute a 403 is kept has passed (review of part 2, L5).
+    t += PROM_FAILED_TTL;
     await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
     expect(promHits()).toHaveLength(7);
   });
 
   it("keeps at most MAX_PROMS answers, the oldest going first", async () => {
+    expect(MAX_PROMS).toBeLessThanOrEqual(40);
     const { svc } = service();
     await svc.choose(["demo-shop"]);
     const proms = (svc as unknown as { proms: Map<string, unknown> }).proms;
@@ -1012,5 +1017,112 @@ describe("Cloud Monitoring's PromQL from main (wave 9 part 2, D183)", () => {
     await svc.choose(["demo-shop", "payments-core"]);
     expect(await svc.gkeOf({ ...c, context: "gke_demo-shop_us-central1_not-listed" }, { unread: true })).toBeUndefined();
     expect(await svc.gkeOf(c, { unread: true })).toEqual(shop);
+  });
+});
+
+describe("Fable's security review of part 2, fixed", () => {
+  const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
+  const S = 'project_id="demo-shop",location="us-central1",cluster_name="shop-prod"';
+  const NODE_CPU = `sum by (project_id,location,cluster_name,node_name) (rate(kubernetes_io:node_cpu_core_usage_time{${S}}[300s]))`;
+  const T0 = Date.parse("2026-11-16T09:00:00Z");
+  const promHits = () => fake.hits("/prometheus/api/v1/query_range");
+  const proms = (svc: GcpService) => (svc as unknown as { proms: Map<string, unknown> }).proms;
+
+  it("M1: a session's metrics call on a GKE context of a chosen project asks gcloud and Google nothing", async () => {
+    // demo-shop chosen in an earlier run: nothing has read gcloud or Google in this one.
+    const { svc, dir } = service({ kept: { projects: ["demo-shop"], agentRead: false, confirmed: [] } });
+    const PROD = "gke_demo-shop_us-central1_shop-prod";
+    const TLS = { ca: caFingerprint(FAKE_CLUSTER_CA), insecure: false, serverName: false, proxy: false };
+    const clusters = { get: () => ({ info: { context: PROD, server: "https://203.0.113.17" }, sidecar: { tls: TLS } }) };
+    const kube = async (path: string): Promise<any> => {
+      if (path === "/api/v1/nodes") return { items: [{ metadata: { name: "gke-shop-prod-default-pool-1a2b" }, status: { allocatable: { cpu: "4", memory: "16Gi" } } }] };
+      if (path === "/api/v1/pods?limit=1") return { items: [] };
+      throw Object.assign(new Error("404 page not found"), { status: 404 });
+    };
+    const metrics = new MetricsService({
+      clickland: () => ({ clusterName: (c) => c }),
+      cluster: () => ({ context: PROD, get: kube }),
+      cloudMonitoring: (handle, o) => cloudMonitoringSource(svc, clusters, new Set())(handle, o),
+      sampler: { timers: { set: () => 1, clear: () => {} } },
+    });
+    const s = await sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, kube);
+    expect(s.reasons.map((r) => r.code)).toContain("cloud-monitoring-not-granted");
+    expect(fake.requests).toEqual([]);
+    expect(existsSync(join(dir, "calls"))).toBe(false);
+    // The IDE's own chart of the same cluster does ask (so the test would see a request).
+    expect((await metrics.series({ handle: "hhhhhhhhhhhh", scope: "cluster", range: "1h" })).source).toBe("cloud-monitoring");
+    expect(fake.hits("/clusters").length).toBeGreaterThan(0);
+    expect(promHits().length).toBeGreaterThan(0);
+  });
+
+  it("L4: answers past 25 s leave at the next ask, not only when MAX_PROMS newer push them out", async () => {
+    let t = 7_000_000;
+    const { svc } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    const ask = svc.promAsk(shop);
+    for (let i = 0; i < 50; i++) await ask(NODE_CPU, T0 - 3_600_000 - i * 60_000, T0, 60);
+    expect(proms(svc).size).toBe(MAX_PROMS);
+    t += PROM_TTL;
+    await ask(NODE_CPU, T0, T0 + 3_600_000, 60);
+    expect(proms(svc).size).toBe(1);
+  });
+
+  it("L5: a 403 or 429 is given again for a minute with no request; another status isn't kept; an account change forgets it", async () => {
+    let t = 8_000_000;
+    const { svc, dir } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    const ask = svc.promAsk(shop);
+    for (const f of [{ status: 403, api: "monitoring" }, { status: 429, api: "monitoring" }] as const) {
+      fake.requests.length = 0;
+      fake.fail.set("demo-shop", f);
+      const first = await ask(NODE_CPU, T0 - 3_600_000, T0, 60).then(() => undefined, (e: Error) => e);
+      expect(first, String(f.status)).toMatchObject({ status: f.status });
+      expect(promHits()).toHaveLength(1);
+      // Another query of the project, within the minute: the same sentence, nothing asked.
+      await expect(ask(NODE_CPU.replace("[300s]", "[600s]"), T0 - 3_600_000, T0, 60)).rejects.toThrow(first!.message);
+      expect(promHits()).toHaveLength(1);
+      t += PROM_FAILED_TTL;
+      fake.fail.clear();
+      await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
+      expect(promHits()).toHaveLength(2);
+      t += PROM_TTL;
+    }
+    // A 500 isn't kept.
+    fake.requests.length = 0;
+    fake.fail.set("demo-shop", { status: 500, api: "monitoring" });
+    await expect(ask(NODE_CPU, T0 - 3_600_000, T0, 60)).rejects.toBeTruthy();
+    fake.fail.clear();
+    await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
+    expect(promHits()).toHaveLength(2);
+    // A 403 read across an account change isn't kept for the new account.
+    t += PROM_TTL;
+    fake.requests.length = 0;
+    fake.fail.set("demo-shop", { status: 403, api: "monitoring" });
+    fake.slowMs = 300;
+    const straddling = ask(NODE_CPU.replace("[300s]", "[900s]"), T0 - 3_600_000, T0, 60).then(() => undefined, (e: Error) => e);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    expect(await straddling).toMatchObject({ status: 403 });
+    fake.slowMs = 0;
+    fake.fail.clear();
+    // The new account's ask goes to Google: the old account's 403 ended after forget() and wasn't kept.
+    await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
+    expect(promHits()).toHaveLength(2);
+  });
+
+  it("L5: past four running and 40 waiting, an ask is refused before a request", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    fake.slowMs = 100;
+    const ask = svc.promAsk(shop);
+    const all = await Promise.all(Array.from({ length: 60 }, (_, i) => ask(NODE_CPU, T0 - 3_600_000 - i * 60_000, T0, 60).then(() => "ok", (e: Error) => e.message)));
+    expect(all.filter((x) => x === "ok")).toHaveLength(PROMS_AT_ONCE + PROMS_WAITING);
+    expect(all.filter((x) => x === PROM_BUSY)).toHaveLength(60 - PROMS_AT_ONCE - PROMS_WAITING);
+    expect(promHits()).toHaveLength(PROMS_AT_ONCE + PROMS_WAITING);
+    // Once they end, asking works again.
+    fake.slowMs = 0;
+    await ask(NODE_CPU, T0 + 60_000, T0 + 3_660_000, 60);
+    expect(promHits()).toHaveLength(PROMS_AT_ONCE + PROMS_WAITING + 1);
   });
 });

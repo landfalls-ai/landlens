@@ -98,10 +98,19 @@ export function connectedOf(
 
 /** A PromQL answer is kept 25 s (D183): two charts of one view, the 30 s refresh and the agent share it. */
 export const PROM_TTL = 25_000;
-/** PromQL answers kept; the oldest go first. */
-export const MAX_PROMS = 200;
+/**
+ * PromQL answers kept; the oldest go first, and every ask first drops those past PROM_TTL (review of part 2, L4: each
+ * is Google's raw answer, up to 8 MB).
+ */
+export const MAX_PROMS = 40;
 /** PromQL queries in flight at once, in a slot of their own (a view asks four). */
 export const PROMS_AT_ONCE = 4;
+/** Asks waiting for a PromQL slot; past this many more is refused before a request (L5). */
+export const PROMS_WAITING = 40;
+/** A 403 or 429 from Cloud Monitoring is kept a minute per project, so open charts don't ask again every 30 s (L5). */
+export const PROM_FAILED_TTL = 60_000;
+/** What an ask past the waiting line says. */
+export const PROM_BUSY = "Cloud Monitoring is busy: Landlens has too many of its queries waiting. Try again in a moment.";
 type HeldProm = { at: number; read: Promise<unknown> };
 
 /** At most `max` calls at once; one that ends hands its place straight to the next in line. */
@@ -161,6 +170,10 @@ export class GcpService {
   /** Cloud Monitoring's PromQL answers, by project|query|step|from in steps (D183). */
   private readonly proms = new Map<string, HeldProm>();
   private readonly promSlots = new Slots(PROMS_AT_ONCE);
+  /** A project's last 403 or 429 from Cloud Monitoring, refused again from here for a minute (L5). */
+  private readonly promFailed = new Map<string, { at: number; err: Error }>();
+  /** PromQL asks started and not ended: at most PROMS_AT_ONCE running and PROMS_WAITING waiting (L5). */
+  private promsInFlight = 0;
 
   constructor(private readonly o: {
     file: string;
@@ -249,6 +262,7 @@ export class GcpService {
     this.lists.clear();
     this.advice.clear();
     this.proms.clear();
+    this.promFailed.clear();
   }
 
   async status(fresh = false): Promise<GcpStatus> {
@@ -356,6 +370,7 @@ export class GcpService {
     for (const key of [...this.lists.keys()]) if (!ids.includes(key.split("\n")[0]!)) this.lists.delete(key);
     for (const key of [...this.advice.keys()]) if (!ids.includes(key.split("/")[0]!)) this.advice.delete(key);
     for (const key of [...this.proms.keys()]) if (!ids.includes(key.split("|")[0]!)) this.proms.delete(key);
+    for (const p of [...this.promFailed.keys()]) if (!ids.includes(p)) this.promFailed.delete(p);
     if (ids.join() !== this.kept.projects.join()) this.clustersCache = undefined;
     // A project you take out leaves Claude's grant (adding it back asks again, M3), and its GKE clusters are
     // disconnected (L7).
@@ -730,9 +745,12 @@ export class GcpService {
   /**
    * How Cloud Monitoring's PromQL is asked for a GKE cluster `gkeOf` answered (D183), handed to packages/metrics as a
    * function: it never sees the client or the token. Each answer is kept 25 s under project|query|step|from (in steps),
-   * at most 200, the oldest going first; a failure isn't kept. Queries run four at once in their own slot, only while the
-   * project is chosen; a failure is its fixed sentence (`failed`: the raw error to the log, token cut). An answer read
-   * across an account change isn't kept for the new account.
+   * at most 40, the oldest going first, and those past 25 s leave at every ask (review of part 2, L4). A 403 or 429 is
+   * kept a minute for the project and given again with no request (L5); any other failure isn't kept. Queries run four
+   * at once in their own slot, only while the project is chosen, with at most 40 waiting (more is PROM_BUSY, no
+   * request); a failure is its fixed sentence (`failed`: the raw error to the log, token cut). An account change or a
+   * project taken out forgets the answers and the failures (`forget` and `choose` clear them; a read that ends removes
+   * only its own entry, and a failure read across an account change isn't kept for the new account).
    */
   promAsk(ref: GkeRef): PromAsk {
     return (query, fromMs, toMs, stepS) => {
@@ -741,23 +759,47 @@ export class GcpService {
       } catch (e) {
         return Promise.reject(e);
       }
+      const t = this.now();
+      // The map is in insertion order and an entry is set again only after it is deleted, so the oldest come first.
+      for (const [k, h] of this.proms) {
+        if (t - h.at < PROM_TTL) break;
+        this.proms.delete(k);
+      }
       const key = `${ref.project}|${query}|${stepS}|${Math.round(fromMs / (stepS * 1000))}`;
       const held = this.proms.get(key);
-      if (held && this.now() - held.at < PROM_TTL) return held.read;
+      if (held) return held.read;
+      const failure = this.promFailed.get(ref.project);
+      if (failure && t - failure.at < PROM_FAILED_TTL) return Promise.reject(failure.err);
+      if (this.promsInFlight >= PROMS_AT_ONCE + PROMS_WAITING) return Promise.reject(fail(503, PROM_BUSY));
       const gen = this.gen;
+      this.promsInFlight++;
       const read = this.client()
         .then((client) => this.promSlots.run(() => promRange(client, ref.project, query, fromMs, toMs, stepS)))
         .catch((e: unknown) => {
-          throw this.failed(`promql ${ref.project}`, e);
-        });
-      const entry: HeldProm = { at: this.now(), read };
+          const err = this.failed(`promql ${ref.project}`, e);
+          const status = (err as { status?: number }).status;
+          if ((status === 403 || status === 429) && gen === this.gen) this.promFailed.set(ref.project, { at: this.now(), err });
+          throw err;
+        })
+        .finally(() => void this.promsInFlight--);
+      const entry: HeldProm = { at: t, read };
       this.proms.delete(key);
       this.proms.set(key, entry);
       while (this.proms.size > MAX_PROMS) this.proms.delete(this.proms.keys().next().value!);
-      const drop = () => this.proms.get(key) === entry && this.proms.delete(key);
-      read.then(() => gen !== this.gen && drop(), drop);
+      read.catch(() => this.proms.get(key) === entry && this.proms.delete(key));
       return read;
     };
+  }
+
+  /**
+   * The chosen project a context's name says it belongs to (gcloud's `gke_<project>_<location>_<name>`), or undefined
+   * when Google Cloud is off, the name isn't that shape or the project isn't chosen. Asks neither gcloud nor Google: a
+   * session's `metrics` call decides with it before `gkeOf` (review of part 2, M1). It says nothing of which cluster it is.
+   */
+  chosenProjectOf(context: string): string | undefined {
+    if (!this.o.mode.on || !GKE_CONTEXT.test(context)) return undefined;
+    const project = context.split("_")[1]!;
+    return this.kept.projects.includes(project) ? project : undefined;
   }
 
   /** `gcp:cluster-view`: a connected cluster's view, or `{ gke: false }` (with the hint, when there is one). */

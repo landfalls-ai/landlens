@@ -166,7 +166,11 @@ a metrics scope), `packages/metrics/test/cloud-monitoring.test.ts` (the queries 
 which `packages/metrics` imports from `packages/gcp/test`), Cloud Monitoring cases in `service.test.ts` and
 `gcp-service.test.ts`, `apps/desktop/test/metrics-source.test.ts`, a case in `packages/kube-mcp/test/server.test.ts`
 (the tool's words), and four cases in `gview.e2e.test.ts` (screenshots `g9-p2-*`), which read `landlens-dev`'s pods and
-OrbStack's nodes with `kubectl get` for the fake's model and write nothing more.
+OrbStack's nodes with `kubectl get` for the fake's model and write nothing more. Its security review's fixes add a
+"Fable's security review of part 2, fixed" block to `cloud-monitoring.test.ts`, `service.test.ts`,
+`metrics-source.test.ts` (T3 reads `src/main/index.ts` to check both wiring sites) and `gcp-service.test.ts` (M1 runs
+a real `GcpService` against the fake with a `kept` file, so nothing has read gcloud or Google before the session's
+call; the fake gcloud's `calls` file shows whether gcloud ran).
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

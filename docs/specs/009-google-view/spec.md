@@ -224,9 +224,9 @@ the client or the token: main hands it a function.
 
 | Scope | One series per | CPU (cores) | Memory (bytes) |
 |---|---|---|---|
-| Pod | `container_name` | `sum by (G,container_name) (rate(kubernetes_io:container_cpu_core_usage_time{S,namespace_name="<ns>",pod_name="<pod>"}[w]))` | `sum by (G,container_name) (kubernetes_io:container_memory_used_bytes{S,namespace_name="<ns>",pod_name="<pod>",memory_type="non-evictable"})` |
-| Deployment, StatefulSet, DaemonSet | `pod_name` | as above by `pod_name`, with `pod_name=~"<its pods>"` | same |
-| Namespace | `pod_name` | as above by `pod_name`, the whole namespace | same |
+| Pod | `container_name` | `sum by (G,namespace_name,pod_name,container_name) (rate(kubernetes_io:container_cpu_core_usage_time{S,namespace_name="<ns>",pod_name="<pod>"}[w]))` | `sum by (G,namespace_name,pod_name,container_name) (kubernetes_io:container_memory_used_bytes{S,namespace_name="<ns>",pod_name="<pod>",memory_type="non-evictable"})` |
+| Deployment, StatefulSet, DaemonSet | `pod_name` | as above by `namespace_name,pod_name`, with `pod_name=~"<its pods>"` | same |
+| Namespace | `pod_name` | as above by `namespace_name,pod_name`, the whole namespace | same |
 | Cluster | `node_name` | `sum by (G,node_name) (rate(kubernetes_io:node_cpu_core_usage_time{S}[w]))` | `sum by (G,node_name) (kubernetes_io:node_memory_used_bytes{S,memory_type="non-evictable"})` |
 | Node | `node_name` | the cluster's with `node_name="<node>"` | same |
 | Cluster → Top namespaces | `namespace_name` | the container CPU query by `namespace_name`, no namespace matcher | the container memory query by `namespace_name` |
@@ -265,6 +265,11 @@ in P's metrics scope, and two projects can each hold a cluster of the same name 
 If Google ever answers without those labels the chart is empty with its reason, never another cluster's line. The
 fake leaks on purpose (D197) and a test takes each of the three matchers out in turn.
 
+*Amended by the review of part 2:* a pod's, a workload's and a namespace's `by` also keep `namespace_name` (a pod's
+`pod_name` too), checked like the three (L2); a workload's or node's `only` applies before the 200 are counted (L1);
+an answer that had series but kept none, some for a lost label, is `cloud-monitoring-failed` ("… answered without this
+cluster's labels …") and metrics-server is next (L3); Top namespaces fail on their own (L6).
+
 **D182. The source order and its reasons.** `MetricsService.series` (`packages/metrics/src/service.ts`): Clickland,
 then the Prometheus the person chose, then **Cloud Monitoring**, then metrics-server. Clickland still wins whenever
 it has data. A chosen Prometheus stays ahead because the person picked it and it is finer (15 s); a Prometheus only
@@ -289,7 +294,7 @@ export type AgentGoogle = { projects: string[]; hold: () => void };
 | `cloud-monitoring-failed` | "Cloud Monitoring (<project>) didn't answer: <the fixed sentence of D175>" |
 | `cloud-monitoring-no-data` | "Cloud Monitoring has no GKE system metrics for <name> in <project> in the last hour." |
 | `cloud-monitoring-not-chosen` | D173's hint |
-| `cloud-monitoring-not-granted` | "Cloud Monitoring has this cluster's history, but Claude may not read Google Cloud. The person can turn on 'Claude can read these projects'." (the agent's call only, D194) |
+| `cloud-monitoring-not-granted` | "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud. The person can turn on 'Claude can read these projects'." (the agent's call only, D194; "may" since the review of part 2, M1: main decides it from the context's name before asking Google) |
 
 Empty answers: when both CPU and memory come back with no series, `gkeHasData` is asked (kept per cluster for five
 minutes). No node samples in the last hour means system metrics are off or the cluster isn't the one listed:
@@ -307,7 +312,8 @@ async promAsk(ref: GkeRef): Promise<PromAsk>   // this.client() + promRange, beh
 
 `cloudMonitoring: async (handle, o) => …` resolves `gcp.gkeOf(…)` (D173), applies D194 when `o.agent` is given, and
 returns `{ cluster, ask }`. `ask` keeps each answer for 25 s under `project|query|step|round(from, step)` (at most
-200 entries, the oldest go first), so two charts of one view, the 30 s refresh and the agent don't each pay for the
+200 entries, the oldest go first; 40 since the review of part 2, with stale ones dropped at each ask, a 403 or 429
+kept a minute per project and at most 40 waiting), so two charts of one view, the 30 s refresh and the agent don't each pay for the
 same query. Nothing is asked unless a chart or a tool asked. A failure goes through `failed()` (raw to the log with
 the token cut, the sentence to the caller). `metrics:series` and its request are unchanged: the page can't ask for a
 source or name a project.

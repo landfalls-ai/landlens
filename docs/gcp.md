@@ -54,8 +54,8 @@ different sign-in asks again. `userData/gke/kubeconfig` (folder 0700,
 file 0600) is Landlens's own kubeconfig for the GKE clusters, below; it holds no token either. In memory, main keeps
 the project list for 5 minutes, each project's resources and the GKE clusters for 60 s, and **Read again** reads at
 once; Google's suggestions for each GKE cluster for 10 minutes (a failed read for one), at most 50 clusters, and
-**Check again** reads at once (at most once in 10 s); each Cloud Monitoring PromQL answer for 25 s, at most 200 (a
-failure isn't kept). An account change, gcloud going, or a project taken out forgets them.
+**Check again** reads at once (at most once in 10 s); each Cloud Monitoring PromQL answer for 25 s, at most 40 (a 403
+or 429 for a minute per project; no other failure). An account change, gcloud going, or a project taken out forgets them.
 
 ## What Landlens asks Google
 
