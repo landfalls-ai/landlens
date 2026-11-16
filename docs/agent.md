@@ -12,7 +12,7 @@ you choose which of your Claude Code skills a session gets.
 
 | In the dock | Where it comes from (ACP) |
 |---|---|
-| The answer, streaming, in Markdown | `agent_message_chunk` |
+| The answer, streaming, in Markdown (a wide table scrolls sideways in its frame: cells wrap at spaces only and inline code never breaks) | `agent_message_chunk` |
 | "Thinking", folded | `agent_thought_chunk` |
 | A row per tool call, consecutive calls grouped in one list: what it is (for example `describe pod landlens-dev/orders-api-…` or `shell kubectl logs …`), its status as an icon, and, opened, what it ran and what came back with line numbers and error lines marked | `tool_call`, `tool_call_update` |
 | The plan, as a checklist | `plan` |
