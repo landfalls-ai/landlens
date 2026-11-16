@@ -10,7 +10,7 @@ import { Details, type NavTarget } from "./Details";
 import { badgeFor, useHealth } from "./health";
 import { Ic, RESOURCE_OF_KIND } from "./icons";
 import { JumpPalette, type Target, type Verb } from "./JumpPalette";
-import { PROMETHEUS_EVENT } from "./MetricsNotice";
+import { OPEN_GCP_EVENT, PROMETHEUS_EVENT } from "./MetricsNotice";
 import { ConnectionsPage } from "./ConnectionsPage";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
@@ -262,6 +262,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     setProblemSel(undefined);
     setGcpPick(undefined);
     setStatus("all");
+  });
+  // A chart's "Open Google Cloud" (a GKE cluster whose project isn't chosen, wave 9 D184).
+  useEffect(() => {
+    const on = () => pick("gcp");
+    window.addEventListener(OPEN_GCP_EVENT, on);
+    return () => window.removeEventListener(OPEN_GCP_EVENT, on);
   });
   /** A Google Cloud resource from ⌘K: its project on the page, and its drawer. */
   const openGcp = (project: string, resource: GcpPick["resource"]) => leaveEdit(() => {

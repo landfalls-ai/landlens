@@ -153,11 +153,10 @@ person's check reads them), and Ask Claude sends one problem at a time.
   through any proxy the sidecar checks the proxy's address, not the cluster's. A development build opens only the
   fake's clusters unless `LANDLENS_GKE_REAL=1`. The list is read when the catalog is (Welcome, the switcher's menu),
   cached 60 s. A `gcp.json` from before this release asks again for each cluster and for Claude's tools.
-- **Google's view of a cluster is wave 9 part 1 so far** ([gcp.md](gcp.md#googles-view-of-a-cluster)): only GKE's
+- **Google's view of a cluster is wave 9 parts 1 and 2 so far** ([gcp.md](gcp.md#googles-view-of-a-cluster)): only GKE's
   diagnosis recommender (API deprecations, exec probe timeouts, …), no cost or idle-resource recommenders; Landlens
   never marks a suggestion done, claimed or dismissed (no writes); only the sentence is shown for subtypes other than
-  API deprecations; no Ask Claude on a suggestion yet (part 3); Cloud Monitoring's metrics and alerts are parts 2 and
-  3. A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
+  API deprecations; no Ask Claude on a suggestion yet (part 3); Cloud Monitoring's alerts are part 3. A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
   counts only when its server is the address Google lists (an IP spelled as a DNS name, or the reverse, doesn't) and
   it trusts the CA Google lists with TLS checked (a CA bundle holding more than the cluster's CA, an
   `insecure-skip-tls-verify` or a `tls-server-name` doesn't). The first 1,000 rows of each of the location's lists are
@@ -242,9 +241,18 @@ person's check reads them), and Ask Claude sends one problem at a time.
   operator's labels, four well-known names), reached only through the API server's service proxy (no direct URL or
   bearer token), and asked only for cAdvisor's CPU and working-set series, which a Prometheus without the kubelet's
   cAdvisor job lacks; there is no setting to pick one. The OrbStack scenario's series are backfilled, not scraped.
-- **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`); an older Clickland is
-  refused. Without it, metrics-server gives live samples from when a view first asks, at most an hour, and only while
-  Landlens is open. OrbStack ships no metrics-server, so there it is Clickland or nothing.
+- **History needs Clickland** with metric filters (Clickland `specs/001-metrics-filters`), a Prometheus you chose,
+  or, for a GKE cluster of a chosen project, Cloud Monitoring; an older Clickland is refused. Without one, metrics-server
+  gives live samples from when a view first asks, at most an hour, and only while Landlens is open. OrbStack ships no
+  metrics-server, so there it is Clickland or nothing.
+- **Cloud Monitoring** ([metrics.md](metrics.md#cloud-monitoring)) is GKE's system metrics only: CPU and memory, 60 s
+  resolution (90 s and 360 s steps at 6h and 24h), memory as the non-evictable part (not the console's "used", which
+  adds the evictable part); no restarts, network, volumes or the history of requests and limits; no dashboards, SLOs
+  or uptime checks. Only for a GKE cluster of a project you chose, and a context of your own only at the address and
+  CA Google lists; a cluster outside the chosen projects gets metrics-server. A chosen Prometheus stays ahead of it.
+  Claude's `metrics` tool reads none of it until wave 9 part 4's grant (it answers from metrics-server and says why).
+  Whether the real API keeps `project_id`, `location` and `cluster_name` through `sum by` is unchecked ([check 1]: if
+  not, the charts are empty with their reason); nothing was checked against the real Monitoring API.
 - **Requests and limits are drawn at their latest value**, not as they changed over the range (a rollout that changed
   them shows the new values across the whole chart).
 - **Clickland keeps the ten largest series per query** and sums the rest as "other": a workload with more than ten

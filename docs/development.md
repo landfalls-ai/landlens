@@ -161,6 +161,12 @@ sides compute for the fake's CA. The e2e `test/gview.e2e.test.ts` (`LANDLENS_INT
 after) for case (a), and for case (b) writes a temporary kubeconfig (0600, in its own folder, removed after) that
 names OrbStack `gke_demo-shop_us-central1_shop-prod` and `gke_orbit-analytics_us-central1_shop-prod`, passed to the
 app as `KUBECONFIG`; it reads `~/.kube/config` only through `kubectl config view` and never writes it.
+Part 2 (Cloud Monitoring as a metrics source) adds `packages/gcp/test/monitoring.test.ts` (`promRange` and the fake as
+a metrics scope), `packages/metrics/test/cloud-monitoring.test.ts` (the queries and the leak filter against the fake,
+which `packages/metrics` imports from `packages/gcp/test`), Cloud Monitoring cases in `service.test.ts` and
+`gcp-service.test.ts`, `apps/desktop/test/metrics-source.test.ts`, a case in `packages/kube-mcp/test/server.test.ts`
+(the tool's words), and four cases in `gview.e2e.test.ts` (screenshots `g9-p2-*`), which read `landlens-dev`'s pods and
+OrbStack's nodes with `kubectl get` for the fake's model and write nothing more.
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

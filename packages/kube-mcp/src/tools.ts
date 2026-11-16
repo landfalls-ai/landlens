@@ -214,8 +214,8 @@ export function registerTools(server: McpServer, cluster: AgentCluster) {
   registerAppTool(server, "metrics", {
     title: "CPU and memory over time",
     description: "CPU and memory usage over the last 1h, 6h or 24h for the cluster, a node, a namespace, a pod, or a " +
-      "Deployment, StatefulSet or DaemonSet, with requests and limits; from Clickland when Landlens has it, else " +
-      "metrics-server sampled while Landlens is open. Use it to see whether a workload is near its limits or was killed for memory." + limitNote,
+      "Deployment, StatefulSet or DaemonSet, with requests and limits; from Clickland when Landlens has it, the cluster's " +
+      "Prometheus once chosen, or Cloud Monitoring for a GKE cluster, else metrics-server sampled while Landlens is open. Use it to see whether a workload is near its limits or was killed for memory." + limitNote,
     inputSchema: {
       scope: z.enum(["cluster", "node", "namespace", "pod", "deployment", "statefulset", "daemonset"]).optional().describe("Default cluster"),
       namespace: z.string().max(63).optional().describe("Needed for namespace, pod and workload scopes"),
@@ -457,9 +457,11 @@ function metricsText(what: string, range: string, s: MetricsSeries): string {
     const refs = [finite(p.request) ? `request ${fmt(p.request)}` : "", finite(p.limit) ? `limit ${fmt(p.limit)}` : "", finite(p.allocatable) ? `allocatable ${fmt(p.allocatable)}` : ""].filter(Boolean);
     return `${name}${refs.length ? ` (${refs.join(", ")})` : ""}:\n${lines.length ? lines.join("\n") : "  no samples"}`;
   };
-  const source = s.source === "clickland" ? "Clickland" : s.source === "prometheus" ? "the cluster's Prometheus" : "metrics-server, sampled live";
-  const notes = s.reasons.filter((r) => r.code === "live-only").map((r) => r.message);
-  return [`CPU and memory for ${what} over ${range} (from ${source}, one point every ${s.step}s, one series per ${s.by}).`, panel("CPU (cores)", s.cpu, cores), panel("Memory (working set)", s.memory, bytes), ...notes].join("\n");
+  const source = s.source === "clickland" ? "Clickland" : s.source === "prometheus" ? "the cluster's Prometheus"
+    : s.source === "cloud-monitoring" ? "Cloud Monitoring (GKE system metrics, 60 s samples)" : "metrics-server, sampled live";
+  const notes = s.reasons.filter((r) => r.code === "live-only" || r.code === "cloud-monitoring-cut" || (s.source === "metrics-server" && r.code.startsWith("cloud-monitoring-"))).map((r) => r.message);
+  const memory = s.source === "cloud-monitoring" ? "Memory (non-evictable)" : "Memory (working set)";
+  return [`CPU and memory for ${what} over ${range} (from ${source}, one point every ${s.step}s, one series per ${s.by}).`, panel("CPU (cores)", s.cpu, cores), panel(memory, s.memory, bytes), ...notes].join("\n");
 }
 
 /** At most 240 points a series, so a 24h chart stays small in the call log and the view. */

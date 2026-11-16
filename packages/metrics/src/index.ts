@@ -6,3 +6,4 @@ export * from "./sampler.js";
 export * from "./service.js";
 export * from "./prometheus.js";
 export * from "./clickland-search.js";
+export * from "./cloud-monitoring.js";

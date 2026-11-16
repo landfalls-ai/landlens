@@ -1557,11 +1557,16 @@ export type MetricsReasonCode =
   | "clickland-no-cluster" // answers, but has nothing for this cluster's name
   | "prometheus-failed" // found in the cluster, but its answer couldn't be read
   | "prometheus-found" // found, but not chosen yet: anyone who can make a Service could pose as one
+  | "cloud-monitoring-failed" // a GKE cluster of a chosen project, but Cloud Monitoring didn't answer (wave 9 D182)
+  | "cloud-monitoring-no-data" // no GKE system metrics for the cluster's nodes in the last hour
+  | "cloud-monitoring-not-chosen" // GKE-shaped, but its project isn't chosen on the Google Cloud page
+  | "cloud-monitoring-not-granted" // the agent's call only: Claude may not read this cluster's project (D194)
+  | "cloud-monitoring-cut" // Cloud Monitoring answered more series than Landlens draws
   | "no-metrics-server"
   | "live-only"; // metrics-server: samples only since Landlens opened, at most an hour
 export type MetricsReason = { code: MetricsReasonCode; message: string };
 export type MetricsSeries = {
-  source: "clickland" | "prometheus" | "metrics-server" | "none";
+  source: "clickland" | "prometheus" | "cloud-monitoring" | "metrics-server" | "none";
   /** Why a better source wasn't used, and anything the reader should know about this one. */
   reasons: MetricsReason[];
   /** Seconds between points. */
@@ -1580,6 +1585,8 @@ export type MetricsSeries = {
   prometheus?: string;
   /** A Prometheus Landlens found but you haven't chosen, `namespace/name`: offered, not used. */
   prometheusFound?: string;
+  /** Cloud Monitoring: the GKE cluster whose system metrics answered (wave 9 D182). */
+  gke?: { project: string; location: string; name: string };
 };
 export type ClicklandSettings = {
   url: string;

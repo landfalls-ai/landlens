@@ -98,13 +98,72 @@ No High; two Medium, five Low and seven missing tests, all fixed. Each test was 
   check, as the review noted was meant); T4 `MAX_VIEWS`; T5 `connectedOf` (the handler's `viaLandlens`, now a unit);
   T6 `latestOnly` (the hook's sequence guard, now a pure helper); T7 the silent-cut test replaced (M2).
 
-## Part 2: Cloud Monitoring as a metrics source (D179–D184)
+## Part 2: Cloud Monitoring as a metrics source (D179–D184) — built 16 Nov 2026
 
-- [ ] `fake-gcp.ts`: the PromQL route with the scope model and the leak; `monitoring.ts` `promRange`
-- [ ] `cloud-monitoring.ts` (queries, parse, series, `gkeHasData`); `cloud-monitoring.test.ts`
-- [ ] `service.ts`'s branch and reasons; contracts; `service.test.ts`
-- [ ] Main: `promAsk`, the wiring, the cache; `MetricsNotice.tsx`; `metricsText`
-- [ ] The e2e's (a) Metrics tab and (b) Overview; docs; review; fixes
+- [x] `fake-gcp.ts`: the PromQL route with the scope model and the leak (`gke`, `scopes`, `leak`, `PROMQL_MARKER`);
+  `monitoring.ts` `promRange`; `monitoring.test.ts`
+- [x] `cloud-monitoring.ts` (queries, parse, series, `gkeHasData`); `cloud-monitoring.test.ts`
+- [x] `service.ts`'s branch and reasons; contracts (`source: "cloud-monitoring"`, `gke`, five reason codes);
+  `service.test.ts`
+- [x] Main: `GcpService.promAsk` (its slot of four, the 25 s cache), `gkeOf`'s `unread`, the wiring
+  (`metrics-source.ts`); `MetricsNotice.tsx`; `metricsText`; `gcp-service.test.ts`, `metrics-source.test.ts`, the kube
+  tool's case in `server.test.ts`
+- [x] The e2e's (a) Metrics tab and (b) Overview (`gview.e2e.test.ts`, screenshots `g9-p2-*`); docs
+  ([metrics.md](../../metrics.md#cloud-monitoring), [gcp.md](../../gcp.md#googles-view-of-a-cluster),
+  [security.md](../../security.md#connections-and-google-cloud), [design.md](../../design.md),
+  [architecture.md](../../architecture.md), [development.md](../../development.md),
+  [limitations.md](../../limitations.md), [roadmap.md](../../roadmap.md), [plan.md](../../plan.md),
+  [history.md](../../history.md))
+- [ ] Fable's security review of part 2, and its fixes
+
+### Where part 2 departs from the spec
+
+1. **The agent's rule lives in `MetricsService`** (D182/D194 put it in main's `cloudMonitoring`), so it is one tested
+   place: a call with `agent` reads Google only for a project in `agent.projects`, and `hold()` runs once, before the
+   first query leaves. Main's dep still receives `o.agent`.
+2. **No session reads Cloud Monitoring in part 2.** The grant that covers metrics (D190) and the session's projects
+   and hold (D194) are part 4's, so `sessionSeries` (new `apps/desktop/src/main/metrics-source.ts`) passes every
+   session's `metrics` tool `projects: []`: it answers from metrics-server with `cloud-monitoring-not-granted`. That
+   sentence's "turn on 'Claude can read these projects'" helps only once part 4 is in.
+3. **A failed listing is said, for the graphs.** `gkeOf(c, { unread: true })`: a context of yours with gcloud's name
+   for a chosen project whose project's listing failed is `cloud-monitoring-failed` ("Landlens couldn't list
+   <project>'s GKE clusters to check that this is one of them: <sentence>"), not silence. The suggestions panel keeps
+   part 1's silence. A `cloudMonitoring` lookup that throws is also a reason.
+4. **Failures are told apart** (D182 says a 400 from Landlens's name check is thrown, any other failure is a reason).
+   Main's `failed()` gives a Google 400 a status of 400 too, so the service marks what `ask` threw (`AskFailed`): every
+   ask failure, a Google 400 included, is `cloud-monitoring-failed` with main's sentence; a failed read of the cluster
+   (a reader that can't list the scope's pods) is "wasn't asked: reading this scope from the cluster failed (HTTP
+   403)" and metrics-server is next, as for Prometheus; a non-matrix answer is its sentence. If asking `gkeHasData`
+   fails after an empty answer, that is a failure, not an empty chart.
+5. **A fifth reason, `cloud-monitoring-cut`.** The 200-series cap counts only this cluster's series, after the filter
+   (so another project's series can't push this cluster's out), and more than 200 is said ("the first 200 are
+   drawn").
+6. **`only` is applied wherever a scope names its keys**: a workload's pods (also when they fit in the regex) and a
+   node, not only the namespace fallback. A workload with no pods asks nothing (Prometheus asks `pod=~"^$"`).
+7. **`promAsk(ref)` returns the function** (not a promise of it); its 25 s key is the project, query, step and
+   `round(from / step)`; answers asked across an account change, or for a project taken out, are dropped.
+   `promRange` also refuses an empty query and a range that isn't one, before a request.
+8. **Open Google Cloud and Copy command also sit on the live metrics-server line** (D184 puts them in the no-metrics
+   notice): a GKE cluster normally has metrics-server, so the notice would seldom show. They are `.link-btn`s; Open
+   Google Cloud is a window event (`landlens:open-gcp`) the workspace answers with the Google Cloud page, as
+   Prometheus's choice is. The notice's reasons show a backticked command as code (`sentenceParts`).
+9. **`metricsText`** calls Cloud Monitoring's memory "Memory (non-evictable)", and when metrics-server answers it
+   passes the Cloud Monitoring reasons as notes, so the model knows why (not-granted, no-data, failed).
+10. **`gkeHandles` moved to `index.ts`** and is passed into `registerIpc`, so the metrics source and the IPC handler
+    read the same set.
+11. **e2e (a) and (b) check more**: (a) the leaked cluster has the same pods with an `intruder` container, never on the
+    page; the ServiceAccount's Overview (it can't list every pod) gets "wasn't asked … HTTP 403" and no node or
+    namespace query reaches the fake. (b) the unchosen project's Usage says why with Open Google Cloud; a moved address
+    draws from Cloud Monitoring no more.
+
+### [check] items settled or moved by part 2
+
+- **[check 1]** (`project_id`, `location`, `cluster_name` in a selector and in `by`): still the person's live check
+  (spec section 9, step 5). The fail-closed half is proven: with each matcher taken out of the query, or a label
+  missing from an answer, nothing of another cluster is drawn (`cloud-monitoring.test.ts`).
+- **[check 6]** (quotas): PromQL answers are kept 25 s, four at once, and nothing is asked unless a chart asks; the
+  "is there data" check is kept five minutes per cluster.
+- [check 7] is still the person's live check; [check 2] and [check 3] are part 3's.
 
 ## Part 3: alerts (D185–D189)
 

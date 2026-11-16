@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { channels, CLOUD_DECLINED } from "@landlens/contracts";
-import { ADVICE_FAILED_TTL, ADVICE_TTL, connectedOf, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_VIEWS, numberUnknown, RESOURCES_TTL, type GcpMode } from "../src/main/gcp";
+import { ADVICE_FAILED_TTL, ADVICE_TTL, connectedOf, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_TTL, PROMS_AT_ONCE, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
 import { caFingerprint } from "@landlens/gcp";
-import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
+import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, PROMQL_MARKER } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
 let fake: FakeGcp;
@@ -19,6 +19,7 @@ beforeEach(() => {
   fake.fail.clear();
   fake.slowMs = 0;
   fake.advice.clear();
+  fake.leak = false;
 });
 
 function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined; fetch?: typeof fetch; now?: () => number; kept?: unknown; onAgentOff?: () => void } = {}) {
@@ -890,5 +891,126 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
       expect(schema.safeParse({ handle: "abcdefgh12345678", ...extra }).success).toBe(false);
     }
     expect(schema.safeParse({ handle: "../x" }).success).toBe(false);
+  });
+});
+
+describe("Cloud Monitoring's PromQL from main (wave 9 part 2, D183)", () => {
+  const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
+  const S = 'project_id="demo-shop",location="us-central1",cluster_name="shop-prod"';
+  const NODE_CPU = `sum by (project_id,location,cluster_name,node_name) (rate(kubernetes_io:node_cpu_core_usage_time{${S}}[300s]))`;
+  const T0 = Date.parse("2026-11-16T09:00:00Z");
+  const promHits = () => fake.hits("/prometheus/api/v1/query_range");
+
+  it("asks only for a chosen project, GET, with gcloud's token and the project as X-Goog-User-Project", async () => {
+    const { svc } = service();
+    await expect(svc.promAsk(shop)(NODE_CPU, T0 - 3_600_000, T0, 60)).rejects.toMatchObject({ status: 404, message: "Choose demo-shop on the Google Cloud page first." });
+    expect(promHits()).toHaveLength(0);
+    await svc.choose(["demo-shop"]);
+    const out = (await svc.promAsk(shop)(NODE_CPU, T0 - 3_600_000, T0, 60)) as { status: string };
+    expect(out.status).toBe("success");
+    expect(promHits()).toEqual([expect.objectContaining({ method: "GET", path: "/v1/projects/demo-shop/location/global/prometheus/api/v1/query_range", userProject: "demo-shop", authorization: `Bearer ${GCP_TOKEN}` })]);
+    // Taken out: refused before a request, and its answers are forgotten.
+    await svc.choose([]);
+    await expect(svc.promAsk(shop)(NODE_CPU, T0 - 3_600_000, T0, 60)).rejects.toMatchObject({ status: 404 });
+    expect((svc as unknown as { proms: Map<string, unknown> }).proms.size).toBe(0);
+  });
+
+  it("keeps each answer 25 s under project, query, step and the start in steps; a failure isn't kept", async () => {
+    let t = 5_000_000;
+    const { svc } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    const ask = svc.promAsk(shop);
+    await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
+    // The same query a few seconds on (the next refresh, the other chart): the kept answer.
+    await ask(NODE_CPU, T0 - 3_600_000 + 20_000, T0 + 20_000, 60);
+    expect(promHits()).toHaveLength(1);
+    // Another step, another start step or another query: asked.
+    await ask(NODE_CPU, T0 - 3_600_000, T0, 90);
+    await ask(NODE_CPU, T0 - 3_600_000 + 60_000, T0 + 60_000, 60);
+    await ask(NODE_CPU.replace("node_cpu_core_usage_time", "node_memory_used_bytes").replace("rate(", "(").replace("[300s]", ""), T0 - 3_600_000, T0, 60);
+    expect(promHits()).toHaveLength(4);
+    t += PROM_TTL;
+    await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
+    expect(promHits()).toHaveLength(5);
+    fake.fail.set("demo-shop", { status: 403, reason: "SERVICE_DISABLED", api: "monitoring" });
+    t += PROM_TTL;
+    await expect(ask(NODE_CPU, T0 - 3_600_000, T0, 60)).rejects.toThrow("The Cloud Monitoring API is off in demo-shop.");
+    fake.fail.clear();
+    await ask(NODE_CPU, T0 - 3_600_000, T0, 60);
+    expect(promHits()).toHaveLength(7);
+  });
+
+  it("keeps at most MAX_PROMS answers, the oldest going first", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const proms = (svc as unknown as { proms: Map<string, unknown> }).proms;
+    const ask = svc.promAsk(shop);
+    for (let i = 0; i <= MAX_PROMS; i++) await ask(NODE_CPU, T0 - 3_600_000 - i * 60_000, T0, 60);
+    expect(proms.size).toBe(MAX_PROMS);
+    expect([...proms.keys()][0]).toBe(`demo-shop|${NODE_CPU}|60|${Math.round((T0 - 3_600_000 - 60_000) / 60_000)}`);
+  });
+
+  it("asks at most four at once, in a slot of its own", async () => {
+    let now = 0;
+    let most = 0;
+    const counting = (async (url: URL, init: RequestInit) => {
+      const prom = String(url).includes("/prometheus/");
+      if (prom) most = Math.max(most, ++now);
+      try {
+        return await fetch(url, init);
+      } finally {
+        if (prom) now--;
+      }
+    }) as typeof fetch;
+    const { svc } = service({ fetch: counting });
+    await svc.choose(["demo-shop"]);
+    fake.slowMs = 120;
+    const ask = svc.promAsk(shop);
+    await Promise.all(Array.from({ length: 10 }, (_, i) => ask(NODE_CPU, T0 - 3_600_000 - i * 60_000, T0, 60)));
+    expect(most).toBe(PROMS_AT_ONCE);
+    expect(promHits()).toHaveLength(10);
+  });
+
+  it("a refused query is the fixed sentence; neither it nor the log line holds the query, Google's echo or the token", async () => {
+    const { svc, logs } = service();
+    await svc.choose(["demo-shop"]);
+    const gauge = `sum by (project_id,location,cluster_name) (rate(kubernetes_io:node_memory_used_bytes{${S}}[300s]))`;
+    const e = await svc.promAsk(shop)(gauge, T0 - 3_600_000, T0, 60).then(() => undefined, (x: Error & { status: number }) => x);
+    expect(e).toMatchObject({ status: 400, message: "Cloud Monitoring didn't accept Landlens's query." });
+    const line = logs.find((l) => l.startsWith("[gcp] promql demo-shop:"))!;
+    expect(line).toContain("bad_data");
+    for (const text of [e!.message, ...logs]) {
+      expect(text).not.toContain(PROMQL_MARKER);
+      expect(text).not.toContain("kubernetes_io");
+      expect(text).not.toContain(GCP_TOKEN);
+    }
+  });
+
+  it("an answer read across an account change isn't kept for the new account", async () => {
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop"]);
+    const proms = (svc as unknown as { proms: Map<string, unknown> }).proms;
+    fake.slowMs = 300;
+    const first = svc.promAsk(shop)(NODE_CPU, T0 - 3_600_000, T0, 60);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    expect(proms.size).toBe(0);
+    await first;
+    expect(proms.size).toBe(0);
+  });
+
+  it("gkeOf with `unread`: your own GKE context whose listing failed says so; without it, silence as before", async () => {
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    fake.fail.set("demo-shop", { status: 403, api: "container" });
+    const c = { context: "gke_demo-shop_us-central1_shop-prod", server: "https://203.0.113.17", viaLandlens: false, tls: { ca: caFingerprint(FAKE_CLUSTER_CA), insecure: false, serverName: false, proxy: false } };
+    expect(await svc.gkeOf(c, { unread: true })).toEqual({ unread: unlisted("demo-shop", "Your account can't list GKE clusters in demo-shop (it needs Kubernetes Engine Cluster Viewer).") });
+    expect(await svc.gkeOf(c)).toBeUndefined();
+    fake.fail.clear();
+    // Listed, but not this cluster (the listing read fine): not GKE, and nothing said.
+    await svc.choose(["demo-shop", "payments-core"]);
+    expect(await svc.gkeOf({ ...c, context: "gke_demo-shop_us-central1_not-listed" }, { unread: true })).toBeUndefined();
+    expect(await svc.gkeOf(c, { unread: true })).toEqual(shop);
   });
 });

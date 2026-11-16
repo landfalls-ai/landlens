@@ -9,7 +9,17 @@
 //                     GET /v1/projects/<id>/locations/<loc>/recommenders/google.container.DiagnosisRecommender/recommendations
 //                                                                     pageSize, pageToken, filter (only
 //                                                                     "stateInfo.state = ACTIVE"; any other is a 400)
+//   Monitoring        GET /v1/projects/<id>/location/global/prometheus/api/v1/query_range
+//                                                                     query, start, end, step; any other path under
+//                                                                     /prometheus/ is a 405
 //
+// Cloud Monitoring's PromQL (wave 9 D197) answers from a model of GKE clusters (`gke`, by "project/location/name": nodes
+// and pods with their containers), reading the query with small patterns: the metric, the matchers, `sum by (…)`,
+// `rate(`. It behaves like a metrics scope: demo-shop's scope also holds orbit-analytics, whose own shop-prod in
+// us-central1 has pods of the same names, and demo-shop has shop-staging; a query without a project_id, location or
+// cluster_name matcher gets their series too, and with `leak` it gets them even with the matchers. A metric it doesn't
+// know, a rate() over a gauge or a bad parameter is a 400 in Prometheus's error shape, whose `error` echoes the query
+// and PROMQL_MARKER.
 // demo-shop is a small, realistic shop (Compute, GKE, Cloud SQL, buckets, Pub/Sub, service accounts, Cloud Run, …);
 // orbit-analytics has 1,200 resources (paging), archive-vault 6,000 (the 5,000 cut). GKE's recommender, for demo-shop
 // in us-central1, has two active insights on shop-prod named by the project number (an API deprecation with its
@@ -17,7 +27,7 @@
 // location, whose name starts the same), one DISMISSED on shop-prod, and one on orbit-analytics's own shop-prod in
 // us-central1 (another project's cluster of the same name and location: the cross-project case). Switches: `fail` per
 // project (401, 403 SERVICE_DISABLED, 403, 429 …; `api` limits it to one API), `slowMs`, `redirect`, `advice` (a
-// project/location's insights and recommendations), `ignoreFilter`.
+// project/location's insights and recommendations), `ignoreFilter`, `gke`, `scopes`, `leak`.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -165,6 +175,44 @@ const CLUSTERS: Record<string, unknown[]> = {
   ],
 };
 
+/** A GKE cluster as Cloud Monitoring's system metrics see it (D197): its nodes and its pods' containers. */
+export type GkeModel = { nodes: string[]; pods: { namespace: string; pod: string; containers: string[] }[] };
+/** What a refused PromQL query's error carries besides the query: it must never reach the page, the agent or a log. */
+export const PROMQL_MARKER = "PROMQL-ECHO-MARKER-7f3a";
+
+const shopPods = (prefix: string): GkeModel["pods"] => [
+  { namespace: "shop", pod: "orders-api-7c9f-x2x4q", containers: ["api", "istio-proxy"] },
+  { namespace: "shop", pod: "orders-api-7c9f-b8k2m", containers: ["api", "istio-proxy"] },
+  { namespace: "shop", pod: "cart-6d5b-9wq7z", containers: ["cart"] },
+  { namespace: "shop", pod: "checkout-5f7c-ll2pd", containers: ["checkout"] },
+  { namespace: "shop", pod: "web-frontend-84d6-4mz9t", containers: ["nginx", "app"] },
+  { namespace: "kube-system", pod: `${prefix}-kube-dns-5c8d-xq4rw`, containers: ["kubedns", "dnsmasq"] },
+  { namespace: "kube-system", pod: `fluentbit-gke-${prefix}`, containers: ["fluentbit"] },
+  { namespace: "monitoring", pod: "kube-state-metrics-0", containers: ["kube-state-metrics"] },
+];
+/** demo-shop's shop-prod (two nodes, eight pods), its shop-staging, and orbit-analytics's own shop-prod (the leak). */
+export const GKE_MODELS: Record<string, GkeModel> = {
+  "demo-shop/us-central1/shop-prod": { nodes: ["gke-shop-prod-default-pool-1a2b", "gke-shop-prod-default-pool-3c4d"], pods: shopPods("prod") },
+  "demo-shop/europe-west1-b/shop-staging": { nodes: ["gke-shop-staging-pool-9z8y"], pods: shopPods("staging").slice(0, 3) },
+  "orbit-analytics/us-central1/shop-prod": { nodes: ["gke-shop-prod-default-pool-1a2b", "gke-orbit-pool-7x6w"], pods: [...shopPods("orbit"), { namespace: "analytics", pod: "spark-driver-0", containers: ["spark"] }] },
+};
+
+type MetricModel = { on: "container" | "node"; cumulative: boolean; memory?: boolean; lo: number; hi: number };
+/** The GKE system metrics the fake knows, by their PromQL names (promql-mapping: the first / becomes :). */
+const GKE_METRICS: Record<string, MetricModel> = {
+  "kubernetes_io:container_cpu_core_usage_time": { on: "container", cumulative: true, lo: 0.004, hi: 0.35 },
+  "kubernetes_io:container_memory_used_bytes": { on: "container", cumulative: false, memory: true, lo: 18e6, hi: 380e6 },
+  "kubernetes_io:container_cpu_request_cores": { on: "container", cumulative: false, lo: 0.1, hi: 0.1 },
+  "kubernetes_io:container_cpu_limit_cores": { on: "container", cumulative: false, lo: 0.5, hi: 0.5 },
+  "kubernetes_io:container_memory_request_bytes": { on: "container", cumulative: false, lo: 128 * 2 ** 20, hi: 128 * 2 ** 20 },
+  "kubernetes_io:container_memory_limit_bytes": { on: "container", cumulative: false, lo: 512 * 2 ** 20, hi: 512 * 2 ** 20 },
+  "kubernetes_io:node_cpu_core_usage_time": { on: "node", cumulative: true, lo: 0.4, hi: 2.6 },
+  "kubernetes_io:node_memory_used_bytes": { on: "node", cumulative: false, memory: true, lo: 1.6e9, hi: 5.2e9 },
+  "kubernetes_io:node_cpu_allocatable_cores": { on: "node", cumulative: false, lo: 3.92, hi: 3.92 },
+  "kubernetes_io:node_memory_allocatable_bytes": { on: "node", cumulative: false, lo: 13.5e9, hi: 13.5e9 },
+};
+const hash = (s: string) => [...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
+
 export const INSIGHT_TYPE = "google.container.DiagnosisInsight";
 export const RECOMMENDER = "google.container.DiagnosisRecommender";
 /** A user agent written by whoever called the API server: a bidi override, a newline and an instruction in it. */
@@ -268,6 +316,12 @@ export class FakeGcp {
   readonly advice = new Map<string, Advice>();
   /** Answer the recommender as if `filter` weren't there (to test that Landlens drops what isn't ACTIVE itself). */
   ignoreFilter = false;
+  /** Cloud Monitoring's model of GKE clusters, by "project/location/name" (D197). */
+  readonly gke = new Map<string, GkeModel>(Object.entries(GKE_MODELS).map(([k, v]) => [k, structuredClone(v)]));
+  /** Metrics scopes: a scoping project's PromQL answers for every project listed (Google's documented leak). */
+  readonly scopes = new Map<string, string[]>([["demo-shop", ["demo-shop", "orbit-analytics"]]]);
+  /** Answer every cluster of the scope even when the query names project_id, location and cluster_name. */
+  leak = false;
   private readonly data = new Map<string, Asset[]>([
     ["demo-shop", demoShop()],
     ["orbit-analytics", many("orbit-analytics", 1200, 7)],
@@ -342,6 +396,12 @@ export class FakeGcp {
     }
     const advice = /^\/v1\/projects\/([^/]+)\/locations\/([^/]+)\/(?:insightTypes\/google\.container\.DiagnosisInsight\/(insights)|recommenders\/google\.container\.DiagnosisRecommender\/(recommendations))$/.exec(url.pathname);
     if (advice) return this.recommender(res, advice[1]!, advice[2]!, advice[3] ? "insights" : "recommendations", url.searchParams);
+    const prom = /^\/v1\/projects\/([^/]+)\/location\/global\/prometheus\/(.*)$/.exec(url.pathname);
+    if (prom) {
+      // Only query_range is Landlens's; every other path of the API (and any method but GET, above) is refused here.
+      if (prom[2] !== "api/v1/query_range") return this.send(res, 405, { error: { code: 405 } });
+      return this.promql(res, prom[1]!, url.searchParams);
+    }
     this.send(res, 404, { error: { code: 404, status: "NOT_FOUND", message: "Not found" } });
   }
 
@@ -361,6 +421,69 @@ export class FakeGcp {
     const size = Math.min(Number(q.get("pageSize") || 100), 1000);
     const from = Number(q.get("pageToken") || 0);
     this.send(res, 200, { [kind]: list.slice(from, from + size), ...(from + size < list.length ? { nextPageToken: String(from + size) } : {}) });
+  }
+
+  /** A PromQL query_range over the model, as a metrics scope answers it (D197). */
+  private promql(res: ServerResponse, project: string, q: URLSearchParams) {
+    const f = this.fail.get(project);
+    if (f && (!f.api || f.api === "monitoring")) return this.failure(res, { api: "monitoring", ...f });
+    const query = q.get("query") ?? "";
+    const bad = (why: string) => this.send(res, 400, { status: "error", errorType: "bad_data", error: `${why}: ${query} ${PROMQL_MARKER}` });
+    const start = Number(q.get("start"));
+    const end = Number(q.get("end"));
+    const step = Number(q.get("step"));
+    if (![start, end, step].every(Number.isFinite) || step <= 0 || end < start) return bad("invalid parameter");
+    if ((end - start) / step > 11_000) return bad("exceeded maximum resolution of 11,000 points per timeseries");
+    const names = [...new Set(query.match(/kubernetes_io:[a-z_]+/g) ?? [])];
+    const metric = names.length === 1 ? GKE_METRICS[names[0]!] : undefined;
+    if (!metric) return bad("unknown metric");
+    const rate = /\brate\(/.test(query);
+    if (rate && !metric.cumulative) return bad("rate() over a gauge");
+    const sel = new RegExp(`${names[0]}\\{([^}]*)\\}`).exec(query)?.[1] ?? "";
+    const matchers = [...sel.matchAll(/([a-z_]+)\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => ({ label: m[1]!, op: m[2]!, value: m[3]!.replace(/\\(.)/g, "$1") }));
+    const by = /sum by \(([^)]*)\)/.exec(query)?.[1]?.split(",").map((x) => x.trim()).filter(Boolean);
+
+    // Every series of every project in the asked project's metrics scope.
+    const rows: Record<string, string>[] = [];
+    for (const p of this.scopes.get(project) ?? [project]) {
+      for (const [key, model] of this.gke) {
+        const [mp, location, cluster] = key.split("/") as [string, string, string];
+        if (mp !== p) continue;
+        const id = { project_id: mp, location, cluster_name: cluster };
+        const entities = metric.on === "node"
+          ? model.nodes.map((n) => ({ ...id, node_name: n }))
+          : model.pods.flatMap((x) => x.containers.map((c) => ({ ...id, namespace_name: x.namespace, pod_name: x.pod, container_name: c })));
+        for (const e of entities) for (const kind of metric.memory ? ["evictable", "non-evictable"] : [""]) rows.push(kind ? { ...e, memory_type: kind } : e);
+      }
+    }
+    const identity = new Set(["project_id", "location", "cluster_name"]);
+    const kept = rows.filter((r) => matchers.every((m) => {
+      if (this.leak && identity.has(m.label)) return true;
+      const v = r[m.label] ?? "";
+      if (m.op === "=") return v === m.value;
+      if (m.op === "!=") return v !== m.value;
+      const re = new RegExp(`^(?:${m.value})$`);
+      return m.op === "=~" ? re.test(v) : !re.test(v);
+    }));
+    const times: number[] = [];
+    for (let t = start; t <= end; t += step) times.push(t);
+    const value = (r: Record<string, string>, t: number) => {
+      const seed = rng(hash(JSON.stringify(r)));
+      const phase = seed() * 6.28;
+      const level = metric.lo + (metric.hi - metric.lo) * seed();
+      const v = metric.lo === metric.hi ? level : level * (0.75 + 0.25 * Math.sin(t / 1900 + phase));
+      return r.memory_type === "evictable" ? v * 0.4 : metric.cumulative && !rate ? v * (t - 1.7e9) : v;
+    };
+    const groups = new Map<string, { metric: Record<string, string>; values: number[] }>();
+    for (const r of kept) {
+      const labels = by ? Object.fromEntries(by.filter((l) => r[l] !== undefined).map((l) => [l, r[l]!])) : r;
+      const k = JSON.stringify(labels);
+      const g = groups.get(k) ?? { metric: labels, values: times.map(() => 0) };
+      times.forEach((t, i) => (g.values[i]! += value(r, t)));
+      groups.set(k, g);
+    }
+    const result = [...groups.values()].map((g) => ({ metric: g.metric, values: times.map((t, i) => [t, String(g.values[i])]) }));
+    this.send(res, 200, { status: "success", data: { resultType: "matrix", result } });
   }
 
   private search(res: ServerResponse, project: string, q: URLSearchParams) {

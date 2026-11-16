@@ -54,7 +54,8 @@ different sign-in asks again. `userData/gke/kubeconfig` (folder 0700,
 file 0600) is Landlens's own kubeconfig for the GKE clusters, below; it holds no token either. In memory, main keeps
 the project list for 5 minutes, each project's resources and the GKE clusters for 60 s, and **Read again** reads at
 once; Google's suggestions for each GKE cluster for 10 minutes (a failed read for one), at most 50 clusters, and
-**Check again** reads at once (at most once in 10 s).
+**Check again** reads at once (at most once in 10 s); each Cloud Monitoring PromQL answer for 25 s, at most 200 (a
+failure isn't kept). An account change, gcloud going, or a project taken out forgets them.
 
 ## What Landlens asks Google
 
@@ -74,6 +75,7 @@ most APIs off; the project search carries none.
 | GKE clusters | `container.googleapis.com/v1/projects/<id>/locations/-/clusters` | at most 200 a project; the chosen projects only; cached 60 s; for the catalog and `gke_clusters` |
 | GKE insights (wave 9) | `recommender.googleapis.com/v1/projects/<id>/locations/<location>/insightTypes/google.container.DiagnosisInsight/insights`, `pageSize=100`, `filter=stateInfo.state = ACTIVE` | a connected GKE cluster of a chosen project only; at most 2 pages, 10 s each; kept 10 minutes with the recommendations |
 | GKE recommendations (wave 9) | `…/recommenders/google.container.DiagnosisRecommender/recommendations`, the same parameters | the same, read beside the insights |
+| GKE usage (wave 9 part 2) | `monitoring.googleapis.com/v1/projects/<id>/location/global/prometheus/api/v1/query_range` with `query`, `start`, `end`, `step` | a connected GKE cluster of a chosen project, only when a chart asks; Landlens's fixed queries only ([metrics.md](metrics.md#cloud-monitoring)), at most 6,000 characters; 10 s each, four at once in their own slot; each answer kept 25 s; only this cluster's series kept |
 
 Cloud Asset has no count call for a search, so the types and their counts are made in main from the cached pages: one
 read of a project gives its types, counts and every page of its rows. Main reads only the projects you chose: any
@@ -183,8 +185,9 @@ gcloud's account), the same read-only agent and approved changes.
 
 Wave 9 ([specs/009-google-view](specs/009-google-view/spec.md)) shows what Google knows about a connected GKE cluster
 beside what the cluster says. Part 1 (D173–D178) is built: which cluster counts, and Google's suggestions on the
-Overview. Cloud Monitoring as a metrics source, its open alerts on the Problems page and Claude's tools for them are
-parts 2–4.
+Overview. Part 2 (D179–D184) is built: Cloud Monitoring as a metrics source, the third after Clickland and a
+Prometheus you chose ([metrics.md](metrics.md#cloud-monitoring)). Its open alerts on the Problems page and Claude's
+tools for them are parts 3–4.
 
 **Which connected cluster is a GKE cluster of a chosen project** (D173) is main's answer, in one place
 (`GcpService.gkeOf`), never the page's:
@@ -207,7 +210,9 @@ parts 2–4.
 - A GKE-shaped name of a project you haven't chosen gets one quiet line under Nodes: "This looks like a GKE cluster of
   <project>. Choose that project on the Google Cloud page to see Google's metrics, alerts and suggestions for it.",
   with **Open Google Cloud**. Anything else (Google Cloud off, gcloud missing or signed out, a listing that failed) is
-  silently an ordinary cluster.
+  silently an ordinary cluster for the suggestions panel. The metrics source asks `gkeOf` with `unread`: a context of
+  yours with gcloud's name for a chosen project whose listing failed then says so ("Landlens couldn't list <project>'s
+  GKE clusters to check that this is one of them: <sentence>") rather than draw from metrics-server without a word.
 
 The page asks with `gcp:cluster-view`, which takes only the cluster's handle: it can't name a project, a location or
 a cluster. The project's number comes from the project search (cached 5 minutes): the recommender names clusters by
@@ -325,14 +330,22 @@ The fakes, in `packages/gcp/test`:
   never show on it: one on `shop-prod-canary`, one dismissed, and one on orbit-analytics's own `shop-prod` in
   us-central1 (another project's cluster of the same name and location). `filter` is honoured for
   `stateInfo.state = ACTIVE` only (any other is a 400); `advice` sets a location's rows and `ignoreFilter` answers
-  as if the filter weren't there.
+  as if the filter weren't there. From wave 9 part 2, Cloud Monitoring's PromQL `query_range` (any other path under
+  `/prometheus/`, and any POST, is a 405): it reads the query's metric, matchers (`=`, `=~` with escapes), `sum by`
+  and `rate(` and answers a deterministic matrix from `gke`, a model of clusters by `project/location/name` (nodes and
+  pods with containers; seeded with demo-shop's shop-prod, two nodes and eight pods, its shop-staging, and
+  orbit-analytics's own shop-prod with pods of the same names). It behaves like a metrics scope: `scopes` puts
+  orbit-analytics in demo-shop's, a query without the identity matchers gets every cluster of the scope, and `leak`
+  answers them even with the matchers. An unknown metric, a `rate()` over a gauge or a bad range is a 400 in
+  Prometheus's error shape whose text echoes the query and a marker, which no test sees passed on.
 - `fake-gcloud.sh`: prints a fixed account and token; files in its `CLOUDSDK_CONFIG` folder change the account
   (empty: signed out), the token or make it fail, and it records each call and its environment.
 
 ```bash
-pnpm --filter @landlens/gcp test                         # auth, assets, client, errors, GKE, recommender, scrubbing
+pnpm --filter @landlens/gcp test                         # auth, assets, client, errors, GKE, recommender, monitoring, scrubbing
+pnpm --filter @landlens/metrics test                     # Cloud Monitoring's queries, the leak filter, the source order
 pnpm --filter @landlens/gcp-mcp test                     # landlens-gcp's tools against the fake
-(cd apps/desktop && npx vitest run test/gcp-service.test.ts)   # GcpService in main
+(cd apps/desktop && npx vitest run test/gcp-service.test.ts test/metrics-source.test.ts)   # GcpService in main, the metrics source
 (cd apps/desktop && npx vitest run test/google-rules.test.ts)  # the Google suggests panel's words
 pnpm -s build && (cd apps/desktop && LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/gcp.e2e.test.ts test/gke.e2e.test.ts test/gview.e2e.test.ts)
 ```
@@ -349,9 +362,15 @@ connects shop-prod the same way and checks the Overview's **Google suggests** (t
 user agent as plain text, no link or heading inside, a disabled API's sentence with **Copy command**); then it opens
 OrbStack as a context of its own named `gke_demo-shop_us-central1_shop-prod` from a temporary kubeconfig (0600, in the
 test's folder, removed after; the catalog honours `KUBECONFIG`), where the panel shows only while the fake lists
-shop-prod at OrbStack's address, and `gke_orbit-analytics_us-central1_shop-prod` gets the hint line. Every request
+shop-prod at OrbStack's address, and `gke_orbit-analytics_us-central1_shop-prod` gets the hint line. Part 2 adds:
+with the fake's model set to `landlens-dev`'s real pods and leaking orbit-analytics's shop-prod (the same pods with an
+`intruder` container), a pod's Metrics tab reads "Cloud Monitoring shop-prod" with the pod's containers and no
+intruder; the ServiceAccount's Overview gets nothing from Google ("wasn't asked … HTTP 403"); the own context's
+Usage draws from Cloud Monitoring (nodes, Top namespaces); the unchosen project's Usage says why with **Open Google
+Cloud**; and a moved address draws from Cloud Monitoring no more. Every PromQL query carried demo-shop's three
+matchers. Every request
 the fake recorded is a GET with gcloud's token. With `LANDLENS_SHOTS=<folder>` they save `g4-*`, `g5-*` and `g9-*`
-screenshots in dark and light (`g9-*` also at 1024×700).
+screenshots in dark and light (`g9-*` also at 1024×700; part 2's are `g9-p2-*`).
 
 ## Left for you to check
 
@@ -359,10 +378,15 @@ Wave 9 ([specs/009-google-view](specs/009-google-view/spec.md) section 9): on yo
 (`gcloud services enable monitoring.googleapis.com recommender.googleapis.com --project <project>`) and have
 Monitoring Viewer and GKE Diagnosis Recommender Viewer (`roles/recommender.containerDiagnosisViewer`; Viewer or Owner
 covers both), then compare **Google suggests** with `gcloud recommender insights list
---insight-type=google.container.DiagnosisInsight --location=<location> --project=<project>`. Still marked **[check]**
-until then: the `content` of subtypes other than the API deprecations (Landlens shows only their sentence); that a
+--insight-type=google.container.DiagnosisInsight --location=<location> --project=<project>`. For the graphs, run the
+spec's `curl` of one node CPU query first (section 9, step 5): it should print one series per node carrying
+`project_id`, `location` and `cluster_name` (**[check 1]**: if `sum by` drops them, Landlens draws nothing and says
+so, never another cluster's lines); then compare a pod's Metrics tab and the Overview's Usage, read "Cloud Monitoring
+<cluster>", with `kubectl top`, and a workload with many pods at 24h. If your project scopes others, check no series of
+theirs shows. Still marked **[check]** until then: the `content` of subtypes other than the API deprecations (Landlens shows only their sentence); that a
 recommendation carries `associatedInsights` (Landlens also joins by the insight's `associatedRecommendations`); the
-Recommender's read quota (Landlens keeps the answer 10 minutes and reads only while an Overview is open); that
+Recommender's and Monitoring's read quotas (Landlens keeps advice 10 minutes and PromQL answers 25 s, and reads only
+while a view asks); that
 gcloud's user token carries `cloud-platform`.
 
 - Real Google Cloud, which no test reaches: with `LANDLENS_GCP_REAL=1` and your own gcloud, that the project search,

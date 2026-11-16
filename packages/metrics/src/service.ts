@@ -1,7 +1,8 @@
 // Which source answers: Clickland when a key is stored and it answers for this cluster; else the cluster's own
-// Prometheus, if it has one; else metrics-server sampled while Landlens is open; else nothing, with every reason and
-// what fixes it.
-import type { ClicklandTest, MetricsReason, MetricsRequest, MetricsSeries } from "@landlens/contracts";
+// Prometheus, if you chose it; else Cloud Monitoring, for a GKE cluster of a project you chose on the Google Cloud page
+// (wave 9, D182); else metrics-server sampled while Landlens is open; else nothing, with every reason and what fixes it.
+import type { ClicklandTest, GkeRef, MetricsReason, MetricsRequest, MetricsSeries } from "@landlens/contracts";
+import { cloudMonitoringSeries, gkeHasData, NOT_METRICS, type PromAsk } from "./cloud-monitoring.js";
 import { ClicklandClient, ClicklandError, FILTERS_MISSING, honoursFilters, type ClicklandConfig } from "./clickland.js";
 import { clicklandSeries, RANGE_MS } from "./clickland-series.js";
 import { liveSeries } from "./live-series.js";
@@ -18,10 +19,29 @@ export type MetricsDeps = {
   cluster: (handle: string) => { context: string; get: Get; ask?: Get };
   /** The Prometheus you chose for a context, `namespace/name`. */
   prometheus?: { chosen: (context: string) => string | undefined };
+  /**
+   * Cloud Monitoring for a connected cluster (D182): `{ cluster, ask }` to use it, `{ reason }` when it is a GKE cluster
+   * that can't be used now (say why, go on to metrics-server), undefined when it isn't a GKE cluster of a chosen project.
+   */
+  cloudMonitoring?: (handle: string, o: { agent?: AgentGoogle }) => Promise<{ cluster: GkeRef; ask: PromAsk } | { reason: MetricsReason } | undefined>;
   fetch?: typeof fetch;
   now?: () => number;
   sampler?: SamplerOptions;
 };
+
+/**
+ * An agent's call (D194): the Google projects its session may read, and how its autonomous GitHub and Linear writes are
+ * held once it has read Google Cloud. The IDE's own charts pass none.
+ */
+export type AgentGoogle = { projects: string[]; hold: () => void };
+
+/** What a session without the grant for the cluster's project is told (D182, D194). */
+export const NOT_GRANTED = "Cloud Monitoring has this cluster's history, but Claude may not read Google Cloud. The person can turn on 'Claude can read these projects'.";
+/** Whether a GKE cluster has any system metrics is asked again after five minutes. */
+const HAS_DATA_TTL = 300_000;
+
+/** A failure of main's `ask` (Google, or main's own refusal), told apart from a failed read of the cluster. */
+class AskFailed extends Error {}
 
 const originOf = (u: string) => {
   try {
@@ -44,6 +64,8 @@ export class MetricsService {
   private readonly filters = new Map<string, { at: number; ok: boolean }>();
   /** Per cluster: the Prometheus found (or none), looked for again after five minutes. */
   private readonly prometheus = new Map<string, { at: number; chosen: string | undefined; target?: PrometheusTarget }>();
+  /** Per GKE cluster (project/location/name): whether Cloud Monitoring had its node CPU in the last hour. */
+  private readonly hasData = new Map<string, { at: number; ok: boolean }>();
   constructor(private readonly deps: MetricsDeps) {}
 
   private now() {
@@ -54,7 +76,7 @@ export class MetricsService {
    * `read`, when given, is how the series reads the cluster itself (requests, limits, allocatable, a workload's
    * pods): the metrics tool passes its session's front-door token. The IDE's charts read through the sidecar.
    */
-  async series(req: MetricsRequest, opts: { read?: Get } = {}): Promise<MetricsSeries> {
+  async series(req: MetricsRequest, opts: { read?: Get; agent?: AgentGoogle } = {}): Promise<MetricsSeries> {
     const cluster = this.deps.cluster(req.handle);
     const { config, clusterName } = this.deps.clickland();
     const reasons: MetricsReason[] = [];
@@ -88,6 +110,15 @@ export class MetricsService {
         found = key;
         reasons.push({ code: "prometheus-found", message: `Landlens found a Prometheus at ${key}. It is used once you choose it, since anyone who can make a Service with Prometheus's labels could pose as one.` });
       }
+    }
+
+    // Cloud Monitoring, for a GKE cluster of a chosen project (D182): after a Prometheus you chose (finer, and you picked
+    // it), before metrics-server. Its reasons say why it wasn't used, and a found Prometheus is still offered beside it.
+    const cm = await this.cloudMonitoring(req, opts, opts.read ?? cluster.get, reasons);
+    if (cm) {
+      cm.reasons = [...reasons, ...cm.reasons];
+      if (found) cm.prometheusFound = found;
+      return cm;
     }
 
     const sampler = this.sampler(req.handle, cluster.get);
@@ -163,6 +194,71 @@ export class MetricsService {
       steps.push({ name: "Query", ok: false, detail: (err as Error).message });
     }
     return { ok: steps.every((s) => s.ok), steps };
+  }
+
+  /**
+   * Cloud Monitoring's answer, or undefined with the reason it wasn't used pushed onto `reasons`. Not a GKE cluster of a
+   * chosen project: nothing is said. An agent's call reads Google only for a project its session may read, and holds
+   * its autonomy before the first query leaves (D194). Both empty means asking whether the cluster has any system
+   * metrics at all: none in the last hour is `cloud-monitoring-no-data` and metrics-server is next; some means this
+   * scope is empty (a new pod), which is Cloud Monitoring's answer. A failed lookup or query is never an empty chart.
+   */
+  private async cloudMonitoring(req: MetricsRequest, opts: { agent?: AgentGoogle }, read: Get, reasons: MetricsReason[]): Promise<MetricsSeries | undefined> {
+    if (!this.deps.cloudMonitoring) return undefined;
+    let found: Awaited<ReturnType<NonNullable<MetricsDeps["cloudMonitoring"]>>>;
+    try {
+      found = await this.deps.cloudMonitoring(req.handle, opts.agent ? { agent: opts.agent } : {});
+    } catch {
+      reasons.push({ code: "cloud-monitoring-failed", message: "Landlens couldn't tell whether this is a GKE cluster it can read Cloud Monitoring for." });
+      return undefined;
+    }
+    if (!found) return undefined;
+    if ("reason" in found) {
+      reasons.push(found.reason);
+      return undefined;
+    }
+    const { cluster: ref, ask: raw } = found;
+    const agent = opts.agent;
+    if (agent && !agent.projects.includes(ref.project)) {
+      reasons.push({ code: "cloud-monitoring-not-granted", message: NOT_GRANTED });
+      return undefined;
+    }
+    let held = false;
+    const ask: PromAsk = async (...a) => {
+      // A session's read of Google Cloud holds its autonomous writes, before the query leaves (D194).
+      if (agent && !held) {
+        held = true;
+        agent.hold();
+      }
+      try {
+        return await raw(...a);
+      } catch (err) {
+        throw new AskFailed((err as Error)?.message || "Cloud Monitoring couldn't be read.");
+      }
+    };
+    const failed = (message: string) => reasons.push({ code: "cloud-monitoring-failed", message: message.slice(0, 300) });
+    try {
+      const out = await cloudMonitoringSeries(read, ask, ref, req, this.now());
+      if (out.cpu.series.length || out.memory.series.length || (await this.gkeHasData(ref, ask))) return out;
+      reasons.push({ code: "cloud-monitoring-no-data", message: `Cloud Monitoring has no GKE system metrics for ${ref.name} in ${ref.project} in the last hour.` });
+    } catch (err) {
+      if (err instanceof AskFailed) failed(`Cloud Monitoring (${ref.project}) didn't answer: ${err.message}`);
+      else if ((err as { status?: number }).status === 400) throw err;
+      else if (typeof (err as { status?: unknown }).status === "number") failed(`Cloud Monitoring (${ref.project}) wasn't asked: reading this scope from the cluster failed (HTTP ${(err as { status: number }).status}).`);
+      else failed(`Cloud Monitoring (${ref.project}) didn't answer: ${(err as Error)?.message === NOT_METRICS ? NOT_METRICS : "Landlens couldn't read its answer."}`);
+    }
+    return undefined;
+  }
+
+  /** Whether the cluster has any system metrics in the last hour, kept five minutes; a failure isn't kept. */
+  private async gkeHasData(ref: GkeRef, ask: PromAsk): Promise<boolean> {
+    const key = `${ref.project}/${ref.location}/${ref.name}`;
+    const known = this.hasData.get(key);
+    if (known && this.now() - known.at < HAS_DATA_TTL) return known.ok;
+    const ok = await gkeHasData(ask, ref, this.now());
+    this.hasData.set(key, { at: this.now(), ok });
+    while (this.hasData.size > 100) this.hasData.delete(this.hasData.keys().next().value!);
+    return ok;
   }
 
   private async filtersOk(client: ClicklandClient, url: string): Promise<boolean> {

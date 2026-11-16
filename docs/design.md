@@ -143,7 +143,12 @@ Linux keep the native frame. The window's background follows the theme so it doe
 all N) and Recent warnings; Nodes. It reads
   `cluster:health` every 10s through `useHealth`, which also feeds the sidebar badges and the status bar counts. Below
   the problems, **Usage** (CPU and memory against allocatable, top namespaces, a 1h/6h/24h switch), and a CPU and
-  memory sparkline on each node row ([metrics.md](metrics.md)).
+  memory sparkline on each node row ([metrics.md](metrics.md)). Usage and the drawer's Metrics tab name their source
+  in a `.metrics-src` line; from wave 9 part 2 a GKE cluster's reads "Cloud Monitoring shop-prod" with the `Cloud`
+  icon (12 px) and the tooltip "Cloud Monitoring, GKE system metrics of shop-prod in demo-shop (us-central1), 60s
+  steps". A Cloud Monitoring reason adds a `.link-btn` **Open Google Cloud** (an unchosen project) or **Copy command**
+  (an API to turn on) beside the live line and under the no-metrics notice, whose reasons show a backticked command
+  as code.
 - **Google suggests** (wave 9 part 1; `GoogleSuggests.tsx`, `googleRules.ts`, `googleView.ts`, `.gs-*` in `gcp.css`;
   [gcp.md](gcp.md#googles-view-of-a-cluster)): on a GKE cluster of a chosen project, a `.panel` right after the
   Problems and Recent warnings columns, full width (so one column at 1024×700). Head: the `Cloud` icon (15 px, accent),

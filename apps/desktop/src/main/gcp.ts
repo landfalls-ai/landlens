@@ -8,7 +8,8 @@
 // address, a hash of its CA and the account, L3). userData/gke/kubeconfig (0700/0600) is Landlens's own kubeconfig for the GKE
 // clusters of those projects (part 5, D91): no token in it, and ~/.kube/config is never written.
 // What is cached, in memory: the projects you can see (5 minutes); each project's resources (60 seconds, per query);
-// Google's suggestions for each GKE cluster (10 minutes, wave 9 D177). One read per project at a time, two at once.
+// Google's suggestions for each GKE cluster (10 minutes, wave 9 D177); each Cloud Monitoring PromQL answer (25 s, D183).
+// One read per project at a time, two at once; PromQL queries four at once, in their own slot.
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -18,8 +19,9 @@ import {
 } from "@landlens/contracts";
 import {
   ACCOUNT_SHAPE, caFingerprint, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK,
-  rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
+  promRange, rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
 } from "@landlens/gcp";
+import type { PromAsk } from "@landlens/metrics";
 import type { GcpReader } from "@landlens/gcp-mcp";
 import type { SidecarTls } from "@landlens/kube";
 
@@ -94,6 +96,36 @@ export function connectedOf(
   return { context: c.info.context, server: c.info.server, viaLandlens: gkeHandles.has(handle), ...(c.sidecar.tls ? { tls: c.sidecar.tls } : {}) };
 }
 
+/** A PromQL answer is kept 25 s (D183): two charts of one view, the 30 s refresh and the agent share it. */
+export const PROM_TTL = 25_000;
+/** PromQL answers kept; the oldest go first. */
+export const MAX_PROMS = 200;
+/** PromQL queries in flight at once, in a slot of their own (a view asks four). */
+export const PROMS_AT_ONCE = 4;
+type HeldProm = { at: number; read: Promise<unknown> };
+
+/** At most `max` calls at once; one that ends hands its place straight to the next in line. */
+class Slots {
+  private running = 0;
+  private readonly waiting: (() => void)[] = [];
+  constructor(private readonly max: number) {}
+  async run<T>(f: () => Promise<T>): Promise<T> {
+    if (this.running >= this.max) await new Promise<void>((r) => this.waiting.push(r));
+    else this.running++;
+    try {
+      return await f();
+    } finally {
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.running--;
+    }
+  }
+}
+
+/** Your own GKE-named context's project, chosen, but its listing couldn't be read (wave 9 part 2): said, not silent. */
+export const unlisted = (project: string, sentence: string) =>
+  `Landlens couldn't list ${project}'s GKE clusters to check that this is one of them: ${sentence}`;
+
 /** What a GKE cluster's view says when the project's number is unknown (review of part 1, L1). */
 export const numberUnknown = (project: string) => `Landlens couldn't read ${project}'s number, so it can't tell which suggestions are this cluster's.`;
 
@@ -126,6 +158,9 @@ export class GcpService {
   private readonly goneListeners: ((contexts: string[]) => void)[] = [];
   /** Google's suggestions per project/location/name (D177). */
   private readonly advice = new Map<string, HeldAdvice>();
+  /** Cloud Monitoring's PromQL answers, by project|query|step|from in steps (D183). */
+  private readonly proms = new Map<string, HeldProm>();
+  private readonly promSlots = new Slots(PROMS_AT_ONCE);
 
   constructor(private readonly o: {
     file: string;
@@ -213,6 +248,7 @@ export class GcpService {
     this.clustersCache = undefined;
     this.lists.clear();
     this.advice.clear();
+    this.proms.clear();
   }
 
   async status(fresh = false): Promise<GcpStatus> {
@@ -319,6 +355,7 @@ export class GcpService {
     }
     for (const key of [...this.lists.keys()]) if (!ids.includes(key.split("\n")[0]!)) this.lists.delete(key);
     for (const key of [...this.advice.keys()]) if (!ids.includes(key.split("/")[0]!)) this.advice.delete(key);
+    for (const key of [...this.proms.keys()]) if (!ids.includes(key.split("|")[0]!)) this.proms.delete(key);
     if (ids.join() !== this.kept.projects.join()) this.clustersCache = undefined;
     // A project you take out leaves Claude's grant (adding it back asks again, M3), and its GKE clusters are
     // disconnected (L7).
@@ -596,7 +633,13 @@ export class GcpService {
    * system roots). With TLS checked against the cluster's own CA, a proxy-url can't change who answers. A GKE-shaped name of a project you haven't chosen gets a hint; anything else
    * (Google Cloud off, gcloud missing or signed out, a failed listing) is undefined, silently.
    */
-  async gkeOf(c: ConnectedCluster): Promise<GkeRef | { hint: string } | undefined> {
+  async gkeOf(c: ConnectedCluster): Promise<GkeRef | { hint: string } | undefined>;
+  /**
+   * With `unread`, your own context of a chosen project whose listing couldn't be read is `{ unread }` with the sentence
+   * (the metrics source says it, wave 9 part 2), not silence. Who the cluster is is still only this method's answer.
+   */
+  async gkeOf(c: ConnectedCluster, o: { unread: true }): Promise<GkeRef | { hint: string } | { unread: string } | undefined>;
+  async gkeOf(c: ConnectedCluster, o: { unread?: true } = {}): Promise<GkeRef | { hint: string } | { unread: string } | undefined> {
     if (!this.o.mode.on || !GKE_CONTEXT.test(c.context)) return undefined;
     const s = await this.status().catch(() => undefined);
     if (s?.state !== "ready") return undefined;
@@ -604,9 +647,18 @@ export class GcpService {
     if (!this.kept.projects.includes(project)) {
       return c.viaLandlens ? undefined : { hint: `This looks like a GKE cluster of ${project}. Choose that project on the Google Cloud page to see Google's metrics, alerts and suggestions for it.` };
     }
+    let unread: string | undefined;
     const listed = c.viaLandlens
       ? this.gke.get(c.context)
-      : (await this.clustersFull().catch(() => undefined))?.clusters.find((x) => x.context === c.context);
+      : await this.clustersFull().then(
+        (r) => {
+          const found = r.clusters.find((x) => x.context === c.context);
+          if (!found) unread = r.errors.find((e) => e.project === project)?.message;
+          return found;
+        },
+        (e: Error) => void (unread = e.message),
+      );
+    if (!listed && unread !== undefined && o.unread) return { unread: unlisted(project, unread) };
     if (!listed || !listed.endpoint || listed.project !== project || listed.location !== location || listed.name !== name) return undefined;
     if (originOf(`https://${listed.endpoint}`) !== originOf(c.server)) return undefined;
     const t = c.tls;
@@ -673,6 +725,39 @@ export class GcpService {
     this.advice.set(key, entry);
     while (this.advice.size > MAX_VIEWS) this.advice.delete(this.advice.keys().next().value!);
     return entry.read;
+  }
+
+  /**
+   * How Cloud Monitoring's PromQL is asked for a GKE cluster `gkeOf` answered (D183), handed to packages/metrics as a
+   * function: it never sees the client or the token. Each answer is kept 25 s under project|query|step|from (in steps),
+   * at most 200, the oldest going first; a failure isn't kept. Queries run four at once in their own slot, only while the
+   * project is chosen; a failure is its fixed sentence (`failed`: the raw error to the log, token cut). An answer read
+   * across an account change isn't kept for the new account.
+   */
+  promAsk(ref: GkeRef): PromAsk {
+    return (query, fromMs, toMs, stepS) => {
+      try {
+        this.chosen(ref.project);
+      } catch (e) {
+        return Promise.reject(e);
+      }
+      const key = `${ref.project}|${query}|${stepS}|${Math.round(fromMs / (stepS * 1000))}`;
+      const held = this.proms.get(key);
+      if (held && this.now() - held.at < PROM_TTL) return held.read;
+      const gen = this.gen;
+      const read = this.client()
+        .then((client) => this.promSlots.run(() => promRange(client, ref.project, query, fromMs, toMs, stepS)))
+        .catch((e: unknown) => {
+          throw this.failed(`promql ${ref.project}`, e);
+        });
+      const entry: HeldProm = { at: this.now(), read };
+      this.proms.delete(key);
+      this.proms.set(key, entry);
+      while (this.proms.size > MAX_PROMS) this.proms.delete(this.proms.keys().next().value!);
+      const drop = () => this.proms.get(key) === entry && this.proms.delete(key);
+      read.then(() => gen !== this.gen && drop(), drop);
+      return read;
+    };
   }
 
   /** `gcp:cluster-view`: a connected cluster's view, or `{ gke: false }` (with the hint, when there is one). */

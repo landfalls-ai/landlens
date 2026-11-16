@@ -10,6 +10,11 @@
 //     (0600, in this test's folder, removed after; the catalog honours KUBECONFIG): it is GKE only while the listing's
 //     address is the one it is connected at and the CA it trusts is the one Google lists (review of part 1, M1). A
 //     GKE-shaped name of a project you haven't chosen gets one quiet line.
+// Part 2 (D179–D184): Cloud Monitoring draws the charts. In (a) a pod's Metrics tab reads "Cloud Monitoring shop-prod"
+// from the fake's model of landlens-dev's real pods, while the fake leaks another project's cluster of the same name
+// (same pod names, one more container): none of it is drawn. In (b) the Overview's Usage draws per node from Cloud
+// Monitoring, a project you haven't chosen says so with Open Google Cloud, and a moved address is an ordinary cluster
+// again. Every PromQL query names demo-shop's project, location and cluster.
 // Every request the fake recorded is a GET with gcloud's token; nothing else is written to OrbStack.
 // LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/gview.e2e.test.ts  (screenshots to $LANDLENS_SHOTS, g9-)
 import { execFileSync } from "node:child_process";
@@ -46,6 +51,8 @@ const all = async (page: Page, name: string, el?: Locator) => {
 };
 
 const NS = "landlens-dev";
+/** A namespace the Usage card's top namespaces lists from the fake's model. */
+const NS_TOP = NS;
 const SA = "landlens-gview-e2e";
 const kc = (args: string[], input?: string) => execFileSync("kubectl", ["--context", "orbstack", ...args], { encoding: "utf8", ...(input ? { input } : {}) });
 const RBAC = `
@@ -95,6 +102,24 @@ async function launch(o: { userData: string; fake: FakeGcp; sdk: string; kubecon
   return { app, page };
 }
 
+/** landlens-dev's pods as Cloud Monitoring's model, and OrbStack's nodes, read (never written) by kubectl. */
+const realModel = () => {
+  const pods = (JSON.parse(kc(["-n", NS, "get", "pods", "-o", "json"])) as { items: { metadata: { name: string }; spec: { containers: { name: string }[] }; status: { phase?: string } }[] }).items;
+  const nodes = (JSON.parse(kc(["get", "nodes", "-o", "json"])) as { items: { metadata: { name: string } }[] }).items.map((n) => n.metadata.name);
+  const running = pods.filter((p) => p.status.phase === "Running");
+  // A running pod with the most containers: the legend (shown for two series or more) names each of them.
+  const pick = [...running].sort((a, b) => b.spec.containers.length - a.spec.containers.length)[0]!;
+  return {
+    nodes,
+    pods: pods.map((p) => ({ namespace: NS, pod: p.metadata.name, containers: p.spec.containers.map((c) => c.name) })),
+    pick: { name: pick.metadata.name, containers: pick.spec.containers.map((c) => c.name) },
+  };
+};
+/** The three matchers every PromQL query of shop-prod must carry (D181). */
+const SCOPED = 'project_id="demo-shop",location="us-central1",cluster_name="shop-prod"';
+const promql = (fake: FakeGcp) => fake.requests.filter((r) => r.path.includes("/prometheus/"));
+const usage = (page: Page) => page.getByRole("region", { name: "Usage" });
+
 const panel = (page: Page) => page.getByRole("region", { name: "Google suggests" });
 const rows = (page: Page) => panel(page).locator(".gs-row");
 
@@ -103,6 +128,7 @@ describe.runIf(run)("(a) Google suggests on a GKE cluster Landlens connected", {
   let page: Page;
   let fake: FakeGcp;
   let token = "";
+  let model: ReturnType<typeof realModel>;
   const sdk = sdkDir();
   const userData = mkdtempSync(join(tmpdir(), "landlens-e2e-gview-"));
   const invoke = (channel: string, req: unknown) =>
@@ -116,6 +142,12 @@ describe.runIf(run)("(a) Google suggests on a GKE cluster Landlens connected", {
     fake.valid.add(token);
     writeFileSync(join(sdk, "token"), token);
     fake.clusters.set("demo-shop", [{ name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: new URL(server).host, masterAuth: { clusterCaCertificate: ca } }]);
+    // Cloud Monitoring's shop-prod is landlens-dev as it is; orbit-analytics's shop-prod (in demo-shop's metrics scope)
+    // has the same pods with one more container, and the fake leaks it even past the matchers.
+    model = realModel();
+    fake.gke.set("demo-shop/us-central1/shop-prod", { nodes: model.nodes, pods: model.pods });
+    fake.gke.set("orbit-analytics/us-central1/shop-prod", { nodes: model.nodes, pods: model.pods.map((p) => ({ ...p, containers: [...p.containers, "intruder"] })) });
+    fake.leak = true;
     writeFileSync(join(userData, "gcp.json"), JSON.stringify({ projects: ["demo-shop"], agentRead: false, confirmed: [] }), { mode: 0o600 });
     ({ app, page } = await launch({ userData, fake, sdk }));
   }, 120_000);
@@ -205,12 +237,45 @@ describe.runIf(run)("(a) Google suggests on a GKE cluster Landlens connected", {
     }, { timeout: 40_000, interval: 2_000 }).toBe(2);
   });
 
+  it("part 2: a pod's Metrics tab draws from Cloud Monitoring shop-prod, and nothing of the other project's cluster", async () => {
+    await page.getByRole("button", { name: "Pods", exact: true }).click();
+    await expect(chosenNamespaces(page)).resolves.toBe(NS);
+    await page.locator(".tr", { hasText: model.pick.name }).first().click();
+    await page.getByRole("tab", { name: "Metrics" }).click();
+    const tab = page.locator(".mtab");
+    const src = tab.locator(".metrics-src", { hasText: "Cloud Monitoring" });
+    await src.waitFor({ timeout: 30_000 });
+    expect(await src.innerText()).toMatch(/Cloud Monitoring\s*shop-prod/);
+    expect(await src.getAttribute("title")).toBe("Cloud Monitoring, GKE system metrics of shop-prod in demo-shop (us-central1), 60s steps");
+    await tab.locator(".chart-plot svg path").first().waitFor({ timeout: 30_000 });
+    expect(model.pick.containers.length).toBeGreaterThan(1);
+    const legend = (await tab.locator(".chart-legend").first().innerText()) ?? "";
+    for (const c of model.pick.containers) expect(legend).toContain(c);
+    // The leaked cluster's extra container is in the answer, and never on the page.
+    expect(await tab.innerText()).not.toContain("intruder");
+    const asked = promql(fake).filter((r) => r.query.query?.includes(`pod_name="${model.pick.name}"`));
+    expect(asked.length).toBeGreaterThanOrEqual(2);
+    expect(asked.every((r) => r.method === "GET" && r.userProject === "demo-shop" && r.path === "/v1/projects/demo-shop/location/global/prometheus/api/v1/query_range" && r.query.query!.includes(SCOPED))).toBe(true);
+    await all(page, "g9-p2-01-metrics-tab", tab);
+    await page.keyboard.press("Escape");
+  });
+
+  it("part 2: the Overview's Usage reads nothing from Google for a reader who can't list every pod", async () => {
+    await page.getByRole("button", { name: "Overview", exact: true }).click();
+    const u = usage(page);
+    await u.getByRole("status", { name: "Metrics unavailable" }).waitFor({ timeout: 30_000 });
+    expect(await u.innerText()).toContain("Cloud Monitoring (demo-shop) wasn't asked: reading this scope from the cluster failed (HTTP 403).");
+    // The cluster's own list is read first and refused, so Google was never asked for the nodes or the namespaces.
+    expect(promql(fake).some((r) => /node_cpu_core_usage_time|namespace_name\)/.test(r.query.query ?? ""))).toBe(false);
+  });
+
   it("asked Google only with GETs and gcloud's token, for demo-shop; the page can't name another project", async () => {
     const asked = fake.requests.filter((r) => r.path.includes("/locations/us-central1/"));
     expect(asked.length).toBeGreaterThanOrEqual(2);
     expect(fake.requests.every((r) => r.method === "GET")).toBe(true);
     expect(fake.requests.every((r) => r.authorization === `Bearer ${token}`)).toBe(true);
     expect(asked.every((r) => r.userProject === "demo-shop" && r.path.startsWith("/v1/projects/demo-shop/"))).toBe(true);
+    expect(promql(fake).every((r) => r.userProject === "demo-shop" && r.query.query!.includes(SCOPED))).toBe(true);
     const refused = await invoke("gcp:cluster-view", { handle: "abcdefgh12345678", project: "orbit-analytics" });
     expect(refused).toEqual({ error: expect.any(String) });
   });
@@ -252,6 +317,8 @@ describe.runIf(run)("(b) a context of your own is GKE only at the listing's addr
     writeFileSync(kubeconfig, JSON.stringify(doc), { mode: 0o600 });
     fake = await new FakeGcp().start();
     fake.clusters.set("demo-shop", [{ name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint, masterAuth: { clusterCaCertificate: ca } }]);
+    const m = realModel();
+    fake.gke.set("demo-shop/us-central1/shop-prod", { nodes: m.nodes, pods: m.pods });
     writeFileSync(join(userData, "gcp.json"), JSON.stringify({ projects: ["demo-shop"], agentRead: false, confirmed: [] }), { mode: 0o600 });
     ({ app, page } = await launch({ userData, fake, sdk, kubeconfig }));
   }, 120_000);
@@ -273,11 +340,36 @@ describe.runIf(run)("(b) a context of your own is GKE only at the listing's addr
     await expect(page.locator(".gs-hint").count()).resolves.toBe(0);
   });
 
+  it("part 2: the Overview's Usage draws per node from Cloud Monitoring, with its source line", async () => {
+    const u = usage(page);
+    const src = u.locator(".metrics-src", { hasText: "Cloud Monitoring" });
+    await src.waitFor({ timeout: 30_000 });
+    expect(await src.innerText()).toMatch(/Cloud Monitoring\s*shop-prod/);
+    expect(await src.getAttribute("title")).toBe("Cloud Monitoring, GKE system metrics of shop-prod in demo-shop (us-central1), 60s steps");
+    await u.locator(".chart-plot svg path").first().waitFor({ timeout: 30_000 });
+    const text = await u.innerText();
+    expect(text).toContain("allocatable");
+    expect(text).toContain(NS_TOP);
+    const asked = promql(fake);
+    expect(asked.some((r) => r.query.query?.includes("kubernetes_io:node_cpu_core_usage_time"))).toBe(true);
+    expect(asked.some((r) => r.query.query?.includes("by (project_id,location,cluster_name,namespace_name)"))).toBe(true);
+    expect(asked.every((r) => r.method === "GET" && r.userProject === "demo-shop" && r.query.query!.includes(SCOPED))).toBe(true);
+    await u.scrollIntoViewIfNeeded();
+    await all(page, "g9-p2-02-overview-usage", u);
+  });
+
   it("a GKE-shaped name of a project you haven't chosen gets one quiet line, which opens Google Cloud", async () => {
     await switchTo(SHOP, ORBIT);
     const hint = page.getByRole("note").filter({ hasText: "This looks like a GKE cluster of orbit-analytics." });
     await hint.waitFor({ timeout: 30_000 });
     await expect(panel(page).count()).resolves.toBe(0);
+    // Usage says why Cloud Monitoring isn't drawing, with the same way to fix it; nothing was asked of orbit-analytics.
+    const u = usage(page);
+    await u.getByRole("status", { name: "Metrics unavailable" }).waitFor({ timeout: 30_000 });
+    expect(await u.innerText()).toContain("This looks like a GKE cluster of orbit-analytics.");
+    await u.getByRole("button", { name: "Open Google Cloud" }).waitFor();
+    expect(fake.requests.some((r) => r.path.includes("orbit-analytics") || r.userProject === "orbit-analytics")).toBe(false);
+    if (shots) await all(page, "g9-p2-03-usage-not-chosen", u);
     await hint.scrollIntoViewIfNeeded();
     if (shots) await all(page, "g9-03-hint", hint);
     await hint.getByRole("button", { name: "Open Google Cloud" }).click();
@@ -298,6 +390,9 @@ describe.runIf(run)("(b) a context of your own is GKE only at the listing's addr
       return panel(page).count();
     }, { timeout: 40_000, interval: 2_000 }).toBe(0);
     await expect(page.locator(".gs-hint").count()).resolves.toBe(0);
+    // Usage no longer draws from Cloud Monitoring once the next refresh asks (every 30 s).
+    await usage(page).getByRole("status", { name: "Metrics unavailable" }).waitFor({ timeout: 45_000 });
+    await expect(usage(page).locator(".metrics-src", { hasText: "Cloud Monitoring" }).count()).resolves.toBe(0);
     expect(fake.requests.every((r) => r.method === "GET" && r.authorization === `Bearer ${GCP_TOKEN}`)).toBe(true);
   });
 

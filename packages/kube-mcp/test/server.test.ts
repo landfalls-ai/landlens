@@ -192,6 +192,31 @@ describe("landlens-kube MCP server", () => {
     for (const l of lines) expect(l).toMatch(/^  \(unnamed\): latest/);
   });
 
+  it("names Cloud Monitoring as the source, its memory as non-evictable, and why a session wasn't given it (wave 9 D184)", async () => {
+    const was = cluster.metrics;
+    try {
+      cluster.metrics = async () => ({
+        source: "cloud-monitoring", from: 0, to: 120_000, step: 60, by: "container", reasons: [], gke: { project: "demo-shop", location: "us-central1", name: "shop-prod" },
+        cpu: { series: [{ key: "api", points: [[0, 0.2], [60_000, 0.25]] }] },
+        memory: { series: [{ key: "api", points: [[0, 2 ** 28], [60_000, 2 ** 28]] }] },
+      } as any);
+      const cm: any = await client.callTool({ name: "metrics", arguments: { scope: "pod", namespace: "landlens-dev", name: "orders-api-7d9f-x1" } });
+      expect(cm.content[0].text).toContain("from Cloud Monitoring (GKE system metrics, 60 s samples), one point every 60s, one series per container");
+      expect(cm.content[0].text).toContain("Memory (non-evictable)");
+      cluster.metrics = async () => ({
+        source: "metrics-server", from: 0, to: 60_000, step: 30, by: "node", cpu: { series: [] }, memory: { series: [] },
+        reasons: [{ code: "cloud-monitoring-not-granted", message: "Cloud Monitoring has this cluster's history, but Claude may not read Google Cloud." }, { code: "live-only", message: "Sampled live." }],
+      } as any);
+      const ms: any = await client.callTool({ name: "metrics", arguments: {} });
+      expect(ms.content[0].text).toContain("Claude may not read Google Cloud.");
+      expect(ms.content[0].text).toContain("Memory (working set)");
+    } finally {
+      cluster.metrics = was;
+    }
+    const { tools } = await client.listTools();
+    expect(tools.find((t) => t.name === "metrics")!.description).toContain("or Cloud Monitoring for a GKE cluster");
+  });
+
   it("tags the front-door requests of a call with its id", async () => {
     await client.callTool({ name: "get_events", arguments: { namespace: "landlens-dev" }, _meta: { [CALL_META]: "c42" } });
     expect(tagged).toContain("c42");

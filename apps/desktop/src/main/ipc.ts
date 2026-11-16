@@ -25,14 +25,14 @@ import type { ActionService } from "./actions";
 
 type Handlers = { [C in Channel]: (req: Request<C>, event: IpcMainInvokeEvent) => Promise<Responses[C]> };
 
-export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService, secrets: SecretService) {
+export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: AgentService, metrics: { service: MetricsService; settings: ClicklandSettingsStore; prometheus: PrometheusChoices; history: ClicklandHistory }, mcp: McpService, workbench: WorkbenchService, forwards: ForwardService, doctor: DoctorService, connections: ConnectionsService, gcp: GcpService, family: FamilyService, landflow: LandflowActions, report: { telemetry: TelemetryService; brain: BrainService }, actions: ActionService, secrets: SecretService, gkeHandles = new Set<string>()) {
   const searches = new Map<string, { at: number; read: Promise<SearchIndex & { at: string }> }>();
   /** Subscriptions per renderer, so a closed window stops its watches. */
   const owned = new Map<WebContents, Set<string>>();
   /** Windows that started a sign-in: when one goes, its sign-ins stop. */
   const flowOwner = flowOwners({ cancelFor: (owner) => (connections.cancelFor(owner), family.cancelFor(owner)) });
-  /** Clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name isn't one). */
-  const gkeHandles = new Set<string>();
+  // gkeHandles: clusters connected through Landlens's GKE kubeconfig, by handle (a context of yours by the same name
+  // isn't one); main's metrics source reads the same set.
   clusters.onGone((handle) => gkeHandles.delete(handle));
 
   /** Main's own question, in a native dialog on the asking window: the renderer can't answer it (part 5, L3). */
