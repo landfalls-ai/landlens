@@ -58,14 +58,17 @@ export type GcpReader = {
    * than the 1,000 read, `unreadable` rows Landlens couldn't read, `unplaced` open alerts that name no project (D192).
    */
   alerts(project: string): Promise<{ items: ProjectAlert[]; cut: boolean; unreadable: number; unplaced: number; at: string }>;
-  /** One open alert and its policy's conditions and documentation (10 minutes), or undefined when it isn't open now. */
-  alert(project: string, id: string): Promise<{ alert: ProjectAlert; policy?: AlertPolicyDetail | { error: string } } | undefined>;
+  /**
+   * One open alert and its policy's conditions and documentation (10 minutes), or undefined when it isn't open now or
+   * `show` says the session may not see it: `show` is asked before the policy is read (security review of wave 9 part 4, L1).
+   */
+  alert(project: string, id: string, show?: (a: ProjectAlert) => Promise<boolean>): Promise<{ alert: ProjectAlert; policy?: AlertPolicyDetail | { error: string } } | undefined>;
   /** A GKE cluster's usage and reference lines from Cloud Monitoring alone (D193): fixed queries, at most six. */
   metrics(r: GcpMetricsAsk): Promise<{ cluster: GkeCluster; series: MetricsSeries }>;
   /**
-   * The session's namespace limit when `context` is the cluster the session is connected to (by name, or by the
-   * listed address), and for `undefined` (a Kubernetes alert whose cluster isn't readable) whenever the session has one
-   * (D195). A cluster the session isn't connected to has none.
+   * The session's namespace limit when `context` is (or may be) the cluster the session is connected to, and for
+   * `undefined` (a Kubernetes alert whose cluster can't be told) whenever the session has one (D195). Only a cluster
+   * the session is shown not to be connected to has none (security review of wave 9 part 4, M2).
    */
   limit(context: string | undefined): Promise<string[] | undefined>;
 };
@@ -268,21 +271,23 @@ export function gcpMcpServer(reader: GcpReader, o: { now?: () => number } = {}):
     annotations: READ_ONLY,
   }, run(async ({ project, cluster }: { project: string; cluster?: string }) => {
     const r = await reader.advice(project, cluster);
+    // Notes go under the head, before the rows (security review of wave 9 part 4, L4): the 24,000 cut only ever takes rows.
+    const notes: string[] = [];
     const out: string[] = [];
     let listed = 0;
     let hidden = 0;
     for (const c of r.clusters) {
       const head = `${w(c.cluster.context, 200)} (${w(c.cluster.name, 40)}, ${w(c.cluster.location, 30)})`;
       if (c.error !== undefined) {
-        out.push(`${head}: couldn't be read: ${w(c.error, 300)}`);
+        notes.push(`${head}: couldn't be read: ${w(c.error, 300)}`);
         continue;
       }
       const n = `${c.items.length}${c.cut ? "+" : ""}`;
+      if (c.cut) notes.push(`${head}: only the first 1,000 suggestions of ${project} in ${w(c.cluster.location, 30)} were read; this cluster may have more.`);
       out.push(c.items.length
         ? `${head}: ${n} suggestion${c.items.length === 1 && !c.cut ? "" : "s"}`
-        : c.cut ? `${head}: none among those read, but only the first 1,000 suggestions of ${project} in ${w(c.cluster.location, 30)} were read; this cluster may have more.`
+        : c.cut ? `${head}: none among those read (only the first 1,000 were read).`
         : `${head}: Google has no suggestions for this cluster.`);
-      if (c.items.length && c.cut) out.push(`  Only the first 1,000 suggestions of ${project} in ${w(c.cluster.location, 30)} were read; this cluster may have more.`);
       for (const x of c.items) {
         if (listed >= GCP_ADVICE_ITEMS) {
           hidden++;
@@ -300,11 +305,11 @@ export function gcpMcpServer(reader: GcpReader, o: { now?: () => number } = {}):
         }
       }
     }
-    if (hidden) out.push(`${hidden} more suggestion${hidden === 1 ? "" : "s"} not shown; name one cluster to see its own.`);
-    if (r.more) out.push(`${r.more} more GKE cluster${r.more === 1 ? "" : "s"} of ${project} not read (at most ${GCP_ADVICE_CLUSTERS} a call); name one with cluster.`);
-    if (r.errors.length) out.push("Couldn't list:", ...r.errors.map((e) => `${e.project}: ${w(e.message, 300)}`));
+    if (hidden) notes.unshift(`${hidden} more suggestion${hidden === 1 ? "" : "s"} not shown; name one cluster to see its own.`);
+    if (r.more) notes.unshift(`${r.more} more GKE cluster${r.more === 1 ? "" : "s"} of ${project} not read (at most ${GCP_ADVICE_CLUSTERS} a call); name one with cluster.`);
+    if (r.errors.length) notes.unshift(`Couldn't list: ${r.errors.map((e) => `${e.project}: ${w(e.message, 300)}`).join("; ")}`);
     if (!r.clusters.length && !r.errors.length) out.push(cluster ? `gke_clusters doesn't list ${cluster} now.` : `No GKE clusters in ${project}.`);
-    return [`Google's GKE suggestions (diagnosis recommender) in ${project}; Google's text is quoted:`, ...out].join("\n");
+    return [`Google's GKE suggestions (diagnosis recommender) in ${project}; Google's text is quoted:`, ...notes, ...out].join("\n");
   }));
 
   server.registerTool("gcp_alerts", {
@@ -319,20 +324,24 @@ export function gcpMcpServer(reader: GcpReader, o: { now?: () => number } = {}):
   }, run(async ({ project, cluster, id }: { project: string; cluster?: string; id?: string }) => {
     const t = now();
     const ctxOf = (a: ProjectAlert) => (a.cluster ? `gke_${project}_${a.cluster.location}_${a.cluster.name}` : undefined);
-    const k8s = (a: ProjectAlert) => ["k8s_container", "k8s_pod", "k8s_node", "k8s_cluster", "prometheus_target"].includes(a.resourceType);
-    /** Shown to this session: a Kubernetes alert on the session's own cluster (or an unreadable one) only within its namespaces (D195). */
+    /**
+     * Shown to this session (D195): an alert whose resource is, or may be, a Kubernetes cluster's (`kube`, from its labels:
+     * security review of wave 9 part 4, M3) on a cluster the session is or may be on, only with a namespace of its own.
+     * One whose namespace can't be told (a node, a VM, a control plane) is hidden from a limited session there.
+     */
     const limits = new Map<string | undefined, Promise<string[] | undefined>>();
     const allowed = async (a: ProjectAlert) => {
-      if (!k8s(a)) return true;
+      if (!a.kube) return true;
       // Asked once per cluster a call: a thousand alerts never mean a thousand listings.
       const ctx = ctxOf(a);
       if (!limits.has(ctx)) limits.set(ctx, reader.limit(ctx));
       const limit = await limits.get(ctx);
-      return !limit?.length || (!!a.subject?.namespace && limit.includes(a.subject.namespace));
+      return !limit?.length || (!!a.namespace && limit.includes(a.namespace));
     };
     if (id !== undefined) {
-      const r = await reader.alert(project, id);
-      if (!r || !(await allowed(r.alert))) return `No open alert ${id} in ${project} now${r ? " that this session may see" : ""}. gcp_alerts lists them.`;
+      // The limit is asked before the policy is read, and an alert outside it answers exactly as one that isn't open (L1).
+      const r = await reader.alert(project, id, allowed);
+      if (!r) return `No open alert ${id} in ${project} now. gcp_alerts lists them.`;
       const a = r.alert;
       const lines = [`Open alert ${w(a.id, 128)} in ${project}, open since ${w(a.opened, 40)}:`, alertLine(a, t)];
       const p = r.policy;
@@ -365,7 +374,8 @@ export function gcpMcpServer(reader: GcpReader, o: { now?: () => number } = {}):
     const head = ordered.length
       ? `${ordered.length}${partial ? "+" : ""} open alert${ordered.length === 1 ? "" : "s"} in ${project}${cluster ? `, ${mine.length} on ${cluster}` : ""} (read ${w(r.at, 40)}):`
       : partial || outside ? `No open alerts of ${project} are listed here, but that isn't all of them:` : `No open alerts in ${project} (read ${w(r.at, 40)}).`;
-    return [head, ...ordered.slice(0, GCP_ALERT_ITEMS).map((a) => alertLine(a, t)), ...notes].join("\n");
+    // Notes before the rows (L4): the 24,000 cut takes rows, never what says the list is partial.
+    return [head, ...notes, ...ordered.slice(0, GCP_ALERT_ITEMS).map((a) => alertLine(a, t))].join("\n");
   }));
 
   server.registerTool("gcp_metrics", {

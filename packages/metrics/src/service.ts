@@ -30,10 +30,19 @@ export type MetricsDeps = {
 };
 
 /**
- * An agent's call (D194): the Google projects its session may read, and how its autonomous GitHub and Linear writes are
- * held once it has read Google Cloud. The IDE's own charts pass none.
+ * An agent's call (D194): the Google projects its session may read now (asked again before each query and on delivery,
+ * so turning reading off, another gcloud account or a project chosen again stops the session at once: security review
+ * of wave 9 part 4, M1), how its autonomous GitHub and Linear writes are held once it has read Google Cloud, and its
+ * budget of Cloud Monitoring reads (`take`, one a call that would ask Google; false past SESSION_READS a minute, L3).
+ * The IDE's own charts pass none.
  */
-export type AgentGoogle = { projects: string[]; hold: () => void };
+export type AgentGoogle = { projects: () => string[]; hold: () => void; take: () => boolean };
+/** A session's Cloud Monitoring reads from the kube metrics tool, a minute (L3): as many as landlens-gcp's calls. */
+export const SESSION_READS = 30;
+/** What a session past its budget is told; metrics-server is next. */
+export const SESSION_READS_SPENT = `At most ${SESSION_READS} Cloud Monitoring reads a minute in a session: this one wasn't asked. Try again in a minute.`;
+/** Withdrawn while a session's read was on its way: nothing of it is used. */
+class Withdrawn extends Error {}
 
 /**
  * What a session without the grant for the cluster's project is told (D182, D194). "May": main decides a session's call
@@ -225,12 +234,20 @@ export class MetricsService {
     }
     const { cluster: ref, ask: raw } = found;
     const agent = opts.agent;
-    if (agent && !agent.projects.includes(ref.project)) {
+    const granted = () => !agent || agent.projects().includes(ref.project);
+    if (!granted()) {
       reasons.push({ code: "cloud-monitoring-not-granted", message: NOT_GRANTED });
+      return undefined;
+    }
+    // A session's reads are counted (L3): past its budget nothing is asked, and metrics-server is next.
+    if (agent && !agent.take()) {
+      reasons.push({ code: "cloud-monitoring-failed", message: SESSION_READS_SPENT });
       return undefined;
     }
     let held = false;
     const ask: PromAsk = async (...a) => {
+      // The grant is asked again before every query (M1): a query after it was withdrawn isn't sent.
+      if (!granted()) throw new Withdrawn();
       // A session's read of Google Cloud holds its autonomous writes, before the query leaves (D194).
       if (agent && !held) {
         held = true;
@@ -245,10 +262,14 @@ export class MetricsService {
     const failed = (message: string) => reasons.push({ code: "cloud-monitoring-failed", message: message.slice(0, 300) });
     try {
       const out = await cloudMonitoringSeries(read, ask, ref, req, this.now());
-      if (out.cpu.series.length || out.memory.series.length || (await this.gkeHasData(ref, ask))) return out;
+      const some = out.cpu.series.length || out.memory.series.length || (await this.gkeHasData(ref, ask));
+      // And on delivery (M1): what was read for a session whose grant went meanwhile isn't given to it.
+      if (!granted()) throw new Withdrawn();
+      if (some) return out;
       reasons.push({ code: "cloud-monitoring-no-data", message: `Cloud Monitoring has no GKE system metrics for ${ref.name} in ${ref.project} in the last hour.` });
     } catch (err) {
-      if (err instanceof AskFailed) failed(`Cloud Monitoring (${ref.project}) didn't answer: ${err.message}`);
+      if (err instanceof Withdrawn || !granted()) reasons.push({ code: "cloud-monitoring-not-granted", message: NOT_GRANTED });
+      else if (err instanceof AskFailed) failed(`Cloud Monitoring (${ref.project}) didn't answer: ${err.message}`);
       // Series came back, but none with this cluster's labels (L3): said, metrics-server next, nothing kept of it.
       else if (err instanceof LabelsLost) failed(err.message);
       else if ((err as { status?: number }).status === 400) throw err;

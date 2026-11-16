@@ -112,8 +112,14 @@ export function caFingerprint(ca: string): string {
   return createHash("sha256").update(Buffer.concat(ders)).digest("hex");
 }
 
-/** A GKE cluster as main keeps it: what the page gets, and the CA the kubeconfig needs (base64 PEM; not sent on). */
-export type GkeClusterFull = GkeCluster & { ca?: string };
+/**
+ * A GKE cluster as main keeps it: what the page gets, the CA the kubeconfig needs (base64 PEM; not sent on), and its
+ * DNS endpoint when the listing has one beside the IP it opens (`dns`, checked as `endpoint` is; not sent on): a session
+ * connected at either address is on this cluster (security review of wave 9 part 4, M2).
+ */
+export type GkeClusterFull = GkeCluster & { ca?: string; dns?: string };
+/** A listed cluster as the page and the agent get it: no CA, no second address. */
+export const publicCluster = ({ ca: _ca, dns: _dns, ...c }: GkeClusterFull): GkeCluster => c;
 
 /**
  * The project's GKE clusters, at most 200; a cluster whose name or location isn't GKE's shape is left out, and one
@@ -142,6 +148,7 @@ export async function listClusters(client: GcpClient, project: string, o: { allo
       endpoint,
       context: gkeContext(project, location, c.name),
       ...(endpoint && endpoint === ip ? { ca } : {}),
+      ...(dns && !isIpEndpoint(dns) && dns !== endpoint ? { dns } : {}),
     });
     if (out.length >= MAX_CLUSTERS) break;
   }

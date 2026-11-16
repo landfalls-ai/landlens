@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { MetricsService, NOT_GRANTED } from "@landlens/metrics";
+import { MetricsService, NOT_GRANTED, SESSION_READS, SESSION_READS_SPENT } from "@landlens/metrics";
 import { cloudMonitoringSource, sessionSeries } from "../src/main/metrics-source";
 
 const NOW = Date.parse("2026-11-16T09:00:00Z");
@@ -48,7 +48,7 @@ describe("sessionSeries", () => {
 
   it("without the session's Google grant (none given, or none for this project) it asks Google nothing", async () => {
     const { ask, read, metrics } = setup();
-    for (const google of [undefined, { projects: [], hold: () => {} }, { projects: ["orbit-analytics"], hold: () => {} }]) {
+    for (const google of [undefined, { projects: () => [], hold: () => {} }, { projects: () => ["orbit-analytics"], hold: () => {} }]) {
       const s = await sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, read, google);
       expect(s.source).toBe("none");
       expect(s.reasons.map((r) => r.code)).toContain("cloud-monitoring-not-granted");
@@ -61,11 +61,41 @@ describe("sessionSeries", () => {
 
   it("D194: with the grant's project it reads Cloud Monitoring, holding the session's autonomy before the first query", async () => {
     const { order, ask, read, metrics } = setup();
-    const google = { projects: ["demo-shop"], hold: () => void order.push("hold") };
+    const google = { projects: () => ["demo-shop"], hold: () => void order.push("hold") };
     const s = await sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, read, google);
     expect(s.source).toBe("cloud-monitoring");
     expect(ask).toHaveBeenCalled();
     expect(order[0]).toBe("hold");
+  });
+});
+
+describe("Fable's security review of part 4, fixed", () => {
+  it("L3: a session's kube metrics calls that would ask Cloud Monitoring are 30 a minute; the 31st asks nothing and says why", async () => {
+    let t = NOW;
+    const ask = vi.fn(async () => node);
+    const read = vi.fn(async (): Promise<any> => ({ items: [] }));
+    const metrics = new MetricsService({
+      clickland: () => ({ clusterName: (c) => c }),
+      cluster: () => ({ context: "gke_demo-shop_us-central1_shop-prod", get: async () => Promise.reject(Object.assign(new Error("404"), { status: 404 })) }),
+      cloudMonitoring: async () => ({ cluster: REF, ask }),
+      now: () => t,
+      sampler: { timers: { set: () => 1, clear: () => {} }, now: () => t },
+    });
+    const series = sessionSeries(metrics, { now: () => t });
+    const google = { projects: () => ["demo-shop"], hold: () => {} };
+    for (let i = 0; i < SESSION_READS; i++) {
+      const s = await series("hhhhhhhhhhhh", { scope: "pod", namespace: "shop", name: `pod-${i}`, range: "1h" }, read, google);
+      expect(s.reasons.map((r) => r.message)).not.toContain(SESSION_READS_SPENT);
+    }
+    const asked = ask.mock.calls.length;
+    const over = await series("hhhhhhhhhhhh", { scope: "pod", namespace: "shop", name: "pod-31", range: "1h" }, read, google);
+    expect(ask.mock.calls.length).toBe(asked);
+    expect(over.source).not.toBe("cloud-monitoring");
+    expect(over.reasons).toContainEqual({ code: "cloud-monitoring-failed", message: SESSION_READS_SPENT });
+    // Another session has its own budget; this one's comes back after the minute.
+    expect((await series("hhhhhhhhhhhh", { scope: "pod", namespace: "shop", name: "pod-32", range: "1h" }, read, { ...google })).reasons.map((r) => r.message)).not.toContain(SESSION_READS_SPENT);
+    t += 60_000;
+    expect((await series("hhhhhhhhhhhh", { scope: "pod", namespace: "shop", name: "pod-33", range: "1h" }, read, google)).reasons.map((r) => r.message)).not.toContain(SESSION_READS_SPENT);
   });
 });
 
@@ -79,17 +109,19 @@ describe("Fable's security review of part 2, fixed", () => {
     const chosenProjectOf = vi.fn((c: string) => (c === PROD ? "demo-shop" : undefined));
     const gcp = { gkeOf, promAsk, chosenProjectOf } as never;
     // A chosen project the session may not read: not granted, and gkeOf (gcloud, the listing, the project search) never runs.
-    expect(await cloudMonitoringSource(gcp, named(PROD), new Set())("h", { agent: { projects: [], hold: () => {} } })).toEqual({ reason: { code: "cloud-monitoring-not-granted", message: NOT_GRANTED } });
-    expect(await cloudMonitoringSource(gcp, named(PROD), new Set(["h"]))("h", { agent: { projects: ["orbit-analytics"], hold: () => {} } })).toMatchObject({ reason: { code: "cloud-monitoring-not-granted" } });
+    expect(await cloudMonitoringSource(gcp, named(PROD), new Set())("h", { agent: { projects: () => [], hold: () => {}, take: () => true } })).toEqual({ reason: { code: "cloud-monitoring-not-granted", message: NOT_GRANTED } });
+    expect(await cloudMonitoringSource(gcp, named(PROD), new Set(["h"]))("h", { agent: { projects: () => ["orbit-analytics"], hold: () => {}, take: () => true } })).toMatchObject({ reason: { code: "cloud-monitoring-not-granted" } });
     // Not chosen, or not GKE's name: nothing.
-    expect(await cloudMonitoringSource(gcp, named("gke_orbit-analytics_us-central1_shop-prod"), new Set())("h", { agent: { projects: [], hold: () => {} } })).toBeUndefined();
-    expect(await cloudMonitoringSource(gcp, named("orbstack"), new Set())("h", { agent: { projects: [], hold: () => {} } })).toBeUndefined();
+    expect(await cloudMonitoringSource(gcp, named("gke_orbit-analytics_us-central1_shop-prod"), new Set())("h", { agent: { projects: () => [], hold: () => {}, take: () => true } })).toBeUndefined();
+    expect(await cloudMonitoringSource(gcp, named("orbstack"), new Set())("h", { agent: { projects: () => [], hold: () => {}, take: () => true } })).toBeUndefined();
     expect(gkeOf).not.toHaveBeenCalled();
     expect(promAsk).not.toHaveBeenCalled();
     // A project the session may read (part 4) goes on to gkeOf; the IDE's own charts always do.
-    expect(await cloudMonitoringSource(gcp, named(PROD), new Set())("h", { agent: { projects: ["demo-shop"], hold: () => {} } })).toMatchObject({ cluster: REF });
+    expect(await cloudMonitoringSource(gcp, named(PROD), new Set())("h", { agent: { projects: () => ["demo-shop"], hold: () => {}, take: () => true } })).toMatchObject({ cluster: REF });
     expect(await cloudMonitoringSource(gcp, named(PROD), new Set())("h", {})).toMatchObject({ cluster: REF });
     expect(gkeOf).toHaveBeenCalledTimes(2);
+    // L3 (review of part 4): a session's queries are asked as an agent's (their own share of the line, no kept 429).
+    expect(promAsk.mock.calls).toEqual([[REF, { agent: true }], [REF, {}]]);
   });
 
   it("T3: index.ts gives the MCP service and the agent the session series, never MetricsService.series itself", () => {

@@ -391,12 +391,14 @@ each run against its own test file, then restored).
 
 ## Part 4: Claude's tools (D190–D196)
 
+Built 16 Nov 2026; its security review fixed the same day (below).
+
 - [x] The grant's `covers`, the dialog, the card's line
 - [x] `GcpReader`'s new methods and `agentReader`; `server.ts`'s three tools; `server.test.ts`
 - [x] D194: `mcp.ts`, `index.ts`, `metrics-source.ts` (the session series; `service.ts` already applied `agent`);
   `cluster_overview`'s line; D195
 - [x] The prompt's words; the MCP page; the live-session e2e; docs
-- [ ] Review; fixes
+- [x] Review; fixes (below)
 
 ### Departures from the spec in part 4
 
@@ -437,3 +439,69 @@ each run against its own test file, then restored).
   PromQL 25 s in its slot), 30 calls a minute a session, at most 10 clusters' suggestions and 6 PromQL queries a call.
 - **[check 1]** stays the person's live check; `gcp_metrics` uses the same labels and draws nothing (with
   `LabelsLost`'s sentence) if `by` drops them. [check 2], [check 3] and [check 7] are unchanged.
+
+### Security review of part 4, fixed
+
+No High; three Medium, five Low and eight missing tests, all fixed as the review proposed; where a fix goes further or
+chose differently, the item says why. Each fix was seen to fail its test with it taken out (43 mutations, one per fix
+or rule, each run against its own test files, then restored; none survived).
+
+- [x] **M1** A session's Google projects are live. `SessionGoogle.projects` (and `AgentGoogle.projects` in
+  `packages/metrics`) is a function: `mcp.ts`'s `sessionGoogle` returns `gcp.projectsNow(start)`, which is
+  `GcpService.agentProjectsNow` = `readable() ∩ start` (the grant on, the project still chosen and still granted, as
+  `agentReader`'s `allowed` already was), so turning reading off, another gcloud account or a project taken out (and
+  chosen again: it has left the grant) stops the open session's kube `metrics` and `cluster_overview`'s line at the
+  next call. Beyond the proposal: `gcpOff()` bumps `gcpEpoch`, and a session begun before it has no projects even after
+  the person turns reading on again (a new yes is for new sessions, as D93 says of a project granted later);
+  `MetricsService` checks `projects()` before each query and again on delivery, so a wave of queries in flight stops at
+  the next one and none is delivered ("not granted"); `agentOnly` checks after its read too, as the item reads do.
+  Tests: `gcp-service.test.ts` (off with a read in flight, an account change, a project taken out and chosen again:
+  no projects, no line, the read in flight not delivered), `mcp-main.test.ts` (after off the old session's projects
+  and line are gone; a new session gets them), `service.test.ts` (withdrawn after the first query: one query asked, not
+  five; the "not granted" reason). T3 is these tests.
+- [x] **M2** The namespace limit fails closed. `listClusters` keeps a cluster's DNS endpoint beside its IP (`dns`,
+  dropped by `publicCluster` before anything leaves main), and `sessionLimit` places the session's cluster by its
+  context, either listed address (`endpoint` or `dns`, compared as origins) or the SHA-256 of the CA its sidecar checks
+  (`mcp.ts` passes `ca` only when TLS is verified: no `insecure-skip-tls-verify` and no `tls-server-name`, since an
+  unchecked CA proves nothing). A session no cluster of the listing matches is limited on every cluster, and so is one
+  with no server or whose listing can't be read (gcloud signed out: T4). Another listed cluster has no limit only when
+  the session's own cluster was placed and it isn't that one; an unlisted context is limited.
+- [x] **M3** Kubernetes is decided from the labels. `slim` marks a row `kube` when its type is `k8s_*`, `gke_*` or
+  `gce_instance`, or any label key has a `cluster`, `namespace`, `pod`, `node` or `container` word (so `k8s_service`,
+  `istio_*`, `gke_container`'s `namespace_id`, and types Landlens has never seen). `alertRows` gives every Kubernetes
+  row its cluster (`cluster_name`, or `cluster` as Prometheus targets name it) and its namespace (the one distinct value
+  among `namespace_name`, `namespace` and `namespace_id`, a valid Kubernetes name, else none). `gcp_alerts` shows a
+  limited session a Kubernetes alert only when its namespace is told and inside the limit (or its cluster is told and
+  isn't the session's); every other is counted in "N alerts outside this session's namespaces aren't shown."
+  Departures: a `location` label alone isn't a Kubernetes sign (Cloud Run, Cloud SQL and load balancers have one, and
+  would all be hidden); a `gce_instance` alert is treated as Kubernetes with no cluster or namespace, so a limited
+  session never sees one, in any project (a GKE node is a Compute Engine VM, and Landlens can't tell which VMs are the
+  session's nodes; the review proposed the session's own project only). **[check]** The label keys (`namespace_id`,
+  `pod_id`, `gke_container`'s set, `istio_*`'s) are from memory, not checked against the real Monitoring API; the
+  key rule covers names Landlens doesn't know, and a row with none of these words and an unknown type stays outside.
+- [x] **L1** `GcpReader.alert(project, id, show)` checks `show` before the policy is read, and `gcp_alerts { id }`
+  passes the session's own rule; an alert outside the limit is "No open alert <id> in <project> now. gcp_alerts lists
+  them.", the same sentence as one not open, with no `alertPolicies` request.
+- [x] **L2** `serveTexts` stores each text and its JSON-escaped form (`JSON.stringify(t).slice(1, -1)`) when they
+  differ, so a quote copied out of the tool's answer (a `"` printed as `\"`, a `\` as `\\`) is found.
+- [x] **L3** A per-session budget: `sessionSeries` keeps 30 calls a minute that would ask Cloud Monitoring for each
+  session's `google` (`SESSION_READS`; past it `MetricsService` asks nothing and says "At most 30 Cloud Monitoring
+  reads a minute in a session …", and the tool answers from metrics-server). Beyond the proposal, since the budget is
+  per session and sessions are many: all sessions' PromQL together (the kube tool and `gcp_metrics`) has at most 12
+  places in the waiting line (`AGENT_PROMS`, past it `PROM_BUSY`, nothing asked), leaving the rest of the 4 + 40 to the
+  person's charts; and a 403 or 429 a session's query gets isn't kept for the project, so a session can't make the
+  person's charts say Google is limiting requests for a minute (their own 403 or 429 is kept as before).
+- [x] **L4** `gke_recommendations` and `gcp_alerts` put their notes (hidden, more, cut, couldn't list or read, the
+  first 1,000) after the head and before the rows, so the 24,000 cut takes rows, never them.
+- [x] **L5** `confirmedRefs` keeps when `gkeOf` said yes; `heldLine` uses it only for `CLUSTERS_TTL` (60 s, the
+  listing's own age), and a later answer that isn't a cluster (no, a hint, unread) forgets it.
+- [x] **T1** `mcp-main.test.ts`: a session with a GitHub remote, autonomy on, `s.google.hold()`, and `autonomyCheck`
+  says `WHY.gcp`. **T2** `packages/acp-host/test/session.test.ts`: a delayed `SessionMcp.open` whose kube `metrics` call
+  sees `NO_GOOGLE` (no projects, no line), then the gateway's `google` for later calls and a call's own copy. **T3** is
+  M1's. **T4** is M2's: no server and an unreadable listing each limit every cluster. **T5** `server.test.ts`: the three
+  new tools count against the 30 a minute, one each per call. **T6** `gcp-service.test.ts`: for advice, alerts, an
+  alert and metrics, an account change or the project taken out while the read runs is a 409 or the "Choose …" 404,
+  not `agentOnly`'s 403. **T7** `gcp-service.test.ts` drives `landlens-gcp` through the real `GcpService` reader against
+  the fake (M2's CA placement, M3's and L1's alerts, L2's quoted text). **T8** `heldLine`'s project check is
+  `agentProjectsNow` alone (the separate `kept.projects` check went: `readable()` already holds it), tested with the
+  project still held but out of the session's grant.

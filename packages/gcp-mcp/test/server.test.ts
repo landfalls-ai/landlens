@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { gkeProjectSeries } from "../../metrics/src/cloud-monitoring.js";
-import { FakeGcp, POLICY_DOC, PROJECTS, PROMQL_MARKER, SHOUTY_AGENT, SHOUTY_POLICY } from "../../gcp/test/fake-gcp.js";
+import { demoShopAlerts, FakeGcp, POLICY_DOC, PROJECTS, PROMQL_MARKER, SHOUTY_AGENT, SHOUTY_POLICY } from "../../gcp/test/fake-gcp.js";
 import { clientFor } from "../../gcp/test/helpers.js";
 import { GCP_ADVICE_ITEMS, GCP_ALERT_ITEMS, GCP_ANSWER_MAX, GCP_CALLS_A_MINUTE, GCP_DATA_LINE, GCP_YAML_MAX, gcpMcpServer, type GcpReader } from "../src/server.js";
 
@@ -68,9 +68,9 @@ function reader(chosen: string[], connected: string[] = [], limits: Record<strin
       return { clusters, more: Math.max(0, all.length - 10), errors: [] };
     },
     alerts,
-    alert: async (p, id) => {
+    alert: async (p, id, show) => {
       const a = (await alerts(p)).items.find((x) => x.id === id);
-      if (!a) return undefined;
+      if (!a || (show && !(await show(a)))) return undefined;
       return { alert: a, ...(a.policyId ? { policy: await alertPolicy(client, p, a.policyId) } : {}) };
     },
     metrics: async (r) => {
@@ -196,6 +196,61 @@ describe("landlens-gcp", () => {
     expect((await c.callTool({ name: "gcp_projects", arguments: {} })).isError).toBeFalsy();
   });
 
+  it("T5 (review of part 4): the three new tools count against the same 30 a minute, one each per call", async () => {
+    let t = 2_000_000;
+    const base = reader(["demo-shop"]);
+    const none = { clusters: [], more: 0, errors: [] };
+    const c = await connect({ ...base, advice: async () => none, alerts: async () => ({ items: [], cut: false, unreadable: 0, unplaced: 0, at: "2026-11-16T10:00:00.000Z" }), metrics: async () => { throw new Error("not read here"); } }, () => t);
+    const calls = [
+      { name: "gke_recommendations", arguments: { project: "demo-shop" } },
+      { name: "gcp_alerts", arguments: { project: "demo-shop" } },
+      { name: "gcp_metrics", arguments: { cluster: "gke_demo-shop_us-central1_shop-prod" } },
+    ];
+    for (let i = 0; i < GCP_CALLS_A_MINUTE; i++) {
+      const r = await c.callTool(calls[i % 3]!);
+      expect(text(r)).not.toMatch(/at most 30 Google Cloud calls a minute/);
+    }
+    for (const call of calls) {
+      const over = await c.callTool(call);
+      expect(over.isError, call.name).toBe(true);
+      expect(text(over)).toMatch(/at most 30 Google Cloud calls a minute/);
+    }
+    t += 60_000;
+    expect((await c.callTool(calls[1]!)).isError).toBeFalsy();
+  });
+
+  it("L4 (review of part 4): the notes that say a list is partial come before the rows, so the 24,000 cut never takes them", async () => {
+    const base = reader(["demo-shop"], [], { "*": ["shop"] });
+    const long = (n: number, i: number) => `${"x".repeat(n)}${i}`;
+    const items = Array.from({ length: 60 }, (_, i) => ({
+      id: long(120, i), opened: "2026-11-16T09:00:00.000Z", policy: long(118, i), severity: "warning" as const, resourceType: "gce_instance", metric: long(195, i),
+      labels: Array.from({ length: 6 }, (_, k): [string, string] => [`k${k}`, long(158, i)]),
+    }));
+    // One Kubernetes alert outside the limit, last, so the outside note has something to count.
+    const outside = { ...items[0]!, id: "outside-1", kube: true as const, namespace: "payments", labels: undefined };
+    const c = await connect({ ...base, alerts: async () => ({ items: [...items, outside], cut: true, unreadable: 2, unplaced: 1, at: "2026-11-16T10:00:00.000Z" }) });
+    const out = text(await c.callTool({ name: "gcp_alerts", arguments: { project: "demo-shop" } }));
+    expect(out).toMatch(/the answer was cut at 24000 characters\)$/);
+    for (const note of [/10 more not shown\./, /1 alert outside this session's namespaces isn't shown\./, /Only the newest 1,000 alerts of demo-shop were read/, /2 rows of Cloud Monitoring's answer couldn't be read/, /1 open alert in Cloud Monitoring's answer doesn't say/]) {
+      expect(out, String(note)).toMatch(note);
+    }
+    const cl = (i: number) => ({ project: "demo-shop", location: "us-central1", name: `c${i}`, status: "RUNNING", version: "1", endpoint: "203.0.113.17", context: `gke_demo-shop_us-central1_c${i}` });
+    const adv = (i: number) => ({ id: `i${i}`, subtype: "X", topic: "deprecation" as const, severity: "low" as const, category: "reliability" as const, description: long(290, i), action: long(290, i),
+      apis: [{ api: long(190, i), clients: Array.from({ length: 5 }, () => ({ agent: long(110, i) })) }] });
+    const r = await connect({
+      ...base,
+      advice: async () => ({
+        clusters: [...Array.from({ length: 9 }, (_, i) => ({ cluster: cl(i), items: Array.from({ length: 40 }, (_, k) => adv(k)), cut: i === 8 })), { cluster: cl(9), items: [], error: "Google didn't answer in time." }],
+        more: 2, errors: [{ project: "demo-shop", message: "The listing failed." }],
+      }),
+    });
+    const rec = text(await r.callTool({ name: "gke_recommendations", arguments: { project: "demo-shop" } }));
+    expect(rec).toMatch(/the answer was cut at 24000 characters\)$/);
+    for (const note of [/320 more suggestions not shown/, /2 more GKE clusters of demo-shop not read/, /Couldn't list: demo-shop: The listing failed\./, /gke_demo-shop_us-central1_c9 \(c9, us-central1\): couldn't be read: Google didn't answer in time\./, /gke_demo-shop_us-central1_c8 \(c8, us-central1\): only the first 1,000 suggestions/]) {
+      expect(rec, String(note)).toMatch(note);
+    }
+  });
+
   it("lists GKE clusters and says which Landlens is connected to", async () => {
     const c = await connect(reader(["demo-shop"], ["gke_demo-shop_us-central1_shop-prod"]));
     const out = text(await c.callTool({ name: "gke_clusters", arguments: {} }));
@@ -292,7 +347,7 @@ describe("landlens-gcp", () => {
       const c = await connect({ ...base, advice: async () => ({ clusters: [{ cluster: cl, items: Array.from({ length: 45 }, (_, i) => item(i)), cut: true }], more: 3, errors: [] }) });
       const out = text(await c.callTool({ name: "gke_recommendations", arguments: { project: "demo-shop" } }));
       expect(out).toMatch(/45\+ suggestions/);
-      expect(out).toMatch(/Only the first 1,000 suggestions of demo-shop in us-central1 were read/);
+      expect(out).toMatch(/only the first 1,000 suggestions of demo-shop in us-central1 were read/);
       expect(out.match(/\[medium\]/g)).toHaveLength(GCP_ADVICE_ITEMS);
       expect(out).toMatch(/5 more suggestions not shown/);
       expect(out).toMatch(/3 more GKE clusters of demo-shop not read/);
@@ -367,14 +422,54 @@ describe("landlens-gcp", () => {
       const c = await connect({ ...base, limit: (ctx) => (asked.push(ctx), base.limit(ctx)) });
       const out = text(await c.callTool({ name: "gcp_alerts", arguments: { project: "demo-shop" } }));
       // Once per cluster in a call, however many alerts it has.
-      expect([...asked].sort()).toEqual(["gke_demo-shop_europe-west1-b_shop-staging", "gke_demo-shop_us-central1_shop-prod"]);
+      // (undefined: the VM, whose cluster can't be told.)
+      expect([...asked].sort()).toEqual(["gke_demo-shop_europe-west1-b_shop-staging", "gke_demo-shop_us-central1_shop-prod", undefined]);
       const ids = out.split("\n").filter((l) => l.startsWith("[")).map((l) => l.split(" · id ")[1]);
-      // shop-prod's alert in shop shows; its node's and its monitoring target's don't; staging (no limit there) and the VM do.
-      expect(ids).toEqual(["0a2-restarts", "0a4-staging", "0a6-vm"]);
-      expect(out).toMatch(/2 alerts outside this session's namespaces aren't shown\./);
+      // shop-prod's alert in shop shows; its node's and its monitoring target's don't; staging (no limit there) does; the
+      // VM may be one of the session's nodes, so it doesn't either (security review of part 4, M3).
+      expect(ids).toEqual(["0a2-restarts", "0a4-staging"]);
+      expect(out).toMatch(/3 alerts outside this session's namespaces aren't shown\./);
+      // L1: one outside the limit answers exactly as one that isn't open, and its policy isn't read.
+      fake.requests.length = 0;
       const one = text(await c.callTool({ name: "gcp_alerts", arguments: { project: "demo-shop", id: "0a5-node-memory" } }));
-      expect(one).toMatch(/No open alert 0a5-node-memory in demo-shop now that this session may see/);
-      expect(one).not.toContain("Node memory");
+      const closed = text(await c.callTool({ name: "gcp_alerts", arguments: { project: "demo-shop", id: "0a7-closed" } }));
+      expect(one).toBe(closed.replace("0a7-closed", "0a5-node-memory"));
+      expect(one).toBe(`${GCP_DATA_LINE}\n\nNo open alert 0a5-node-memory in demo-shop now. gcp_alerts lists them.`);
+      expect(fake.requests.filter((q) => q.path.includes("alertPolicies"))).toEqual([]);
+    });
+
+    it("M3 (review of part 4): any alert whose labels say Kubernetes is limited, whatever its type; a VM is too; each is counted", async () => {
+      const shopProd = "gke_demo-shop_us-central1_shop-prod";
+      fake.alerts.set("demo-shop", [
+        ...demoShopAlerts(),
+        { name: "projects/demo-shop/alerts/0b1-slo", state: "OPEN", openTime: new Date(Date.now() - 5 * 60_000).toISOString(),
+          resource: { type: "k8s_service", labels: { project_id: "demo-shop", location: "us-central1", cluster_name: "shop-prod", namespace_name: "payments", service_name: "ledger" } },
+          policy: { name: "projects/demo-shop/alertPolicies/1001", displayName: "Ledger SLO burn", severity: "ERROR" } },
+        { name: "projects/demo-shop/alerts/0b2-legacy", state: "OPEN", openTime: new Date(Date.now() - 6 * 60_000).toISOString(),
+          resource: { type: "gke_container", labels: { project_id: "demo-shop", zone: "us-central1-a", cluster_name: "shop-prod", namespace_id: "shop", pod_id: "orders-api-7c9f-x2x4q", container_name: "api" } },
+          policy: { name: "projects/demo-shop/alertPolicies/1001", displayName: "Legacy restarts in shop", severity: "WARNING" } },
+      ]);
+      try {
+        const c = await connect(reader(["demo-shop"], [], { [shopProd]: ["shop"], "*": ["shop"] }));
+        const out = text(await c.callTool({ name: "gcp_alerts", arguments: { project: "demo-shop" } }));
+        const ids = out.split("\n").filter((l) => l.startsWith("[")).map((l) => l.split(" · id ")[1]);
+        // The legacy row in shop has no GKE location, so its cluster can't be told: limited as unknown, and in shop it shows.
+        expect(ids).toEqual(["0b2-legacy", "0a2-restarts", "0a4-staging"]);
+        expect(out).not.toContain("Ledger SLO burn");
+        expect(out).not.toContain("payments");
+        expect(out).not.toContain("7023411000000000000");
+        expect(out).toMatch(/4 alerts outside this session's namespaces aren't shown\./);
+        fake.requests.length = 0;
+        for (const id of ["0b1-slo", "0a6-vm"]) {
+          expect(text(await c.callTool({ name: "gcp_alerts", arguments: { project: "demo-shop", id } }))).toBe(`${GCP_DATA_LINE}\n\nNo open alert ${id} in demo-shop now. gcp_alerts lists them.`);
+        }
+        expect(fake.requests.filter((q) => q.path.includes("alertPolicies"))).toEqual([]);
+        // An unlimited session sees them all, the SLO alert's labels quoted.
+        const all = text(await (await connect(reader(["demo-shop"]))).callTool({ name: "gcp_alerts", arguments: { project: "demo-shop" } }));
+        expect(all).toMatch(/k8s_service shop-prod \(us-central1\) .*namespace_name="payments" service_name="ledger"/);
+      } finally {
+        fake.alerts.delete("demo-shop");
+      }
     });
   });
 

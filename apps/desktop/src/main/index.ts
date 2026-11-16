@@ -206,6 +206,8 @@ async function start() {
     // `session` is the session's own cluster, for the namespace limit (D195); `line` is cluster_overview's (D194).
     gcp: {
       reader: (session) => gcp.agentReader((context) => clusters.list().some((c) => c.context === context), session),
+      // A session's kube tools ask at each call which of its projects it may still read (security review of part 4, M1).
+      projectsNow: (start) => gcp.agentProjectsNow(start),
       line: (handle, projects, namespaces) => {
         try {
           return gcp.heldLine(connectedOf(clusters, gkeHandles, handle), projects, namespaces);

@@ -50,6 +50,8 @@ export class McpService {
   private builtinTools: Promise<McpServerInfo["tools"]> | undefined;
   /** A view's link dialog is open. */
   private linkAsked = false;
+  /** Bumped by gcpOff(): a session opened before has no Google Cloud from then on, its kube tools' included (M1). */
+  private gcpEpoch = 0;
 
   constructor(private readonly deps: {
     store: McpServerStore;
@@ -70,11 +72,13 @@ export class McpService {
     family?: FamilyServers;
     /**
      * Google Cloud for landlens-gcp (GcpService.agentReader): undefined while Claude may not read it. `session`: the
-     * session's cluster (its context, address and namespace limit, for D195). `line`: cluster_overview's line for a
-     * session's cluster from what main holds (GcpService.heldLine, D194).
+     * session's cluster (its context, address, checked CA and namespace limit, for D195). `projectsNow`: the projects a
+     * session that began with `start` may read now (GcpService.agentProjectsNow; security review of wave 9 part 4, M1).
+     * `line`: cluster_overview's line for a session's cluster from what main holds (GcpService.heldLine, D194).
      */
     gcp?: {
-      reader(session?: { context: string; server?: string; namespaces?: string[] }): Promise<{ reader: GcpReader; projects: string[] } | undefined>;
+      reader(session?: { context: string; server?: string; ca?: string; namespaces?: string[] }): Promise<{ reader: GcpReader; projects: string[] } | undefined>;
+      projectsNow(start: string[]): string[];
       line?(handle: string, projects: string[], namespaces?: string[]): string | undefined;
     };
     log?: (l: string) => void;
@@ -129,28 +133,46 @@ export class McpService {
     };
   }
 
-  /** A session's cluster as landlens-gcp's reader needs it (D195): its context, its address, its namespace limit. */
+  /**
+   * A session's cluster as landlens-gcp's reader needs it (D195): its context, its address, the fingerprint of the CA its
+   * sidecar checks TLS against (only when TLS is checked, with no override: M2), its namespace limit.
+   */
   private sessionCluster(handle: string, context: string, namespaces?: string[]) {
     let server: string | undefined;
+    let ca: string | undefined;
     try {
-      server = this.deps.clusters.get(handle).info.server;
+      const c = this.deps.clusters.get(handle);
+      server = c.info.server;
+      const t = c.sidecar?.tls;
+      ca = t && !t.insecure && !t.serverName && t.ca ? t.ca : undefined;
     } catch {
       server = undefined;
     }
-    return { context, ...(server ? { server } : {}), ...(namespaces?.length ? { namespaces } : {}) };
+    return { context, ...(server ? { server } : {}), ...(ca ? { ca } : {}), ...(namespaces?.length ? { namespaces } : {}) };
   }
 
   /**
-   * What a session's kube tools may use of Google Cloud (D194): the projects its landlens-gcp has (none without the
-   * grant), a hold on this very gateway session (its GitHub and Linear writes ask from then on, as after a landlens-gcp
-   * call), and cluster_overview's line from what main holds.
+   * What a session's kube tools may use of Google Cloud (D194): the projects its landlens-gcp began with (none without
+   * the grant) as they are at each call (`projects()`: GcpService's answer now, and none at all once gcpOff() ran since
+   * the session opened; security review of wave 9 part 4, M1), a hold on this very gateway session (its GitHub and
+   * Linear writes ask from then on, as after a landlens-gcp call), and cluster_overview's line from what main holds,
+   * for those projects only.
    */
-  private sessionGoogle(s: GatewaySession, handle: string, projects: string[], namespaces?: string[]): SessionGoogle {
-    const line = this.deps.gcp?.line;
+  private sessionGoogle(s: GatewaySession, handle: string, start: string[], namespaces?: string[]): SessionGoogle {
+    const gcp = this.deps.gcp;
+    const line = gcp?.line;
+    const begun = [...start];
+    const epoch = this.gcpEpoch;
+    const projects = () => (gcp && begun.length && epoch === this.gcpEpoch ? gcp.projectsNow(begun) : []);
     return {
-      projects: [...projects],
+      projects,
       hold: () => s.hold(WHY.gcp),
-      ...(line && projects.length ? { line: () => line(handle, projects, namespaces) } : {}),
+      ...(line && begun.length ? {
+        line: () => {
+          const now = projects();
+          return now.length ? line(handle, now, namespaces) : undefined;
+        },
+      } : {}),
     };
   }
 
@@ -164,8 +186,12 @@ export class McpService {
     return g ? { spec: { name: GCP_MCP_SERVER, server: () => gcpMcpServer(g.reader) }, projects: g.projects } : undefined;
   }
 
-  /** You turned "Claude can read these projects" off: landlens-gcp leaves every open session at once. */
+  /**
+   * You turned "Claude can read these projects" off (or gcloud's account changed): landlens-gcp leaves every open session
+   * at once, and their kube tools read Cloud Monitoring no more (M1), even after reading is turned on again.
+   */
   gcpOff() {
+    this.gcpEpoch++;
     this.gateway.dropBuiltin(GCP_MCP_SERVER);
     for (const h of [...this.consoles.keys()]) void this.closeConsole(h);
   }

@@ -208,7 +208,7 @@ describe("openAlerts (D185)", () => {
       const [a] = (await openAlerts(clientFor(fake).client, "demo-shop")).alerts;
       expect(a).toEqual({
         name: "projects/demo-shop/alerts/x", openTime: "2026-11-16T09:00:00Z",
-        resource: { type: "k8s_pod", labels: { location: "us-central1", cluster_name: "shop-prod", namespace_name: "shop", pod_name: "p-1" } },
+        resource: { type: "k8s_pod", labels: { location: "us-central1", cluster_name: "shop-prod", namespace_name: "shop", pod_name: "p-1" }, kube: true },
         metric: { type: "kubernetes.io/pod/x" }, policy: { name: "projects/demo-shop/alertPolicies/9", displayName: "P", severity: "WARNING" },
       });
       expect(JSON.stringify(a)).not.toMatch(/MARKER|console\.example/);
@@ -465,6 +465,40 @@ describe("alertRows: the project's open alerts as gcp_alerts lists them (wave 9 
       expect(by.prom).toMatchObject({ cluster: { location: "us-central1", name: "shop-prod" }, resourceType: "prometheus_target" });
       // A cluster name that isn't GKE's shape names no cluster (D195 then treats it as unreadable: limited).
       expect(by.bad).not.toHaveProperty("cluster");
+    } finally {
+      fake.alerts.delete("demo-shop");
+    }
+  });
+
+  it("M3 (review of part 4): Kubernetes is decided from the labels, not a list of types, with the namespace they name", async () => {
+    fake.alerts.set("demo-shop", [
+      raw("svc", { type: "k8s_service", labels: { project_id: "demo-shop", location: "us-central1", cluster_name: "shop-prod", namespace_name: "payments", service_name: "ledger" } }),
+      raw("legacy", { type: "gke_container", labels: { project_id: "demo-shop", zone: "us-central1-a", cluster_name: "shop-prod", namespace_id: "payments", pod_id: "ledger-0", container_name: "app" } }),
+      raw("istio", { type: "istio_canonical_service", labels: { project_id: "demo-shop", mesh_uid: "m", canonical_service_namespace: "payments", canonical_service_name: "ledger" } }),
+      raw("unknown", { type: "some_new_type", labels: { project_id: "demo-shop", cluster_name: "shop-prod", location: "us-central1" } }),
+      raw("cp", { type: "k8s_control_plane_component", labels: { project_id: "demo-shop", location: "us-central1", cluster_name: "shop-prod", component_name: "apiserver" } }),
+      raw("two", on("k8s_pod", { namespace_name: "shop", namespace: "payments", pod_name: "p" })),
+      raw("vm", { type: "gce_instance", labels: { project_id: "demo-shop", zone: "us-central1-a", instance_id: "7" } }),
+      raw("lb", { type: "https_lb_rule", labels: { project_id: "demo-shop", url_map_name: "shop" } }),
+      raw("run", { type: "cloud_run_revision", labels: { project_id: "demo-shop", location: "us-central1", service_name: "web" } }),
+    ]);
+    try {
+      const { items } = alertRows((await openAlerts(clientFor(fake).client, "demo-shop")).alerts, SHOP);
+      const by = Object.fromEntries(items.map((a) => [a.id, a]));
+      expect(by.svc).toMatchObject({ kube: true, namespace: "payments", cluster: { location: "us-central1", name: "shop-prod" } });
+      expect(by.legacy).toMatchObject({ kube: true, namespace: "payments" });
+      // istio's namespace is under another key: Kubernetes, its namespace not told (hidden from a limited session).
+      expect(by.istio).toMatchObject({ kube: true });
+      expect(by.istio).not.toHaveProperty("namespace");
+      expect(by.unknown).toMatchObject({ kube: true, cluster: { name: "shop-prod" } });
+      expect(by.cp).toMatchObject({ kube: true, cluster: { name: "shop-prod" } });
+      expect(by.cp).not.toHaveProperty("namespace");
+      // Two keys naming two namespaces: none can be told.
+      expect(by.two).toMatchObject({ kube: true });
+      expect(by.two).not.toHaveProperty("namespace");
+      // A VM may be a node.
+      expect(by.vm).toMatchObject({ kube: true });
+      for (const id of ["lb", "run"]) expect(by[id], id).not.toHaveProperty("kube");
     } finally {
       fake.alerts.delete("demo-shop");
     }

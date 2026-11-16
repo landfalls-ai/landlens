@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { AppViews, viewCsp, VIEW_HEADERS } from "../src/main/app-views";
 import { ClicklandSettingsStore, type Crypto } from "../src/main/clickland-settings";
 import { CSP_PROD } from "../src/main/csp";
-import { listingHash, readTools, testRemote, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { listingHash, readTools, testRemote, WHY, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import { FakeProvider, listing } from "../../../packages/connections/test/fake-provider";
 import { McpService } from "../src/main/mcp";
 import type { GcpReader } from "@landlens/gcp-mcp";
@@ -289,6 +289,7 @@ describe("McpService", () => {
       ask: { confirm: async () => false, openExternal: async () => {} },
       gcp: {
         reader: async (session) => (sessions.push(session), on ? { reader, projects: ["demo-shop"] } : undefined),
+        projectsNow: (start) => (on ? start.filter((p) => p === "demo-shop") : []),
         line: (...a) => (lines.push(a), "Cloud Monitoring has 1 open alert for this cluster"),
       },
     });
@@ -299,7 +300,7 @@ describe("McpService", () => {
       expect(off.servers.map((x) => x.name)).toEqual(["landlens-kube"]);
       expect(off.gcp).toBeUndefined();
       // Without the grant the session's kube tools get no project and no line (D194).
-      expect(off.google!.projects).toEqual([]);
+      expect(off.google!.projects()).toEqual([]);
       expect(off.google!.line).toBeUndefined();
       await off.close();
       expect((await svc.servers("orbstack")).servers.map((x) => x.name)).toEqual(["landlens-kube"]);
@@ -310,7 +311,7 @@ describe("McpService", () => {
       expect(s.gcp).toEqual(["demo-shop"]);
       // The reader knows the session's cluster (D195), and the kube tools get the grant's projects and the line (D194).
       expect(sessions.at(-1)).toEqual({ context: "orbstack", server: "https://203.0.113.17" });
-      expect(s.google!.projects).toEqual(["demo-shop"]);
+      expect(s.google!.projects()).toEqual(["demo-shop"]);
       expect(s.google!.line!()).toBe("Cloud Monitoring has 1 open alert for this cluster");
       expect(lines.at(-1)).toEqual(["h", ["demo-shop"], undefined]);
       const limited = await svc.forSessions().open({ label: "agent 3 · orbstack", context: "orbstack", handle: "h", cluster: { ...cluster, namespaces: ["shop"] } });
@@ -326,9 +327,90 @@ describe("McpService", () => {
       expect((await list()).status).toBe(200);
       svc.gcpOff();
       expect((await list()).status).toBe(404);
+      // M1 (review of part 4): the open session's kube tools have no project and no line from then on, even once reading
+      // is on again (that yes is for new sessions); a session opened after it has them.
+      expect(s.google!.projects()).toEqual([]);
+      expect(s.google!.line!()).toBeUndefined();
+      const after = await svc.forSessions().open({ label: "agent 4 · orbstack", context: "orbstack", handle: "h", cluster });
+      expect(after.google!.projects()).toEqual(["demo-shop"]);
+      expect(s.google!.projects()).toEqual([]);
+      // Reading off without gcpOff (main's answer now): none either, live.
+      on = false;
+      expect(after.google!.projects()).toEqual([]);
+      expect(after.google!.line!()).toBeUndefined();
+      await after.close();
       await s.close();
     } finally {
       await svc.stop();
+    }
+  });
+
+  it("M2 (review of part 4): the reader gets the CA the session's sidecar checks TLS against, only when it checks it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const sessions: unknown[] = [];
+    let tls: Record<string, unknown> | undefined = { ca: "ab".repeat(32), insecure: false, serverName: false, proxy: false };
+    const svc = new McpService({
+      store: new McpServerStore(join(dir, "mcp-servers.json"), fake()),
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {}, get: () => ({ info: { server: "https://10.0.0.2" }, sidecar: { ...(tls ? { tls } : {}) } }) } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      gcp: { reader: async (session) => (sessions.push(session), undefined), projectsNow: () => [] },
+    });
+    await svc.start();
+    try {
+      const cluster = { context: "my-prod", types: async () => [], get: async () => ({ status: 200, text: "{}" }), namespaces: ["shop"] };
+      for (const [t, ca] of [[tls, "ab".repeat(32)], [{ ...tls, insecure: true }, undefined], [{ ...tls, serverName: true }, undefined], [undefined, undefined]] as const) {
+        tls = t as typeof tls;
+        await (await svc.forSessions().open({ label: "agent · my-prod", context: "my-prod", handle: "h", cluster })).close();
+        expect(sessions.at(-1)).toEqual({ context: "my-prod", server: "https://10.0.0.2", ...(ca ? { ca } : {}), namespaces: ["shop"] });
+      }
+    } finally {
+      await svc.stop();
+    }
+  });
+
+  it("T1 (review of part 4): the session's google.hold holds its own GitHub writes, as a landlens-gcp call does", async () => {
+    const TOKEN = `ghp_${"B".repeat(36)}`;
+    const fp = await new FakeProvider("github").start();
+    fp.valid.add(TOKEN);
+    const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
+    const headers = { Authorization: `Bearer ${TOKEN}` };
+    const full = await testRemote({ name: "github", url: `${fp.origin}/mcp/`, headers, noViews: true });
+    const ro = await testRemote({ name: "github", url: `${fp.origin}/mcp/readonly`, headers, noViews: true });
+    const gh = listing("github");
+    const conn: RemoteSpec = {
+      name: "github", url: `${fp.origin}/mcp/`, headers, origins: [fp.origin], noViews: true,
+      pin: listingHash(full.tools!), readUrl: `${fp.origin}/mcp/readonly`, readPin: listingHash(ro.tools!),
+      provider: { id: "github", readTools: readTools(gh.full, gh.readonly), mode: "ask", readsAuto: true },
+    };
+    const info = { provider: "github", state: "ready", mode: "ask", readsAuto: true, give: true } as ConnInfo;
+    const svc = new McpService({
+      store: new McpServerStore(join(dir, "mcp-servers.json"), fake()),
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: () => {} } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      connections: { remotes: async () => [conn], servers: () => [], drifted: () => {}, info: () => info },
+    });
+    await svc.start();
+    try {
+      const cluster = { context: "orbstack", types: async () => [], get: async () => ({ status: 200, text: "{}" }) };
+      const s = await svc.forSessions().open({ label: "agent 1 · orbstack", context: "orbstack", handle: "h", cluster });
+      s.bind("acp-hold");
+      svc.setAutonomy("acp-hold", "github", true, { repos: ["landfalls-ai/landlens"] });
+      const write = { owner: "landfalls-ai", repo: "landlens", method: "create", title: "after a metrics read" };
+      expect((await svc.autonomyCheck("acp-hold", "mcp__github__issue_write", write)).ok).toBe(true);
+      s.google!.hold();
+      expect(await svc.autonomyCheck("acp-hold", "mcp__github__issue_write", write)).toMatchObject({ ok: false, why: WHY.gcp });
+      await s.close();
+    } finally {
+      await svc.stop();
+      await fp.stop();
     }
   });
 

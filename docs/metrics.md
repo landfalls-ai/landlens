@@ -122,14 +122,16 @@ beside them:
 | `cloud-monitoring-failed` | "Cloud Monitoring (demo-shop) didn't answer: <Google's error as Landlens's fixed sentence>", e.g. the API off (with its `gcloud services enable` command and Copy), the Monitoring Viewer role missing, or "Cloud Monitoring didn't accept Landlens's query." Google's own text, which echoes the query, is never shown or logged. Also an answer without this cluster's labels (above), "Cloud Monitoring is busy …" (more than 40 queries waiting), and, beside a drawn Overview, "Top namespaces couldn't be read: …" |
 | `cloud-monitoring-no-data` | "Cloud Monitoring has no GKE system metrics for shop-prod in demo-shop in the last hour." Asked only when a scope comes back empty: no node CPU for the whole cluster in the last hour (a no kept a minute, a yes five) means system metrics are off, and metrics-server is next. With node data, an empty scope is a new pod, and the chart says "no samples yet" as for any source |
 | `cloud-monitoring-not-chosen` | The hint, with Open Google Cloud |
-| `cloud-monitoring-not-granted` | The agent's `metrics` tool only: "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud. …". From wave 9 part 4 (D190, D194) a session reads Cloud Monitoring only for a project its Google grant had when it began ("Claude can read these projects", whose yes now names metrics), holding its autonomous GitHub and Linear writes before the first query; without it, its tool answers from metrics-server. Main decides it from the context's name and the session's projects before asking anything: a call it refuses makes no gcloud run and no Google request |
+| `cloud-monitoring-not-granted` | The agent's `metrics` tool only: "Cloud Monitoring may have this cluster's history, but Claude may not read Google Cloud. …". From wave 9 part 4 (D190, D194) a session reads Cloud Monitoring only for a project its Google grant had when it began and still has (checked before each query and before delivery; "Claude can read these projects", whose yes now names metrics), holding its autonomous GitHub and Linear writes before the first query; without it, its tool answers from metrics-server. Main decides it from the context's name and the session's projects before asking anything: a call it refuses makes no gcloud run and no Google request |
 | `cloud-monitoring-cut` | More than 200 series (above) |
 
 **Main** (`GcpService.promAsk`) hands `packages/metrics` a function, never the client or the token. Each answer is kept
 25 s under the project, the query, the step and the start in steps (at most 40, the oldest first, and those past
 25 s leave at the next ask), so the two charts of a view, the 30 s refresh and the agent don't each pay for one query.
 A 403 or 429 (the API off, the role missing, Google's rate limit) is kept a minute for the project and given again
-without asking; no other failure is kept. Queries run four at once in their own slot with at most 40 waiting, only
+without asking, unless a Claude session's query got it (its own asks don't speak for your charts); no other failure is
+kept. Claude's sessions' queries together have at most 12 places in the line, and one session asks at most 30 times a
+minute through its `metrics` tool. Queries run four at once in their own slot with at most 40 waiting, only
 for a project still chosen, each with a 10 s limit and the client's 8 MB cap. An account change or a project taken
 out forgets the answers and the failures. Nothing is asked unless a chart asked.
 

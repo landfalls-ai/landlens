@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { HAS_DATA_TTL, MetricsService, NO_DATA_TTL, NOT_GRANTED } from "../src/service.js";
+import { HAS_DATA_TTL, MetricsService, NO_DATA_TTL, NOT_GRANTED, SESSION_READS_SPENT } from "../src/service.js";
 import { fakeClickland, KEY } from "./fakes.js";
 
 const NOW = Date.parse("2026-11-14T12:00:00Z");
@@ -232,16 +232,55 @@ describe("Cloud Monitoring in the order (wave 9, D182)", () => {
   it("an agent's call reads Google only for a project its session may read, and holds its autonomy before the first query", async () => {
     const order: string[] = [];
     const ask = vi.fn(async (q: string) => (order.push("ask"), answers().ask(q)));
-    const without = await svc({ dep: use(ask) }).series(req, { agent: { projects: ["orbit-analytics"], hold: () => order.push("hold") } });
+    const without = await svc({ dep: use(ask) }).series(req, { agent: { projects: () => ["orbit-analytics"], hold: () => order.push("hold"), take: () => true } });
     expect(without.source).toBe("metrics-server");
     expect(without.reasons[1]).toEqual({ code: "cloud-monitoring-not-granted", message: NOT_GRANTED });
     expect(ask).not.toHaveBeenCalled();
     expect(order).toEqual([]);
-    const granted = await svc({ dep: use(ask) }).series(req, { agent: { projects: ["demo-shop"], hold: () => order.push("hold") } });
+    const granted = await svc({ dep: use(ask) }).series(req, { agent: { projects: () => ["demo-shop"], hold: () => order.push("hold"), take: () => true } });
     expect(granted.source).toBe("cloud-monitoring");
     expect(order[0]).toBe("hold");
     expect(order.filter((x) => x === "hold")).toHaveLength(1);
     expect(order.length).toBeGreaterThan(2);
+  });
+
+  it("M1 (review of wave 9 part 4): the grant is asked again before each query and on delivery; withdrawn, nothing is used", async () => {
+    let projects = ["demo-shop"];
+    const sent: string[] = [];
+    // The grant goes while the first query is on its way: the rest aren't sent, and what came back isn't given.
+    const ask = vi.fn(async (q: string) => {
+      sent.push(q);
+      projects = [];
+      return answers().ask(q);
+    });
+    const s = await svc({ dep: use(ask) }).series(req, { agent: { projects: () => projects, hold: () => {}, take: () => true } });
+    expect(s.source).toBe("metrics-server");
+    expect(s.reasons.map((r) => r.code)).toContain("cloud-monitoring-not-granted");
+    expect(s.reasons.map((r) => r.code)).not.toContain("cloud-monitoring-failed");
+    // Before each query: an empty answer asks whether the cluster has metrics at all, later; withdrawn by then, it isn't sent.
+    projects = ["demo-shop"];
+    const empty = answers({ nodes: [] });
+    const later: string[] = [];
+    const ask2 = vi.fn(async (q: string) => {
+      later.push(q);
+      projects = [];
+      return empty.ask(q);
+    });
+    const s2 = await svc({ dep: use(ask2) }).series(req, { agent: { projects: () => projects, hold: () => {}, take: () => true } });
+    expect(s2.reasons.map((r) => r.code)).toContain("cloud-monitoring-not-granted");
+    // Only the first query left: granted throughout, the same call asks five (four, then the has-metrics probe).
+    expect(later).toHaveLength(1);
+    const whole = answers({ nodes: [] });
+    await svc({ dep: use(whole.ask) }).series(req, { agent: { projects: () => ["demo-shop"], hold: () => {}, take: () => true } });
+    expect(whole.log).toHaveLength(5);
+  });
+
+  it("L3 (review of wave 9 part 4): past its budget a session's call asks Google nothing and says why", async () => {
+    const ask = vi.fn(async (q: string) => answers().ask(q));
+    const s = await svc({ dep: use(ask) }).series(req, { agent: { projects: () => ["demo-shop"], hold: () => {}, take: () => false } });
+    expect(s.source).toBe("metrics-server");
+    expect(s.reasons).toContainEqual({ code: "cloud-monitoring-failed", message: SESSION_READS_SPENT });
+    expect(ask).not.toHaveBeenCalled();
   });
 
   describe("Fable's security review of part 2, fixed", () => {

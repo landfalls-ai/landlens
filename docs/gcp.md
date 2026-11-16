@@ -84,8 +84,9 @@ most APIs off; the project search carries none.
 
 From wave 9 part 4 Claude's session may make the same reads, through `landlens-gcp` and only for a project of its grant
 (below): `gke_recommendations` the insights and recommendations (the same 10-minute cache), `gcp_alerts` the open
-alerts and a policy (the same 60 s and 10 minutes), and `gcp_metrics` PromQL (the same 25 s, slot and kept 403 or
-429), for any listed GKE cluster of the project, connected or not. `gcp_metrics` and the kube `metrics` tool on a GKE
+alerts and a policy (the same 60 s and 10 minutes), and `gcp_metrics` PromQL (the same 25 s and slot, with all sessions' queries
+together at most 12 of its places, and a 403 or 429 a session gets not kept for your charts), for any listed GKE cluster
+of the project, connected or not. `gcp_metrics` and the kube `metrics` tool on a GKE
 cluster use the fixed queries only; no tool takes a query or a filter.
 
 Cloud Asset has no count call for a search, so the types and their counts are made in main from the cached pages: one
@@ -401,21 +402,31 @@ someone wrote it (a policy's name and documentation, a description, a recommende
 value); the whole answer is scrubbed again and cut at 24,000 characters. Nothing reads as all clear when it isn't: a
 cut read, unreadable rows, alerts that name no project, a cluster whose suggestions couldn't be read or clusters not
 read are each said. A failure is one of Landlens's sentences, never Google's text (which may echo the query) or the
-token. Main tells its store of Google text what the tools return, so a question quoting it holds the session's
-autonomy too.
+token. The notes that say a list is partial come right after the head, before the rows, so the 24,000 cut takes rows,
+never them. Main tells its store of Google text what the tools return (and each text as the tool's JSON quotes print it),
+so a question quoting it holds the session's autonomy too.
 
-**A session limited to namespaces** (D195) is limited on the cluster it is connected to (by its name or, for a GKE
-cluster listed at the session's address, by the listing): `gcp_metrics` refuses the cluster and node scopes and other
-namespaces there with "This session may only read namespaces …", and `gcp_alerts` leaves out that cluster's
-Kubernetes alerts outside them (a node's too), ending "N alerts outside this session's namespaces aren't shown."; a
-Kubernetes alert whose cluster can't be told, or a listing that can't be read, counts as the session's own. Another
-GKE cluster has no limit: it is read as the project grant allows. Suggestions are about the whole cluster and stay.
+**A session limited to namespaces** (D195) is limited on the cluster it is connected to: by its name, or the listed GKE
+cluster at either of its addresses (IP or DNS endpoint) or with the CA its sidecar checks (TLS checked). When the
+listing places none of them, the session has no server or the listing can't be read, every cluster is limited.
+`gcp_metrics` refuses the cluster and node scopes and other namespaces there with "This session may only read
+namespaces …", and `gcp_alerts` leaves out that cluster's Kubernetes alerts outside them, ending "N alerts outside this
+session's namespaces aren't shown.". An alert is Kubernetes by its labels (a key with `cluster`, `namespace`, `pod`,
+`node` or `container` in it, a `k8s_*` or `gke_*` type, or a Compute Engine VM, which may be one of the nodes), and is
+shown only when its namespace is told and inside the limit; one whose cluster or namespace can't be told is counted,
+not shown. An id outside the limit answers "No open alert … now." with no policy read. Another placed GKE cluster has no
+limit: it is read as the project grant allows. Suggestions are about the whole cluster and stay.
 
 **The kube tools on a GKE cluster** (D194): `metrics` reads Cloud Monitoring for a session only when the cluster's
-project is in its grant as it began, and holds its autonomous GitHub and Linear writes before the first query leaves;
-without the grant it reads as before this wave (metrics-server) and says "not granted". `cluster_overview` ends, only
+project was in its grant as it began and still is (reading on, the project still chosen, the same gcloud account; once
+reading is turned off a session that was open has none, even after a new yes), checked before each query and before
+the answer is delivered, and holds its autonomous GitHub and Linear writes before the first query leaves; without the
+grant it reads as before this wave (metrics-server) and says "not granted". A session asks Cloud Monitoring through
+`metrics` at most 30 times a minute ("At most 30 Cloud Monitoring reads a minute in a session …"; metrics-server
+answers). `cluster_overview` ends, only
 for such a session and only from what main already holds (the last view of this very connection in the last 10
-minutes; no request and no outside text), with "Cloud Monitoring has 3 open alerts for this cluster and Google has 2
+minutes, while main's yes for the connection is under a minute old and the project still readable; no request and no
+outside text), with "Cloud Monitoring has 3 open alerts for this cluster and Google has 2
 suggestions, as Landlens read them at 09:12 UTC: gcp_alerts and gke_recommendations (landlens-gcp) list them." (a
 limited session counts its namespaces' alerts and says how many others; a read that failed or was cut says so). Once a session runs one of these tools, its autonomous GitHub and Linear writes ask, for the rest of
 the session ("Asked because: Google Cloud data was read in this session"; [connections.md](connections.md)). The calls are logged on the MCP page's

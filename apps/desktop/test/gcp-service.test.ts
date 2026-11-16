@@ -4,14 +4,17 @@
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { channels, CLOUD_DECLINED, GCP_GRANT_WORDS } from "@landlens/contracts";
-import { ACCOUNT_CHANGED, ADVICE_FAILED_TTL, ADVICE_TTL, ALERTS_TTL, CLUSTERS_TTL, connectedOf, ITEM_GONE, unchecked, MAX_POLICIES, POLICY_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
+import { ACCOUNT_CHANGED, ADVICE_FAILED_TTL, AGENT_PROMS, ADVICE_TTL, ALERTS_TTL, CLUSTERS_TTL, connectedOf, ITEM_GONE, unchecked, MAX_POLICIES, POLICY_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
 import { MetricsService } from "@landlens/metrics";
 import { cloudMonitoringSource, sessionSeries } from "../src/main/metrics-source";
 import { SiblingText } from "../src/main/sibling-text";
 import { caFingerprint } from "@landlens/gcp";
-import { demoShopAlerts, demoShopPolicies, FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, POLICY_DOC, PROMQL_MARKER, SHOUTY_AGENT, SHOUTY_POLICY } from "../../../packages/gcp/test/fake-gcp";
+import { demoShopAlerts, demoShopPolicies, FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, OTHER_CLUSTER_CA, POLICY_DOC, PROMQL_MARKER, SHOUTY_AGENT, SHOUTY_POLICY } from "../../../packages/gcp/test/fake-gcp";
+import { GCP_DATA_LINE, gcpMcpServer, type GcpReader } from "@landlens/gcp-mcp";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
 let fake: FakeGcp;
@@ -1654,5 +1657,328 @@ describe("Claude's Google tools (wave 9 part 4, D190–D195)", () => {
       await cut.svc.choose([]);
       expect(cut.svc.heldLine(conn, ["demo-shop"])).toBeUndefined();
     });
+  });
+});
+
+describe("Fable's security review of wave 9 part 4, fixed", () => {
+  const yes = async () => true;
+  const PROD = "gke_demo-shop_us-central1_shop-prod";
+  const STAGING = "gke_demo-shop_europe-west1-b_shop-staging";
+  const PROD_CA = caFingerprint(FAKE_CLUSTER_CA);
+  const TLS = { ca: PROD_CA, insecure: false, serverName: false, proxy: false };
+  const conn = { context: PROD, server: "https://203.0.113.17", viaLandlens: false, tls: TLS };
+  const S = 'project_id="demo-shop",location="us-central1",cluster_name="shop-prod"';
+  const NODE_CPU = `sum by (project_id,location,cluster_name,node_name) (rate(kubernetes_io:node_cpu_core_usage_time{${S}}[300s]))`;
+  const T0 = Date.parse("2026-11-16T09:00:00Z");
+  const shop = { project: "demo-shop", location: "us-central1", name: "shop-prod" };
+  const promHits = () => fake.hits("/prometheus/api/v1/query_range");
+  const granted = async (o: Parameters<typeof service>[0] = {}) => {
+    const s = service(o);
+    await s.svc.choose(["demo-shop"]);
+    await s.svc.setAgentRead(true, yes);
+    return s;
+  };
+  /** landlens-gcp's tools over GcpService's own reader (T7): the tools and main's reads together, against the fake. */
+  const tools = async (reader: GcpReader) => {
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await gcpMcpServer(reader).connect(a);
+    const c = new Client({ name: "t", version: "1" });
+    await c.connect(b);
+    return { call: async (name: string, args: Record<string, unknown>) => (await c.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] } };
+  };
+  const text = (r: { content: { text: string }[] }) => r.content[0]!.text;
+  /** A session's kube metrics tool on shop-prod, as main wires it: the session series over MetricsService and gkeOf. */
+  const kubeMetrics = (svc: GcpService, projects: () => string[]) => {
+    const clusters = { get: () => ({ info: { context: PROD, server: "https://203.0.113.17" }, sidecar: { tls: TLS } }) };
+    const kube = async (path: string): Promise<any> => {
+      if (path === "/api/v1/nodes") return { items: [{ metadata: { name: "gke-shop-prod-default-pool-1a2b" }, status: { allocatable: { cpu: "4", memory: "16Gi" } } }] };
+      if (path === "/api/v1/pods?limit=1") return { items: [] };
+      throw Object.assign(new Error("404 page not found"), { status: 404 });
+    };
+    const metrics = new MetricsService({
+      clickland: () => ({ clusterName: (c) => c }),
+      cluster: () => ({ context: PROD, get: kube }),
+      cloudMonitoring: (handle, o) => cloudMonitoringSource(svc, clusters, new Set())(handle, o),
+      sampler: { timers: { set: () => 1, clear: () => {} } },
+    });
+    const google = { projects, hold: () => {} };
+    return () => sessionSeries(metrics)("hhhhhhhhhhhh", { scope: "cluster", range: "1h" }, kube, google);
+  };
+  const codes = (s: { reasons: { code: string }[] }) => s.reasons.map((r) => r.code);
+
+  describe("M1: a session's Google projects are live", () => {
+    it("turning reading off stops the open session's kube metrics and cluster_overview line, and a read in flight isn't delivered", async () => {
+      const { svc } = await granted();
+      const g = (await svc.agentReader(() => false))!;
+      const read = kubeMetrics(svc, () => svc.agentProjectsNow(g.projects));
+      expect((await read()).source).toBe("cloud-monitoring");
+      await svc.view(conn);
+      expect(svc.heldLine(conn, g.projects)).toMatch(/^Cloud Monitoring has 3 open alerts/);
+      // In flight when it goes off: not delivered (MetricsService asks again on delivery), and landlens-gcp's isn't either.
+      // (The first read's answers are kept 25 s: this one asks Google again.)
+      (svc as unknown as { proms: Map<string, unknown> }).proms.clear();
+      (svc as unknown as { alertsOf: Map<string, unknown> }).alertsOf.clear();
+      fake.slowMs = 300;
+      const flying = read();
+      const alerts = g.reader.alerts("demo-shop").then(() => "delivered", (e: Error) => e.message);
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.setAgentRead(false, yes);
+      expect(codes(await flying)).toContain("cloud-monitoring-not-granted");
+      expect((await flying).source).not.toBe("cloud-monitoring");
+      expect(await alerts).toBe("The person turned off Claude's reading of Google Cloud.");
+      fake.slowMs = 0;
+      fake.requests.length = 0;
+      const off = await read();
+      expect(codes(off)).toContain("cloud-monitoring-not-granted");
+      expect(fake.requests).toEqual([]);
+      expect(svc.agentProjectsNow(g.projects)).toEqual([]);
+      expect(svc.heldLine(conn, g.projects)).toBeUndefined();
+    });
+
+    it("another gcloud account stops them too", async () => {
+      const { svc, dir } = await granted();
+      const g = (await svc.agentReader(() => false))!;
+      const read = kubeMetrics(svc, () => svc.agentProjectsNow(g.projects));
+      expect((await read()).source).toBe("cloud-monitoring");
+      await svc.view(conn);
+      writeFileSync(join(dir, "account"), "someone-else@example.com");
+      await svc.status(true);
+      fake.requests.length = 0;
+      expect(codes(await read())).toContain("cloud-monitoring-not-granted");
+      expect(fake.requests).toEqual([]);
+      expect(svc.heldLine(conn, g.projects)).toBeUndefined();
+    });
+
+    it("a project taken out and chosen again stops them too: it left the grant", async () => {
+      const { svc } = await granted();
+      const g = (await svc.agentReader(() => false))!;
+      const read = kubeMetrics(svc, () => svc.agentProjectsNow(g.projects));
+      expect((await read()).source).toBe("cloud-monitoring");
+      await svc.choose([]);
+      await svc.choose(["demo-shop"]);
+      await svc.view(conn);
+      fake.requests.length = 0;
+      expect(codes(await read())).toContain("cloud-monitoring-not-granted");
+      expect(fake.requests).toEqual([]);
+      expect(svc.heldLine(conn, g.projects)).toBeUndefined();
+      await expect(g.reader.alerts("demo-shop")).rejects.toThrow(/isn't one of the projects/);
+    });
+  });
+
+  describe("M2: the namespace limit fails closed", () => {
+    const DNS = "gke-0a1b2c3d4e-482913570214.us-central1.gke.goog";
+    const listing = () => fake.clusters.set("demo-shop", [
+      { name: "shop-prod", location: "us-central1", status: "RUNNING", currentMasterVersion: "1.33.4-gke.1172000", endpoint: "203.0.113.17", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA }, controlPlaneEndpointsConfig: { dnsEndpointConfig: { endpoint: DNS } } },
+      { name: "shop-staging", location: "europe-west1-b", status: "RUNNING", currentMasterVersion: "1.32.9-gke.1051000", endpoint: "198.51.100.90", masterAuth: { clusterCaCertificate: OTHER_CLUSTER_CA } },
+    ]);
+    afterEach(() => void fake.clusters.delete("demo-shop"));
+    const limits = async (svc: GcpService, session: { context: string; server?: string; ca?: string; namespaces?: string[] }) => {
+      const g = (await svc.agentReader(() => false, session))!;
+      return [await g.reader.limit(PROD), await g.reader.limit(STAGING)];
+    };
+    const ns = ["shop"];
+
+    it("placed by the CA its sidecar checks or by either listed address, whatever its name; else limited on every cluster", async () => {
+      listing();
+      const { svc } = await granted();
+      expect(OTHER_CLUSTER_CA).not.toBe(FAKE_CLUSTER_CA);
+      // shop-prod reached at an internal address under the person's own name: its CA places it.
+      expect(await limits(svc, { context: "my-prod", server: "https://10.0.0.2", ca: PROD_CA, namespaces: ns })).toEqual([ns, undefined]);
+      // At the DNS endpoint the listing keeps beside the IP.
+      expect(await limits(svc, { context: "my-prod", server: `https://${DNS}`, namespaces: ns })).toEqual([ns, undefined]);
+      // At shop-staging's listed address.
+      expect(await limits(svc, { context: "my-staging", server: "https://198.51.100.90", namespaces: ns })).toEqual([undefined, ns]);
+      // No listed address, no listed CA (a bastion, Connect Gateway, OrbStack): it can't be shown not to be on either.
+      expect(await limits(svc, { context: "my-prod", server: "https://10.0.0.2", ca: "ab".repeat(32), namespaces: ns })).toEqual([ns, ns]);
+      expect(await limits(svc, { context: "orbstack", server: "https://127.0.0.1:26443", namespaces: ns })).toEqual([ns, ns]);
+      // T4: no address at all.
+      expect(await limits(svc, { context: "my-prod", namespaces: ns })).toEqual([ns, ns]);
+      // A placed session is limited on a context the listing doesn't have, and never on none without a limit.
+      const placed = (await svc.agentReader(() => false, { context: "my-prod", server: "https://10.0.0.2", ca: PROD_CA, namespaces: ns }))!;
+      expect(await placed.reader.limit("gke_demo-shop_us-central1_not-listed")).toEqual(ns);
+      expect(await limits(svc, { context: "my-prod", server: "https://10.0.0.2", ca: PROD_CA })).toEqual([undefined, undefined]);
+    });
+
+    it("T4: a listing that can't be read (gcloud signed out) limits every cluster", async () => {
+      listing();
+      const { svc, dir } = await granted();
+      const g = (await svc.agentReader(() => false, { context: "my-staging", server: "https://198.51.100.90", namespaces: ns }))!;
+      expect(await g.reader.limit(PROD)).toBeUndefined();
+      writeFileSync(join(dir, "account"), "");
+      expect((await svc.status(true)).state).toBe("signed-out");
+      expect(await g.reader.limit(PROD)).toEqual(ns);
+      expect(await g.reader.limit(STAGING)).toEqual(ns);
+    });
+
+    it("T7: through the tools, a session placed by its CA reads its own cluster only in its namespaces, nothing asked", async () => {
+      listing();
+      const { svc } = await granted();
+      const g = (await svc.agentReader(() => false, { context: "my-prod", server: "https://10.0.0.2", ca: PROD_CA, namespaces: ns }))!;
+      const t = await tools(g.reader);
+      fake.requests.length = 0;
+      for (const a of [{ cluster: PROD }, { cluster: PROD, scope: "node", name: "gke-shop-prod-default-pool-1a2b" }, { cluster: PROD, scope: "namespace", namespace: "payments" }]) {
+        const r = await t.call("gcp_metrics", a);
+        expect(r.isError, JSON.stringify(a)).toBe(true);
+        expect(text(r)).toBe("Landlens: This session may only read namespaces shop.");
+      }
+      expect(promHits()).toEqual([]);
+      expect(text(await t.call("gcp_metrics", { cluster: PROD, scope: "namespace", namespace: "shop" }))).toMatch(/GKE system metrics of shop-prod/);
+      expect(text(await t.call("gcp_metrics", { cluster: STAGING }))).toMatch(/GKE system metrics of shop-staging/);
+    });
+  });
+
+  it("M3, L1 (T7): through the tools, a limited session's alerts hide what its labels say is Kubernetes outside it; one asked by id reads no policy", async () => {
+    fake.alerts.set("demo-shop", [
+      ...demoShopAlerts(),
+      { name: "projects/demo-shop/alerts/0b1-slo", state: "OPEN", openTime: new Date(Date.now() - 5 * 60_000).toISOString(),
+        resource: { type: "k8s_service", labels: { project_id: "demo-shop", location: "us-central1", cluster_name: "shop-prod", namespace_name: "payments", service_name: "ledger" } },
+        policy: { name: "projects/demo-shop/alertPolicies/1001", displayName: "Ledger SLO burn", severity: "ERROR" } },
+    ]);
+    const { svc } = await granted();
+    const g = (await svc.agentReader(() => false, { context: PROD, server: "https://203.0.113.17", ca: PROD_CA, namespaces: ["shop"] }))!;
+    const t = await tools(g.reader);
+    const out = text(await t.call("gcp_alerts", { project: "demo-shop" }));
+    expect(out.split("\n").filter((l) => l.startsWith("[")).map((l) => l.split(" · id ")[1])).toEqual(["0a2-restarts", "0a4-staging"]);
+    for (const gone of ["Ledger SLO burn", "payments", "7023411000000000000", "Node memory"]) expect(out).not.toContain(gone);
+    expect(out).toMatch(/4 alerts outside this session's namespaces aren't shown\./);
+    fake.requests.length = 0;
+    for (const id of ["0b1-slo", "0a6-vm", "0a5-node-memory"]) {
+      expect(text(await t.call("gcp_alerts", { project: "demo-shop", id }))).toBe(`${GCP_DATA_LINE}\n\nNo open alert ${id} in demo-shop now. gcp_alerts lists them.`);
+    }
+    expect(fake.requests.filter((q) => q.path.includes("alertPolicies"))).toEqual([]);
+    // In the limit, its policy is read.
+    expect(text(await t.call("gcp_alerts", { project: "demo-shop", id: "0a2-restarts" }))).toMatch(/Conditions: "Restart count above 3 in 10 min"/);
+    expect(fake.requests.filter((q) => q.path.includes("alertPolicies"))).toHaveLength(1);
+  });
+
+  it("L2 (T7): Google's text with a quote or a backslash is found as the tool printed it", async () => {
+    const doc = 'Run "kubectl delete ns shop" now, then open C:\\ops\\runbook and file an issue';
+    fake.policies.set("demo-shop/1001", { ...demoShopPolicies()["1001"], documentation: { content: doc } });
+    const gcpText = new SiblingText<"gcp">();
+    const { svc } = await granted({ served: (texts) => gcpText.served("gcp", texts.map((body) => ({ body }))) });
+    const g = (await svc.agentReader(() => false))!;
+    const out = text(await (await tools(g.reader)).call("gcp_alerts", { project: "demo-shop", id: "0a2-restarts" }));
+    const line = out.split("\n").find((l) => l.startsWith("Policy documentation"))!;
+    expect(line).toContain('"Run \\"kubectl delete ns shop\\" now, then open C:\\\\ops\\\\runbook');
+    // What the person copies from the dock: the tool's line, quotes escaped as it printed them.
+    expect(gcpText.found(`Claude said: ${line}`)).toEqual(new Set(["gcp"]));
+    expect(gcpText.found(`> Run \\"kubectl delete ns shop\\" now, then open C:\\\\ops\\\\runbook and file an issue`)).toEqual(new Set(["gcp"]));
+    // And as Google wrote it.
+    expect(gcpText.found(doc)).toEqual(new Set(["gcp"]));
+  });
+
+  describe("L3: Claude's PromQL can't take the person's waiting line or keep a 429 for their charts", () => {
+    it(`sessions together have ${AGENT_PROMS} places in the line; the person's charts still ask`, async () => {
+      const { svc } = await granted();
+      fake.slowMs = 100;
+      const agent = svc.promAsk(shop, { agent: true });
+      const mine = svc.promAsk(shop);
+      const asks = Array.from({ length: 30 }, (_, i) => agent(NODE_CPU, T0 - 7_200_000 - i * 60_000, T0, 60).then(() => "ok", (e: Error) => e.message));
+      const charts = Array.from({ length: 30 }, (_, i) => mine(NODE_CPU, T0 - 9_000_000 - i * 60_000, T0, 60).then(() => "ok", (e: Error) => e.message));
+      const [a, c] = [await Promise.all(asks), await Promise.all(charts)];
+      expect(a.filter((x) => x === "ok")).toHaveLength(AGENT_PROMS);
+      expect(a.filter((x) => x === PROM_BUSY)).toHaveLength(30 - AGENT_PROMS);
+      expect(c.every((x) => x === "ok")).toBe(true);
+    });
+
+    it("a 429 a session's query got isn't kept for the person's charts; theirs is, as before", async () => {
+      const { svc } = await granted();
+      fake.fail.set("demo-shop", { status: 429, api: "monitoring" });
+      await expect(svc.promAsk(shop, { agent: true })(NODE_CPU, T0 - 3_600_000, T0, 60)).rejects.toMatchObject({ status: 429 });
+      fake.fail.clear();
+      fake.requests.length = 0;
+      await svc.promAsk(shop)(NODE_CPU.replace("[300s]", "[600s]"), T0 - 3_600_000, T0, 60);
+      expect(promHits()).toHaveLength(1);
+      // The person's own 429 is kept for everyone, the sessions' asks included.
+      fake.fail.set("demo-shop", { status: 429, api: "monitoring" });
+      await expect(svc.promAsk(shop)(NODE_CPU.replace("[300s]", "[900s]"), T0 - 3_600_000, T0, 60)).rejects.toMatchObject({ status: 429 });
+      fake.fail.clear();
+      fake.requests.length = 0;
+      await expect(svc.promAsk(shop, { agent: true })(NODE_CPU.replace("[300s]", "[1200s]"), T0 - 3_600_000, T0, 60)).rejects.toMatchObject({ status: 429 });
+      expect(promHits()).toHaveLength(0);
+    });
+
+    it("gcp_metrics' reads are a session's too", async () => {
+      const { svc } = await granted();
+      const g = (await svc.agentReader(() => false))!;
+      fake.fail.set("demo-shop", { status: 429, api: "monitoring" });
+      await expect(g.reader.metrics({ cluster: PROD, scope: "cluster", range: "1h" })).rejects.toThrow(/didn't answer/);
+      fake.fail.clear();
+      fake.requests.length = 0;
+      await svc.promAsk(shop)(NODE_CPU.replace("[300s]", "[1500s]"), T0 - 3_600_000, T0, 60);
+      expect(promHits().filter((q) => q.query.query?.includes("[1500s]"))).toHaveLength(1);
+    });
+  });
+
+  describe("L5, T8: cluster_overview's line", () => {
+    it("L5: gkeOf's yes lasts as long as its listing: a no for the connection, or a minute without a yes, ends the line", async () => {
+      let t = 1_800_000_000_000;
+      const { svc } = await granted({ now: () => t });
+      await svc.view(conn);
+      expect(svc.heldLine(conn, ["demo-shop"])).toBeDefined();
+      t += CLUSTERS_TTL + 1;
+      expect(svc.heldLine(conn, ["demo-shop"])).toBeUndefined();
+      await svc.view(conn);
+      expect(svc.heldLine(conn, ["demo-shop"])).toBeDefined();
+      // shop-prod leaves the listing: the next view says not GKE, and the line goes at once.
+      fake.clusters.set("demo-shop", [{ name: "shop-staging", location: "europe-west1-b", status: "RUNNING", endpoint: "198.51.100.90", masterAuth: { clusterCaCertificate: FAKE_CLUSTER_CA } }]);
+      try {
+        t += CLUSTERS_TTL;
+        expect(await svc.view(conn)).toEqual({ gke: false });
+        t -= CLUSTERS_TTL - 1;
+        expect(svc.heldLine(conn, ["demo-shop"])).toBeUndefined();
+      } finally {
+        fake.clusters.delete("demo-shop");
+      }
+    });
+
+    it("T8: nothing held is said for a project the session can't read now, even if it were still held", async () => {
+      const { svc } = await granted();
+      await svc.view(conn);
+      const held = svc as unknown as { confirmedRefs: Map<string, unknown>; lastViews: Map<string, unknown> };
+      const refs = [...held.confirmedRefs];
+      const views = [...held.lastViews];
+      await svc.choose([]);
+      for (const [k, v] of refs) held.confirmedRefs.set(k, v);
+      for (const [k, v] of views) held.lastViews.set(k, v);
+      expect(svc.heldLine(conn, ["demo-shop"])).toBeUndefined();
+    });
+  });
+
+  describe("T6: a read across an account change or a choice isn't delivered", () => {
+    const reads: [string, (r: GcpReader) => Promise<unknown>, (r: GcpReader) => Promise<unknown>][] = [
+      ["advice", async (r) => r.advice("demo-shop"), (r) => r.advice("demo-shop", PROD)],
+      ["alerts", async () => undefined, (r) => r.alerts("demo-shop")],
+      ["alert", async (r) => r.alerts("demo-shop"), (r) => r.alert("demo-shop", "0a2-restarts")],
+      ["metrics", async (r) => r.clusters(), (r) => r.metrics({ cluster: PROD, scope: "cluster", range: "1h" })],
+    ];
+    for (const [name, prime, read] of reads) {
+      it(`${name}: the account changes while it reads`, async () => {
+        const { svc, dir } = await granted();
+        const g = (await svc.agentReader(() => false))!;
+        // What is read before (the listing, the project's number, the alerts) is cached; only this read's own request is slow.
+        await prime(g.reader);
+        if (name === "advice") fake.advice.clear();
+        (svc as unknown as { advice: Map<string, unknown> }).advice.clear();
+        fake.slowMs = 300;
+        const r = read(g.reader).then(() => "delivered", (e: Error) => e.message);
+        await new Promise((x) => setTimeout(x, 50));
+        writeFileSync(join(dir, "account"), "someone-else@example.com");
+        await svc.status(true);
+        expect(await r).toBe(ACCOUNT_CHANGED);
+      });
+
+      it(`${name}: the project is taken out while it reads`, async () => {
+        const { svc } = await granted();
+        const g = (await svc.agentReader(() => false))!;
+        await prime(g.reader);
+        (svc as unknown as { advice: Map<string, unknown> }).advice.clear();
+        fake.slowMs = 300;
+        const r = read(g.reader).then(() => "delivered", (e: Error) => e.message);
+        await new Promise((x) => setTimeout(x, 50));
+        await svc.choose([]);
+        expect(await r).toBe("Choose demo-shop on the Google Cloud page first.");
+      });
+    }
   });
 });

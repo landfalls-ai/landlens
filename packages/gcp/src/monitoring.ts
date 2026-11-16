@@ -65,8 +65,20 @@ const Alert = z.object({
   metric: z.object({ type: text.optional() }).optional(),
   policy: z.object({ name: text.optional(), displayName: text.optional(), severity: text.optional() }).optional(),
 });
-/** The resource labels an alert of a GKE cluster is placed by (D186); project_id is checked in openAlerts. */
-const ALERT_LABELS = ["location", "cluster_name", "cluster", "namespace_name", "pod_name", "container_name", "node_name", "namespace"] as const;
+/**
+ * The resource labels an alert of a GKE cluster is placed by (D186), and the legacy gke_container's `namespace_id` and
+ * `pod_id` (security review of wave 9 part 4, M3); project_id is checked in openAlerts.
+ */
+const ALERT_LABELS = ["location", "cluster_name", "cluster", "namespace_name", "pod_name", "container_name", "node_name", "namespace", "namespace_id", "pod_id"] as const;
+/**
+ * A label key that says a resource may be a Kubernetes cluster's (M3): a cluster, namespace, pod, node or container as
+ * a word of the key (cluster_name, namespace_id, canonical_service_namespace, …). Decided from the labels, not a list of
+ * types: a type Landlens doesn't know with such a label still counts. [check] The real types' label keys are from
+ * memory of Cloud Monitoring's monitored-resource list, not read from it.
+ */
+const KUBE_KEY = /(?:^|_)(?:cluster|namespace|pod|node|container)(?:_|$)/;
+/** Resource types that are a cluster's, or may be (a VM may be a GKE node), whatever their labels say. */
+const KUBE_TYPE = /^(?:k8s_|gke_)|^gce_instance$/;
 /**
  * An open alert of the project as main keeps it: the fields clusterAlerts reads and nothing else of Google's row
  * (review of part 3, L6). Its text isn't cleaned yet: clusterAlerts does that.
@@ -79,7 +91,11 @@ export type RawAlert = {
    * gcp_alerts says what it is about (wave 9 part 4, D192): keys of OTHER_LABEL's shape, values cleaned, redacted and
    * cut to 120 here, sorted by key. A cluster's resource keeps none: its subject says it.
    */
-  resource?: { type?: string; labels?: Partial<Record<(typeof ALERT_LABELS)[number], string>>; other?: [string, string][] };
+  resource?: {
+    type?: string; labels?: Partial<Record<(typeof ALERT_LABELS)[number], string>>; other?: [string, string][];
+    /** The resource is, or may be, a Kubernetes cluster's (KUBE_KEY, KUBE_TYPE): decided at the read from every label key. */
+    kube?: true;
+  };
   metric?: { type?: string };
   policy?: { name?: string; displayName?: string; severity?: string };
 };
@@ -94,10 +110,11 @@ const slim = (a: z.infer<typeof Alert>): RawAlert => {
     .filter((e): e is [string, string] => e[0] !== "project_id" && OTHER_LABEL.test(e[0]) && typeof e[1] === "string")
     .sort((x, y) => x[0].localeCompare(y[0])).slice(0, OTHER_LABELS_MAX)
     .map(([k, v]): [string, string] => [k, outsideText(v, 120)]);
+  const kube = KUBE_TYPE.test(a.resource?.type ?? "") || Object.keys(l).some((k) => KUBE_KEY.test(k));
   return {
     name: a.name,
     openTime: a.openTime,
-    ...(a.resource ? { resource: { type: a.resource.type, labels, ...(other.length ? { other } : {}) } } : {}),
+    ...(a.resource ? { resource: { type: a.resource.type, labels, ...(other.length ? { other } : {}), ...(kube ? { kube: true as const } : {}) } } : {}),
     ...(a.metric ? { metric: { type: a.metric.type } } : {}),
     ...(a.policy ? { policy: { name: a.policy.name, displayName: a.policy.displayName, severity: a.policy.severity } } : {}),
   };
@@ -253,8 +270,12 @@ function toAlert(a: RawAlert, own: { ids: Set<string>; numbered: boolean }): Gcp
 /** A monitored resource's type (k8s_container, gce_instance, …); another text shows as "unknown". */
 const RESOURCE_TYPE = /^[a-z][a-z0-9_.]{0,63}$/;
 
-/** An open alert of the project as the agent's gcp_alerts lists it (D192): the GKE cluster it is on, or its other labels. */
-export type ProjectAlert = GcpAlert & { cluster?: { location: string; name: string }; labels?: [string, string][] };
+/**
+ * An open alert of the project as the agent's gcp_alerts lists it (D192): the GKE cluster it is on, or its other labels.
+ * `kube`: its resource is, or may be, a Kubernetes cluster's (M3); `namespace`: the namespace its labels name, when it is
+ * a Kubernetes name. A limited session sees a `kube` row only with a namespace of its own (D195).
+ */
+export type ProjectAlert = GcpAlert & { cluster?: { location: string; name: string }; labels?: [string, string][]; kube?: true; namespace?: string };
 
 /**
  * Every open alert of the project as gcp_alerts lists it (wave 9 part 4, D192), pure: newest first, one per id. A
@@ -277,9 +298,17 @@ export function alertRows(raw: RawAlert[], c: { project: string; number?: string
     seen.add(id);
     const l = a.resource?.labels ?? {};
     const type = a.resource?.type;
-    const name = type === "prometheus_target" ? l.cluster : (CLUSTER_RESOURCES as readonly string[]).includes(type ?? "") ? l.cluster_name : undefined;
+    const kube = !!a.resource?.kube || (CLUSTER_RESOURCES as readonly string[]).includes(type ?? "");
+    // Any Kubernetes row names its cluster by cluster_name (a Prometheus target by cluster) and location (M3).
+    const name = !kube ? undefined : type === "prometheus_target" ? l.cluster : l.cluster_name ?? l.cluster;
     const cluster = name && GKE_NAME.test(name) && l.location && GKE_LOCATION.test(l.location) ? { location: l.location, name } : undefined;
-    items.push({ ...row, ...(cluster ? { cluster } : {}), ...(a.resource?.other?.length ? { labels: a.resource.other } : {}) });
+    // One namespace, said the same way by every key that names one; two different ones are none (it can't be told).
+    const named = new Set([l.namespace_name, l.namespace, l.namespace_id].filter((x) => x !== undefined));
+    const ns = named.size === 1 ? [...named][0] : undefined;
+    items.push({
+      ...row, ...(cluster ? { cluster } : {}), ...(a.resource?.other?.length ? { labels: a.resource.other } : {}),
+      ...(kube ? { kube: true as const, ...(isNamespace(ns) ? { namespace: ns } : {}) } : {}),
+    });
   }
   items.sort((x, y) => y.opened.localeCompare(x.opened));
   return { items, unreadable };

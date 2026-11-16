@@ -31,13 +31,14 @@ export type ClusterSession = {
 };
 
 /**
- * Google Cloud for the session's own kube tools (wave 9 part 4, D194): the projects the session may read (its grant as
- * it began; none without it), `hold` (its GitHub and Linear autonomy asks from then on, before Cloud Monitoring is
- * asked), and cluster_overview's line from what main holds.
+ * Google Cloud for the session's own kube tools (wave 9 part 4, D194): the projects the session may read now (`projects`,
+ * asked at every call: its grant as it began, less what was withdrawn since, security review of part 4 M1; none without
+ * it), `hold` (its GitHub and Linear autonomy asks from then on, before Cloud Monitoring is asked), and cluster_overview's
+ * line from what main holds.
  */
-export type SessionGoogle = { projects: string[]; hold(): void; line?(): string | undefined };
+export type SessionGoogle = { projects(): string[]; hold(): void; line?(): string | undefined };
 /** Before the gateway has answered: no project, nothing to hold. A session's metrics call never goes without one. */
-export const NO_GOOGLE: SessionGoogle = Object.freeze({ projects: [], hold: () => {} });
+export const NO_GOOGLE: SessionGoogle = Object.freeze({ projects: () => [], hold: () => {} });
 
 /** The MCP gateway as a session sees it (the desktop's McpGateway, through its store of servers). */
 export interface SessionMcp {

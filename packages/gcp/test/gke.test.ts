@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { caFingerprint, checkCa, checkEndpoint, GKE_CONTEXT, gkeKubeconfig, listClusters, writeGkeKubeconfig, type GkeClusterFull } from "../src/gke.js";
+import { caFingerprint, checkCa, checkEndpoint, GKE_CONTEXT, gkeKubeconfig, listClusters, publicCluster, writeGkeKubeconfig, type GkeClusterFull } from "../src/gke.js";
 import { FAKE_CLUSTER_CA, FAKE_LEAF_CERT, FakeGcp, GCP_ACCOUNT, GCP_TOKEN } from "./fake-gcp.js";
 import { clientFor, FAKE_GCLOUD, sdkDir } from "./helpers.js";
 
@@ -100,6 +100,10 @@ describe("listClusters", () => {
         ["no-ca-dns", dns, false],
         ["good", "203.0.113.43", true],
       ]);
+      // The DNS endpoint is kept beside the IP it doesn't open (security review of wave 9 part 4, M2), never twice.
+      expect(cs.map((c) => c.dns)).toEqual([undefined, undefined, undefined, dns]);
+      expect(publicCluster(cs[3]!)).not.toHaveProperty("dns");
+      expect(publicCluster(cs[3]!)).not.toHaveProperty("ca");
       const doc = parse(gkeKubeconfig(cs, FAKE_GCLOUD, GCP_ACCOUNT));
       expect(doc.clusters.map((c: { name: string; cluster: Record<string, string> }) => [c.name, c.cluster.server, "certificate-authority-data" in c.cluster])).toEqual([
         ["gke_payments-core_us-central1_no-ca-dns", `https://${dns}`, false],
