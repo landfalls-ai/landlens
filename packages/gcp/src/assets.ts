@@ -2,6 +2,7 @@
 // searchAllResources, paged, capped and checked. Every answer is zod-checked; every string that reaches the page is
 // cut to 300 characters and stripped of control and format characters; a resource keeps at most 20 labels.
 import { GCP_MAX_RESOURCES, GCP_PAGE, GcpAssetType, GcpProjectId, GcpQuery, GcpResourceName, type GcpProject, type GcpResource, type GcpTypeCount } from "@landlens/contracts";
+import { redactText } from "@landlens/kube/redact";
 import { z } from "zod";
 import type { GcpClient } from "./client.js";
 import { GcpError, SENTENCES } from "./errors.js";
@@ -43,6 +44,16 @@ export function clean(s: string, max = 300): string {
   // Cut by code point, so a pair (an emoji) is never split into a lone surrogate (review of part 4, L4).
   const points = Array.from(out);
   return points.length > max ? `${points.slice(0, max - 1).join("")}…` : out;
+}
+
+/**
+ * Free text written by someone outside (a policy's name and documentation, a user agent, Google's descriptions) as one
+ * line for the page and the agent (wave 9 part 3, D189): every run of whitespace one space, control, format and
+ * line-separator characters out, credential shapes redacted, and only then cut to `max`, so a key across the cut is
+ * still taken whole (review of part 1, L3). Before the redaction it is held to 16,384 characters, far past any `max`.
+ */
+export function outsideText(s: string, max: number): string {
+  return clean(redactText(clean(s.replace(/\s+/g, " "), 16_384)).replace(/\s+/g, " ").trim(), max);
 }
 
 /** Control and format characters (bidi overrides, zero-width, line separators) a JSON text may carry in its strings. */

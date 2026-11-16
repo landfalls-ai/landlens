@@ -6,3 +6,4 @@ export * from "./gke.js";
 export * from "./recommender.js";
 export * from "./scrub.js";
 export * from "./monitoring.js";
+export * from "./briefs.js";

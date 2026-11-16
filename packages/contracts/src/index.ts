@@ -772,21 +772,42 @@ export type GkeAdvice = {
   /** For an API deprecation: the APIs still called and who calls them (a user agent is the caller's own text). */
   apis?: { api: string; stops?: string; clients: { agent: string; requests?: number; last?: string }[] }[];
 };
-/** An open Cloud Monitoring alert on a cluster (D186; wave 9 part 3). */
+/**
+ * An open Cloud Monitoring alert on a cluster (D186; wave 9 part 3): Google's alert, its text cleaned, redacted and cut
+ * in main. Every name in `subject` is a Kubernetes name.
+ */
 export type GcpAlert = {
+  /** The last segment of the alert's name. */
   id: string;
+  /** When it opened (ISO). */
   opened: string;
+  /** The policy's display name, at most 120 characters; "" when it has none. Written by whoever made the policy. */
   policy: string;
+  /** The policy's number, only when the policy is this project's (by id or number). */
   policyId?: string;
+  /** Google's word, or "none" for no word or one Landlens doesn't know ([check 2]: never guessed). */
   severity: "critical" | "error" | "warning" | "none";
+  /** k8s_container, k8s_pod, k8s_node, k8s_cluster or prometheus_target. */
   resourceType: string;
+  /** The metric's type, such as kubernetes.io/container/restart_count. */
   metric?: string;
   subject?: { kind: "Pod" | "Node" | "Namespace"; namespace?: string; name: string; container?: string };
+};
+/** The most open alerts of a project Landlens reads (one page of 1,000, D185), and the most one cluster shows (D186). */
+export const GCP_ALERTS_READ = 1000;
+export const GCP_ALERTS_SHOWN = 200;
+/**
+ * One alert's or suggestion's detail (D187): the brief Ask Claude quotes, and for an alert whose policy is this
+ * project's, the policy's conditions and documentation as plain text (or why they couldn't be read).
+ */
+export type GcpClusterItem = {
+  brief: string;
+  policy?: { conditions: string[]; documentation?: string; cut: boolean } | { error: string };
 };
 /**
  * Google's view of a connected cluster (D177): whether it is a GKE cluster of a chosen project (with a hint when it
  * looks like one of a project you haven't chosen), and if so Google's suggestions and open alerts, each failing alone
- * into its fixed sentence. Alerts are read from wave 9 part 3; until then their list is empty.
+ * into its fixed sentence.
  */
 export type GcpClusterView =
   | { gke: false; hint?: string }
@@ -798,7 +819,13 @@ export type GcpClusterView =
        * than `items` (review of part 1, M2); the panel then never says there are none.
        */
       advice: { items: GkeAdvice[]; cut: boolean; at: string } | { error: string };
-      alerts: { items: GcpAlert[]; others: number; cut: boolean; at: string } | { error: string };
+      /**
+       * This cluster's open alerts (D185–D186). `others`: open alerts of the project that don't name this cluster. `cut`:
+       * Google had more than the 1,000 read. `unreadable`: alerts of the answer Landlens couldn't read (an odd shape, or
+       * one of this cluster's with no id or opening time); `over`: this cluster's beyond the 200 shown. Any of the last
+       * three means the list may be missing some, and nothing says "none".
+       */
+      alerts: { items: GcpAlert[]; others: number; cut: boolean; unreadable: number; over: number; at: string } | { error: string };
     };
 /** The built-in server of read-only Google Cloud tools (D93), on the gateway beside landlens-kube when you turn it on. */
 export const GCP_MCP_SERVER = "landlens-gcp";
@@ -1288,6 +1315,8 @@ export const channels = {
   "gcp:clusters": z.object({}),
   // Google's view of a connected cluster (wave 9, D177): only the handle; main finds the project, location and cluster.
   "gcp:cluster-view": z.object({ handle: Handle, fresh: z.boolean().optional() }).strict(),
+  /** One alert's or suggestion's detail and brief (D187): only an id in that handle's current view is answered. */
+  "gcp:cluster-item": z.object({ handle: Handle, kind: z.enum(["alert", "advice"]), id: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/) }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1423,6 +1452,7 @@ export type Responses = {
   "gcp:resource": { resource: GcpResource; json?: string; cut: boolean; brief?: string };
   "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
   "gcp:cluster-view": GcpClusterView;
+  "gcp:cluster-item": GcpClusterItem;
 };
 
 /** A tool as the MCP page shows it. */

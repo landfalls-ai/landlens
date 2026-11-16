@@ -171,6 +171,12 @@ OrbStack's nodes with `kubectl get` for the fake's model and write nothing more.
 `metrics-source.test.ts` (T3 reads `src/main/index.ts` to check both wiring sites) and `gcp-service.test.ts` (M1 runs
 a real `GcpService` against the fake with a `kept` file, so nothing has read gcloud or Google before the session's
 call; the fake gcloud's `calls` file shows whether gcloud ran).
+Part 3 (Cloud Monitoring's alerts) adds `openAlerts`, `clusterAlerts` and `alertPolicy` cases to
+`packages/gcp/test/monitoring.test.ts`, `packages/gcp/test/briefs.test.ts` (the briefs Ask Claude quotes), the alerts
+half and `gcp:cluster-item` in `gcp-service.test.ts`, the alerts' words and Ask's contexts in `google-rules.test.ts`,
+the third section's rules in `problems.test.ts`, a `GCP_QUOTE` case in `agent-service.test.ts`, and three cases in
+`gview.e2e.test.ts` (b) (screenshots `g9-p3-*`), whose fake alerts name `landlens-dev`'s real pod and OrbStack's node
+and whose agent is played in main (`agent:start` and `agent:prompt` replaced, as in `landflow.e2e`).
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

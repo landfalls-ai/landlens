@@ -11,9 +11,8 @@
 // insight is dropped. Every string of Google's is cleaned (control, format and line-separator characters out) and cut;
 // a user agent is the caller's own text, so it is redacted as well, before it is cut.
 import { GKE_ADVICE_READ, type GkeAdvice, type GkeRef } from "@landlens/contracts";
-import { redactText } from "@landlens/kube/redact";
 import { z } from "zod";
-import { checkProject, clean } from "./assets.js";
+import { checkProject, clean, outsideText } from "./assets.js";
 import type { GcpClient } from "./client.js";
 import { GcpError, SENTENCES } from "./errors.js";
 import { GKE_LOCATION, GKE_NAME } from "./gke.js";
@@ -98,7 +97,7 @@ async function pages(client: GcpClient, c: GkeRef, path: string, key: "insights"
 }
 
 /** A user agent: cleaned, redacted, and only then cut, so a credential across the cut is still taken whole (L3). */
-export const userAgent = (ua: string) => clean(redactText(clean(ua.replace(/\s+/g, " "), 4096)), 120);
+export const userAgent = (ua: string) => outsideText(ua, 120);
 
 /**
  * A recommender resource name with this cluster's project written one way: Google names a project by id or number

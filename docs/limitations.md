@@ -153,16 +153,26 @@ person's check reads them), and Ask Claude sends one problem at a time.
   through any proxy the sidecar checks the proxy's address, not the cluster's. A development build opens only the
   fake's clusters unless `LANDLENS_GKE_REAL=1`. The list is read when the catalog is (Welcome, the switcher's menu),
   cached 60 s. A `gcp.json` from before this release asks again for each cluster and for Claude's tools.
-- **Google's view of a cluster is wave 9 parts 1 and 2 so far** ([gcp.md](gcp.md#googles-view-of-a-cluster)): only GKE's
+- **Google's view of a cluster is wave 9 parts 1–3 so far** ([gcp.md](gcp.md#googles-view-of-a-cluster)): only GKE's
   diagnosis recommender (API deprecations, exec probe timeouts, …), no cost or idle-resource recommenders; Landlens
   never marks a suggestion done, claimed or dismissed (no writes); only the sentence is shown for subtypes other than
-  API deprecations; no Ask Claude on a suggestion yet (part 3); Cloud Monitoring's alerts are part 3. A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
+  API deprecations. Claude's own tools for them are part 4 (Ask Claude quotes one alert or suggestion at a time). A cluster outside the chosen projects gets nothing (a GKE-shaped name gets a hint), and a context of your own
   counts only when its server is the address Google lists (an IP spelled as a DNS name, or the reverse, doesn't) and
   it trusts the CA Google lists with TLS checked (a CA bundle holding more than the cluster's CA, an
   `insecure-skip-tls-verify` or a `tls-server-name` doesn't). The first 1,000 rows of each of the location's lists are
-  read; past them the panel says this cluster may have more. Read once per Overview visit and every 10 minutes, kept
-  10 minutes. Nothing was checked against the real
+  read; past them the panel says this cluster may have more. Read when the Overview or Problems opens and every 60 s
+  while one is shown, kept 10 minutes. Nothing was checked against the real
   Recommender API.
+- **Cloud Monitoring's alerts are the open ones only, read-only** ([gcp.md](gcp.md#googles-view-of-a-cluster)): the
+  newest 1,000 open alerts of the project (one page; past it the page says only those were read), and of those only
+  the ones whose resource names this cluster (`k8s_*` by `cluster_name`, `prometheus_target` by `cluster`); others
+  are counted, not listed; at most 200 shown. No closed alerts and no alert's history, no snooze, acknowledge or close
+  (writes), no incidents, uptime checks, SLOs or dashboards, no Triage on an alert, and no alerts on the Google Cloud
+  page or in ⌘K's search (only the command). A policy's documentation is shown as its first 300 characters of plain
+  text (no Markdown, no links), with at most 5 conditions; a policy of another project of the metrics scope isn't read.
+  A severity word Landlens doesn't know shows no badge. Alerts don't count in the sidebar's, the status bar's or the
+  Pods badge's numbers. Read every 60 s while the Overview or Problems is shown, so an alert can take a minute to
+  appear or go. Nothing was checked against the real Monitoring API ([check 2], [check 3]).
 - **Claude's Google Cloud tools only read, and only the chosen projects** ([gcp.md](gcp.md#claudes-google-cloud-tools-landlens-gcp)):
   no IAM policies, costs or logs; 30 calls a minute a session; a resource's configuration is scrubbed by known
   positions and shapes, so a secret in an unusual field and shape can still reach the model. The switch is one for all

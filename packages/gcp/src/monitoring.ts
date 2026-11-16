@@ -1,12 +1,14 @@
-// Cloud Monitoring (wave 9, D179): PromQL over HTTP, query_range only, GET only. The query is one Landlens built from
+// Cloud Monitoring (wave 9, D179, D185–D187): PromQL over HTTP, query_range only, GET only. The query is one Landlens built from
 // fixed text and checked names (packages/metrics' cloud-monitoring.ts); this file never takes one from the page or the
 // agent. The answer is handed back as Google sent it: the caller filters it to the cluster (a project's PromQL answers
 // for its whole metrics scope, D181) before anything of it is drawn. A refused query's error echoes the query, so it is
 // a fixed sentence here and its text goes nowhere (D175). `packages/metrics` never sees this client or the token: main
 // hands it a function.
-import { checkProject } from "./assets.js";
+import { ContainerName, GCP_ALERTS_READ, GCP_ALERTS_SHOWN, NamespaceName, NodeName, type GcpAlert, type GkeRef } from "@landlens/contracts";
+import { z } from "zod";
+import { checkProject, outsideText } from "./assets.js";
 import type { GcpClient } from "./client.js";
-import { GcpError } from "./errors.js";
+import { GcpError, SENTENCES } from "./errors.js";
 
 /** A GET's URL must stay short; D180's queries are well under this. */
 export const PROM_QUERY_MAX = 6_000;
@@ -31,4 +33,172 @@ export async function promRange(client: GcpClient, project: string, query: strin
     project,
     { limitMs: PROM_LIMIT_MS },
   );
+}
+
+// ---- Open alerts (wave 9 part 3, D185–D187) ------------------------------------------------------------------------
+//
+// alerts.list answers for the project's whole metrics scope, so main keeps only OPEN alerts whose resource names the
+// project asked (`resource.labels.project_id`), and then only those whose resource is this cluster's. No `filter` is
+// sent: its syntax is undocumented ([check 3]). A policy's name and documentation are written by whoever made the policy:
+// they are cleaned, redacted and cut here (outsideText), shown as text, and reach Claude only quoted.
+
+/** One page of the newest alerts (Google's default order is openTime desc), and the time a read may take. */
+export const ALERTS_PAGE = GCP_ALERTS_READ;
+export const ALERTS_LIMIT_MS = 15_000;
+/** An alert policy is small; its read is held to 10 s and 1 MB. */
+export const POLICY_LIMIT_MS = 10_000;
+export const POLICY_MAX_BYTES = 1024 * 1024;
+/** What an alert shows of its policy: up to five conditions, and the documentation's first 300 characters. */
+export const POLICY_CONDITIONS = 5;
+export const POLICY_DOC_MAX = 300;
+
+const text = z.string().max(100_000);
+const AlertsPage = z.object({ alerts: z.array(z.unknown()).max(100_000).optional(), nextPageToken: text.optional() }).passthrough();
+const Alert = z.object({
+  name: text,
+  state: text.optional(),
+  openTime: text.optional(),
+  resource: z.object({ type: text.optional(), labels: z.record(z.string(), z.unknown()).optional() }).passthrough().optional(),
+  metric: z.object({ type: text.optional() }).passthrough().optional(),
+  policy: z.object({ name: text.optional(), displayName: text.optional(), severity: text.optional() }).passthrough().optional(),
+}).passthrough();
+/** An open alert of the project as Google sent it, schema-checked; nothing of it is cleaned yet. */
+export type RawAlert = z.infer<typeof Alert>;
+const Policy = z.object({
+  name: text.optional(),
+  conditions: z.array(z.object({ displayName: text.optional() }).passthrough()).max(1000).optional(),
+  documentation: z.object({ content: text.optional() }).passthrough().optional(),
+}).passthrough();
+
+/** The resource types an alert of a GKE cluster names (D186). */
+export const CLUSTER_RESOURCES = ["k8s_container", "k8s_pod", "k8s_node", "k8s_cluster", "prometheus_target"] as const;
+const ALERT_ID = /^[A-Za-z0-9._-]{1,128}$/;
+const METRIC_TYPE = /^[A-Za-z0-9_./:-]{1,200}$/;
+/**
+ * Google's severity words ([check 2]: from memory, the reference page links an enum it doesn't print). Any other word,
+ * or none, shows no severity: Landlens never guesses one.
+ */
+const ALERT_SEVERITY: Record<string, GcpAlert["severity"]> = { CRITICAL: "critical", ERROR: "error", WARNING: "warning" };
+const SUBDOMAIN = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/;
+const isNamespace = (s: unknown): s is string => typeof s === "string" && NamespaceName.safeParse(s).success;
+const isPod = (s: unknown): s is string => typeof s === "string" && s.length <= 253 && SUBDOMAIN.test(s);
+const isContainer = (s: unknown): s is string => typeof s === "string" && ContainerName.safeParse(s).success;
+const isNode = (s: unknown): s is string => typeof s === "string" && NodeName.safeParse(s).success;
+
+/**
+ * The project's open alerts (D185): one page of the newest 1,000, 15 s, 8 MB, no filter. Kept: `state` OPEN and
+ * `resource.labels.project_id` exactly the project asked (another project of the metrics scope never shows under this
+ * one). `cut`: Google had more. `unreadable`: rows that weren't an alert's shape, so whose they are is unknown.
+ */
+export async function openAlerts(client: GcpClient, project: string): Promise<{ alerts: RawAlert[]; cut: boolean; unreadable: number }> {
+  checkProject(project);
+  const r = AlertsPage.safeParse(await client.get("monitoring", `/v3/projects/${project}/alerts`, { pageSize: String(ALERTS_PAGE) }, project, { limitMs: ALERTS_LIMIT_MS }));
+  if (!r.success) throw new GcpError(200, SENTENCES.answer, "schema");
+  const alerts: RawAlert[] = [];
+  let unreadable = 0;
+  for (const x of r.data.alerts ?? []) {
+    const a = Alert.safeParse(x);
+    if (!a.success) {
+      unreadable++;
+      continue;
+    }
+    if (a.data.state === "OPEN" && a.data.resource?.labels?.project_id === project) alerts.push(a.data);
+  }
+  return { alerts, cut: !!r.data.nextPageToken, unreadable };
+}
+
+/** Whether an alert's resource is this cluster: a Kubernetes resource by location and cluster_name, or a Prometheus target by location and cluster. */
+function onCluster(a: RawAlert, c: GkeRef): boolean {
+  const type = a.resource?.type;
+  const l = a.resource?.labels ?? {};
+  if (type === "prometheus_target") return l.location === c.location && l.cluster === c.name;
+  return (CLUSTER_RESOURCES as readonly string[]).includes(type ?? "") && l.location === c.location && l.cluster_name === c.name;
+}
+
+/** What an alert is about, when every name it gives is a Kubernetes name; else none. */
+function subjectOf(a: RawAlert): GcpAlert["subject"] {
+  const l = a.resource?.labels ?? {};
+  switch (a.resource?.type) {
+    case "k8s_container":
+      return isNamespace(l.namespace_name) && isPod(l.pod_name) && isContainer(l.container_name)
+        ? { kind: "Pod", namespace: l.namespace_name, name: l.pod_name, container: l.container_name } : undefined;
+    case "k8s_pod":
+      return isNamespace(l.namespace_name) && isPod(l.pod_name) ? { kind: "Pod", namespace: l.namespace_name, name: l.pod_name } : undefined;
+    case "k8s_node":
+      return isNode(l.node_name) ? { kind: "Node", name: l.node_name } : undefined;
+    case "prometheus_target":
+      return isNamespace(l.namespace) ? { kind: "Namespace", namespace: l.namespace, name: l.namespace } : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** An ISO time, when Date reads the text. */
+const isoOf = (s: string | undefined): string | undefined => {
+  if (!s || s.length > 64) return undefined;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? new Date(t).toISOString() : undefined;
+};
+
+/**
+ * This cluster's alerts among the project's open ones (D186), pure: newest first, at most 200. `others`: the project's
+ * open alerts that don't name this cluster. `unreadable`: this cluster's alerts with no usable id or opening time
+ * (dropped, but counted, so the list never reads as complete); `over`: this cluster's past the 200.
+ */
+export function clusterAlerts(raw: RawAlert[], c: GkeRef): { items: GcpAlert[]; others: number; unreadable: number; over: number } {
+  const items: GcpAlert[] = [];
+  let others = 0;
+  let unreadable = 0;
+  const seen = new Set<string>();
+  const ids = new Set([c.project, ...(c.number && /^\d{1,30}$/.test(c.number) ? [c.number] : [])]);
+  for (const a of raw) {
+    if (!onCluster(a, c)) {
+      others++;
+      continue;
+    }
+    const id = a.name.split("/").at(-1) ?? "";
+    const opened = isoOf(a.openTime);
+    if (!ALERT_ID.test(id) || !opened || seen.has(id)) {
+      if (!seen.has(id)) unreadable++;
+      continue;
+    }
+    seen.add(id);
+    const pol = /^projects\/([^/]+)\/alertPolicies\/(\d{1,30})$/.exec(a.policy?.name ?? "");
+    const metric = a.metric?.type;
+    const subject = subjectOf(a);
+    items.push({
+      id, opened,
+      policy: outsideText(a.policy?.displayName ?? "", 120),
+      ...(pol && ids.has(pol[1]!) ? { policyId: pol[2]! } : {}),
+      severity: ALERT_SEVERITY[a.policy?.severity ?? ""] ?? "none",
+      resourceType: a.resource!.type!,
+      ...(metric && METRIC_TYPE.test(metric) ? { metric } : {}),
+      ...(subject ? { subject } : {}),
+    });
+  }
+  items.sort((x, y) => y.opened.localeCompare(x.opened));
+  return { items: items.slice(0, GCP_ALERTS_SHOWN), others, unreadable, over: Math.max(0, items.length - GCP_ALERTS_SHOWN) };
+}
+
+/** An alert policy's detail as an alert shows it (D187). */
+export type AlertPolicyDetail = { conditions: string[]; documentation?: string; cut: boolean };
+
+/**
+ * One alert policy of the project (D187): `GET /v3/projects/<project>/alertPolicies/<digits>`, 10 s, 1 MB. Up to five
+ * condition names (120 characters each) and the documentation as plain text: one line, cleaned, redacted, then cut to
+ * 300 (`cut` says so). The documentation's links and the policy's labels are not read.
+ */
+export async function alertPolicy(client: GcpClient, project: string, policyId: string): Promise<AlertPolicyDetail> {
+  checkProject(project);
+  if (!/^\d{1,30}$/.test(policyId)) throw new GcpError(400, "That isn't an alert policy.");
+  const r = Policy.safeParse(await client.get("monitoring", `/v3/projects/${project}/alertPolicies/${policyId}`, {}, project, { limitMs: POLICY_LIMIT_MS, maxBytes: POLICY_MAX_BYTES }));
+  if (!r.success) throw new GcpError(200, SENTENCES.answer, "schema");
+  const conditions = (r.data.conditions ?? []).map((x) => outsideText(x.displayName ?? "", 120)).filter(Boolean).slice(0, POLICY_CONDITIONS);
+  const content = r.data.documentation?.content ?? "";
+  const whole = outsideText(content, 16_384);
+  return {
+    conditions,
+    ...(whole ? { documentation: outsideText(content, POLICY_DOC_MAX) } : {}),
+    cut: Array.from(whole).length > POLICY_DOC_MAX,
+  };
 }

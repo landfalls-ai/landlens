@@ -137,3 +137,29 @@
   .gs-detail { margin-left: 10px; }
   .gs-apis th:nth-child(2) { width: 70px; }
 }
+
+/* Cloud Monitoring's alerts (wave 9 part 3, D188): the Problems page's third section, its drawer, the Overview's line. */
+.pb-gcp .pb-cloud { color: var(--accent); }
+.pb-sec-where { margin-left: 4px; color: var(--ink-3); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pb-alert .kind-tile:not(.bad):not(.warn) { color: var(--accent); }
+.pb-alert-detail { display: flex; min-width: 0; white-space: nowrap; }
+.pb-alert-detail > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pb-alert-detail > span:first-child { flex: none; max-width: 60%; }
+.pb-none { display: flex; align-items: center; gap: 7px; margin: 6px 10px; color: var(--ink-2); font-size: var(--t-12); }
+.pb-none .ic { flex: none; }
+.pb-others { margin: 6px 10px 0; }
+.al-policy { display: grid; gap: 8px; margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.al-policy h3 { margin: 0; font-size: var(--t-12); color: var(--ink-2); }
+.al-policy h4 { margin: 0; font-size: var(--t-12); font-weight: 500; color: var(--ink-3); }
+.al-policy p { margin: 0; overflow-wrap: anywhere; }
+.al-conditions { margin: 0; padding-left: 18px; display: grid; gap: 3px; color: var(--ink-2); overflow-wrap: anywhere; }
+.al-doc { padding: 10px 12px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); display: grid; gap: 6px; }
+.al-doc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; color: var(--ink-3); font-size: var(--t-12); }
+.al-doc-head .al-cut { padding: 0 6px; border-radius: 999px; background: var(--bg-3); white-space: nowrap; }
+.al-doc-text { color: var(--ink-2); line-height: 1.45; white-space: normal; }
+.ov-alerts { display: flex; align-items: center; gap: 6px; margin: 2px 4px 6px; font-size: var(--t-12); }
+.ov-alerts.tone-warn .ic { color: var(--warn-text); }
+.ov-alerts.tone-muted { color: var(--ink-3); }
+.verdict-alerts { display: flex; align-items: center; gap: 6px; font-size: var(--t-12); }
+.gs-ask { justify-self: start; }
+@container main (max-width: 720px) { .pb-sec-where { display: none; } }

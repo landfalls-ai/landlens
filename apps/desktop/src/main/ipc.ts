@@ -266,6 +266,9 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
     // cluster of a chosen project is main's answer, from how it was connected and the address it was connected at.
     // The sidecar's report of whom it trusts goes with it: an own context must verify TLS against the listed CA (M1).
     "gcp:cluster-view": ({ handle, fresh }) => gcp.view(connectedOf(clusters, gkeHandles, handle), !!fresh),
+    // One alert's or suggestion's detail and Ask Claude's brief (wave 9 part 3, D187): a handle and an id, answered only
+    // for an id in that cluster's view now.
+    "gcp:cluster-item": ({ handle, kind, id }) => gcp.item(connectedOf(clusters, gkeHandles, handle), kind, id),
     // The workbench (docs/workbench.md): logs and shells belong to the window that opened them.
     "logs:open": async (req, event) => workbench.openLogs(req, event.sender),
     "logs:close": async ({ stream }, event) => (workbench.closeLogsFor(stream, event.sender), { ok: true }),

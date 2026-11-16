@@ -163,14 +163,31 @@ all N) and Recent warnings; Nodes. It reads
   read; when it was cut, a `.gs-cut` note (`role="note"`, `CircleAlert` in `.tone-warn`) says what was read, alone or
   under the rows, and the count reads "3+"; a failure: a `.notice` with the
   sentence, its command as `code`, and **Copy command**. On a GKE-looking cluster of an unchosen project, one quiet
-  `.gs-hint` line (`role="note"`) under Nodes with a **Open Google Cloud** `.link-btn`. No Ask yet (wave 9 part 3).
+  `.gs-hint` line (`role="note"`) under Nodes with a **Open Google Cloud** `.link-btn`. From part 3 a row has an
+  **Ask** `.ghost-btn` (`Sparkles`, on hover or focus; `a` on a focused row) before the chevron, and the opened row an
+  **Ask Claude** `.ask-btn` under the source line. Cloud Monitoring's open alerts get one `.ov-alerts` line under the
+  Problems panel's head (`Cloud` in warn, then "3 open Cloud Monitoring alerts" as a small `.link-btn`; muted when the
+  read failed or was partial), and "All clear" a `.verdict-alerts` sub-line with `Cloud` ("Cloud Monitoring has 3 open
+  alerts for this cluster.").
 - **Problems** (`Problems.tsx`, `problemRules.ts`; CSS `.pb-*` in `workbench.css`; [doctor.md](doctor.md#the-problems-page)):
   a `.seg` for severity and `.chip` buttons per kind of problem (the chosen one in accent), the skipped-checks
   `.notice`, then "Failing" and "To watch" sections of `.ov-row`s: tone-tinted kind tile, title in medium weight, the
   kind as `.ov-kind`, namespace dimmed, the detail in mono, age at the right; Ask and Open as `.ghost-btn`s on hover,
   focus or selection; the selected row has the accent wash and a 2px left edge. The drawer is the `.drawer` shell of
   Helm's: a stethoscope tile, the reason as a `.badge`, "Open <Kind>" as a small `.secondary`, the hint in a `--bg-2`
-  card above the facts, and the Logs tab's `.logs-pane` with a `.logs-note` head.
+  card above the facts, and the Logs tab's `.logs-pane` with a `.logs-note` head. On a GKE cluster of a chosen project
+  (wave 9 part 3, `.pb-gcp`, `.al-*` in `gcp.css`) the `.seg` gains **Alerts N** with a 12 px `Cloud`, and a third
+  section **From Cloud Monitoring** follows: `Cloud` in accent, its `.count-badge`, and "demo-shop · Google's alerts,
+  not Landlens's checks" in `--ink-3` (hidden under 720 px). A row is a `.pb-row.pb-alert`: a `.kind-tile.sm` with
+  `BellRing` (bad or warn tint by severity, accent when there is none), the policy's name, "Alert · Pod ns/name (c)"
+  then the metric in mono `--ink-3`, "open 42 min", and the severity `.badge` with icon and word (`.bad` + `CircleX`
+  Critical or Error, `.warn` + `Clock` Warning; none for no known word); Ask and Open as `.ghost-btn`s. The empty
+  states are a `.pb-none` line (`CircleCheck` in ok for the all-clear, `Info` in warn when some weren't read), the
+  project's others a small dim line. The alert's drawer (`AlertDrawer.tsx`) is the same `.drawer` shell: a `BellRing`
+  tile, "Alert / Cloud Monitoring / project" eyebrow, **Ask Claude**, the policy's name as the title, the `Alert` pill,
+  the severity badge, "open 42 min" and **Open Pod** as a small `.secondary`; Summary's facts, then **From the policy**
+  under a hairline: the conditions as a list and the documentation in an `.al-doc` well (`--bg-2`, inset line) headed
+  with `Info` "Written in Google Cloud by whoever made the policy" and an `.al-cut` pill "First 300 characters".
 - **Lists** (`ResourceTable.tsx`, columns in `kinds.ts`): 32px inset rows; healthy status is a quiet dot and word,
   failing and pending are pills with a left edge; generated name suffixes dimmed (`splitName` in `present.ts`);
   restarts toned at 5 and 10; sortable headers; ↑/↓ or j/k; a row flashes when its status changes. The toolbar's
@@ -443,7 +460,11 @@ strip); region "Claude asks"; classes `.auto-chip`, `section.change`, `.change-d
 so they don't change a button's name; Overview tiles are links named "Open …", and its rows are `.ov-row`, not `.tr`.
 Google suggests (wave 9): region "Google suggests"; rows `.gs-row` with `aria-expanded`; the opened `.gs-detail`;
 button "Check Google's suggestions again"; the failure `role="alert"` with button "Copy command"; the hint is a
-`role="note"` with button "Open Google Cloud".
+`role="note"` with button "Open Google Cloud"; a row's button "Ask Claude about <subtype>". Alerts (part 3): the
+Overview's `.ov-alerts` in region "Problems"; the segment button "Alerts N"; region "From Cloud Monitoring" with rows
+`.pb-alert` (`data-alert` the id, named "Cloud Monitoring alert: <policy>. Alert · …"); the drawer is a
+`complementary` "Cloud Monitoring alert: <policy>" with a `note` "Policy documentation" and buttons "Ask Claude" and
+"Open Pod"; ⌘K's "Show Cloud Monitoring alerts".
 Sidebar (D139): headers `.nav-sec[data-sec="<section>"]` with `aria-expanded` and `aria-controls`; groups named by
 section ("Workspace", "Pinned", "Cloud", "Workloads", …); in the rail a section is a button and its flyout a menu,
 both named by the section; `localStorage` key `landlens.nav.v1`.

@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { channels, CLOUD_DECLINED } from "@landlens/contracts";
-import { ADVICE_FAILED_TTL, ADVICE_TTL, connectedOf, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
+import { ADVICE_FAILED_TTL, ADVICE_TTL, ALERTS_TTL, connectedOf, ITEM_GONE, MAX_POLICIES, POLICY_TTL, FRESH_EVERY, gcpMode, GcpService, MAX_CACHED, MAX_PROMS, MAX_VIEWS, numberUnknown, PROM_BUSY, PROM_FAILED_TTL, PROM_TTL, PROMS_AT_ONCE, PROMS_WAITING, RESOURCES_TTL, unlisted, type GcpMode } from "../src/main/gcp";
 import { MetricsService } from "@landlens/metrics";
 import { cloudMonitoringSource, sessionSeries } from "../src/main/metrics-source";
 import { caFingerprint } from "@landlens/gcp";
-import { FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, PROMQL_MARKER } from "../../../packages/gcp/test/fake-gcp";
+import { demoShopAlerts, demoShopPolicies, FAKE_CLUSTER_CA, FakeGcp, GCP_TOKEN, PROMQL_MARKER } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
 
 let fake: FakeGcp;
@@ -21,6 +21,8 @@ beforeEach(() => {
   fake.fail.clear();
   fake.slowMs = 0;
   fake.advice.clear();
+  fake.alerts.clear();
+  fake.policies.clear();
   fake.leak = false;
 });
 
@@ -697,8 +699,9 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     expect(await service({ mode: { on: false } }).svc.gkeOf(at("https://203.0.113.17"))).toBeUndefined();
   });
 
-  it("the view holds Google's suggestions for that cluster only, cached 10 minutes, and alerts empty until part 3", async () => {
+  it("the view holds Google's suggestions for that cluster only, cached 10 minutes (no alerts open: an empty, whole list)", async () => {
     let t = 1_000_000;
+    fake.alerts.set("demo-shop", []);
     const { svc, logs } = service({ now: () => t });
     await svc.choose(["demo-shop"]);
     const v = await svc.view(at("https://203.0.113.17"));
@@ -706,7 +709,7 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     expect(v.cluster).toEqual({ project: "demo-shop", location: "us-central1", name: "shop-prod" });
     if ("error" in v.advice) throw new Error(v.advice.error);
     expect(v.advice.items.map((a) => a.id)).toEqual(["deprecation-1-32", "exec-probe-timeout"]);
-    expect(v.alerts).toEqual({ items: [], others: 0, cut: false, at: expect.any(String) });
+    expect(v.alerts).toEqual({ items: [], others: 0, cut: false, unreadable: 0, over: 0, at: expect.any(String) });
     const asked = () => fake.hits("/insights").length;
     expect(asked()).toBe(1);
     // Cached: the next visit, and Check again within 10 s, ask nothing.
@@ -740,7 +743,7 @@ describe("Google's view of a connected cluster (wave 9, D173–D177)", () => {
     if (!v.gke) throw new Error("not GKE");
     expect(v.advice).toEqual({ error: "The Recommender API is off in demo-shop. Turn it on: `gcloud services enable recommender.googleapis.com --project demo-shop`." });
     // The other half stands on its own.
-    expect(v.alerts).toMatchObject({ items: [] });
+    expect(v.alerts).toMatchObject({ items: [{}, {}, {}] });
     expect(JSON.stringify(v)).not.toContain(GCP_TOKEN);
     expect(logs.some((l) => l.startsWith("[gcp] recommender demo-shop/us-central1:"))).toBe(true);
     expect(logs.join("\n")).not.toContain(GCP_TOKEN);
@@ -1124,5 +1127,210 @@ describe("Fable's security review of part 2, fixed", () => {
     fake.slowMs = 0;
     await ask(NODE_CPU, T0 + 60_000, T0 + 3_660_000, 60);
     expect(promHits()).toHaveLength(PROMS_AT_ONCE + PROMS_WAITING + 1);
+  });
+});
+
+describe("Cloud Monitoring's alerts beside the doctor's problems (wave 9 part 3, D185–D189)", () => {
+  const TLS = { ca: caFingerprint(FAKE_CLUSTER_CA), insecure: false, serverName: false, proxy: false };
+  const PROD = { context: "gke_demo-shop_us-central1_shop-prod", server: "https://203.0.113.17", viaLandlens: false, tls: TLS };
+  const shop = { project: "demo-shop", number: "482913570214", location: "us-central1", name: "shop-prod" };
+  const seed = () => {
+    fake.alerts.set("demo-shop", demoShopAlerts());
+    for (const [id, p] of Object.entries(demoShopPolicies())) fake.policies.set(`demo-shop/${id}`, p);
+  };
+  const alertsRead = () => fake.hits("/alerts").filter((r) => !r.path.includes("alertPolicies")).length;
+
+  it("the view holds this cluster's open alerts only: not another project's, another cluster's, a VM's or a closed one", async () => {
+    seed();
+    const { svc, logs } = service();
+    await svc.choose(["demo-shop"]);
+    const v = await svc.view(PROD);
+    if (!v.gke || "error" in v.alerts) throw new Error("no alerts");
+    expect(v.alerts.items.map((a) => a.id)).toEqual(["0a1-prom-target", "0a2-restarts", "0a5-node-memory"]);
+    // shop-staging's and the VM's are the project's others; orbit-analytics's and the closed one aren't counted at all.
+    expect(v.alerts).toMatchObject({ others: 2, cut: false, unreadable: 0, over: 0 });
+    expect(JSON.stringify(v)).not.toContain("0a3-leak");
+    expect(JSON.stringify(v)).not.toContain("0a7-closed");
+    // One read of the project's alerts, unfiltered (the fake refuses a filter), through the monitoring origin.
+    expect(alertsRead()).toBe(1);
+    expect(logs.join("\n")).not.toContain(GCP_TOKEN);
+  });
+
+  it("the project's alerts are kept 60 s; Check again reads them at most once in 10 s; two clusters of a project share one read", async () => {
+    seed();
+    let t = 1_000_000;
+    const { svc } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    await svc.clusterView(shop);
+    await svc.clusterView({ ...shop, location: "europe-west1-b", name: "shop-staging" });
+    expect(alertsRead()).toBe(1);
+    t += 5_000;
+    await svc.clusterView(shop, true);
+    expect(alertsRead()).toBe(1);
+    t += FRESH_EVERY;
+    await svc.clusterView(shop, true);
+    expect(alertsRead()).toBe(2);
+    t += ALERTS_TTL - 1;
+    await svc.clusterView(shop);
+    expect(alertsRead()).toBe(2);
+    t += 2;
+    await svc.clusterView(shop);
+    expect(alertsRead()).toBe(3);
+  });
+
+  it("a failed alerts read is its sentence, kept 60 s, beside suggestions that were read; no token anywhere", async () => {
+    seed();
+    let t = 1_000_000;
+    const { svc, logs } = service({ now: () => t });
+    await svc.choose(["demo-shop"]);
+    fake.fail.set("demo-shop", { status: 403, api: "monitoring", message: `denied ${GCP_TOKEN}` });
+    const v = await svc.view(PROD);
+    if (!v.gke) throw new Error("not GKE");
+    expect(v.alerts).toEqual({ error: "Your account can't read Cloud Monitoring in demo-shop (it needs Monitoring Viewer)." });
+    // The suggestions stand on their own.
+    expect(v.advice).toMatchObject({ items: [{}, {}] });
+    expect(JSON.stringify(v)).not.toContain(GCP_TOKEN);
+    expect(logs.some((l) => l.startsWith("[gcp] alerts demo-shop:"))).toBe(true);
+    expect(logs.join("\n")).not.toContain(GCP_TOKEN);
+    fake.fail.clear();
+    t += ALERTS_TTL - 1;
+    expect(((await svc.view(PROD)) as { alerts: unknown }).alerts).toHaveProperty("error");
+    t += 2;
+    expect(((await svc.view(PROD)) as { alerts: { items: unknown[] } }).alerts.items).toHaveLength(3);
+  });
+
+  it("no silent all-clear: Google's cut and rows that couldn't be read are on the view", async () => {
+    const many = Array.from({ length: 1001 }, (_, i) => ({ ...demoShopAlerts()[5]!, name: `projects/demo-shop/alerts/vm-${i}` }));
+    fake.alerts.set("demo-shop", [...many, { name: "projects/demo-shop/alerts/broken", state: "OPEN", resource: "not an object" }]);
+    const { svc } = service();
+    await svc.choose(["demo-shop"]);
+    const v = await svc.view(PROD);
+    if (!v.gke || "error" in v.alerts) throw new Error("no alerts");
+    expect(v.alerts).toMatchObject({ items: [], cut: true });
+    fake.alerts.set("demo-shop", [demoShopAlerts()[1]!, { name: "projects/demo-shop/alerts/broken", state: "OPEN", resource: "not an object" }]);
+    const fresh = service();
+    await fresh.svc.choose(["demo-shop"]);
+    const w = await fresh.svc.view(PROD);
+    if (!w.gke || "error" in w.alerts) throw new Error("no alerts");
+    expect(w.alerts).toMatchObject({ items: [{ id: "0a2-restarts" }], cut: false, unreadable: 1 });
+  });
+
+  it("forgets the project's alerts and policies when the account changes or the project is taken out", async () => {
+    seed();
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop", "orbit-analytics"]);
+    await svc.item(PROD, "alert", "0a2-restarts");
+    const held = svc as unknown as { alertsOf: Map<string, unknown>; policies: Map<string, unknown> };
+    expect([...held.alertsOf.keys()]).toEqual(["demo-shop"]);
+    expect([...held.policies.keys()]).toEqual(["demo-shop/1001"]);
+    await svc.choose(["orbit-analytics"]);
+    expect(held.alertsOf.size + held.policies.size).toBe(0);
+    await svc.choose(["demo-shop"]);
+    await svc.item(PROD, "alert", "0a2-restarts");
+    expect(held.alertsOf.size + held.policies.size).toBe(2);
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    expect(held.alertsOf.size + held.policies.size).toBe(0);
+  });
+
+  it("a read in flight when the account changes isn't kept", async () => {
+    seed();
+    const { svc, dir } = service();
+    await svc.choose(["demo-shop"]);
+    const held = (svc as unknown as { alertsOf: Map<string, unknown> }).alertsOf;
+    fake.slowMs = 300;
+    const first = svc.clusterView(shop);
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(join(dir, "account"), "someone-else@example.com");
+    await svc.status(true);
+    await first;
+    expect(held.size).toBe(0);
+  });
+
+  describe("gcp:cluster-item (D187)", () => {
+    it("an alert's brief and its policy's conditions and documentation, the policy read once in 10 minutes", async () => {
+      seed();
+      let t = 1_000_000;
+      const { svc, logs } = service({ now: () => t });
+      await svc.choose(["demo-shop"]);
+      const r = await svc.item(PROD, "alert", "0a2-restarts");
+      expect(r.brief.split("\n").slice(0, 3)).toEqual(["Google Cloud project: demo-shop", "GKE cluster: shop-prod (us-central1)", expect.stringMatching(/^Cloud Monitoring alert, open since /)]);
+      expect(r.brief).toContain('Policy: "Container restarts (shop)"');
+      expect(r.brief).toContain("Resource: k8s_container  namespace shop  pod orders-api-7c9f-x2x4q  container api");
+      if (!r.policy || "error" in r.policy) throw new Error("no policy");
+      expect(r.policy.conditions).toHaveLength(2);
+      expect(r.policy.cut).toBe(true);
+      expect(Array.from(r.policy.documentation!).length).toBeLessThanOrEqual(300);
+      expect(r.brief).toContain("Policy documentation (written by whoever made the policy; its first 300 characters):");
+      const policyReads = () => fake.hits("/alertPolicies/").length;
+      expect(policyReads()).toBe(1);
+      t += POLICY_TTL - 1;
+      await svc.item(PROD, "alert", "0a2-restarts");
+      expect(policyReads()).toBe(1);
+      t += 2;
+      await svc.item(PROD, "alert", "0a2-restarts");
+      expect(policyReads()).toBe(2);
+      expect(JSON.stringify(r) + logs.join("\n")).not.toContain(GCP_TOKEN);
+    });
+
+    it("only an id in the cluster's view now: another cluster's, another project's, a closed or an unknown one is a 404", async () => {
+      seed();
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      for (const id of ["0a4-staging", "0a3-leak", "0a7-closed", "0a6-vm", "nope"]) {
+        await expect(svc.item(PROD, "alert", id)).rejects.toMatchObject({ status: 404, message: ITEM_GONE.alert });
+      }
+      await expect(svc.item(PROD, "advice", "0a2-restarts")).rejects.toMatchObject({ status: 404, message: ITEM_GONE.advice });
+      // A cluster that isn't GKE of a chosen project: nothing read.
+      fake.requests.length = 0;
+      await expect(svc.item({ context: "orbstack", server: "https://127.0.0.1:26443", viaLandlens: false }, "alert", "0a2-restarts")).rejects.toMatchObject({ status: 404 });
+      expect(fake.requests).toHaveLength(0);
+    });
+
+    it("another project's policy isn't read; a policy that fails is its sentence and the brief leaves it out", async () => {
+      seed();
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      const foreign = await svc.item(PROD, "alert", "0a1-prom-target");
+      expect(foreign.policy).toBeUndefined();
+      expect(fake.hits("/alertPolicies/")).toHaveLength(0);
+      // A policy of this project (by its number) that Google doesn't answer for.
+      const node = demoShopAlerts()[4]!;
+      fake.alerts.set("demo-shop", [{ ...node, policy: { ...(node.policy as object), name: "projects/482913570214/alertPolicies/9999" } }]);
+      const again = service();
+      await again.svc.choose(["demo-shop"]);
+      const missing = await again.svc.item(PROD, "alert", "0a5-node-memory");
+      expect(missing.policy).toHaveProperty("error");
+      expect(missing.brief).not.toContain("Conditions");
+      expect(missing.brief).not.toContain("Policy documentation");
+    });
+
+    it("a suggestion's brief, from the view", async () => {
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      const r = await svc.item(PROD, "advice", "deprecation-1-32");
+      expect(r.brief).toMatch(/^Google Cloud project: demo-shop\nGKE cluster: shop-prod \(us-central1\)\nGKE recommendation: /);
+      expect(r.policy).toBeUndefined();
+    });
+
+    it("at most MAX_POLICIES policies are kept", async () => {
+      const policies = Array.from({ length: MAX_POLICIES + 1 }, (_, i) => String(5000 + i));
+      fake.alerts.set("demo-shop", policies.map((id, i) => ({ ...demoShopAlerts()[1]!, name: `projects/demo-shop/alerts/p-${i}`, policy: { ...(demoShopAlerts()[1]!.policy as object), name: `projects/demo-shop/alertPolicies/${id}` } })));
+      for (const id of policies) fake.policies.set(`demo-shop/${id}`, demoShopPolicies()["1002"]!);
+      const { svc } = service();
+      await svc.choose(["demo-shop"]);
+      const held = (svc as unknown as { policies: Map<string, unknown> }).policies;
+      for (let i = 0; i <= MAX_POLICIES; i++) await svc.item(PROD, "alert", `p-${i}`);
+      expect(held.size).toBe(MAX_POLICIES);
+      expect(held.has("demo-shop/5000")).toBe(false);
+    });
+
+    it("the channel takes a handle, a kind and an id of Google's shape, nothing else", () => {
+      const ch = channels["gcp:cluster-item"];
+      expect(ch.safeParse({ handle: "handle-0001", kind: "alert", id: "0a2-restarts" }).success).toBe(true);
+      expect(ch.safeParse({ handle: "handle-0001", kind: "alert", id: "../x" }).success).toBe(false);
+      expect(ch.safeParse({ handle: "handle-0001", kind: "policy", id: "1001" }).success).toBe(false);
+      expect(ch.safeParse({ handle: "handle-0001", kind: "alert", id: "1001", project: "orbit-analytics" }).success).toBe(false);
+    });
   });
 });

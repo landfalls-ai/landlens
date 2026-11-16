@@ -222,13 +222,89 @@ No High; one Medium, seven Low and eight missing tests, all fixed. Each test was
   listed pod that isn't a name is left out of the query, not a 400. **T7** `NaN`, `+Inf`, `-Inf`, a string, a short
   and a `null` point dropped. **T8** is M1's tests.
 
-## Part 3: alerts (D185–D189)
+## Part 3: alerts (D185–D189) — built 16 Nov 2026
 
-- [ ] `fake-gcp.ts`: alerts and the policy; `monitoring.ts` `openAlerts`, `clusterAlerts`, the policy read; tests
-- [ ] `clusterView`'s alerts half, `gcp:cluster-item`, `briefs.ts`; `gcp-service.test.ts`
-- [ ] `problemRules.ts`, `Problems.tsx`, `AlertDrawer.tsx`, the Overview's lines, ⌘K
-- [ ] `quotes.ts` heads, `GCP_QUOTE`, the questions (and Ask on a suggestion, from part 1); the e2e; docs; review;
-  fixes
+- [x] `fake-gcp.ts`: alerts and the policy (`demoShopAlerts`, `demoShopPolicies`, `SHOUTY_POLICY`, `POLICY_DOC`;
+  `alerts`, `policies`); `monitoring.ts` `openAlerts`, `clusterAlerts`, `alertPolicy`; `monitoring.test.ts`
+- [x] `clusterView`'s alerts half, `gcp:cluster-item` (`GcpService.item`, the IPC handler, the preload's list),
+  `briefs.ts`; `gcp-service.test.ts`, `briefs.test.ts`
+- [x] `problemRules.ts`, `Problems.tsx`, `AlertDrawer.tsx`, the Overview's lines, ⌘K; `problems.test.ts`,
+  `google-rules.test.ts`
+- [x] `quotes.ts` heads, `GCP_QUOTE`, the questions (and Ask on a suggestion, from part 1); `agent-service.test.ts`;
+  the e2e (`gview.e2e.test.ts` (b), screenshots `g9-p3-*`); docs ([gcp.md](../../gcp.md#googles-view-of-a-cluster),
+  [doctor.md](../../doctor.md#the-problems-page), [security.md](../../security.md#connections-and-google-cloud),
+  [agent.md](../../agent.md), [design.md](../../design.md), [architecture.md](../../architecture.md),
+  [development.md](../../development.md), [limitations.md](../../limitations.md), [roadmap.md](../../roadmap.md),
+  [plan.md](../../plan.md), [history.md](../../history.md))
+- [ ] Fable's security review of part 3, and its fixes
+
+Every safety rule's test was seen to fail with the rule taken out (33 mutations, each run against its own test file,
+then restored): the project-exact and `OPEN` filters, `cut`, both `unreadable` counts, the 200 cap and `over`,
+`policyId` only for this project, unknown severity "none", the metric's shape, the policy's digits before a request,
+the documentation's 300, the `\p{Cc}\p{Cf}\p{Zl}\p{Zp}` class, redaction before the cut, the brief's JSON quoting,
+its redaction and cap, `item` only for ids in the view, the alerts read failing alone, the 60 s cache, `forget()`
+clearing alerts, the policy cap, the view's `unreadable` including the answer's, both `GCP_QUOTE` heads, the alert's
+fixed head, the alert's namespaces for a limited session, no badge for "none", the failed-read sentence, the Overview's
+and the verdict's partial and failed lines, the namespace rule, Failing and To watch hiding alerts, and the channel's id
+shape. One didn't fail, and isn't a rule on its own (departure 14).
+
+### Where part 3 departs from the spec
+
+1. **The alerts view says what it couldn't show.** `GcpClusterView.alerts` is `{ items, others, cut, unreadable, over,
+   at }`: `unreadable` counts rows of Google's answer that weren't an alert's shape (whose they are is unknown) plus
+   this cluster's with no usable id or opening time; `over` counts this cluster's past the 200 shown. Each puts a
+   sentence in the strip and makes the counts "3+", so a list that dropped rows never reads as complete.
+2. **`outsideText` (`assets.ts`)**: one helper for outside text: whitespace made one space, control, format and
+   line/paragraph-separator characters removed, `redactText`, then cut. Every alert and policy field and every brief
+   value goes through it, and the recommender's user agent now does too (the same steps as part 1's L3 fix).
+3. **Alerts are kept per project, cut per cluster on use.** `alerts.list` answers for the project, so two GKE clusters
+   of a project share one read (60 s); `clusterAlerts` runs on each view. A failed read is kept 60 s too (the spec
+   gave the time for alerts only). Policies are kept 10 minutes, a failure a minute, at most 100 (`MAX_POLICIES`).
+4. **The policy's `cut`** compares the whole cleaned documentation (up to 16,384 characters) with the 300 kept.
+5. **The briefs** JSON-quote free text, so a `"` in a policy name or a sentence can't end the quote, and redact the
+   whole again before the 4,000 cap. The alert's documentation line says "its first 300 characters" when cut; a policy
+   that failed or isn't the project's leaves its lines out. A suggestion's brief also has its priority, when Google
+   refreshed it and each API's callers.
+6. **`gcp:cluster-item`'s 404s are fixed sentences** (`ITEM_GONE`: "That alert is no longer open on this cluster.",
+   "Google no longer lists that suggestion for this cluster."); the view checked is the one main holds (read again
+   only when its time is up), so an id the page saw a moment ago is still answered.
+7. **The workspace holds one `useGoogleView`**, active while the Overview or Problems is shown, every 60 s; Google
+   suggests reads it too (main still keeps advice 10 minutes, so this asks Google no more often), and ⌘K's command
+   shows when the last view was GKE.
+8. **The Alerts segment counts the alerts in the chosen namespaces** and goes back to All when it has none; a doctor's
+   class chip or In triage hides the section too. The Overview's line opens Problems on Alerts only when there are
+   alerts (else on All, where the strip says why).
+9. **More words than the spec's**: under the section, how many of this cluster's are outside the chosen namespaces; an
+   empty section after a partial read says some weren't read instead of the all-clear; the Overview's line and the
+   verdict's sub-line have failed and partial variants ("couldn't be read", "only partly read").
+10. **The drawer, when the alert leaves a partly read list**, says "Not among the alerts read since 12:03." (it may
+    still be open) rather than "No longer open". A policy of another project says why it isn't read. The documentation's
+    cut note is a small pill.
+11. **An alert's context carries `namespaces`**: the subject's (a Prometheus target's Namespace included), or `""` for
+    a node, the cluster or no subject, so wave 8's L11 rule keeps it from a limited session. Only a Pod subject goes
+    as a reference. Ask in the drawer sends the brief the drawer already read; elsewhere `askGoogle` reads it, one at a
+    time (a second Ask while reading is dropped), and a failure shows in the workspace's notice.
+12. **The e2e's part 3 cases run in (b)**, OrbStack as your own context with full access, not in (a): (a)'s
+    ServiceAccount is limited to `landlens-dev`, where the namespace rule hides the node's and the target's alerts.
+    The fake's alerts name `landlens-dev`'s real pod and OrbStack's node, so **Open Pod** opens the real pod. The
+    question is sent at once once the played session is up, which clears the chip, so the e2e checks the head in the
+    prompt main received rather than the chip's title.
+13. **The policy's documentation keeps its Markdown as text**: a link written in it (`[the runbook](https://…)`) is
+    shown and quoted as characters inside the well and the fence; only `documentation.links` isn't read.
+14. **The generation check in `projectAlerts` and `policy`** (as in `readAdvice`) is belt-and-braces: `forget()` and
+    `choose()` clear both maps synchronously and each entry is set before any await, so taking the check out changes
+    no outcome. The rule it would guard ("a read across an account change isn't kept") holds by the clear, whose
+    mutation does fail its test.
+
+### [check] items settled or moved by part 3
+
+- **[check 2]** (severity words): Landlens maps only `CRITICAL`, `ERROR` and `WARNING`; any other word, or none, is
+  "none" and shows no badge (tested with the rule removed). Whether real alerts carry those words is the person's live
+  check (spec section 9, step 6).
+- **[check 3]** (`alerts.list`'s `filter`): none is sent, and the fake refuses one, so nothing depends on its syntax;
+  Landlens filters in main. That Google's default order is newest first (so a cut keeps the newest 1,000) is still the
+  person's live check.
+- [check 1] and [check 7] are still the person's live checks.
 
 ## Part 4: Claude's tools (D190–D196)
 

@@ -8,18 +8,20 @@
 // address, a hash of its CA and the account, L3). userData/gke/kubeconfig (0700/0600) is Landlens's own kubeconfig for the GKE
 // clusters of those projects (part 5, D91): no token in it, and ~/.kube/config is never written.
 // What is cached, in memory: the projects you can see (5 minutes); each project's resources (60 seconds, per query);
-// Google's suggestions for each GKE cluster (10 minutes, wave 9 D177); each Cloud Monitoring PromQL answer (25 s, D183).
+// Google's suggestions for each GKE cluster (10 minutes, wave 9 D177); each Cloud Monitoring PromQL answer (25 s, D183);
+// each project's open alerts (60 s) and each alert policy read (10 minutes, wave 9 part 3, D185–D187).
 // One read per project at a time, two at once; PromQL queries four at once, in their own slot.
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
-  CLOUD_CONFIRM, CLOUD_DECLINED, GCP_PAGE, GcpProjectId, type GcpClusterView, type GcpProject, type GcpResource, type GcpStatus, type GkeAdvice, type GkeCluster,
-  type GkeRef, type KubeContext, type Responses,
+  CLOUD_CONFIRM, CLOUD_DECLINED, GCP_PAGE, GcpProjectId, type GcpClusterItem, type GcpClusterView, type GcpProject, type GcpResource, type GcpStatus, type GkeAdvice,
+  type GkeCluster, type GkeRef, type KubeContext, type Responses,
 } from "@landlens/contracts";
 import {
-  ACCOUNT_SHAPE, caFingerprint, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource, GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK,
-  promRange, rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig, type GkeClusterFull, type Runner,
+  ACCOUNT_SHAPE, adviceBrief, alertBrief, alertPolicy, caFingerprint, clusterAlerts, countTypes, endpointsFor, GcloudAuth, gcloudEnv, GcpClient, GcpError, getResource,
+  GKE_CONTEXT, gkeAdvice, gkeKubeconfig, listClusters, LOOPBACK, openAlerts, promRange, rawGcpError, resourceBrief, searchProjects, searchResources, writeGkeKubeconfig,
+  type AlertPolicyDetail, type GkeClusterFull, type RawAlert, type Runner,
 } from "@landlens/gcp";
 import type { PromAsk } from "@landlens/metrics";
 import type { GcpReader } from "@landlens/gcp-mcp";
@@ -76,6 +78,20 @@ export const FRESH_EVERY = 10_000;
 export const MAX_VIEWS = 50;
 type Advice = { items: GkeAdvice[]; cut: boolean; at: string } | { error: string };
 type HeldAdvice = { at: number; ok: boolean; read: Promise<Advice> };
+/**
+ * A project's open alerts are kept 60 s (D177), a failure too: the 60 s refresh of an open Problems page or Overview
+ * reads them again. They are read per project (alerts.list answers for the project), and cut to each cluster's on use.
+ */
+export const ALERTS_TTL = 60_000;
+type ProjectAlerts = { alerts: RawAlert[]; cut: boolean; unreadable: number; at: string } | { error: string };
+type HeldAlerts = { at: number; read: Promise<ProjectAlerts> };
+/** An alert policy's detail is kept 10 minutes, a failure a minute (D187); at most this many. */
+export const POLICY_TTL = 10 * 60_000;
+export const MAX_POLICIES = 100;
+type Policy = AlertPolicyDetail | { error: string };
+type HeldPolicy = { at: number; ok: boolean; read: Promise<Policy> };
+/** What gcp:cluster-item says for an id that isn't in the cluster's view now. */
+export const ITEM_GONE = { alert: "That alert is no longer open on this cluster.", advice: "Google no longer lists that suggestion for this cluster." } as const;
 /**
  * A connected cluster as main knows it (D173): its context, the address it was connected at, how, and whom its sidecar
  * trusts to be the cluster (the CA's fingerprint and whether TLS checking is loosened; review of part 1, M1).
@@ -167,6 +183,10 @@ export class GcpService {
   private readonly goneListeners: ((contexts: string[]) => void)[] = [];
   /** Google's suggestions per project/location/name (D177). */
   private readonly advice = new Map<string, HeldAdvice>();
+  /** Each project's open alerts, as alerts.list answered (D185). */
+  private readonly alertsOf = new Map<string, HeldAlerts>();
+  /** Alert policies' detail, by project/number (D187). */
+  private readonly policies = new Map<string, HeldPolicy>();
   /** Cloud Monitoring's PromQL answers, by project|query|step|from in steps (D183). */
   private readonly proms = new Map<string, HeldProm>();
   private readonly promSlots = new Slots(PROMS_AT_ONCE);
@@ -261,6 +281,8 @@ export class GcpService {
     this.clustersCache = undefined;
     this.lists.clear();
     this.advice.clear();
+    this.alertsOf.clear();
+    this.policies.clear();
     this.proms.clear();
     this.promFailed.clear();
   }
@@ -369,6 +391,8 @@ export class GcpService {
     }
     for (const key of [...this.lists.keys()]) if (!ids.includes(key.split("\n")[0]!)) this.lists.delete(key);
     for (const key of [...this.advice.keys()]) if (!ids.includes(key.split("/")[0]!)) this.advice.delete(key);
+    for (const p of [...this.alertsOf.keys()]) if (!ids.includes(p)) this.alertsOf.delete(p);
+    for (const key of [...this.policies.keys()]) if (!ids.includes(key.split("/")[0]!)) this.policies.delete(key);
     for (const key of [...this.proms.keys()]) if (!ids.includes(key.split("|")[0]!)) this.proms.delete(key);
     for (const p of [...this.promFailed.keys()]) if (!ids.includes(p)) this.promFailed.delete(p);
     if (ids.join() !== this.kept.projects.join()) this.clustersCache = undefined;
@@ -690,9 +714,10 @@ export class GcpService {
   }
 
   /**
-   * Google's view of a GKE cluster (D177): its suggestions (and, from part 3, its open alerts), each failing alone into
-   * its fixed sentence. Kept per cluster 10 minutes (a failure a minute); `fresh` reads again, at most once in 10 s.
-   * Reads go through the two-at-once slot. Only `gkeOf`'s answer reaches here, never a name from the page.
+   * Google's view of a GKE cluster (D177): its suggestions and its open alerts, read side by side, each failing alone
+   * into its fixed sentence. Suggestions are kept per cluster 10 minutes (a failure a minute), the project's open alerts
+   * 60 s; `fresh` reads both again, each at most once in 10 s. Reads go through the two-at-once slot. Only `gkeOf`'s
+   * answer reaches here, never a name from the page.
    */
   async clusterView(ref: GkeRef, fresh = false): Promise<GcpClusterView> {
     this.chosen(ref.project);
@@ -701,14 +726,86 @@ export class GcpService {
     const age = held ? this.now() - held.at : Infinity;
     const reuse = held && (fresh ? age < FRESH_EVERY : age < (held.ok ? ADVICE_TTL : ADVICE_FAILED_TTL));
     const advice = reuse ? held.read : this.readAdvice(key, ref);
-    const at = new Date(this.now()).toISOString();
+    const [a, raw] = await Promise.all([advice, this.projectAlerts(ref.project, fresh)]);
+    const mine = "error" in raw ? undefined : clusterAlerts(raw.alerts, ref);
     return {
       gke: true,
       cluster: { project: ref.project, location: ref.location, name: ref.name },
-      advice: await advice,
-      // Wave 9 part 3 reads Cloud Monitoring's open alerts here.
-      alerts: { items: [], others: 0, cut: false, at },
+      advice: a,
+      // Rows of the answer that weren't an alert's shape count with this cluster's unreadable ones: whose they are is
+      // unknown, so the list never reads as complete (no silent all-clear).
+      alerts: "error" in raw ? raw : { ...mine!, cut: raw.cut, unreadable: raw.unreadable + mine!.unreadable, at: raw.at },
     };
+  }
+
+  /**
+   * A project's open alerts (D185), kept 60 s and read again on `fresh` at most once in 10 s; a failure is its sentence,
+   * kept as long. A read across an account change, or for a project taken out meanwhile, isn't kept; and only this
+   * read's own entry is removed, never a newer one (as `readAdvice`).
+   */
+  private projectAlerts(project: string, fresh: boolean): Promise<ProjectAlerts> {
+    const held = this.alertsOf.get(project);
+    const age = held ? this.now() - held.at : Infinity;
+    if (held && age < (fresh ? FRESH_EVERY : ALERTS_TTL)) return held.read;
+    const gen = this.gen;
+    const entry: HeldAlerts = { at: this.now(), read: Promise.resolve({ error: "" }) };
+    entry.read = this.client()
+      .then((client) => this.slot(() => openAlerts(client, project)))
+      .then((r): ProjectAlerts => ({ ...r, at: new Date(this.now()).toISOString() }))
+      .catch((e: unknown): ProjectAlerts => ({ error: this.failed(`alerts ${project}`, e).message }))
+      .then((r) => {
+        if ((gen !== this.gen || !this.kept.projects.includes(project)) && this.alertsOf.get(project) === entry) this.alertsOf.delete(project);
+        return r;
+      });
+    this.alertsOf.set(project, entry);
+    return entry.read;
+  }
+
+  /**
+   * `gcp:cluster-item` (D187): one alert's or suggestion's detail and the brief Ask Claude quotes, for an id in the
+   * cluster's view now (the view as main holds it, read again only when its time is up). Anything else is a 404 with a
+   * fixed sentence. An alert whose policy is this project's also gets the policy's conditions and documentation
+   * (kept 10 minutes), each failing into its sentence; the brief then leaves them out.
+   */
+  async item(c: ConnectedCluster, kind: "alert" | "advice", id: string): Promise<GcpClusterItem> {
+    const ref = await this.gkeOf(c);
+    if (!ref || "hint" in ref) throw fail(404, "This cluster isn't a GKE cluster of a project you chose.");
+    const v = await this.clusterView(ref);
+    if (!v.gke) throw fail(404, ITEM_GONE[kind]);
+    const where = { project: ref.project, location: ref.location, name: ref.name };
+    if (kind === "advice") {
+      const a = "error" in v.advice ? undefined : v.advice.items.find((x) => x.id === id);
+      if (!a) throw fail(404, ITEM_GONE.advice);
+      return { brief: adviceBrief(where, a) };
+    }
+    const a = "error" in v.alerts ? undefined : v.alerts.items.find((x) => x.id === id);
+    if (!a) throw fail(404, ITEM_GONE.alert);
+    if (!a.policyId) return { brief: alertBrief(where, a) };
+    const policy = await this.policy(ref.project, a.policyId);
+    return { brief: alertBrief(where, a, "error" in policy ? undefined : policy), policy };
+  }
+
+  /** An alert policy's detail (D187), kept 10 minutes (a failure a minute), at most MAX_POLICIES, read in the slot. */
+  private policy(project: string, policyId: string): Promise<Policy> {
+    const key = `${project}/${policyId}`;
+    const held = this.policies.get(key);
+    if (held && this.now() - held.at < (held.ok ? POLICY_TTL : ADVICE_FAILED_TTL)) return held.read;
+    const gen = this.gen;
+    const entry: HeldPolicy = { at: this.now(), ok: true, read: Promise.resolve({ error: "" }) };
+    entry.read = this.client()
+      .then((client) => this.slot(() => alertPolicy(client, project, policyId)))
+      .catch((e: unknown): Policy => {
+        entry.ok = false;
+        return { error: this.failed(`alert policy ${project}`, e).message };
+      })
+      .then((r) => {
+        if ((gen !== this.gen || !this.kept.projects.includes(project)) && this.policies.get(key) === entry) this.policies.delete(key);
+        return r;
+      });
+    this.policies.delete(key);
+    this.policies.set(key, entry);
+    while (this.policies.size > MAX_POLICIES) this.policies.delete(this.policies.keys().next().value!);
+    return entry.read;
   }
 
   private readAdvice(key: string, ref: GkeRef): Promise<Advice> {

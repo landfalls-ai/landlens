@@ -1,6 +1,6 @@
 // The Problems page's rules (D58, D61): the class chips, the filters, the two sections, which problems have logs, and
 // how ⌘K matches a problem. Pure, so apps/desktop/test/problems.test.ts runs them without a window.
-import type { Problem, ProblemClass } from "@landlens/contracts";
+import type { GcpAlert, Problem, ProblemClass } from "@landlens/contracts";
 import { score } from "./paletteRules";
 
 /** Chip labels, in the doctor's order (packages/kube/src/doctor.ts). */
@@ -21,7 +21,8 @@ export const CLASS_LABEL: Record<ProblemClass, string> = {
 };
 const CLASS_ORDER = Object.keys(CLASS_LABEL) as ProblemClass[];
 
-export type Severity = "all" | "bad" | "warn";
+/** The segment: all three sections, the doctor's failing or to-watch problems, or only Cloud Monitoring's alerts (D188). */
+export type Severity = "all" | "bad" | "warn" | "alerts";
 export type ProblemFilter = { severity: Severity; cls?: ProblemClass; text: string };
 
 const subjectText = (p: Problem) => `${p.title} ${p.kind} ${p.namespace ?? ""} ${p.name}`.toLowerCase();
@@ -97,4 +98,33 @@ export function badgeFor(problems: Problem[], kind?: Problem["kind"]): Badge | u
   if (bad) return { tone: "bad", n: bad };
   const warn = mine.length;
   return warn ? { tone: "warn", n: warn } : undefined;
+}
+
+/** What an alert is matched on by the toolbar's filter: its policy, its subject and its metric (D188). */
+const alertText = (a: GcpAlert) => `${a.policy} ${a.subject ? `${a.subject.kind} ${a.subject.namespace ?? ""} ${a.subject.name} ${a.subject.container ?? ""}` : a.resourceType} ${a.metric ?? ""}`.toLowerCase();
+
+/**
+ * The namespace rule (D188): with namespaces chosen, an alert shows only when its subject is in one of them; a node's,
+ * the cluster's or one with no subject only when every namespace is shown.
+ */
+export const alertInNamespaces = (a: GcpAlert, namespaces: string[]) => !namespaces.length || (!!a.subject?.namespace && namespaces.includes(a.subject.namespace));
+
+/**
+ * Cloud Monitoring's alerts the page shows (D188): All and Alerts show them, Failing and To watch hide them, as does a
+ * doctor's class chip or In triage (`doctorOnly`); then the namespace rule and the toolbar's words. Newest first, as main
+ * sorted them.
+ */
+export function filterAlerts(alerts: GcpAlert[], f: { severity: Severity; text: string; namespaces: string[]; doctorOnly?: boolean }): GcpAlert[] {
+  if (f.severity === "bad" || f.severity === "warn" || f.doctorOnly) return [];
+  const words = f.text.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return alerts.filter((a) => alertInNamespaces(a, f.namespaces) && words.every((w) => alertText(a).includes(w)));
+}
+
+/** The alert in the drawer, kept when it leaves the view (as a problem is, D59): `goneAt` is when it was first missing. */
+export type HeldAlert = { id: string; last: GcpAlert; goneAt?: number };
+export function holdAlert(held: HeldAlert | undefined, alerts: GcpAlert[] | undefined, now: number): HeldAlert | undefined {
+  if (!held || !alerts) return held;
+  const a = alerts.find((x) => x.id === held.id);
+  if (a) return a === held.last && !held.goneAt ? held : { id: a.id, last: a };
+  return held.goneAt ? held : { ...held, goneAt: now };
 }
