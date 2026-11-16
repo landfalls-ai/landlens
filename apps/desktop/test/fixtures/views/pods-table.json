@@ -1,0 +1,100 @@
+[
+  {
+    "tool": "view_context",
+    "arguments": {}
+  },
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "the test's pods",
+      "document": {
+        "schema": 1,
+        "title": "views-e2e pods",
+        "sources": {
+          "pods": {
+            "kind": "kube.list",
+            "resource": "pods",
+            "namespace": "landlens-dev",
+            "labelSelector": "app=views-e2e",
+            "fields": {
+              "name": "$name",
+              "status": "$status",
+              "restarts": "$restarts",
+              "node": "$node",
+              "age": "$age"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ]
+          },
+          "total": {
+            "kind": "kube.list",
+            "resource": "pods",
+            "namespace": "landlens-dev",
+            "labelSelector": "app=views-e2e",
+            "fields": {
+              "name": "$name"
+            },
+            "pipe": [
+              {
+                "group": {
+                  "by": [],
+                  "agg": {
+                    "count": {
+                      "fn": "count"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "blocks": [
+          {
+            "type": "stat",
+            "source": "total",
+            "field": "count",
+            "label": "Pods",
+            "span": 3,
+            "title": "Count"
+          },
+          {
+            "type": "table",
+            "source": "pods",
+            "title": "Pods",
+            "columns": [
+              {
+                "field": "name",
+                "header": "Name"
+              },
+              {
+                "field": "status",
+                "header": "Status"
+              },
+              {
+                "field": "restarts",
+                "header": "Restarts",
+                "format": "number"
+              },
+              {
+                "field": "node",
+                "header": "Node"
+              },
+              {
+                "field": "age",
+                "header": "Age",
+                "format": "age"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]

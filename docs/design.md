@@ -331,6 +331,27 @@ all N) and Recent warnings; Nodes. It reads
   **Drain…**; during the run each row's state on its right (`Clock` waiting, a spinning `LoaderCircle` evicting,
   `CircleCheck` gone in ok, `CircleSlash` blocked and `CircleX` failed in bad), the elapsed time in mono in the
   head, **Stop**; at the end the summary, **Uncordon…** and **Done**.
+- **Views** (wave 10 part 2, `ViewsPage.tsx`, `ViewBuilt.tsx`, `views.css`; [views.md](views.md)). The first
+  Workspace row (`LayoutDashboard`). Blank: one centred 640px column, an `h2` in `--t-16` "Describe what you want to
+  see on <context>.", one `--ink-2` sentence (read-only, never Secrets) and a three-line composer with the placeholder
+  "Pods that restarted today, worst first"; no dock, no chips. Building: the ask as the heading, a spinner and
+  "Claude is building…", then the tool calls as a quiet inset list (name in mono, "running"/"done"/"failed" dim),
+  **Show the chat (⌘J)** and **Start over** as links. The view: a sticky header on `--bg-1` (the title in `--t-15`
+  600, a 7px dot in `--ok` with "Live · <time>" in `--ink-3`, "vN" dim, parameters as small inset selects, then
+  Undo, Redo, **How Claude built this** (`ScrollText`, secondary) and a ⌄ menu with **New view**); a refused change
+  is one `--warn-soft` row, a link that opens its pointers in mono. Blocks on a 12-column grid with 12px gaps (span
+  from the document, a stat 3 by default; every block full width when the main column is under 720px), each a
+  `--bg-2` card with an inset `--line`, its title in `--t-125` 600 `--ink-2`, and an "Ask Claude about …" icon
+  (`MessageSquarePlus`) at .6 opacity until hover. Native blocks are plain in part 2: a table with a sticky `--bg-3`
+  head, numbers right-aligned and tabular, the first cell a `.link-btn` to the row's object and a 2px left edge in
+  `--bad` or `--warn` for a row's tone; a stat in `--t-26` 600 with its label dim; logs in mono on `--bg-0`. An app
+  block is an `AppFrame` in the quieter `.app-third` ring captioned "Built by Claude" in `--ink-3`. The chat folds to
+  a sticky strip at the bottom (`--bg-2`, radius 4, `--shadow-2`): `MessageSquare` (opens the dock, ⌘J), Claude's last
+  line (or a spinner and "Claude is working…"), and a one-line composer that can carry an "About <block>" chip; the
+  page's own colour fills the 12px below it so rows don't show through. **How Claude built this** is a 440px drawer
+  over the view: sources as inset cards (id in mono, "ok · 12 rows" dim, the source in words, its steps, whose access,
+  **As Claude wrote it** with the JSON in a mono well), **Requests** as "200 GET /api/…" lines (status in its tone),
+  custom blocks with their size and **View source**, the versions (the shown one bold) and **Copy document**.
 
 ### Tables (wave 8 part 3)
 

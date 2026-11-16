@@ -251,3 +251,13 @@ describe("D225's limits, at the limit and one past", () => {
     expect(issues(small({ sources: { prototype: { kind: "kube.list", resource: "pods" } } })).some((i) => /not an id Landlens allows|not a valid name here/.test(i))).toBe(true);
   });
 });
+
+describe("field names (security review of part 1, a note for part 2)", () => {
+  it("refuses the names every object has, so no row owns a toString or valueOf", () => {
+    for (const f of ["toString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "constructor"]) {
+      expect(issues(small({ sources: { pods: { kind: "kube.list", resource: "pods", fields: { [f]: "$name" } } } }))).toEqual([`/sources/pods/fields/${f}: not a valid name here`]);
+    }
+    expect(issues(small({ blocks: [{ type: "table", source: "pods", columns: [{ field: "valueOf" }] }] }))).toEqual(["/blocks/0/columns/0/field: not a field name Landlens allows"]);
+    ok(small({ sources: { pods: { kind: "kube.list", resource: "pods", fields: { toStringish: "$name" } } } }));
+  });
+});

@@ -1,0 +1,58 @@
+/* Landlens's MCP App views. Every colour and font comes from the MCP Apps standard variables, which the host fills
+   (Landlens maps its Iris tokens onto them); the values here are fallbacks for a host that sends none. Chart colours are
+   the view's own: Iris's validated categorical palette. */
+:root {
+  --color-background-primary: #16191F; --color-background-secondary: #1D2129; --color-background-tertiary: #0B0C0F;
+  --color-background-ghost: rgba(255,255,255,.04); --color-background-info: rgba(140,130,255,.14);
+  --color-background-danger: rgba(240,80,110,.13); --color-background-warning: rgba(240,180,41,.13); --color-background-success: rgba(46,194,126,.13);
+  --color-text-primary: #ECEEF2; --color-text-secondary: #A9B0BC; --color-text-tertiary: #727A88; --color-text-disabled: #4C5360;
+  --color-text-info: #9A90FF; --color-text-danger: #FF7A90; --color-text-warning: #F3C148; --color-text-success: #4FD496; --color-text-inverse: #FFFFFF;
+  --color-border-primary: rgba(255,255,255,.12); --color-border-secondary: rgba(255,255,255,.07);
+  --color-border-danger: #F0506E; --color-border-warning: #F0B429; --color-border-success: #2EC27E; --color-border-info: rgba(140,130,255,.45);
+  --color-ring-primary: #9A90FF; --color-background-inverse: #6F62F0;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-text-xs-size: 11px; --font-text-sm-size: 12px; --font-text-md-size: 13px; --font-text-lg-size: 15px;
+  --font-heading-sm-size: 15px; --font-weight-medium: 500; --font-weight-semibold: 600;
+  --border-radius-xs: 4px; --border-radius-sm: 6px; --border-radius-md: 8px; --border-radius-lg: 12px; --border-radius-full: 9999px;
+  --viz-1: #7D71F5; --viz-2: #D95926; --viz-3: #3987E5; --viz-4: #199E70; --viz-other: #5A6170;
+  --viz-grid: rgba(255,255,255,.06);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --color-background-primary: #FFFFFF; --color-background-secondary: #F1F2F5; --color-background-tertiary: #F3F4F6;
+  --color-background-ghost: rgba(16,20,30,.04); --color-background-info: rgba(91,77,227,.09);
+  --color-background-danger: rgba(211,47,69,.08); --color-background-warning: rgba(201,138,0,.12); --color-background-success: rgba(18,144,95,.10);
+  --color-text-primary: #14171C; --color-text-secondary: #4A5260; --color-text-tertiary: #7B8391; --color-text-disabled: #A8AEB9;
+  --color-text-info: #5546DB; --color-text-danger: #C2263C; --color-text-warning: #8F5F00; --color-text-success: #0B7A4F;
+  --color-border-primary: rgba(16,20,30,.15); --color-border-secondary: rgba(16,20,30,.085);
+  --color-border-danger: #D32F45; --color-border-warning: #C98A00; --color-border-success: #12905F; --color-border-info: rgba(91,77,227,.4);
+  --color-ring-primary: #5546DB; --color-background-inverse: #5B4DE3;
+  --viz-1: #5546DB; --viz-2: #EB6834; --viz-3: #2A78D6; --viz-4: #1BAF7A; --viz-other: #A8AEB9;
+  --viz-grid: rgba(16,20,30,.07);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--color-background-primary); }
+body { color: var(--color-text-primary); font: var(--font-text-md-size)/1.45 var(--font-sans); -webkit-font-smoothing: antialiased; }
+/* Landlens's base for a block Claude wrote (wave 10, D204): the standard variables above, plain defaults below, and
+   nothing that loads anything. Claude's own css follows this. */
+#app { padding: 12px; min-height: 48px; }
+html.fill, html.fill body { height: 100%; overflow: hidden; }
+html.fill #app { height: 100%; overflow: auto; }
+h1, h2, h3 { margin: 0 0 8px; font-weight: var(--font-weight-semibold); }
+h1 { font-size: 16px; } h2 { font-size: 14px; } h3 { font-size: 13px; }
+p { margin: 0 0 8px; }
+table { border-collapse: collapse; width: 100%; font-size: var(--font-text-sm-size); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--color-border-secondary); }
+th { color: var(--color-text-secondary); font-weight: var(--font-weight-medium); }
+.dim { color: var(--color-text-tertiary); }
+.mono { font-family: var(--font-mono); }
+.num { font-variant-numeric: tabular-nums; }
+.ok { color: var(--color-text-success); } .warn { color: var(--color-text-warning); } .bad { color: var(--color-text-danger); }
+button { font: inherit; color: inherit; background: var(--color-background-secondary); border: 1px solid var(--color-border-primary); border-radius: var(--border-radius-sm); padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--color-ring-primary); }
+.card { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.card .t { font-weight: var(--font-weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .grow { flex: 1; min-width: 0; }

@@ -2,12 +2,13 @@
 // log the MCP page and the dock read, Preview (you running a read-only tool from the MCP page), and MCP App views.
 // GitHub and Linear (Connections) and the Land family's servers (Clickland, Landflow, Landfall; docs/family.md) are
 // served after the servers you added, under their reserved names.
-import { BUILTIN_MCP_SERVER, CONN_NOTES, FAMILY_NOTES, GCP_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type FamilyInfo, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries, type Sibling } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, CONN_NOTES, FAMILY_NOTES, GCP_MCP_SERVER, VIEWS_MCP_SERVER, type AutonomyScope, type AutonomyState, type ConnInfo, type ConnProvider, type FamilyInfo, type McpAppView, type McpCall, type McpServerInfo, type McpServers, type McpTest, type McpToolResult, type MetricsSeries, type Sibling } from "@landlens/contracts";
 import { agentReadOnlyPolicy, type ClusterManager, type FrontDoor } from "@landlens/kube";
 import { frontDoorCluster, type AgentCluster } from "@landlens/kube-mcp";
-import { BuiltinUpstream, isSibling, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, WHY, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
+import { BuiltinUpstream, isBuiltin, isSibling, listingHash, McpGateway, PROVIDER_LABEL, rawError, testRemote, toolInfo, WHY, type BuiltinSpec, type GatewaySession, type RemoteSpec } from "@landlens/mcp-gateway";
 import { gcpMcpServer, type GcpReader } from "@landlens/gcp-mcp";
 import type { SessionGoogle, SessionMcp } from "@landlens/acp-host";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { AppViews, viewCsp } from "./app-views";
 import type { ClicklandSettingsStore } from "./clickland-settings";
 import { originOf, type McpServerStore } from "./mcp-store";
@@ -115,10 +116,14 @@ export class McpService {
   /** The gateway as an agent session sees it (acp-host's SessionMcp). */
   forSessions(): SessionMcp {
     return {
-      open: async ({ label, context, handle, cluster }) => {
+      open: async ({ label, context, handle, cluster, views }) => {
         const remotes = await this.remotesFor(context);
         const gcp = await this.gcpBuiltin(this.sessionCluster(handle, context, cluster.namespaces));
-        const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes, ...(gcp ? { builtins: [gcp.spec] } : {}) });
+        // A session from the Views page also gets landlens-views (wave 10, D205), built by main's ViewService.
+        const builtins: BuiltinSpec[] = [];
+        if (gcp) builtins.push(gcp.spec);
+        if (views) builtins.push({ name: VIEWS_MCP_SERVER, server: views as () => McpServer });
+        const s = await this.gateway.open({ label, context, origin: "agent", cluster, remotes, ...(builtins.length ? { builtins } : {}) });
         const providers = remotes.flatMap((r) => (r.provider && !isSibling(r.provider.id) ? [PROVIDER_LABEL[r.provider.id]] : []));
         // The Land family's servers get their own paragraph in the standing rules (D114).
         const family = remotes.flatMap((r) => (r.provider && isSibling(r.provider.id) ? [PROVIDER_LABEL[r.provider.id]] : []));
@@ -127,6 +132,7 @@ export class McpService {
         return {
           servers: s.servers(), allow: s.allow, ...(providers.length || family.length ? { providers, readsFree } : {}), ...(family.length ? { family } : {}), ...(gcp ? { gcp: gcp.projects } : {}),
           google: this.sessionGoogle(s, handle, gcp?.projects ?? [], cluster.namespaces),
+          ...(views ? { views: true } : {}),
           bind: (id) => s.bind(id), close: () => s.close(),
         };
       },
@@ -475,7 +481,7 @@ export class McpService {
     if (!call?.app || !kept) throw fail(404, "That call has no view (or it's too old to show).");
     const session = this.gateway.sessionOf(callId);
     const res = await this.gateway.appResource(session, call.server, call.app, kept.url);
-    const csp = viewCsp(res.csp, call.server === BUILTIN_MCP_SERVER ? [] : this.deps.store.appOriginsOf(call.server));
+    const csp = viewCsp(res.csp, isBuiltin(call.server) ? [] : this.deps.store.appOriginsOf(call.server));
     const view = this.views.add({ call: callId, server: call.server, tool: call.tool, html: res.html, csp });
     const t = this.gateway.tool(call.server, call.tool);
     return {
@@ -494,6 +500,8 @@ export class McpService {
   async viewCall(viewId: string, name: string, args: Record<string, unknown>): Promise<McpToolResult> {
     const v = this.views.get(viewId);
     if (!v) throw fail(404, "That view has closed.");
+    // A block of a view calls only view_data, through views:app-call (wave 10, D204).
+    if (v.block) throw fail(403, "A view's block calls its own view's data only.");
     if (!this.views.allowCall(viewId)) throw fail(429, "That view is calling tools too often.");
     const session = this.gateway.sessionOf(v.call);
     if (!session) return { content: [{ type: "text", text: "Landlens: the session this view came from has ended." }], isError: true };

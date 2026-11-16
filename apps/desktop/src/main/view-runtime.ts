@@ -513,6 +513,22 @@ export class ViewRuntime {
     return false;
   }
 
+  /**
+   * The row object a frame's link names (kind, namespace, name: all a landlens://object link carries), when it is one
+   * of the rows the view shows now; else none (D219: a frame can't aim at an object the view doesn't show).
+   */
+  findRef(viewId: string, t: { kind: string; namespace?: string; name: string }): RowRef | undefined {
+    const v = this.views.get(viewId);
+    if (!v || v.ready !== v.gen) return undefined;
+    for (const s of v.sources.values()) {
+      for (const row of s.data.rows) {
+        const r = row._ref;
+        if (r && r.kind === t.kind && r.name === t.name && (r.namespace ?? undefined) === (t.namespace ?? undefined)) return structuredClone(r);
+      }
+    }
+    return undefined;
+  }
+
   get size() {
     return this.views.size;
   }

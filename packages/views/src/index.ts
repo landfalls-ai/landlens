@@ -11,3 +11,7 @@ export * from "./transform.js";
 export * from "./schema.js";
 export * from "./patch.js";
 export * from "./projection.js";
+export * from "./history.js";
+export * from "./status.js";
+export * from "./catalog.js";
+export * from "./app/page.js";

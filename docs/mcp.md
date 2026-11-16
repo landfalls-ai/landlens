@@ -160,6 +160,19 @@ resources and anything else.
 "View from <server>" above, so a remote view never reads as Landlens's own. Their HTML is cached by the server's
 address and the resource's URI.
 
+**landlens-views** (wave 10, [views.md](views.md)) is a third built-in, beside `landlens-kube` and `landlens-gcp`,
+served in memory by the gateway and given only to a Views session (the fence allows `mcp__landlens-views` whole
+there). Its five tools are read-only; `render_view` and `patch_view` show a small card (`ui://landlens-views/card`:
+the view's title, version and blocks, **Open view**, which sends `landlens://view/<id>`; the host honours that link
+only from `landlens-views`). `view_data` is app-only. A view's custom blocks (`ui://landlens-views/<view>/<block>`)
+aren't served by the gateway: main builds each block's page and serves it as a view of its own, with no network at
+all, whatever it declares. For them the host adds three things: `ui/notifications/landlens-data` (a source's new
+data, sent after the first result, the newest of each source waiting till then); a tool filter (a block's frame may
+call only `view_data`, through `views:app-call`; anything else gets `-32601` before it leaves the window, and main's
+`mcp:app-call` refuses a block's frame); and heights from 48 to 2,000 px, or the page's height for a view's only,
+filling block (`containerDimensions.height`). An object link from a block opens only an object that is one of the
+view's rows (`views:intent`).
+
 **In the dock** only the newest view stays open; an earlier one folds to its tool row and a one-line verdict (the
 tool's first line of text), and opens again on a click. A view shows at most 320 px until **Show all**.
 

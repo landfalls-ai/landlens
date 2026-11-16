@@ -225,15 +225,72 @@ Left as they are, and why:
 
 ## Part 2: the page and Claude, with app blocks
 
-- [ ] As section 13 lists, and e2e 1–4 (without the action intent), 6, 7 and 9
-- [ ] From part 1's security review, for part 2 (not part 1 bugs):
-  - `open()` takes `namespaces` from its caller. It must come from main's record of the building session, never from
-    the page or a tool argument; omitted means the whole cluster.
-  - A push carries no version or generation, so the page can't drop a push that belongs to an older document.
-  - `VIEW_LIMITS.frameMessage` isn't applied: a source can push 2,000 rows × 24 fields × 2,000 characters a second.
-  - Field names `toString` and `valueOf` are allowed, so a row can own a non-function `toString`; `String(row)` or a
-    template literal in the renderer would throw.
-  - `REFUSED_TAGS` is a courtesy list (no `frame`, `frameset`, `portal`, `script src`); the CSP has to be the wall.
+Built 16 Nov 2026 ([views.md](../../views.md)).
+
+- [x] As section 13 lists, and e2e 1, 3, 4 (without the action intent), 6, 7 and 9 (`apps/desktop/test/views.e2e.test.ts`,
+  7 cases with the fake agent on OrbStack, plus D214's undo and redo), and the live case once with the person's Claude
+- [x] From part 1's security review, for part 2 (not part 1 bugs):
+  - [x] `open()` takes `namespaces` from main's record of the building session (`AgentService.namespacesOf`), never
+    the page or a tool argument (`views-main.test.ts`: the page asks for two, the session has one, the token has one).
+  - [x] A push carries the version it belongs to (`ViewDataPush.version`, stamped by `ViewService.onPush`); the
+    window drops one for another version or another view (`view-store.test.ts`).
+  - [x] `VIEW_LIMITS.frameMessage` is applied to every push and to a frame's first data (`fitData`: rows halved then
+    grown to fit, `truncated` and a fixed note; log lines cut from the oldest; a series dropped last).
+  - [x] Field names `toString`, `valueOf` and every other `Object.prototype` name, and `prototype`, are refused.
+  - [x] The CSP is the wall: a block's frame has `connect-src 'none'` whatever it declares; e2e 4 checks that the
+    frame's CSP violations name `connect-src` and `img-src` (Chromium's own rule against loopback requests from an
+    opaque origin would stop the probes too, so "nothing reached the listener" alone doesn't show the CSP).
+
+### Departures
+
+1. **The chat folds to a strip at the bottom edge, not a side strip.** Once a version exists the view has the page and
+   the chat is one line under it (Claude's last line, a composer, the button that opens the dock); ⌘J opens the dock
+   beside the view. The dock is the view's session (`AgentDock`'s `bound` mode), mounted from the session's start so it
+   hears every update and every question, hidden until opened; a question from the session opens it.
+2. **One open view per window**, kept in the window's store until **New view**, a reload or a disconnect; going to
+   another page and back finds it (its sources stop 30 s after the page leaves, D210).
+3. **Native blocks are plain until part 3** (`ViewBuilt.tsx`): a table of text cells, a stat, a list, log lines, the
+   doctor's rows, text, a chart's points as a small table. No `ViewHeader.tsx`: the header is part of `ViewsPage.tsx`.
+4. **Save, Export, Duplicate, tweaks, example chips and saved views are part 4's**, with the gateway's origin `"view"`
+   (only `tool` sources need it). The action and ask intents are refused until part 3.
+5. **`view_data` is answered by `ViewService` in main** (the block's frame → `views:app-call`), not through the gateway:
+   the gateway's `view_data` handler serves Claude's own session and the tool is app-only there. `mcp:app-call`
+   refuses a block's frame outright (403).
+6. **Undo and redo are built and unit-tested here** (`ViewHistory`, 20 versions, a patch must name the shown version),
+   and checked in the e2e (D214); e2e 2 (a patch's restart of undo and redo across a follow-up) stays part 3's.
+7. **View source is a `<pre>`**, not CodeMirror; **Copy document** is the only export.
+8. **`view_context`'s usage line names no source**: it says usage over time comes from Clickland, Prometheus or the
+   sampler, whichever this cluster has, and never Cloud Monitoring (a view has no Google grant), without probing which.
+9. **Opening an object from a view goes to the object's own page** (as from the Agent page), not a drawer over the view.
+10. **The fake agent's `view-script:`** reads `test/fixtures/views/<name>.json` (`pods-table`, `app-block`,
+    `hostile-block`, `bad-spec`, `configmaps-table`) and writes each answer to `fake-agent-results.jsonl`.
+11. **`view-store.test.ts` is typechecked with `tsconfig.web.json`** (it imports the window's store), and excluded from
+    `tsconfig.node.json`.
+
+### [check] items settled
+
+- **mcp-ui's older action names** (spec §1): not needed. The installed `@modelcontextprotocol/ext-apps` 1.7.5's README
+  says MCP-UI's client SDK "offers a fully-featured MCP Apps framework", so `@mcp-ui/*` speaks MCP Apps' JSON-RPC;
+  no host Landlens talks to sends `tool`, `prompt`, `link`, `intent` or `notify`, and a block that does gets
+  "Method not found" (`-32601`). No mapping was built.
+- **"SEP-1865"**: confirmed. The same README's Resources list "Specification (2026-01-26)" and "SEP-1865 Discussion"
+  (`modelcontextprotocol/modelcontextprotocol` pull request 1865). The docs cite the package, its version and the
+  protocol date, and the SEP number as the package gives it.
+
+### Checks
+
+`pnpm typecheck` 0; `pnpm -r test` (desktop 50 files, 723 tests; views 78; gateway 101 and 3 skipped; acp-host 35;
+the rest as before); `pnpm -s build` 0; `views.e2e.test.ts` 7 of 7 with the fake agent on OrbStack, and the live case
+once. Every part 2 rule was taken out once and its test failed: 23 in unit tests, and in the built app e2e 4 fails
+without `view.el`'s `on…` rule, its address rule, the block's `connect-src 'none'` and the window's tool filter.
+
+**Live (16 Nov 2026, the person's Claude through `claude-agent-acp`).** Asked "In namespace landlens-dev: how many pods
+aren't Running, and a table of the pods with their status, restarts and age, the most restarts first.", Claude
+called `view_context` and `render_view` and built "landlens-dev pods" v1 ("Not-Running count and pods table sorted by
+restarts"): three `kube.list` sources of pods in `landlens-dev` (the pods; `notrunning`, a filter then a group;
+`total`, a group), two stats (11 not Running, 25 pods) and a table "Pods by restarts" (pod, status, ready, restarts,
+age; CrashLoopBackOff and Error rows in the bad tone), in about 25 seconds, with no question asked. The view's token
+made two `GET /api/v1/namespaces/landlens-dev/pods`, both 200.
 
 ## Part 3: native blocks and actions
 

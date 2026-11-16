@@ -7,8 +7,9 @@ import * as acp from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 
 const MODEL = "claude-fake-1";
@@ -23,6 +24,44 @@ async function callKube(servers) {
   try {
     const r = await client.callTool({ name: "api_resources", arguments: {} });
     return r.isError ? "error" : "ok";
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+/**
+ * Wave 10: a prompt whose first line is `view-script: <name>` runs fixtures/views/<name>.json, an array of
+ * `{ tool, arguments }` for landlens-views, through the session's server (the real gateway), each as a tool card, and
+ * says each result. `__PROBE__`, `__WSPROBE__` and `__STUNPROBE__` in the arguments become the test's own listeners
+ * (LANDLENS_FAKE_PROBE), so a hostile block can aim at them. Results go to fake-agent-results.jsonl for the test.
+ */
+const VIEWS = join(dirname(fileURLToPath(import.meta.url)), "views");
+async function viewScript(name, s, sessionId, notify, say) {
+  const views = s.servers.find((x) => x.name === "landlens-views");
+  if (!views) return say("This session has no landlens-views.");
+  const probe = process.env.LANDLENS_FAKE_PROBE ?? "http://127.0.0.1:9";
+  const u = new URL(probe);
+  let raw = readFileSync(join(VIEWS, `${name}.json`), "utf8");
+  raw = raw.replaceAll("__PROBE__", probe).replaceAll("__WSPROBE__", `ws://${u.host}`).replaceAll("__STUNPROBE__", `stun:${u.hostname}:${process.env.LANDLENS_FAKE_STUN ?? "9"}`);
+  const steps = JSON.parse(raw);
+  const headers = Object.fromEntries((views.headers ?? []).map((h) => [h.name, h.value]));
+  const client = new Client({ name: "fake-acp-agent", version: "0.0.1" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(views.url), { requestInit: { headers } }));
+  try {
+    for (const step of steps) {
+      const toolCallId = randomUUID();
+      const title = `mcp__landlens-views__${step.tool}`;
+      await notify({ sessionUpdate: "tool_call", toolCallId, title, kind: "other", status: "in_progress", rawInput: step.arguments, _meta: { claudeCode: { toolName: title } } });
+      const r = await client.callTool({ name: step.tool, arguments: step.arguments });
+      const text = (r.content ?? []).map((c) => c.text ?? "").join("\n");
+      await notify({ sessionUpdate: "tool_call_update", toolCallId, status: r.isError ? "failed" : "completed", content: [{ type: "content", content: { type: "text", text } }] });
+      try {
+        if (s.cwd) appendFileSync(join(s.cwd, "..", "fake-agent-results.jsonl"), `${JSON.stringify({ tool: step.tool, text, isError: !!r.isError })}\n`);
+      } catch {
+        // as for prompts
+      }
+      await say(`${step.tool}: ${text.split("\n")[0]}\n`);
+    }
   } finally {
     await client.close().catch(() => {});
   }
@@ -53,7 +92,11 @@ acp
       // a folder that went is no prompt lost to the test: it then finds nothing
     }
     const say = (t) => ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } });
-    if (/^Summarise this session/.test(text)) {
+    const script = /^view-script: ([a-z0-9-]{1,40})$/m.exec(text.split("\n")[0] ?? "");
+    if (script) {
+      const notify = (update) => ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update });
+      await viewScript(script[1], s, ctx.params.sessionId, notify, say).catch((e) => say(`The script failed: ${e.message}`));
+    } else if (/^Summarise this session/.test(text)) {
       await say("Checked the cluster's API resources; ");
       await say("nothing was changed.");
     } else {

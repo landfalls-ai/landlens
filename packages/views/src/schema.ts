@@ -20,10 +20,15 @@ export const Id = z
   .regex(/^[a-z][a-z0-9-]{0,30}$/, "not an id: a lowercase letter, then letters, digits or -, at most 31")
   // Never a name every object inherits (security review of wave 10 part 1, L5).
   .refine((f) => f !== "constructor" && f !== "prototype", "not an id Landlens allows");
+/**
+ * Names every object has (toString, valueOf, hasOwnProperty, …): a row that owned one would break code that turns a
+ * row into text, in the page or in Claude's script (security review of wave 10 part 1, a note for part 2).
+ */
+const INHERITED: ReadonlySet<string> = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 export const Field = z
   .string()
   .regex(/^[a-z][A-Za-z0-9_]{0,40}$/, "not a field name: a lowercase letter, then letters, digits or _, at most 41")
-  .refine((f) => f !== "constructor" && f !== "prototype", "not a field name Landlens allows");
+  .refine((f) => !INHERITED.has(f), "not a field name Landlens allows");
 
 /** Claude's text: no control or invisible character (refused, so Claude sees why); variation selectors dropped. */
 const Text = (max: number, opts: { min?: number; lines?: boolean } = {}) =>

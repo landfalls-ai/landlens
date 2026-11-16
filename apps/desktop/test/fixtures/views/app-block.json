@@ -1,0 +1,23 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "a custom block",
+      "document": {
+        "schema": 1,
+        "title": "views-e2e, drawn by Claude",
+        "sources": {
+          "pods": { "kind": "kube.list", "resource": "pods", "namespace": "landlens-dev", "labelSelector": "app=views-e2e", "fields": { "name": "$name", "status": "$status" } }
+        },
+        "blocks": [
+          {
+            "type": "app", "id": "count", "uses": ["pods"], "title": "Pod count",
+            "html": "<div class=\"card\"><div class=\"grow\"><div class=\"t\" id=\"count\">…</div><div class=\"dim\" id=\"names\"></div></div><button id=\"open\" type=\"button\">Open the first pod</button><button id=\"pull\" type=\"button\">Read again</button></div>",
+            "css": "#count { font-size: 22px; }",
+            "js": "var first; view.onData('pods', function (d) { document.getElementById('count').textContent = 'Pods: ' + d.rows.length; document.getElementById('names').textContent = d.rows.map(function (r) { return r.name; }).join(', '); first = d.rows[0]; }); document.getElementById('open').addEventListener('click', function () { if (first) view.openObject(first._ref); }); document.getElementById('pull').addEventListener('click', function () { view.read('pods').then(function (d) { document.body.setAttribute('data-pulled', String(d && d.rows.length)); }); });"
+          }
+        ]
+      }
+    }
+  }
+]

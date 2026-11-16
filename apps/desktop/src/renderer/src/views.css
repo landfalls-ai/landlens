@@ -1,0 +1,79 @@
+/* The Views page (wave 10 part 2, docs/views.md): a blank page with one composer, then the view on a 12-column grid,
+   with the chat folded to a strip at the bottom edge (D213). Iris tokens only (docs/design.md). */
+.dock-holder { display: contents; }
+.dock-holder[hidden] { display: none; }
+
+.views-page { flex: 1; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
+.views-page.blank, .views-page.building { align-items: center; justify-content: center; padding: 24px; }
+.views-blank { width: min(640px, 100%); display: grid; gap: 14px; }
+.views-blank h2 { margin: 0; font-size: var(--t-16); font-weight: 600; color: var(--ink); }
+.views-blank > p { margin: 0; font-size: var(--t-125); }
+.views-ask { white-space: pre-wrap; overflow-wrap: anywhere; }
+.views-composer textarea { min-height: 64px; }
+.views-building { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--t-125); }
+.views-building-links { display: flex; gap: 16px; }
+.views-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; border-radius: var(--r-3); overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.views-tools li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px; background: var(--bg-2); }
+.views-tools li.tool-failed .dim { color: var(--bad-text); }
+
+.views-page.has-view { padding: 0 0 12px; }
+.views-page.has-view.with-strip { padding-bottom: 0; }
+.view-head { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: var(--bg-1); border-bottom: 1px solid var(--line); }
+.view-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.view-title h2 { margin: 0; font-size: var(--t-15); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-live { display: inline-flex; align-items: center; gap: 5px; font-size: var(--t-115); color: var(--ink-3); }
+.view-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-4); }
+.view-live .dot.on { background: var(--ok); }
+.view-param { display: inline-flex; align-items: center; gap: 6px; }
+.view-param select, .view-param input { height: 26px; padding: 0 6px; background: var(--bg-2); border: 0; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.view-head .menu-wrap { position: relative; }
+.view-head .menu { position: absolute; right: 0; top: 30px; z-index: 10; min-width: 160px; display: grid; padding: 4px; background: var(--bg-2); border-radius: var(--r-3); box-shadow: var(--shadow-2), inset 0 0 0 1px var(--line-2); }
+.view-head .menu button { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: var(--r-2); text-align: left; }
+.view-head .menu button:hover { background: var(--hover); }
+.view-refused { margin: 10px 16px 0; padding: 8px 12px; border-radius: var(--r-3); background: var(--warn-soft); }
+.view-refused ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+
+.view-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; padding: 12px 16px; align-items: start; }
+.view-grid.single { flex: 1; }
+@container main (max-width: 720px) { .view-grid > .vb { grid-column: span 12 !important; } }
+.vb { grid-column: span var(--span, 12); min-width: 0; display: grid; gap: 8px; padding: 10px 12px 12px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); }
+.vb-head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.vb-title { flex: 1; min-width: 0; font-size: var(--t-125); font-weight: 600; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-ask { opacity: .6; }
+.vb:hover .vb-ask, .vb-ask:focus-visible { opacity: 1; }
+.vb-note { display: flex; align-items: center; gap: 6px; font-size: var(--t-12); }
+.vb-table-wrap { overflow: auto; max-height: 560px; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line); }
+.vb-table { width: 100%; border-collapse: collapse; font-size: var(--t-12); }
+.vb-table th { position: sticky; top: 0; background: var(--bg-3); text-align: left; font-weight: 500; color: var(--ink-2); padding: 6px 10px; white-space: nowrap; }
+.vb-table td { padding: 5px 10px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.vb-table td.num { font-variant-numeric: tabular-nums; text-align: right; }
+.vb-table .link-btn { font-weight: 500; text-align: left; }
+.tone-row-bad td:first-child, li.tone-row-bad { box-shadow: inset 2px 0 0 var(--bad); }
+.tone-row-warn td:first-child, li.tone-row-warn { box-shadow: inset 2px 0 0 var(--warn); }
+.vb-stat-value { font-size: var(--t-26); font-weight: 600; color: var(--ink); line-height: 1.1; }
+.vb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: var(--t-125); }
+.vb-list li { padding: 3px 8px; overflow-wrap: anywhere; }
+.vb-logs { margin: 0; max-height: 420px; overflow: auto; padding: 8px 10px; font: var(--t-115)/1.55 var(--mono); background: var(--bg-0); border-radius: var(--r-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vb-text p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-13); }
+.vb-app { padding: 8px; }
+.app-third.built .app-third-cap { color: var(--ink-3); font-size: var(--t-11); }
+
+.view-strip { position: absolute; left: 16px; right: 16px; bottom: 12px; z-index: 4; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-4); background: var(--bg-2); box-shadow: var(--shadow-2), inset 0 0 0 1px var(--line-2); }
+/* The page's own colour under the strip, so rows don't show through the gap below it. */
+.view-strip::after { content: ""; position: absolute; left: -16px; right: -16px; top: 100%; height: 13px; background: var(--bg-1); }
+.views-page.has-view .view-strip { position: sticky; margin: auto 16px 12px; left: auto; right: auto; bottom: 12px; }
+.view-strip-line { flex: 0 1 38%; min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-composer { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 10px; box-shadow: inset 0 0 0 1px var(--line); }
+.strip-composer textarea { min-height: 22px; max-height: 80px; flex: 1; }
+.strip-composer .composer-foot { flex: none; }
+
+.views-drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 8; width: min(440px, 90%); }
+.views-drawer .drawer-body { overflow: auto; padding: 0 18px 18px; display: grid; gap: 10px; align-content: start; }
+.views-drawer h3 { margin: 8px 0 0; font-size: var(--t-12); color: var(--ink-3); font-weight: 600; text-transform: none; }
+.vd-source { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--r-3); box-shadow: inset 0 0 0 1px var(--line); }
+.vd-source p { margin: 0; font-size: var(--t-125); overflow-wrap: anywhere; }
+.vd-source-head { display: flex; justify-content: space-between; gap: 8px; }
+.vd-json { margin: 4px 0 0; max-height: 260px; overflow: auto; padding: 8px 10px; font: var(--t-115)/1.5 var(--mono); background: var(--bg-0); border-radius: var(--r-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vd-audit, .vd-versions { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.vd-audit li { overflow-wrap: anywhere; }
+.vd-versions li.on { font-weight: 600; }

@@ -7,12 +7,12 @@ import type { Badge } from "./health";
 import { Ic, kindIcon, MOD } from "./icons";
 import { CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import {
-  allSections, badgeWords, CLOUD, isOpen, loadNavFolds, NAV_KEY, navGroupsKey, PINNED, rollUp, setAll, shownRows, storeNavFolds, WORKSPACE,
+  allSections, badgeWords, CLOUD, isOpen, loadNavFolds, NAV_KEY, navGroupsKey, PINNED, rollUp, setAll, shownRows, storeNavFolds, WORKSPACE, WORKSPACE_PAGES,
   type NavFolds,
 } from "./navState";
 import { clusterTile } from "./present";
 
-export type Current = NavItem | "overview" | "problems" | "connections" | "mcp" | "agent" | "helm" | "gcp";
+export type Current = NavItem | "overview" | "problems" | "views" | "connections" | "mcp" | "agent" | "helm" | "gcp";
 
 /** A kind's key for pins: `group/resource`. */
 export const navKey = (n: NavItem) => `${n.type.group}/${n.type.resource}`;
@@ -307,7 +307,7 @@ export function Sidebar(props: {
   };
 
   // The blocks, in order. Overview and Problems stay above them, so folding everything never hides the total.
-  const workspaceRows = [pageRow("connections", "Connections"), pageRow("mcp", "MCP"), pageRow("agent", "Agent")];
+  const workspaceRows = WORKSPACE_PAGES.map(([page, label]) => pageRow(page, label));
   const pinnedRows = pinned.map((n) => kindRow(n, "pin:"));
   const cloudRows = [pageRow("gcp", "Google Cloud")];
   const rowsOf = (s: string, items: NavItem[]) => [...items.map((n) => kindRow(n)), ...(s === "Workloads" ? [pageRow("helm", "Helm releases")] : [])];

@@ -65,6 +65,14 @@ describe("the session fence", () => {
     expect(o.settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__clickland__list_services"]);
   });
 
+  it("allows landlens-views whole only by its exact rule, in a session from the Views page (wave 10, D205)", () => {
+    const base = { home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234, path: "/usr/bin" };
+    expect(sessionOptions(base).settings.permissions.allow).toEqual(["mcp__landlens-kube"]);
+    expect(sessionOptions({ ...base, mcpAllow: ["mcp__landlens-views"] }).settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-views"]);
+    const loose = sessionOptions({ ...base, mcpAllow: ["mcp__landlens-viewsx", "mcp__landlens-views__render_view", "mcp__landlens-v*"] });
+    expect(loose.settings.permissions.allow).toEqual(["mcp__landlens-kube"]);
+  });
+
   it("allows landlens-gcp whole only by its exact rule, when the gateway gives it (wave 6, D93)", () => {
     const base = { home: "/Users/me", cwd: "/tmp/s1", kubeconfig: "/tmp/s1/kubeconfig", token: "t".repeat(64), frontDoorPort: 51234, path: "/usr/bin" };
     expect(sessionOptions({ ...base, mcpAllow: ["mcp__landlens-gcp"] }).settings.permissions.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-gcp"]);

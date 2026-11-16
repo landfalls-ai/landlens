@@ -512,6 +512,13 @@ describe("McpService", () => {
     }
   });
 
+  it("refuses mcp:app-call to a view's block: it calls its own view's data through views:app-call only (wave 10)", async () => {
+    const { svc } = service({ n: 0, answer: async () => false });
+    const v = svc.views.add({ call: "", server: "landlens-views", tool: "render_view", html: "", csp: "", block: { view: "0123456789abcdef", block: "count" } });
+    await expect(svc.viewCall(v.id, "view_data", { source: "pods" })).rejects.toMatchObject({ status: 403 });
+    await expect(svc.viewCall(v.id, "list_resources", {})).rejects.toMatchObject({ status: 403 });
+  });
+
   it("asks about one view link at a time, at most three a minute per view", async () => {
     let release: (v: boolean) => void = () => {};
     const asked = { n: 0, answer: () => new Promise<boolean>((r) => (release = r)) };

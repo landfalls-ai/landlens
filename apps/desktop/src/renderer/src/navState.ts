@@ -8,8 +8,10 @@ import type { Badge } from "./problemRules";
 export const NAV_KEY = "landlens.nav.v1";
 export const navGroupsKey = (context: string) => `landlens.nav.groups.${context}`;
 
-/** The group above Pinned: Connections, MCP and Agent. */
+/** The group above Pinned: Views, Connections, MCP and Agent. */
 export const WORKSPACE = "Workspace";
+/** Workspace's rows, in order: Views (wave 10, D213) first. */
+export const WORKSPACE_PAGES = [["views", "Views"], ["connections", "Connections"], ["mcp", "MCP"], ["agent", "Agent"]] as const;
 export const PINNED = "Pinned";
 export const CLOUD = "Cloud";
 

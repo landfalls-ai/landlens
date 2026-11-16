@@ -1,0 +1,19 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "document": {
+        "schema": 1,
+        "title": "A view that doesn't fit",
+        "colour": "red",
+        "sources": {
+          "pods": { "kind": "kube.list", "resource": "pods", "namespace": "landlens-dev" },
+          "keys": { "kind": "kube.list", "resource": "secrets", "namespace": "landlens-dev" }
+        },
+        "blocks": [
+          { "type": "app", "id": "form", "uses": ["pods"], "html": "<form action=\"https://example.com\"><input name=\"x\"></form>" }
+        ]
+      }
+    }
+  }
+]

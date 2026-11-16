@@ -15,6 +15,8 @@ import { ConnectionsPage } from "./ConnectionsPage";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
+import { ViewsPage } from "./ViewsPage";
+import { useView, viewStore } from "./viewStore";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
@@ -89,6 +91,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [creating, setCreating] = useState(false);
   const [want, setWant] = useState<NavTarget>();
   const [dock, setDock] = useState(false);
+  // The Views page's own chat (wave 10, D213): the dock bound to the view's session, folded to a strip at first.
+  const [viewDock, setViewDock] = useState(false);
+  const viewSnap = useView();
   const [askContext, setAskContext] = useState<AskContext[]>([]);
   const [prompt, setPrompt] = useState<{ id: number; text: string; draft?: true }>();
   const [userRail, setUserRail] = useState<boolean>();
@@ -201,6 +206,13 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const helm = useMemo(() => (several && helmAll.releases ? { ...helmAll, releases: helmAll.releases.filter((r) => namespaces.includes(r.namespace)) } : helmAll), [helmAll, several, namespaces]);
   const helmSel = helmPage && helmPick ? helm.releases?.find((r) => r.namespace === helmPick.namespace && r.name === helmPick.name) : undefined;
   const agentPage = current === "agent";
+  const viewsPage = current === "views";
+  const viewInfo = viewSnap.view;
+  // On the Views page the dock is the view's; elsewhere, the ordinary one.
+  const dockShown = viewsPage ? viewDock && !!viewInfo : dock;
+  // The view's session asks the person something: its dock opens, on the Views page, so the question is seen.
+  const viewSession = viewInfo?.state?.session ?? viewInfo?.session.session;
+  useEffect(() => viewStore.onPermission((p) => p.session === viewSession && setViewDock(true)), [viewSession]);
   const nsWatch = useWatch({ handle: cluster.handle, group: "", version: "v1", resource: "namespaces" });
   const scoped = list?.type.namespaced && namespace ? namespace : undefined;
   // One namespace: its watch; two to eight: one each, merged; more: the cluster's, filtered (D158).
@@ -463,7 +475,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   // the dock alone does, and the drawer floats over the table.
   const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && (problemSel || alertSel)) || !!(gcpPage && gcpPick);
   const narrow = width.app < 1280;
-  const autoRail = dock && (drawer || narrow);
+  const autoRail = dockShown && (drawer || narrow);
   const rail = userRail ?? autoRail;
   useEffect(() => setUserRail(undefined), [dock, drawer, narrow]);
   const dockW = dockWidth(dockChosen, width.app, drawer, narrow);
@@ -500,7 +512,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       if (mod && !e.shiftKey && !e.altKey) {
         const k = e.key.toLowerCase();
         if (k === "k") return e.preventDefault(), setJump((j) => !j);
-        if (k === "j") return e.preventDefault(), setDock((d) => !d);
+        if (k === "j") return e.preventDefault(), current === "views" ? setViewDock((d) => !d) : setDock((d) => !d);
         if (k === "b") return e.preventDefault(), setUserRail(!rail);
         if (k === "1") return e.preventDefault(), pick("overview");
         if (k === "3") return e.preventDefault(), pick("problems");
@@ -539,11 +551,11 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => [...new Set([...nsWatch.items.map((n) => n.metadata.name), ...(ctxNamespace ? [ctxNamespace] : []), ...namespaces])].sort(), [nsWatch.items, ctxNamespace, namespaces]);
-  const label = list?.label ?? (mcp ? "MCP" : connPage ? "Connections" : gcpPage ? "Google Cloud" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
+  const label = list?.label ?? (viewsPage ? "Views" : mcp ? "MCP" : connPage ? "Connections" : gcpPage ? "Google Cloud" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
 
   return (
     <div ref={app}
-      className={"app" + (rail ? " sidebar-rail" : "") + (narrow ? " narrow" : "") + (dock ? " with-dock" : "") + (drawer ? " with-drawer" : "") + (bench.open ? " with-bench" : "") + (bench.open && bench.max ? " bench-max" : "") + (width.height < 760 ? " short" : "")}
+      className={"app" + (rail ? " sidebar-rail" : "") + (narrow ? " narrow" : "") + (dockShown ? " with-dock" : "") + (drawer ? " with-drawer" : "") + (bench.open ? " with-bench" : "") + (bench.open && bench.max ? " bench-max" : "") + (width.height < 760 ? " short" : "")}
       style={{
         "--dock-w": `${dockW}px`,
         ...(bench.height ? { "--bench-h": `${Math.min(bench.height, Math.max(160, width.height - 48 - 4 * 32 - 26))}px` } : {}),
@@ -573,9 +585,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage || viewsPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && !connPage && !gcpPage && (!list || list.type.namespaced) ? { namespaces: {
+          {...(!mcp && !agentPage && !connPage && !gcpPage && !viewsPage && (!list || list.type.namespaced) ? { namespaces: {
             list: nsList, value: namespaces, onChange: (ns: string[]) => leaveEdit(() => { setNamespaces(ns); setSelectedNow(undefined); setProblemSel(undefined); setAlertSel(undefined); }),
             ...(list ? { unwatched: [...(watch.left ?? []), ...(watch.refused ?? [])] } : {}),
           } } : {})}
@@ -585,10 +597,12 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             ...(list.type.group === "" && list.type.resource === "secrets" ? {} : { onAsk: askSelection }),
           } } : {})}
           {...(list || helmPage || problemsPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
-          {...(dock ? {} : { onAsk: () => setDock(true) })}
-          {...(!mcp && !agentPage && !connPage && !gcpPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
+          {...(dock || viewsPage ? {} : { onAsk: () => setDock(true) })}
+          {...(!mcp && !agentPage && !connPage && !gcpPage && !viewsPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
         />
-        {mcp ? (
+        {viewsPage ? (
+          <ViewsPage cluster={cluster} dockOpen={dockShown} onOpenDock={() => setViewDock(true)} onFoldDock={() => setViewDock(false)} onOpenObject={go} height={width.height} />
+        ) : mcp ? (
           <McpPage
             handle={cluster.handle}
             context={cluster.context}
@@ -688,7 +702,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             loading={watch.loading}
             selected={selected?.metadata.uid}
             width={width.main}
-            {...(narrow && dock && drawer ? { covered: dockW + 12 } : {})}
+            {...(narrow && dockShown && drawer ? { covered: dockW + 12 } : {})}
             oneNamespace={!!scoped}
             hidden={hidden}
             sort={sort}
@@ -813,7 +827,30 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
       <Bench bench={bench} cluster={cluster} onAsk={ask} appHeight={width.height} />
+      {viewInfo && viewSession ? (
+        // The view's session, bound (D213): mounted from its start, so it hears every turn and every question, and
+        // shown only on the Views page while you have it open; folded, the page's strip carries the chat.
+        <div className="dock-holder" hidden={!(viewsPage && viewDock)}>
+          <AgentDock
+            key={viewSession}
+            cluster={cluster}
+            context={[]}
+            onContextChange={() => {}}
+            onClose={() => setViewDock(false)}
+            onActivity={() => {}}
+            onOpenObject={go}
+            bound={{
+              info: { ...viewInfo.session, session: viewSession },
+              ask: viewInfo.state?.ask ?? viewInfo.ask,
+              busy: viewInfo.state?.busy ?? true,
+              send: (text, refs) => viewStore.send(text, refs),
+            }}
+            grip={<DockGrip width={dockW} max={dockLimit} onWidth={chooseDock} />}
+          />
+        </div>
+      ) : null}
       {dock ? (
+        <div className="dock-holder" hidden={viewsPage}>
         <AgentDock
           cluster={cluster}
           context={askContext}
@@ -826,6 +863,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onOpenSettings={() => pick("agent")}
           grip={<DockGrip width={dockW} max={dockLimit} onWidth={chooseDock} />}
         />
+        </div>
       ) : null}
       {settings ? (
         <ClicklandSettings handle={cluster.handle} context={cluster.context} onClose={() => setSettings(false)} onSaved={(v) => (setClickland(v), setMetricsVersion((n) => n + 1))} />

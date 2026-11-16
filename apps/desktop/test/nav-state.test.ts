@@ -96,3 +96,10 @@ describe("the page you are on", () => {
     expect(shownRows(rows, true, (r) => r.on).map((r) => r.k)).toEqual(["pods", "deployments", "jobs"]);
   });
 });
+
+describe("the Workspace rows (wave 10, D213)", () => {
+  it("puts Views first, above Connections, MCP and Agent", async () => {
+    const { WORKSPACE_PAGES } = await import("../src/renderer/src/navState");
+    expect(WORKSPACE_PAGES.map(([p]) => p)).toEqual(["views", "connections", "mcp", "agent"]);
+  });
+});

@@ -1,0 +1,17 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "document": {
+        "schema": 1,
+        "title": "ConfigMaps in landlens-dev",
+        "sources": {
+          "cms": { "kind": "kube.list", "resource": "configmaps", "namespace": "landlens-dev", "labelSelector": "landlens.dev/e2e=views", "fields": { "name": "$name", "note": "metadata.annotations[\"landlens.dev/note\"]" } }
+        },
+        "blocks": [
+          { "type": "table", "source": "cms", "title": "ConfigMaps", "columns": [{ "field": "name", "header": "Name" }, { "field": "note", "header": "Note" }] }
+        ]
+      }
+    }
+  }
+]

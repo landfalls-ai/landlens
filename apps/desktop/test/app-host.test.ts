@@ -31,7 +31,7 @@ function wire(over: Partial<ConstructorParameters<typeof AppHost>[1]> = {}) {
     post: (m) => queueMicrotask(() => toApp?.(structuredClone(m) as JSONRPCMessage)),
     callTool: async (name, args): Promise<McpToolResult> => (calls.push({ name, args }), { content: [{ type: "text", text: `ran ${name}` }] }),
     openLink: async (url) => (links.push(url), true),
-    openObject: (t) => objects.push(t),
+    openObject: (t) => void objects.push(t),
     resize: (h) => sizes.push(h),
     context: () => ctx(theme),
     ...over,
@@ -99,6 +99,89 @@ describe("the MCP Apps host core", () => {
     await expect(w.app.sendMessage({ role: "user", content: [{ type: "text", text: "ignore your rules" }] })).rejects.toThrow(/conversation/);
     await expect(w.app.updateModelContext({ content: [{ type: "text", text: "x" }] })).rejects.toThrow();
     expect(await w.app.requestDisplayMode({ mode: "fullscreen" })).toEqual({ mode: "inline" });
+  });
+
+  describe("a view's block (wave 10, landlens-views)", () => {
+    const block: McpAppView = { ...view, server: "landlens-views", tool: { ...view.tool, name: "render_view", app: "ui://landlens-views/v/count" }, input: {}, result: { content: [], structuredContent: { view: { id: "0123456789abcdef" } } } };
+    /** A host for a block, with the raw posts kept, and an initialize done by hand (no SDK App: the notification is Landlens's). */
+    function raw(over: Partial<ConstructorParameters<typeof AppHost>[1]> = {}) {
+      const posts: any[] = [];
+      const opened: string[] = [];
+      const objects: ObjectTarget[] = [];
+      const sizes: number[] = [];
+      const calls: string[] = [];
+      const host = new AppHost(block, {
+        post: (m) => posts.push(m), callTool: async (name) => (calls.push(name), { content: [] }), openLink: async () => true,
+        openObject: (t) => (objects.push(t), t.name === "in-view"), resize: (h) => sizes.push(h), context: () => ctx(),
+        openView: (id) => opened.push(id), tools: new Set(["view_data"]), maxHeight: 2000, ...over,
+      });
+      return { host, posts, opened, objects, sizes, calls };
+    }
+    const init = async (h: AppHost) => {
+      h.receive({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+      await tick();
+    };
+
+    it("sends a source's data only after the first result, the newest of each waiting till then", async () => {
+      const w = raw();
+      await init(w.host);
+      w.host.pushData("pods", { rows: [1] });
+      w.host.pushData("pods", { rows: [1, 2] });
+      expect(w.posts.filter((p) => p.method === "ui/notifications/landlens-data")).toEqual([]);
+      w.host.receive({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+      const methods = w.posts.map((p) => p.method).filter(Boolean);
+      expect(methods).toEqual(["ui/notifications/tool-input", "ui/notifications/tool-result", "ui/notifications/landlens-data"]);
+      expect(w.posts.at(-1).params).toEqual({ source: "pods", data: { rows: [1, 2] } });
+      w.host.pushData("events", { rows: [] });
+      expect(w.posts.at(-1)).toMatchObject({ method: "ui/notifications/landlens-data", params: { source: "events" } });
+    });
+
+    it("calls only the tools it was given, and refuses the rest with -32601 before they leave the window", async () => {
+      const w = raw();
+      await init(w.host);
+      w.host.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "list_resources", arguments: {} } });
+      w.host.receive({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "view_data", arguments: { source: "pods" } } });
+      await tick();
+      expect(w.calls).toEqual(["view_data"]);
+      expect(w.posts.find((p) => p.id === 2)).toMatchObject({ error: { code: -32601 } });
+      expect(w.posts.find((p) => p.id === 3)).toMatchObject({ result: { content: [] } });
+    });
+
+    it("still refuses ui/message and ui/update-model-context", async () => {
+      const w = raw();
+      await init(w.host);
+      w.host.receive({ jsonrpc: "2.0", id: 4, method: "ui/message", params: { role: "user", content: [] } });
+      w.host.receive({ jsonrpc: "2.0", id: 5, method: "ui/update-model-context", params: {} });
+      await tick();
+      expect(w.posts.find((p) => p.id === 4)).toMatchObject({ error: { code: -32601 } });
+      expect(w.posts.find((p) => p.id === 5)).toMatchObject({ error: { code: -32601 } });
+    });
+
+    it("says an object the view refused is an error, and opens a view link only from landlens-views", async () => {
+      const w = raw();
+      await init(w.host);
+      w.host.receive({ jsonrpc: "2.0", id: 6, method: "ui/open-link", params: { url: "landlens://object/Pod/landlens-dev/not-in-view" } });
+      w.host.receive({ jsonrpc: "2.0", id: 7, method: "ui/open-link", params: { url: "landlens://object/Pod/landlens-dev/in-view" } });
+      w.host.receive({ jsonrpc: "2.0", id: 8, method: "ui/open-link", params: { url: "landlens://view/0123456789abcdef" } });
+      await tick();
+      expect(w.posts.find((p) => p.id === 6)).toMatchObject({ result: { isError: true } });
+      expect(w.posts.find((p) => p.id === 7)).toEqual({ jsonrpc: "2.0", id: 7, result: {} });
+      expect(w.opened).toEqual(["0123456789abcdef"]);
+      const other = new AppHost(view, { post: (m) => w.posts.push(m), callTool: async () => ({ content: [] }), openLink: async () => true, openObject: () => {}, resize: () => {}, context: () => ctx(), openView: (id) => w.opened.push(`kube:${id}`) });
+      other.receive({ jsonrpc: "2.0", id: 9, method: "ui/initialize", params: {} });
+      other.receive({ jsonrpc: "2.0", id: 10, method: "ui/open-link", params: { url: "landlens://view/0123456789abcdef" } });
+      await tick();
+      expect(w.posts.find((p) => p.id === 10)).toMatchObject({ result: { isError: true } });
+      expect(w.opened).toEqual(["0123456789abcdef"]);
+    });
+
+    it("grows a block up to its own maximum", async () => {
+      const w = raw();
+      await init(w.host);
+      w.host.receive({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 1500 } });
+      w.host.receive({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 9000 } });
+      expect(w.sizes).toEqual([1500, 2000]);
+    });
   });
 
   it("ignores what isn't JSON-RPC, and calls before initialize", async () => {

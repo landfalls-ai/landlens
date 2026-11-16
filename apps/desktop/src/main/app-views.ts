@@ -19,8 +19,10 @@ const MAX_VIEWS = 40;
 
 export type View = {
   id: string;
-  /** The gateway call whose result the view shows. */
+  /** The gateway call whose result the view shows ("" for a block of a view, which is no call's). */
   call: string;
+  /** A block Claude wrote on the Views page (wave 10, D204): its view and block. Its calls and intents go to ViewService. */
+  block?: { view: string; block: string };
   server: string;
   tool: string;
   html: string;

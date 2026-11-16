@@ -121,12 +121,17 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
   main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
   only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
-- **Views on demand has only its engine** ([spec](specs/010-views/spec.md), wave 10 part 1): the view document, its
-  checks and the runtime that reads a view's sources with its own read-only token are in main, but no page, channel or
-  Claude tool opens a view yet (parts 2–4: the page and `landlens-views`, native blocks and actions, saving and the
-  connections' sources). When it does, a view shows what Claude could read, so env values show as `<redacted>` and
-  Secrets never appear; usage over time is never read from Cloud Monitoring (a view has no Google grant); a
-  workload's log follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
+- **Views on demand has its engine and its page, not yet its own blocks, actions or saving** ([views.md](views.md),
+  wave 10 parts 1–2): Claude builds a view on the Views page and it goes live, but native blocks are drawn plainly (a
+  table of text cells, a number, a chart's points as a small table) until part 3 gives them the app's table, chart
+  and log components; a view has no actions, and a block's action and ask intents are refused (part 3); a view isn't
+  kept: it lives in the window until **New view**, a reload or a disconnect, one at a time, with no Save, Export,
+  Duplicate, tweaks or example chips (part 4); it reads only this cluster, never Google Cloud, GitHub, Linear or a
+  family service (part 4). A view shows what Claude could read, so env values show as `<redacted>` and Secrets never
+  appear; usage over time is never read from Cloud Monitoring (a view has no Google grant); a workload's log follows
+  at most five started pods; the doctor's problems are polled every 15 s, not pushed. Opening an object from a view
+  leaves the Views page for the object's own (the view is there when you come back). **View source** in How Claude
+  built this is plain text, not the editor.
 - **A private key logged a line at a time is redacted from its BEGIN to its END, up to 200 lines** (wave 10 part 1's
   review, M1): a longer one shows its lines past the 200th, and a followed read whose tail begins at a key's last body
   line when that line is shorter than 16 characters shows that line (a few bytes). The front door holds a followed

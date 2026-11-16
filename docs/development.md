@@ -205,6 +205,18 @@ applies a throwaway Deployment (busybox, `IfNotPresent`) and ConfigMap named `vi
 `scenario=view-check`) in `landlens-dev`, scales the Deployment once, reads Helm's `landlens-demo`, and deletes both by
 label at the end. Desktop's `pnpm test` skips `*.integration.test.ts`.
 
+Part 2 ([views.md](views.md#tests)): `packages/views/test/server.test.ts` (the tools, versions, status lines, the
+frame's cut, a block's page), the gateway's "built-ins: landlens-views", acp-host's fence and prompt tests, and in
+desktop `views-main.test.ts` (`ViewService` with a fake agent and the real `ViewRuntime`), `views-ipc.test.ts` (the
+channels' Secrets check, electron mocked), `view-store.test.ts` (the window's store; typechecked with
+`tsconfig.web.json`), `app-host.test.ts` and `mcp-main.test.ts`. The e2e `test/views.e2e.test.ts` drives the built app
+with the fake agent: a prompt whose first line is `view-script: <name>` makes `fake-acp-agent.mjs` call
+`landlens-views` through the real gateway with `test/fixtures/views/<name>.json` (`__PROBE__`, `__WSPROBE__` and
+`__STUNPROBE__` become the test's own loopback listeners, `LANDLENS_FAKE_PROBE` and `LANDLENS_FAKE_STUN`) and write
+each answer to `fake-agent-results.jsonl` beside the session folders. It makes and removes a Deployment `views-e2e`
+and a ConfigMap in `landlens-dev`. With `LANDLENS_INTEGRATION=orbstack,claude`, `-t "live: Claude"` asks your own
+Claude for a view of `landlens-dev` and, with `LANDLENS_SHOTS`, writes what it built to `w10p2-live-view.json`.
+
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
 every request (`/_fake/state`). The fake Landfall records any trigger, timeline or artifact request in `forbidden`.

@@ -1132,6 +1132,97 @@ export type HelmReleaseDetail = {
 export type TerminalEnd = "exit" | "lost" | "refused";
 export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
 
+// Views on demand (wave 10, docs/specs/010-views): what a view's sources deliver. The view document's own schema and
+// type are in @landlens/views (it needs these names, so a re-export here would make the two packages a cycle).
+/** A view's id: 16 hex characters, made by main. */
+export const ViewId = z.string().regex(/^[0-9a-f]{16}$/, "not a view id");
+export type ViewId = z.infer<typeof ViewId>;
+/**
+ * The object a row of a `kube.*` source is (D207): built by main from the object itself, never from the document's
+ * fields, so opening or acting on a row can't be pointed elsewhere.
+ */
+export const RowRef = z.object({
+  group: GroupName,
+  version: VersionName,
+  resource: ResourceName,
+  kind: KindName,
+  namespace: NamespaceName.optional(),
+  name: ObjectName,
+}).strict();
+export type RowRef = z.infer<typeof RowRef>;
+/** One value of a row: strings are cleaned and cut to 2,000 characters by main. */
+export type ViewCell = string | number | boolean | null;
+export type ViewTone = "ok" | "warn" | "bad" | "muted";
+/** A row: the source's fields, plus the hidden `_ref` (kube rows) and `_tone`. */
+export type ViewRow = { [field: string]: ViewCell | RowRef | undefined; _ref?: RowRef; _tone?: ViewTone };
+/**
+ * loading (nothing read yet); ok; forbidden (the view's scope or your RBAC); unknown (the cluster has no such kind);
+ * unavailable (the cluster has no metrics-server, say); off (a connection isn't readable now); error (a read failed).
+ * Anything but ok comes with one of D222's fixed sentences in `message`, so an empty list is never an all-clear.
+ */
+export type ViewSourceState = "loading" | "ok" | "forbidden" | "unknown" | "unavailable" | "off" | "error";
+export type ViewLogLine = { n: number; text: string; failure: boolean };
+export type SourceData = {
+  state: ViewSourceState;
+  /** One of D222's fixed sentences: why the state isn't ok, or what was left out when `truncated`. */
+  message?: string;
+  rows: ViewRow[];
+  /** Rows before the 2,000-row cut (or lines, for a log). */
+  total: number;
+  /** Something was left out: rows past 2,000, objects past 10,000, a log's older lines, a doctor check not made. */
+  truncated: boolean;
+  /** When main last changed this (ms), 0 before the first read. */
+  at: number;
+  series?: MetricsSeries;
+  lines?: ViewLogLine[];
+};
+
+
+/** Landlens's own server for the Views page (wave 10, D205): built per session in main, allowed whole. */
+export const VIEWS_MCP_SERVER = "landlens-views";
+/** A block's id or a source's id in a view document (packages/views' Id), for the channels. */
+export const ViewPartId = z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, "not an id");
+/** A source's state and counts (no row of it): what the page's header and the disclosure show, and what Claude gets. */
+export type ViewSourceStatus = { state: ViewSourceState; message?: string; rows: number; total: number; truncated: boolean; at: number };
+/** One version of a view (D214): Claude's render or patch, with its note; the person moves between them. */
+export type ViewVersion = { version: number; parent?: number; note?: string; at: number; by: "claude" };
+/**
+ * A view as the page shows it (D213, D214): the shown version's document (validated in main; the page draws it as
+ * text or a sandboxed frame only), its sources' states, the versions kept, and Claude's last change that didn't fit.
+ */
+export type ViewState = {
+  id: string;
+  /** The agent session bound to it (D213). */
+  session: string;
+  context: string;
+  /** The building session's namespace limit (main's record, never the page's word). */
+  namespaces?: string[];
+  title: string;
+  /** The shown version; 0 before Claude's first render_view. */
+  version: number;
+  /** Who chose the shown version: Claude's last change, or you with Undo and Redo. */
+  shownBy: "claude" | "you";
+  canUndo: boolean;
+  canRedo: boolean;
+  versions: ViewVersion[];
+  /** The shown version's document (packages/views' ViewDocument, as JSON). */
+  document?: unknown;
+  params: Record<string, string>;
+  sources: Record<string, ViewSourceStatus>;
+  /** Claude's last render or patch that was refused (D222): its problems, in Landlens's sentences. */
+  refused?: { at: number; issues: string[] };
+  /** What the person first asked for (the page's heading while Claude builds). */
+  ask: string;
+  /** A question to the view's session is running. */
+  busy: boolean;
+  /** The session's last turn failed (its words, as the dock shows them). */
+  failed?: string;
+};
+/** A source's new data for the page (D210), stamped with the view's version so the page drops a push of an older one. */
+export type ViewDataPush = { view: string; version: number; source: string; data: SourceData };
+/** A front-door request made with a view's token (the disclosure, D223). */
+export type ViewAuditEntry = { at: string; method: string; path: string; allowed: boolean; status?: number; reason?: string };
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -1340,6 +1431,20 @@ export const channels = {
   "gcp:cluster-view": z.object({ handle: Handle, fresh: z.boolean().optional() }).strict(),
   /** One alert's or suggestion's detail and brief (D187): only an id in that handle's current view is answered. */
   "gcp:cluster-item": z.object({ handle: Handle, kind: z.enum(["alert", "advice"]), id: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/) }).strict(),
+  // Views on demand (wave 10, docs/views.md). A view's namespaces come from main's record of the session that builds
+  // it, never from a later request; views:start's `namespaces` limits that session, as agent:start's does.
+  "views:start": z.object({ handle: Handle, namespaces: z.array(NamespaceName).min(1).max(20).optional(), text: z.string().min(1).max(20_000) }).strict(),
+  "views:prompt": z.object({ view: ViewId, text: z.string().min(1).max(20_000), context: z.array(ResourceRef).max(10).optional(), block: ViewPartId.optional() }).strict(),
+  "views:get": z.object({ view: ViewId }).strict(),
+  "views:version": z.object({ view: ViewId, to: z.number().int().min(1).max(1_000_000) }).strict(),
+  "views:param": z.object({ view: ViewId, name: ViewPartId, value: z.string().max(253) }).strict(),
+  "views:refresh": z.object({ view: ViewId }).strict(),
+  "views:visible": z.object({ view: ViewId, visible: z.boolean() }).strict(),
+  "views:close": z.object({ view: ViewId }).strict(),
+  "views:app-open": z.object({ view: ViewId, block: ViewPartId }).strict(),
+  "views:app-call": z.object({ frame: McpViewId, name: McpToolName, arguments: z.record(z.string(), z.unknown()).optional() }).strict(),
+  "views:intent": z.object({ frame: McpViewId, url: z.string().min(1).max(2000) }).strict(),
+  "views:audit": z.object({ view: ViewId }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1476,6 +1581,20 @@ export type Responses = {
   "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
   "gcp:cluster-view": GcpClusterView;
   "gcp:cluster-item": GcpClusterItem;
+  /** The new view (no version until Claude's first render_view) and the session bound to it, for the dock. */
+  "views:start": { view: string; session: AgentSessionInfo };
+  "views:prompt": { stopReason: string };
+  "views:get": ViewState;
+  "views:version": ViewState;
+  "views:param": ViewState;
+  "views:refresh": { ran: boolean };
+  "views:visible": { ok: true };
+  "views:close": { ok: true };
+  "views:app-open": McpAppView;
+  "views:app-call": McpToolResult;
+  /** What the page may open for a frame's intent: only an object that is one of the view's rows (D219). */
+  "views:intent": { object?: RowRef };
+  "views:audit": { label: string; entries: ViewAuditEntry[] };
 };
 
 /** A tool as the MCP page shows it. */
@@ -1896,58 +2015,13 @@ export type AgentStatus =
   | { state: "starting" | "ready" }
   | { state: "stopped"; message: string }
   | { state: "answered"; request: string };
-// Views on demand (wave 10, docs/specs/010-views): what a view's sources deliver. The view document's own schema and
-// type are in @landlens/views (it needs these names, so a re-export here would make the two packages a cycle).
-/** A view's id: 16 hex characters, made by main. */
-export const ViewId = z.string().regex(/^[0-9a-f]{16}$/, "not a view id");
-export type ViewId = z.infer<typeof ViewId>;
-/**
- * The object a row of a `kube.*` source is (D207): built by main from the object itself, never from the document's
- * fields, so opening or acting on a row can't be pointed elsewhere.
- */
-export const RowRef = z.object({
-  group: GroupName,
-  version: VersionName,
-  resource: ResourceName,
-  kind: KindName,
-  namespace: NamespaceName.optional(),
-  name: ObjectName,
-}).strict();
-export type RowRef = z.infer<typeof RowRef>;
-/** One value of a row: strings are cleaned and cut to 2,000 characters by main. */
-export type ViewCell = string | number | boolean | null;
-export type ViewTone = "ok" | "warn" | "bad" | "muted";
-/** A row: the source's fields, plus the hidden `_ref` (kube rows) and `_tone`. */
-export type ViewRow = { [field: string]: ViewCell | RowRef | undefined; _ref?: RowRef; _tone?: ViewTone };
-/**
- * loading (nothing read yet); ok; forbidden (the view's scope or your RBAC); unknown (the cluster has no such kind);
- * unavailable (the cluster has no metrics-server, say); off (a connection isn't readable now); error (a read failed).
- * Anything but ok comes with one of D222's fixed sentences in `message`, so an empty list is never an all-clear.
- */
-export type ViewSourceState = "loading" | "ok" | "forbidden" | "unknown" | "unavailable" | "off" | "error";
-export type ViewLogLine = { n: number; text: string; failure: boolean };
-export type SourceData = {
-  state: ViewSourceState;
-  /** One of D222's fixed sentences: why the state isn't ok, or what was left out when `truncated`. */
-  message?: string;
-  rows: ViewRow[];
-  /** Rows before the 2,000-row cut (or lines, for a log). */
-  total: number;
-  /** Something was left out: rows past 2,000, objects past 10,000, a log's older lines, a doctor check not made. */
-  truncated: boolean;
-  /** When main last changed this (ms), 0 before the first read. */
-  at: number;
-  series?: MetricsSeries;
-  lines?: ViewLogLine[];
-};
-
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
-  "family:update", "action:progress",
+  "family:update", "action:progress", "views:state", "views:data",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

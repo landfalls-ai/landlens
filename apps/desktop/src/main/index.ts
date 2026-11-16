@@ -25,6 +25,7 @@ import { connectionOverrides, ConnectionsService } from "./connections";
 import { connectedOf, gcpMode, GcpService } from "./gcp";
 import { cloudMonitoringSource, sessionSeries } from "./metrics-source";
 import { ViewRuntime } from "./view-runtime";
+import { ViewService } from "./views";
 import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
 import { FamilySentStore } from "@landlens/connections";
@@ -58,6 +59,8 @@ async function start() {
   hardenSession();
   const binary = sidecarBinary();
   let mcp: McpService | undefined;
+  /** The Views page's main side (wave 10 part 2), once made: the runtime's pushes and the front door's audit reach it. */
+  let viewService: ViewService | undefined;
   /** The agent service, once made: the gateway's autonomy pushes go through it (M1 of the wave 7 part 2 review). */
   let agentRef: AgentService | undefined;
   /** Landlens's own telemetry (wave 7 part 5): off until the person turns it on. */
@@ -68,6 +71,7 @@ async function start() {
   const nodeWrites = nodeWritesFrom(process.env, app.isPackaged);
   const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => {
     mcp?.onAudit(e);
+    viewService?.onAudit(e);
     telemetry?.audit(e);
   }, { nodeWrites });
   await frontDoor.start();
@@ -109,9 +113,8 @@ async function start() {
   // series reads from the cluster is read as the session. The usage numbers are Clickland's, Prometheus's, the shared
   // sampler's, or Cloud Monitoring's only for a project of the session's Google grant, holding its autonomy first (D194).
   const series = sessionSeries(metrics);
-  // Views on demand (wave 10, docs/specs/010-views): each open view reads with its own read-only front-door token,
-  // labelled `view · <context>`. Part 1 is the engine only: nothing opens a view until part 2 gives the page its
-  // channels, so its pushes go nowhere yet.
+  // Views on demand (wave 10, docs/views.md): each open view reads with its own read-only front-door token, labelled
+  // `view · <context>`. ViewService (below) opens them for the Views page and passes their pushes on.
   const views = new ViewRuntime({
     clusters,
     frontDoor,
@@ -120,7 +123,7 @@ async function start() {
     helm: (handle, namespace) => listReleases(clusters.get(handle).client, namespace),
     // Usage over time as a Claude session reads it, through the view's token, with no Google grant (D194).
     metrics: (handle, r, read) => series(handle, r, read),
-    push: () => {},
+    push: (p) => viewService?.onPush(p),
   });
   const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
   // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
@@ -354,10 +357,13 @@ async function start() {
   });
   liveDrains = () => actions.liveRuns();
   endDrains = () => actions.quit();
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets, gkeHandles);
+  viewService = new ViewService({ runtime: views, agent, frames: mcp.views, clusters, push: send, log: (l) => console.warn(l) });
+  const viewsSvc = viewService;
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets, gkeHandles, viewService);
   const service = mcp;
   shutdown = async () => {
     await secrets.quit();
+    viewsSvc.closeAll();
     views.closeAll();
     forwards.stopAll();
     metrics.stopAll();
@@ -390,15 +396,18 @@ async function start() {
   win.webContents.on("did-start-navigation", (d) => {
     if (d.isMainFrame && !d.isSameDocument) {
       void agent.closeAll();
+      viewsSvc.closeAll();
       views.closeAll();
     }
   });
   win.webContents.on("render-process-gone", () => {
     void agent.closeAll();
+    viewsSvc.closeAll();
     views.closeAll();
   });
   win.webContents.on("destroyed", () => {
     void agent.closeAll();
+    viewsSvc.closeAll();
     views.closeAll();
   });
   if (DEV_URL) await win.loadURL(DEV_URL);

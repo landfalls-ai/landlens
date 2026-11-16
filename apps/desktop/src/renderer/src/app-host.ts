@@ -12,6 +12,8 @@ import type { McpAppView, McpToolResult } from "@landlens/contracts";
 export const PROTOCOL_VERSION = "2026-01-26";
 export const MIN_HEIGHT = 48;
 export const MAX_HEIGHT = 640;
+/** A block Claude wrote, on the Views page (wave 10, D204): as tall as it says, up to this. */
+export const VIEW_MAX_HEIGHT = 2000;
 /** Larger messages from a view are dropped. */
 const MAX_MESSAGE = 1_000_000;
 
@@ -20,7 +22,8 @@ export type HostContext = {
   styles: { variables: Record<string, string> };
   displayMode: "inline";
   availableDisplayModes: ["inline"];
-  containerDimensions: { maxHeight: number; width?: number };
+  /** `height`: a fixed height (a Views page block that fills the page); otherwise the view grows up to maxHeight. */
+  containerDimensions: { maxHeight: number; width?: number; height?: number };
   locale: string;
   timeZone: string;
   platform: "desktop";
@@ -35,8 +38,20 @@ export type HostDeps = {
   callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
   /** https only; main shows the host and asks you. */
   openLink(url: string): Promise<boolean>;
-  /** Move the main view to an object (the view's "Open in Landlens"). */
-  openObject(t: ObjectTarget): void;
+  /**
+   * Move the main view to an object (the view's "Open in Landlens"). A block of a view answers false when main says the
+   * object isn't one of the view's rows (D219): then nothing opens.
+   */
+  openObject(t: ObjectTarget): void | boolean | Promise<boolean>;
+  /** landlens://view/<id> from Landlens's own card (landlens-views only): show that view. */
+  openView?(id: string): void;
+  /**
+   * The tools the view may call. A block of a view may call only view_data (D204): every other name is refused with
+   * -32601 here, and again in main.
+   */
+  tools?: ReadonlySet<string>;
+  /** The tallest the frame may be (MAX_HEIGHT in the dock; VIEW_MAX_HEIGHT on the Views page). */
+  maxHeight?: number;
   resize(height: number): void;
   /** A key typed in the view that the app answers (Escape, ⌘/Ctrl chords): replay it in the host. */
   key?(k: ViewKey): void;
@@ -56,6 +71,7 @@ export function viewKey(p: Record<string, unknown>): ViewKey | undefined {
 
 type Msg = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown; result?: unknown; error?: unknown };
 
+const VIEW_LINK = /^landlens:\/\/view\/([0-9a-f]{16})$/;
 const OBJECT_LINK = /^landlens:\/\/object\/([A-Za-z][A-Za-z0-9]{0,62})\/([a-z0-9][a-z0-9.-]{0,252}|_)\/([a-z0-9][a-z0-9.:-]{0,252})$/;
 
 /** landlens://object/<Kind>/<namespace or _>/<name>, the one non-https link a view may ask for. */
@@ -99,6 +115,18 @@ export class AppHost {
     void this.request(m.id, m.method, params);
   }
 
+  /**
+   * A source's new data for a block of a view: `ui/notifications/landlens-data`, a Landlens extension (the 2026-01-26
+   * protocol has no host-to-view update after the first result). Only after the view has its first result.
+   */
+  pushData(source: string, data: unknown): void {
+    if (this.closed) return;
+    // Before the first result is out, the newest of each source waits, and follows the result.
+    if (!this.delivered) return void this.queued.set(source, data);
+    this.notify("ui/notifications/landlens-data", { source, data });
+  }
+  private readonly queued = new Map<string, unknown>();
+
   /** The theme or size changed: tell the view. */
   contextChanged(): void {
     if (this.initialized && !this.closed) this.notify("ui/notifications/host-context-changed", this.deps.context());
@@ -128,10 +156,12 @@ export class AppHost {
         // What the tool was called with, then what it returned: the view renders from these.
         this.notify("ui/notifications/tool-input", { arguments: this.view.input });
         this.notify("ui/notifications/tool-result", this.view.result);
+        for (const [source, data] of this.queued) this.notify("ui/notifications/landlens-data", { source, data });
+        this.queued.clear();
         return;
       case "ui/notifications/size-changed": {
         const h = Number(params.height);
-        if (Number.isFinite(h)) this.deps.resize(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(h))));
+        if (Number.isFinite(h)) this.deps.resize(Math.max(MIN_HEIGHT, Math.min(this.deps.maxHeight ?? MAX_HEIGHT, Math.ceil(h))));
         return;
       }
       case "ui/notifications/landlens-key": {
@@ -170,13 +200,16 @@ export class AppHost {
           const name = typeof params.name === "string" ? params.name : "";
           const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? (params.arguments as Record<string, unknown>) : {};
           if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name)) return err(-32602, "Invalid tool name");
+          if (this.deps.tools && !this.deps.tools.has(name)) return err(-32601, "Landlens doesn't offer that tool to this view");
           return ok(await this.deps.callTool(name, args));
         }
         case "ui/open-link": {
           const url = typeof params.url === "string" ? params.url : "";
           const target = objectLink(url);
-          if (target) {
-            this.deps.openObject(target);
+          if (target) return ok((await this.deps.openObject(target)) === false ? { isError: true } : {});
+          const view = VIEW_LINK.exec(url);
+          if (view && this.deps.openView && this.view.server === "landlens-views") {
+            this.deps.openView(view[1]!);
             return ok({});
           }
           if (!/^https:\/\//i.test(url)) return ok({ isError: true });

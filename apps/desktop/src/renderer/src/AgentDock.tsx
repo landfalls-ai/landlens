@@ -13,6 +13,7 @@ import { BrainSheet, SessionMenu, SummaryStrip, useReportable } from "./BrainShe
 import type { ObjectTarget } from "./app-host";
 import { contextIcon, Ic, kindIcon } from "./icons";
 import { hasView, useMcpCalls } from "./mcpStore";
+import { viewStore } from "./viewStore";
 import { slashOptions, slashQuery, SlashMenu, type AgentCommand, type SlashOption } from "./SlashMenu";
 
 export type { AskContext } from "./quotes";
@@ -47,7 +48,14 @@ export function AgentDock(props: {
   onOpenSettings?: () => void;
   /** The left edge's resize grip (wave 6). */
   grip?: React.ReactNode;
+  /**
+   * Bound to a view's session (the Views page, wave 10 D213): the page owns the session, so the dock neither starts
+   * nor closes one, offers no new session or history, replays what the session said before it was there, and sends
+   * through the view (views:prompt, which attaches the shown version). `busy` is main's word for the view's turn.
+   */
+  bound?: { info: AgentSessionInfo; ask: string; busy: boolean; send: (text: string, refs: ResourceRef[]) => Promise<{ stopReason: string } | undefined> };
 }) {
+  const bound = props.bound;
   const [info, setInfo] = useState<AgentSessionInfo>();
   const [failed, setFailed] = useState<string>();
   const [attempt, setAttempt] = useState(0);
@@ -134,6 +142,25 @@ export function AgentDock(props: {
       }
     });
     let closed = false;
+    if (bound) {
+      // The view's session: shown from what it said so far, then live; the page closes it, not the dock.
+      session.current = bound.info.session;
+      setInfo(bound.info);
+      setMode(bound.info.mode?.current);
+      setItems([{ type: "user", text: bound.ask, context: [] }]);
+      for (const u of viewStore.recent(bound.info.session)) apply(u.update);
+      setAsks(viewStore.asks(bound.info.session));
+      const offAsk2 = viewStore.onAsk((s, text) => s === session.current && setItems((xs) => [...xs, { type: "user", text, context: [] }]));
+      return () => {
+        offAsk2();
+        offUpdate();
+        offAsk();
+        offChange();
+        offStatus();
+        offAutonomy();
+        session.current = undefined;
+      };
+    }
     const resume = opening.resume;
     if (resume) {
       // Replayed updates come before agent:resume answers: take them for this session at once.
@@ -174,7 +201,12 @@ export function AgentDock(props: {
       if (session.current) void api.invoke("agent:close", { session: session.current }).catch(() => {});
       session.current = undefined;
     };
-  }, [props.cluster.handle, attempt, opening.n]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [props.cluster.handle, attempt, opening.n, bound?.info.session]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A bound dock's turn is the view's: main says when it runs (the first ask went with views:start, not from here).
+  useEffect(() => {
+    if (bound) setBusy(bound.busy);
+  }, [bound?.busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** A change arrived or moved on: keep the newest copy; announce arrivals and verdicts (D8, D46). */
   function change(c: AgentChange) {
@@ -314,13 +346,15 @@ export function AgentDock(props: {
     // Nothing about a Secret goes (D166).
     const context = sendable(props.context, info?.namespaces);
     const item = { type: "user" as const, text, context };
-    setItems((xs) => [...xs, item]);
+    if (!bound) setItems((xs) => [...xs, item]);
     setDraft("");
     props.onContextChange([]);
     setBusy(true);
     try {
       const refs = context.flatMap((c) => (c.ref ? [c.ref] : []));
-      const r = await api.invoke("agent:prompt", { session: s, text: withQuotes(text, context), ...(refs.length ? { context: refs } : {}) });
+      const r = bound
+        ? ((await bound.send(withQuotes(text, context), refs)) ?? { stopReason: "end_turn" })
+        : await api.invoke("agent:prompt", { session: s, text: withQuotes(text, context), ...(refs.length ? { context: refs } : {}) });
       if (r.stopReason === "cancelled") setItems((xs) => [...xs, { type: "note", text: "Stopped." }]);
       else if (r.stopReason !== "end_turn") setItems((xs) => [...xs, { type: "note", text: `Ended: ${r.stopReason}` }]);
     } catch (e) {
@@ -491,6 +525,7 @@ export function AgentDock(props: {
   );
   const placeholder = waiting.length ? `Or tell ${agent} what to change instead…`
     : asks.length ? `Reply to ${agent}…`
+      : bound ? "Ask for a change to this view"
       : props.context.length ? "What do you want to know about it?"
         : commands.length ? "Ask about this cluster, or / for commands" : "Ask about this cluster";
   const noting = waiting.length > 0 && draft.trim().length > 0;
@@ -520,8 +555,8 @@ export function AgentDock(props: {
             )}
           </div>
         </div>
-        <button className="icon-btn" aria-label="New session" title="New session" onClick={() => requestSwitch({ n: opening.n + 1 })}><Ic icon={SquarePen} size={15} /></button>
-        {!panel ? <button className="icon-btn" aria-label="History" title="History" onClick={() => setPanel("history")}><Ic icon={History} size={15} /></button> : null}
+        {!bound ? <button className="icon-btn" aria-label="New session" title="New session" onClick={() => requestSwitch({ n: opening.n + 1 })}><Ic icon={SquarePen} size={15} /></button> : null}
+        {!panel && !bound ? <button className="icon-btn" aria-label="History" title="History" onClick={() => setPanel("history")}><Ic icon={History} size={15} /></button> : null}
         {!panel && info ? (
           <SessionMenu session={info.session} can={reportable} onSummary={() => setBrainSheet(true)}
             onNote={(n) => setItems((xs) => [...xs, { type: "note", text: n.text, ...(n.tone === "ok" ? {} : { tone: n.tone }) }])} />
