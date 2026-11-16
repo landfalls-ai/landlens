@@ -188,7 +188,9 @@ export function ViewsPage(props: {
   const { tools, line } = useSessionLines(session);
   const [disclose, setDisclose] = useState(false);
   const [refusedOpen, setRefusedOpen] = useState(false);
-  const [about, setAbout] = useState<{ block: string; title: string }>();
+  const [about, setAbout] = useState<{ block: string; title: string; version: number }>();
+  // "About <block>" names a block of the version shown when it was chosen: another version drops the chip (L6).
+  useEffect(() => setAbout((a) => (a && a.version !== st?.version ? undefined : a)), [st?.version]);
   const [menu, setMenu] = useState(false);
   const page = useRef<HTMLDivElement>(null);
   const data = (s: string) => viewStore.data(s);
@@ -301,7 +303,7 @@ export function ViewsPage(props: {
       <div className={"view-grid" + (single ? " single" : "")}>
         {blocks.map((b, i) => (
           <ViewBlock key={`${st.version}-${i}`} view={v!.id} version={st.version} b={b} i={i} data={data} single={single} height={fillHeight}
-            onOpenObject={props.onOpenObject} onAsk={(block, title) => (setAbout({ block, title }), props.onFoldDock())} />
+            onOpenObject={props.onOpenObject} onAsk={(block, title) => (setAbout({ block, title, version: st.version }), props.onFoldDock())} />
         ))}
       </div>
       {!props.dockOpen ? (
@@ -311,7 +313,7 @@ export function ViewsPage(props: {
           <Composer label="Ask Claude" placeholder="Ask for a change, or about what you see" busy={st.busy}
             {...(about ? { chip: { title: about.title, clear: () => setAbout(undefined) } } : {})}
             onSend={(t) => {
-              void viewStore.send(t, [], about?.block).catch(() => {});
+              void viewStore.send(t, [], about ? { block: about.block, version: about.version } : undefined).catch(() => {});
               setAbout(undefined);
             }} />
         </div>

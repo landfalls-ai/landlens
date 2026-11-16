@@ -185,7 +185,7 @@ describe("MCP App views on landlens-app:", () => {
 });
 
 describe("McpService", () => {
-  const service = (asked: { n: number; answer: () => Promise<boolean> }) => {
+  const service = (asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } }) => {
     const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
     const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
     const svc = new McpService({
@@ -195,7 +195,7 @@ describe("McpService", () => {
       clusters: { onGone: () => {} } as never,
       metrics: async () => { throw new Error("no metrics"); },
       push: () => {},
-      ask: { confirm: () => (asked.n++, asked.answer()), openExternal: async () => {} },
+      ask: { confirm: (q: { message: string; detail: string }) => (asked.n++, (asked.q = q), asked.answer()), openExternal: async () => {} },
     });
     return { st, svc };
   };
@@ -536,5 +536,30 @@ describe("McpService", () => {
     await expect(svc.viewLink(v.id, "http://example.com/")).rejects.toMatchObject({ status: 429 });
     const w = svc.views.add({ call: "c2", server: "s", tool: "t", html: "", csp: "" });
     await expect(svc.viewLink(w.id, "http://example.com/")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("shows a view's link whole or not at all, and names a block as Claude's, not Landlens's (review of wave 10 part 2, M2)", async () => {
+    const asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } } = { n: 0, answer: async () => false };
+    const { svc } = service(asked);
+    const b = svc.views.add({ call: "", server: "landlens-views", tool: "render_view", html: "", csp: "", block: { view: "0123456789abcdef", block: "count", caption: "Pods in landlens-dev · Pod count" } });
+    // 480 harmless characters of path, then the rows: refused, and no dialog was shown.
+    const long = `https://docs.example.com/${"a".repeat(480)}?d=${"r".repeat(700)}`;
+    await expect(svc.viewLink(b.id, long)).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/1,2\d\d characters/) });
+    expect(asked.n).toBe(0);
+    const short = "https://docs.example.com/pods?d=abc";
+    expect(await svc.viewLink(b.id, short)).toBe(false);
+    expect(asked.n).toBe(1);
+    expect(asked.q!.detail).toBe(`A block Claude built on the Views page (Pods in landlens-dev · Pod count) wants to open this address, which carries data after the ?:\n${short}`);
+    expect(asked.q!.detail).not.toContain("render_view");
+    // At the limit the whole address is in the dialog.
+    const max = `https://docs.example.com/${"b".repeat(500 - "https://docs.example.com/".length)}`;
+    expect(max).toHaveLength(500);
+    expect(await svc.viewLink(b.id, max)).toBe(false);
+    expect(asked.q!.detail.endsWith(`:\n${max}`)).toBe(true);
+    // A remote server's view keeps its own name, and the same rule.
+    const r = svc.views.add({ call: "c3", server: "docs-server", tool: "search", html: "", csp: "" });
+    expect(await svc.viewLink(r.id, "https://docs.example.com/x")).toBe(false);
+    expect(asked.q!.detail).toBe("The docs-server view (search) wants to open this address:\nhttps://docs.example.com/x");
+    await expect(svc.viewLink(r.id, `${max}c`)).rejects.toMatchObject({ status: 400 });
   });
 });

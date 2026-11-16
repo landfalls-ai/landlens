@@ -239,7 +239,9 @@ Built 16 Nov 2026 ([views.md](../../views.md)).
   - [x] Field names `toString`, `valueOf` and every other `Object.prototype` name, and `prototype`, are refused.
   - [x] The CSP is the wall: a block's frame has `connect-src 'none'` whatever it declares; e2e 4 checks that the
     frame's CSP violations name `connect-src` and `img-src` (Chromium's own rule against loopback requests from an
-    opaque origin would stop the probes too, so "nothing reached the listener" alone doesn't show the CSP).
+    opaque origin would stop the probes too, so "nothing reached the listener" alone doesn't show the CSP). Part 2's
+    review found that too thin, and the probes aimed elsewhere (M4 below): e2e 4 now names every attempt's directive
+    and reads a net log.
 
 ### Departures
 
@@ -291,6 +293,88 @@ restarts"): three `kube.list` sources of pods in `landlens-dev` (the pods; `notr
 `total`, a group), two stats (11 not Running, 25 pods) and a table "Pods by restarts" (pod, status, ready, restarts,
 age; CrashLoopBackOff and Error rows in the bad tone), in about 25 seconds, with no question asked. The view's token
 made two `GET /api/v1/namespaces/landlens-dev/pods`, both 200.
+
+### Security review of part 2, fixed
+
+One High, four Medium and eight Low, all fixed as the review proposed; where a fix chose differently, the item says
+why. Each fix was seen to fail its test with it taken out (44 mutations, each run against its own test and restored;
+three in the built app on OrbStack; none survived; one, a default stored as a pick, survived the first test, which
+now checks what the page is told). `pnpm typecheck` 0; `pnpm -r test` (desktop 51 files, 739 tests; views 82;
+acp-host 36; the rest as before); `views.e2e.test.ts` 7 of 7 with the fake agent on OrbStack.
+
+- [x] **H1** A block's script could send data out through DNS (`<link rel="dns-prefetch">` is under no CSP directive;
+  `X-DNS-Prefetch-Control: off` stops only anchors). `hardenApp()` appends
+  `--blink-settings=dnsPrefetchingEnabled=false` before the app is ready (`BLINK_SETTINGS` in `security.ts`).
+  Tests: `security-app.test.ts` (the switch and its one working spelling); e2e 4's hostile block adds a parsed and a
+  scripted `dns-prefetch` link to `dnsprefetch-*.<run's host>`, and a `session.netLog` of the run must never name the
+  host. Mutation: without the switch the net log names both, 24 times, and e2e 4 fails; the unit test fails too.
+- [x] **M1** "Ask about this block" could be closed by cluster text (claude-agent-acp writes
+  `<context ref=…>text</context>` and escapes nothing). `quotedBlock` writes each row as a JSON array and each log line
+  as a JSON string, every `<` as `\u003c`, under the data line and a line saying so, inside a backtick fence longer
+  than any run (a run over 16 cut to 16), cut inside the fence; the attached view's JSON escapes `<` too. Beyond the
+  proposal for this one site, `resourceBlock` (`@landlens/acp-host`) writes every `</context` as `<\/context`, which
+  covers an object's YAML from Ask, the older gap the review named. A log source's lines now count against the 50 as
+  rows do (before, a block naming a log source and then a list got 50 lines and 50 rows). Tests: `views-main.test.ts` (an annotation and
+  a log line holding `</context>`, `<context ref>` and 40 backticks, for a table and a logs block: no `<`, the fence's
+  twin is the last line, every row parses back); `prompt.test.ts`. Mutations: rows unquoted, `<` unescaped, log lines
+  unquoted, no fence, a fixed three-backtick fence, `resourceBlock` unescaped: each fails.
+- [x] **M2** The link dialog showed 500 of up to 2,000 characters and called a block Landlens's `render_view`.
+  `viewLink` refuses an address over `VIEW_LINK_SHOWN` (500) without a dialog, for every view, shows the rest whole,
+  says when it carries data after `?`, and names a block "A block Claude built on the Views page (*view* · *block*)"
+  from the caption `ViewService.appOpen` gives its frame (the document's checked title and the block's). Chose: a
+  limit for all views rather than refusing a block's https links until part 3, so a block's link to the docs still
+  works. Tests: `mcp-main.test.ts` (a block's 1,2xx-character link refused with no dialog; a short one's dialog text
+  whole, with the caption and the query note; 500 exactly; a remote view's own name), `views-main.test.ts` (the
+  caption). Mutations: no limit, the address cut to 100, the old asker, no query note, no caption: each fails.
+- [x] **M3** A version refused on parameters was half applied. `ViewRuntime` keeps the person's picks apart from
+  defaults (`picked`): `update` checks before it assigns and lets go a pick the new version doesn't take (its default
+  is read), `setParams` refuses one, and both answer the picks kept, which `ViewService` holds as the view's `params`.
+  `ViewService.version` calls `runtime.update` before `history.show` and pushes the state in a `finally`. Tests:
+  `views-main.test.ts` (Undo to a version whose choice doesn't take the pick: `views:get`, the last pushed state and
+  the next data push all v1, with v1's rows; a refused update leaves v2 everywhere; Claude's versions replacing the
+  options under a default and under a pick are shown, a pick that still fits is kept, an unfit pick is refused).
+  Mutations: history moved first, no push on refusal, a strict update, a default stored as a pick: each fails.
+- [x] **M4** Caps without a test where they're applied, and an e2e 4 that proved little. `views-main.test.ts`: 2,000
+  ConfigMaps with a 2,000-character value (an annotation that long is omitted by the front door): every push, `view_data`'s
+  answer and a two-source block's first message under `VIEW_LIMITS.frameMessage` and `truncated`; 50 rows; at most
+  20,000 characters and the cut line, inside the fence. The lower-stakes survivors too: `closeAll` closes frames, a
+  view closed mid-start and mid-render (`views-main.test.ts`), the host's 1,000,000-character cap and tool-name check
+  (`app-host.test.ts`), another view's `views:state` dropped (`view-store.test.ts`). e2e 4 aims every attempt at its
+  own name under the run's random `views-e2e-<hex>.test` and asserts each CSP-governed attempt's own violation (18:
+  `connect-src` ×5, `img-src` ×2, `font-src` ×2, `media-src` ×2, `style-src-elem` ×2, `script-src-elem` ×2,
+  `frame-src`, `object-src` ×2) and a net log with no lookup or request of the host. **Found while fixing**: the fake
+  agent gets only Landlens's allowlisted environment (`agentEnv`), so `LANDLENS_FAKE_PROBE` and `LANDLENS_FAKE_STUN`
+  never reached it, and the old block aimed at `127.0.0.1:9`; the test now writes `agent-sessions/fake-agent-env.json`
+  for the fake agent and checks the block named this run's host, and WebRTC now aims at the test's UDP listener.
+  Mutations: each of the three `fitData` sites, the share, the cut, `ASK_ROWS` 5,000, the four survivors above, and in
+  the built app a CSP of `script-src 'unsafe-inline'` alone: each fails.
+- [x] **L1** `view.el` reads an address with `[\x00-\x20\x7f]` taken out and allows only `https:`, `mailto:`,
+  `landlens:` and `#` (on `href`, `src`, `action`, `formaction`, `xlink:href`, `poster`, `data`, `background`, `ping`,
+  `cite`, `srcset`, `codebase`, `manifest`); it throws for `script`, `iframe`, `frame`, `frameset`, `object`, `embed`,
+  `link`, `meta`, `base` and `portal`, and drops `srcdoc`. A relative address is dropped now too. Tests:
+  `packages/views/test/runtime.test.ts` (the runtime in a stand-in document); e2e 4's `el` line (`java\tscript:`,
+  `\x01javascript:`, `view.el("script")`: null, null, refused, nothing ran). Mutations: the old address rule, the tag
+  rule (unit and e2e), `srcdoc`: each fails.
+- [x] **L2** A view's keys reach the app only while its frame has the focus (`AppFrame`: `document.activeElement` is
+  the frame and the page has focus) and at most `KEYS_PER_SECOND` (4) a second, for every view. Test:
+  `app-host.test.ts` (20 in a row give 4; a second later one more; none unfocused). Mutations: each check.
+- [x] **L3** A usage reader's reason goes into the notes only while the read succeeds; a failed later read (`error`,
+  whose message Claude hears) carries only the failure sentence. Test: `view-runtime.test.ts`. Mutation: fails.
+- [x] **L4** `view_context` lists a kind only when its resource passes `ResourceName` and its group `GroupName`.
+  Test: `views-main.test.ts` (a resource with a newline and a sentence, a group with spaces). Mutations: each check.
+- [x] **L5** A version's note is the schema's `Text(200)` (`Text` now exported from `schema.ts`). Test:
+  `server.test.ts` (U+202E, U+200B, a newline, a bell: refused at `/note`, on render and patch). Mutation: fails.
+- [x] **L6** `views:prompt` carries the `version` the block was chosen in; `ViewService.prompt` refuses a block when it
+  isn't the shown version (409, "The view changed since you chose that block: ask about it again."); the page keeps
+  the version on the chip and drops the chip when the version changes. Tests: `views-main.test.ts`,
+  `views-ipc.test.ts`. Mutations: the check in main, the version dropped in IPC: each fails.
+- [x] **L7** `ViewService` listens to `clusters.onGone` and closes the cluster's views (frames, session, working
+  view). Test: `views-main.test.ts`. Mutation: fails.
+- [x] **L8** A new session for an ended one is one promise on the working view (`restart`), shared by follow-ups sent
+  meanwhile, and closed again if the view closed while it started. Test: `views-main.test.ts` (two prompts at once,
+  one start, one session). Mutation: fails.
+- [x] **Noted**: `security.md`'s frame-navigation row now credits the page's `frame-src landlens-app:` for https,
+  `data:` and `blob:`, and `will-frame-navigate` for another `landlens-app:` address only.
 
 ## Part 3: native blocks and actions
 

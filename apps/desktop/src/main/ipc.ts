@@ -281,9 +281,9 @@ export function registerIpc(clusters: ClusterManager, hub: WatchHub, agent: Agen
       await secrets.refusePrompt({ text });
       return viewsOf(views).start({ handle, text, ...(namespaces ? { namespaces } : {}) });
     },
-    "views:prompt": async ({ view, text, context, block }) => {
+    "views:prompt": async ({ view, text, context, block, version }) => {
       await secrets.refusePrompt({ text, ...(context ? { context } : {}) });
-      return viewsOf(views).prompt({ view, text, ...(context ? { context } : {}), ...(block ? { block } : {}) });
+      return viewsOf(views).prompt({ view, text, ...(context ? { context } : {}), ...(block ? { block } : {}), ...(version !== undefined ? { version } : {}) });
     },
     "views:get": async ({ view }) => viewsOf(views).get(view),
     "views:version": async ({ view, to }) => viewsOf(views).version(view, to),

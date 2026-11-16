@@ -337,6 +337,11 @@ type View = {
   document: ViewDocument;
   /** By name, with no prototype: a parameter named like an Object method reads nothing inherited (L5). */
   params: Record<string, string>;
+  /**
+   * The values the person picked, apart from the defaults `params` fills in (review of part 2, M3): a new version keeps
+   * a pick only while it fits, and never takes a default as if it were one.
+   */
+  picked: Record<string, string>;
   /** Bumped by every change (a version, a parameter, a stop): reads and pushes of an older one are dropped. */
   gen: number;
   /**
@@ -395,7 +400,7 @@ export class ViewRuntime {
     const c = this.deps.clusters.get(r.data.handle);
     const namespaces = r.data.namespaces ? [...new Set(r.data.namespaces)] : undefined;
     // Everything that can refuse the open is checked before a token exists (security review, L1).
-    const params = this.checkParams(parsed.document, r.data.params ?? {});
+    const { params, picked } = this.checkParams(parsed.document, r.data.params ?? {}, true);
     const label = `view · ${c.info.context}`;
     const token = this.deps.frontDoor.issueToken({ label, policy: agentReadOnlyPolicy(namespaces), clusters: [r.data.handle] });
     let id = "";
@@ -407,7 +412,7 @@ export class ViewRuntime {
       while (this.views.has(id));
       const view: View = {
         id, handle: r.data.handle, context: c.info.context, token, client, ...(namespaces ? { namespaces } : {}),
-        document: parsed.document, params, gen: 0, ready: 0, budget: new WatchBudget(this.L.viewObjects, this.L.viewChars),
+        document: parsed.document, params, picked, gen: 0, ready: 0, budget: new WatchBudget(this.L.viewObjects, this.L.viewChars),
         dirty: new Set(), feeds: new Map(), sources: new Map(), running: false, visible: true, lastRefresh: 0, closed: false,
       };
       this.views.set(id, view);
@@ -421,23 +426,34 @@ export class ViewRuntime {
     }
   }
 
-  /** A new version of the view's document: sources that read the same thing keep their reads; the rest start again. */
-  update(viewId: string, document: unknown) {
+  /**
+   * A new version of the view's document: sources that read the same thing keep their reads; the rest start again.
+   * Everything is checked before anything changes (review of part 2, M3): a document that doesn't parse leaves the view
+   * as it was. A value the person picked that the new version's parameter doesn't take is let go, and the parameter
+   * reads its default. Answers the picks kept.
+   */
+  update(viewId: string, document: unknown): Record<string, string> {
     const v = this.view(viewId);
     const parsed = parseDocument(document);
     if (!parsed.ok) throw Object.assign(fail(400, "the view document isn't valid"), { issues: parsed.issues });
+    const { params, picked } = this.checkParams(parsed.document, v.picked, false);
     v.document = parsed.document;
-    v.params = this.checkParams(v.document, v.params);
+    v.params = params;
+    v.picked = picked;
     void this.sync(v);
+    return { ...picked };
   }
 
-  /** The person picked a parameter's value: checked against the parameter's type. */
-  setParams(viewId: string, params: Record<string, string>) {
+  /** The person picked a parameter's value: checked against the parameter's type, or refused. Answers the picks. */
+  setParams(viewId: string, params: Record<string, string>): Record<string, string> {
     const v = this.view(viewId);
     const p = Params.safeParse(params);
     if (!p.success) throw fail(400, "not valid parameters");
-    v.params = this.checkParams(v.document, { ...v.params, ...p.data });
+    const next = this.checkParams(v.document, { ...v.picked, ...p.data }, true);
+    v.params = next.params;
+    v.picked = next.picked;
     void this.sync(v);
+    return { ...next.picked };
   }
 
   /** Refresh: polled sources read again now, at most once per 5 s. Answers whether it ran. */
@@ -552,17 +568,28 @@ export class ViewRuntime {
     return v.ready === v.gen ? s.data : { state: "loading", rows: [], total: 0, truncated: false, at: s.data.at };
   }
 
-  /** Parameter values, each checked against its parameter; anything else is dropped. No prototype (L5). */
-  private checkParams(d: ViewDocument, given: Record<string, string>): Record<string, string> {
-    const out: Record<string, string> = Object.create(null);
+  /**
+   * Parameter values: the person's picks, each checked against its parameter, and the defaults for the rest; a name the
+   * document has no parameter for is dropped. `strict`: a pick that doesn't fit is refused (the person's own pick);
+   * otherwise it is let go and the default is read (a new version, whose parameter changed). No prototype (L5).
+   */
+  private checkParams(d: ViewDocument, given: Record<string, string>, strict: boolean): { params: Record<string, string>; picked: Record<string, string> } {
+    const params: Record<string, string> = Object.create(null);
+    const picked: Record<string, string> = Object.create(null);
+    const fits = (p: NonNullable<ViewDocument["params"]>[number], v: string): boolean =>
+      p.type === "namespace" ? NamespaceName.safeParse(v).success : p.type === "choice" ? p.options.includes(v) : true;
     for (const p of d.params ?? []) {
-      const v = Object.hasOwn(given, p.name) ? given[p.name]! : p.default;
-      if (v === undefined) continue;
-      if (p.type === "namespace" && !NamespaceName.safeParse(v).success) throw fail(400, `${p.name} isn't a namespace`);
-      if (p.type === "choice" && !p.options.includes(v)) throw fail(400, `${p.name} isn't one of its options`);
-      out[p.name] = p.type === "text" ? cellText(v, 100) : v;
+      const mine = Object.hasOwn(given, p.name) ? given[p.name]! : undefined;
+      if (mine !== undefined && !fits(p, mine)) {
+        if (strict) throw fail(400, p.type === "namespace" ? `${p.name} isn't a namespace` : `${p.name} isn't one of its options`);
+      } else if (mine !== undefined) {
+        picked[p.name] = params[p.name] = p.type === "text" ? cellText(mine, 100) : mine;
+        continue;
+      }
+      // The schema holds a default to its parameter's type (a choice's among its options).
+      if (p.default !== undefined) params[p.name] = p.type === "text" ? cellText(p.default, 100) : p.default;
     }
-    return out;
+    return { params, picked };
   }
 
   private stopFeeds(v: View) {
@@ -962,7 +989,10 @@ export class ViewRuntime {
         base = (series.namespaces ?? []).slice(0, this.L.rows).map((n) => ({ namespace: cellText(n.key, 253), cpu: finite(n.cpu), memory: finite(n.memory) }));
         if (series.source === "none") {
           state = "unavailable";
-          notes.push(series.reasons[0] ? cellText(series.reasons[0].message, 300) : SENTENCES.metricsOff);
+          // The reader's reason is its own words (Prometheus's error text included): the page shows it while the source
+          // is unavailable, which Claude hears as a fixed sentence. A later read that fails makes the state `error`,
+          // whose message Claude does hear, so then it goes (review of wave 10 part 2, L3).
+          if (!erred) notes.push(series.reasons[0] ? cellText(series.reasons[0].message, 300) : SENTENCES.metricsOff);
         }
         base = plainRows(base, src.fields ? parseFields(src.fields) : undefined);
       }

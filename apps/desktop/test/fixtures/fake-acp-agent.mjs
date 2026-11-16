@@ -32,17 +32,26 @@ async function callKube(servers) {
 /**
  * Wave 10: a prompt whose first line is `view-script: <name>` runs fixtures/views/<name>.json, an array of
  * `{ tool, arguments }` for landlens-views, through the session's server (the real gateway), each as a tool card, and
- * says each result. `__PROBE__`, `__WSPROBE__` and `__STUNPROBE__` in the arguments become the test's own listeners
- * (LANDLENS_FAKE_PROBE), so a hostile block can aim at them. Results go to fake-agent-results.jsonl for the test.
+ * says each result. `__PROBE__`, `__WSPROBE__` and `__STUNPROBE__` in the arguments become the test's own listeners,
+ * so a hostile block can aim at them; `__NETHOST__` the test's own unique host name, which its net log must never show.
+ * They come from fake-agent-env.json beside the session folders, written by the test: Landlens hands the agent only
+ * its allowlisted environment (agentEnv), so a LANDLENS_FAKE_* variable never reaches this process. Results go to
+ * fake-agent-results.jsonl, in the same folder, for the test.
  */
 const VIEWS = join(dirname(fileURLToPath(import.meta.url)), "views");
 async function viewScript(name, s, sessionId, notify, say) {
   const views = s.servers.find((x) => x.name === "landlens-views");
   if (!views) return say("This session has no landlens-views.");
-  const probe = process.env.LANDLENS_FAKE_PROBE ?? "http://127.0.0.1:9";
+  let given = {};
+  try {
+    if (s.cwd) given = JSON.parse(readFileSync(join(s.cwd, "..", "fake-agent-env.json"), "utf8"));
+  } catch {
+    // none written: the defaults below
+  }
+  const probe = given.probe ?? "http://127.0.0.1:9";
   const u = new URL(probe);
   let raw = readFileSync(join(VIEWS, `${name}.json`), "utf8");
-  raw = raw.replaceAll("__PROBE__", probe).replaceAll("__WSPROBE__", `ws://${u.host}`).replaceAll("__STUNPROBE__", `stun:${u.hostname}:${process.env.LANDLENS_FAKE_STUN ?? "9"}`);
+  raw = raw.replaceAll("__NETHOST__", given.nethost ?? "views-e2e.invalid").replaceAll("__PROBE__", probe).replaceAll("__WSPROBE__", `ws://${u.host}`).replaceAll("__STUNPROBE__", `stun:${u.hostname}:${given.stun ?? "9"}`);
   const steps = JSON.parse(raw);
   const headers = Object.fromEntries((views.headers ?? []).map((h) => [h.name, h.value]));
   const client = new Client({ name: "fake-acp-agent", version: "0.0.1" });

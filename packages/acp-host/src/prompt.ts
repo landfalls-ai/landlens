@@ -142,9 +142,14 @@ export function clusterSystemPrompt(c: { context: string; server: string; versio
   ].join("\n");
 }
 
-/** A Kubernetes object or text attached to a prompt as an ACP embedded resource. */
+/**
+ * A Kubernetes object or text attached to a prompt as an ACP embedded resource. claude-agent-acp hands it to Claude as
+ * `<context ref="uri">text</context>` and escapes nothing, so a `</context` in the text (an annotation, a label, a log
+ * line) would end the data there and put what follows outside it (security review of wave 10 part 2, M1). Each is
+ * written `<\/context`, which reads the same to Claude and closes nothing.
+ */
 export function resourceBlock(uri: string, text: string, mimeType = "application/yaml") {
-  return { type: "resource" as const, resource: { uri, mimeType, text } };
+  return { type: "resource" as const, resource: { uri, mimeType, text: text.replace(/<\/(context)/gi, "<\\/$1") } };
 }
 
 /**

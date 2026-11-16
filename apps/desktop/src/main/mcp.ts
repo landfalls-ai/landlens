@@ -42,6 +42,9 @@ export type Ask = {
   openExternal(url: string): Promise<void>;
 };
 
+/** The longest view link the dialog shows whole (review of wave 10 part 2, M2); a longer one is refused. */
+export const VIEW_LINK_SHOWN = 500;
+
 export class McpService {
   readonly gateway: McpGateway;
   readonly views = new AppViews();
@@ -509,8 +512,11 @@ export class McpService {
   }
 
   /**
-   * ui/open-link: https only, after you've seen the host and said yes. One dialog at a time for all views, and at
-   * most three a minute per view, so a view can't bury you in dialogs until you click Open.
+   * ui/open-link: https only, after you've seen the whole address and said yes. One dialog at a time for all views, and
+   * at most three a minute per view, so a view can't bury you in dialogs until you click Open. An address longer than
+   * the dialog shows whole is refused without one (review of wave 10 part 2, M2: it showed 500 characters and opened
+   * 2,000, so the rest could carry a view's data unseen); the dialog says when the address carries data after `?`, and
+   * names who asks: a block Claude built on the Views page by its caption, never as Landlens's own render_view.
    */
   async viewLink(viewId: string, raw: string): Promise<boolean> {
     const v = this.views.get(viewId);
@@ -524,11 +530,13 @@ export class McpService {
       throw fail(400, "not a link");
     }
     if (u.protocol !== "https:" || u.username || u.password) throw fail(400, "Views may open https links only.");
+    if (u.href.length > VIEW_LINK_SHOWN) throw fail(400, `That link is ${u.href.length.toLocaleString("en-US")} characters: Landlens shows a view's link whole before it opens it, and opens none over ${VIEW_LINK_SHOWN}.`);
+    const who = v.block ? `A block Claude built on the Views page (${v.block.caption ?? v.block.block})` : `The ${v.server} view (${v.tool})`;
     this.linkAsked = true;
     try {
       const yes = await this.deps.ask.confirm({
         message: `Open ${u.host} in your browser?`,
-        detail: `The ${v.server} view (${v.tool}) wants to open:\n${u.href.slice(0, 500)}`,
+        detail: `${who} wants to open this address${u.search ? ", which carries data after the ?" : ""}:\n${u.href}`,
         yes: "Open",
       });
       if (yes) await this.deps.ask.openExternal(u.href);

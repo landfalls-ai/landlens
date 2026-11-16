@@ -115,12 +115,15 @@ export const viewStore = {
     }
   },
 
-  /** A follow-up, from the page's strip or the dock (D213): the shown version goes with it (main attaches it). */
-  async send(text: string, context: ResourceRef[] = [], block?: string): Promise<{ stopReason: string } | undefined> {
+  /**
+   * A follow-up, from the page's strip or the dock (D213): the shown version goes with it (main attaches it). A block
+   * asked about goes with the version it was chosen in, which main checks is still the one shown (review of part 2, L6).
+   */
+  async send(text: string, context: ResourceRef[] = [], block?: { block: string; version: number }): Promise<{ stopReason: string } | undefined> {
     const v = snap.view;
     if (!v || !text.trim()) return undefined;
     for (const l of askListeners) l(v.state?.session ?? v.session.session, text);
-    return api.invoke("views:prompt", { view: v.id, text, ...(context.length ? { context } : {}), ...(block ? { block } : {}) });
+    return api.invoke("views:prompt", { view: v.id, text, ...(context.length ? { context } : {}), ...(block ? { block: block.block, version: block.version } : {}) });
   },
 
   async version(to: number) {

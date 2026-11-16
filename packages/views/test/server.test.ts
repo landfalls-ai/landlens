@@ -55,6 +55,18 @@ describe("the landlens-views tools (D205)", () => {
     expect(calls[0]?.[0]).toBe("render");
   });
 
+  it("checks a version's note as the document's text: no control or invisible character (review of wave 10 part 2, L5)", async () => {
+    const { client, calls } = await connect();
+    for (const note of ["fix \u202eeht", "a\u200bb", "line\nbreak", "bell\u0007"]) {
+      const r: any = await client.callTool({ name: "render_view", arguments: { document: small(), note } });
+      expect(r.isError, JSON.stringify(note)).toBe(true);
+      expect(textOf(r)).toContain("/note: text can't hold control or invisible characters");
+      expect(patchNote(note)).toBe(false);
+    }
+    expect(calls).toEqual([]);
+    expect(checkArgs("render_view", { document: {}, note: "adds the restarts column" }).ok).toBe(true);
+  });
+
   it("answers refused arguments in D222's words, with their pointers, and calls nothing", async () => {
     const { client, calls } = await connect();
     const r: any = await client.callTool({ name: "render_view", arguments: { document: "not an object", note: "x".repeat(201) } });
@@ -169,3 +181,7 @@ describe("an app block's page (D204)", () => {
     expect(html).not.toMatch(/<link/i);
   });
 });
+
+function patchNote(note: string): boolean {
+  return checkArgs("patch_view", { base: 1, ops: [], note }).ok;
+}

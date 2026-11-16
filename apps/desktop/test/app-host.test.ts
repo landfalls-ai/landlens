@@ -4,7 +4,7 @@ import { App } from "@modelcontextprotocol/ext-apps";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
-import { AppHost, irisVariables, objectLink, viewKey, type HostContext, type ObjectTarget, type ViewKey } from "../src/renderer/src/app-host";
+import { AppHost, irisVariables, KEYS_PER_SECOND, objectLink, viewKey, type HostContext, type ObjectTarget, type ViewKey } from "../src/renderer/src/app-host";
 
 const view: McpAppView = {
   view: "a".repeat(32), url: `landlens-app://view/${"a".repeat(32)}`, server: "landlens-kube",
@@ -147,6 +147,21 @@ describe("the MCP Apps host core", () => {
       expect(w.posts.find((p) => p.id === 3)).toMatchObject({ result: { content: [] } });
     });
 
+    it("drops a message over 1,000,000 characters and a tool name of the wrong shape, unasked (review of part 2, M4)", async () => {
+      const w = raw();
+      await init(w.host);
+      const n = w.posts.length;
+      w.host.receive({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "view_data", arguments: { source: "pods", pad: "x".repeat(1_000_000) } } });
+      w.host.receive({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "view data\nand more", arguments: {} } });
+      w.host.receive({ jsonrpc: "2.0", id: 22, method: "tools/call", params: { name: "v".repeat(129), arguments: {} } });
+      await tick();
+      expect(w.calls).toEqual([]);
+      expect(w.posts.find((p) => p.id === 20)).toBeUndefined();
+      expect(w.posts.find((p) => p.id === 21)).toMatchObject({ error: { code: -32602 } });
+      expect(w.posts.find((p) => p.id === 22)).toMatchObject({ error: { code: -32602 } });
+      expect(w.posts.length).toBe(n + 2);
+    });
+
     it("still refuses ui/message and ui/update-model-context", async () => {
       const w = raw();
       await init(w.host);
@@ -222,5 +237,24 @@ describe("the MCP Apps host core", () => {
     host.receive({ jsonrpc: "2.0", method: "ui/notifications/landlens-key", params: { key: "k", metaKey: true } });
     host.receive({ jsonrpc: "2.0", method: "ui/notifications/landlens-key", params: { key: "Tab" } });
     expect(keys.map((x) => x.key)).toEqual(["k"]);
+  });
+
+  it("takes a view's keys only while its frame has the focus, and at most four a second (review of wave 10 part 2, L2)", () => {
+    const keys: ViewKey[] = [];
+    let focused = true;
+    let t = 1_000_000;
+    const host = new AppHost(view, { post: () => {}, callTool: async () => ({ content: [] }), openLink: async () => true, openObject: () => {}, resize: () => {}, key: (x) => keys.push(x), focused: () => focused, now: () => t, context: () => ctx() });
+    const press = () => host.receive({ jsonrpc: "2.0", method: "ui/notifications/landlens-key", params: { key: "1", metaKey: true } });
+    for (let i = 0; i < 20; i++) press();
+    expect(keys).toHaveLength(KEYS_PER_SECOND);
+    expect(KEYS_PER_SECOND).toBe(4);
+    t += 1_000;
+    press();
+    expect(keys).toHaveLength(5);
+    // A frame the person isn't in: its script's keys go nowhere.
+    t += 1_000;
+    focused = false;
+    for (let i = 0; i < 20; i++) press();
+    expect(keys).toHaveLength(5);
   });
 });

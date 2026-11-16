@@ -47,6 +47,9 @@ describe("views:start and views:prompt", () => {
     await invoke("views:start", { handle: "handle-01", text: "Pods that restarted" });
     await invoke("views:prompt", { view: "0123456789abcdef", text: "worst first" });
     expect(calls.map((c) => c.channel)).toEqual(["start", "prompt"]);
+    // A block goes with the version it was chosen in, for main to check (review of part 2, L6).
+    await invoke("views:prompt", { view: "0123456789abcdef", text: "this one", block: "block-0", version: 3 });
+    expect(calls.at(-1)!.req).toEqual({ view: "0123456789abcdef", text: "this one", block: "block-0", version: 3 });
   });
 
   it("refuse a block's frame calling anything through mcp:app-call's shape, and a request from outside the app", async () => {

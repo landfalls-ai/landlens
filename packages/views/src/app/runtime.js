@@ -113,20 +113,31 @@
     notify("ui/notifications/size-changed", { width: Math.ceil(r.width), height: Math.ceil(r.height) });
   }
 
-  // Attributes `view.el` sets: never an event handler (on…) and never a script: or data: address.
-  var BAD_URL = /^\s*(javascript|data|vbscript):/i;
+  // What `view.el` makes: never a tag that runs or loads a document (script, a frame, an object, a link, a meta or a
+  // base), never an event handler (on…) or `srcdoc`, and an address only to https:, mailto:, landlens: or a #fragment.
+  // The address is read as the URL parser reads it, with every tab, newline and control character taken out first, so
+  // "java\tscript:" and "\x01javascript:" are what they are (security review of wave 10 part 2, L1). The sandbox and the
+  // CSP are the wall; this keeps Claude's own markup from doing what the page didn't mean.
+  var REFUSED_TAG = /^(script|iframe|frame|frameset|object|embed|link|meta|base|portal)$/i;
+  var URL_ATTR = /^(href|src|action|formaction|xlink:href|poster|data|background|ping|cite|srcset|codebase|manifest)$/i;
+  var GOOD_URL = /^(https:|mailto:|landlens:|#)/i;
+  function goodUrl(v) {
+    return GOOD_URL.test(String(v).replace(/[\x00-\x20\x7f]/g, ""));
+  }
   function el(tag, attrs) {
-    var node = document.createElement(String(tag));
+    var name = String(tag);
+    if (REFUSED_TAG.test(name.replace(/[\x00-\x20]/g, ""))) throw new Error("view.el doesn't make <" + name.slice(0, 20) + ">");
+    var node = document.createElement(name);
     if (attrs && typeof attrs === "object") {
       for (var k in attrs) {
         if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
         var v = attrs[k];
         if (v === null || v === undefined || v === false) continue;
         if (typeof v !== "string" && typeof v !== "number" && v !== true) continue;
-        if (/^on/i.test(k)) continue;
+        if (/^on/i.test(k) || /^srcdoc$/i.test(k)) continue;
         if (k === "class") node.className = String(v);
         else if (k === "text") node.textContent = String(v);
-        else if (/^(href|src|action|formaction|xlink:href)$/i.test(k) && BAD_URL.test(String(v))) continue;
+        else if (URL_ATTR.test(k) && !goodUrl(v)) continue;
         else node.setAttribute(k, v === true ? "" : String(v));
       }
     }

@@ -41,6 +41,10 @@ describe("viewStore", () => {
     // Another view's push is never this one's.
     listeners.get("views:data")!({ view: "fedcba9876543210", version: 2, source: "pods", data: rows(9) });
     expect((viewStore.data("pods") as any).rows).toHaveLength(3);
+    // Nor is its state (review of part 2, M4): this view stays on its version, with its data.
+    listeners.get("views:state")!({ ...state(7), id: "fedcba9876543210", title: "another" });
+    expect(viewStore.get().view?.state).toMatchObject({ version: 2, title: "t" });
+    expect((viewStore.data("pods") as any).rows).toHaveLength(3);
     expect(seen).toEqual([2, 3]);
     // A question from the view's session is kept until it's answered, and heard, so the page can open the dock.
     const heard: string[] = [];

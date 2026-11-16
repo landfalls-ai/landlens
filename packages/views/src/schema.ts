@@ -31,7 +31,7 @@ export const Field = z
   .refine((f) => !INHERITED.has(f), "not a field name Landlens allows");
 
 /** Claude's text: no control or invisible character (refused, so Claude sees why); variation selectors dropped. */
-const Text = (max: number, opts: { min?: number; lines?: boolean } = {}) =>
+export const Text = (max: number, opts: { min?: number; lines?: boolean } = {}) =>
   z
     .string()
     .min(opts.min ?? 0)

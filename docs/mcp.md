@@ -146,11 +146,14 @@ the MCP `Protocol` class into the renderer, and the wire format is small. It is 
 answers `ui/initialize` (host capabilities: open links, server tools, logging; the host context with the theme and
 the standard variables filled from Iris tokens), then on `ui/notifications/initialized` sends `tool-input` and
 `tool-result`; `tools/call` goes to main (`mcp:app-call`) and through the gateway; `ui/open-link` opens https links
-after a native dialog that shows the host (one at a time, at most 3 a minute per view), and
+after a native dialog that shows the host and the whole address, says when it carries data after `?` and names the
+view's server and tool (one at a time, at most 3 a minute per view; an address over 500 characters is refused without
+a dialog), and
 `landlens://object/<Kind>/<namespace or _>/<name>` moves the main view to that object (Open in Landlens);
 `size-changed` sets the frame's height (48 to 640 px; past 640 the view's own body scrolls); a view hands back Escape
 and the app's ⌘/Ctrl chords (`ui/notifications/landlens-key`, a Landlens extension; only Escape and ⌘/Ctrl with K, J,
-B or a digit are accepted) and the page replays them on the frame element, so ⌘J and Escape work with focus in a view;
+B or a digit are accepted, only while the frame has the focus and at most four a second, so a view's script can't press
+them) and the page replays them on the frame element, so ⌘J and Escape work with focus in a view;
 `ui/request-display-mode` answers inline. A theme change sends `host-context-changed`. Refused: `ui/message` and
 `ui/update-model-context` (a view may not write to the agent's conversation or change what the model sees),
 resources and anything else.

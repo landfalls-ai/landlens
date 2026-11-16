@@ -1434,7 +1434,8 @@ export const channels = {
   // Views on demand (wave 10, docs/views.md). A view's namespaces come from main's record of the session that builds
   // it, never from a later request; views:start's `namespaces` limits that session, as agent:start's does.
   "views:start": z.object({ handle: Handle, namespaces: z.array(NamespaceName).min(1).max(20).optional(), text: z.string().min(1).max(20_000) }).strict(),
-  "views:prompt": z.object({ view: ViewId, text: z.string().min(1).max(20_000), context: z.array(ResourceRef).max(10).optional(), block: ViewPartId.optional() }).strict(),
+  // `version`: the version the block was chosen in; main refuses a block of another (review of wave 10 part 2, L6).
+  "views:prompt": z.object({ view: ViewId, text: z.string().min(1).max(20_000), context: z.array(ResourceRef).max(10).optional(), block: ViewPartId.optional(), version: z.number().int().min(1).max(1_000_000).optional() }).strict(),
   "views:get": z.object({ view: ViewId }).strict(),
   "views:version": z.object({ view: ViewId, to: z.number().int().min(1).max(1_000_000) }).strict(),
   "views:param": z.object({ view: ViewId, name: ViewPartId, value: z.string().max(253) }).strict(),

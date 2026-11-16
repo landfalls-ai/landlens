@@ -85,6 +85,8 @@ export function AppFrame(props: { call?: string; block?: BlockFrame; onOpenObjec
       resize: (h) => (b?.fill ? undefined : setHeight(h), setReady(true)),
       // Replayed on the frame element so the app's own handlers see where it came from (a dock, a drawer).
       key: (k) => frame.current?.dispatchEvent(new KeyboardEvent("keydown", { ...k, bubbles: true, cancelable: true })),
+      // A key comes from the person only while they are in the frame (L2); a script's own keys are dropped.
+      focused: () => !!frame.current && document.activeElement === frame.current && document.hasFocus(),
       context: () => hostContext(frame.current?.clientWidth, b ? VIEW_MAX_HEIGHT : MAX_HEIGHT, b?.fill),
     });
     // A block's sources, live: what the page's store hears from main, for the sources this block names.

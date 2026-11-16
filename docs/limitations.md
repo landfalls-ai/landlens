@@ -131,7 +131,10 @@ person's check reads them), and Ask Claude sends one problem at a time.
   appear; usage over time is never read from Cloud Monitoring (a view has no Google grant); a workload's log follows
   at most five started pods; the doctor's problems are polled every 15 s, not pushed. Opening an object from a view
   leaves the Views page for the object's own (the view is there when you come back). **View source** in How Claude
-  built this is plain text, not the editor.
+  built this is plain text, not the editor. "Ask about this block" sends rows as JSON in a fence (Claude reads them
+  fine; they aren't a table), and a question about a block is refused once the view moved to another version.
+  `view.el` sets addresses only to `https:`, `mailto:`, `landlens:` and `#…` (not a relative path) and makes no
+  `script`, frame, `object`, `embed`, `link`, `meta` or `base`.
 - **A private key logged a line at a time is redacted from its BEGIN to its END, up to 200 lines** (wave 10 part 1's
   review, M1): a longer one shows its lines past the 200th, and a followed read whose tail begins at a key's last body
   line when that line is shorter than 16 characters shows that line (a few bytes). The front door holds a followed
@@ -152,7 +155,9 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **MCP servers** are remote and streamable HTTP only: no stdio servers, no OAuth (a header you paste), and a session
   gets the servers on for its cluster, with their tool lists, when it starts. MCP App views can't write to the
   conversation (`ui/message`), change the model's context, read resources or go fullscreen; they run without Geist
-  (fonts only from `data:`), and a view that tries to navigate is left blank.
+  (fonts only from `data:`), and a view that tries to navigate is left blank. A view's https link over 500
+  characters is refused (the dialog shows an address whole or not at all), and no page or frame prefetches DNS
+  (`dnsPrefetchingEnabled=false` for the whole app, wave 10 part 2's review, H1).
 - **A remote server's tools ask every time** unless you turn on its auto-run switch, and that switch trusts the
   server's own `readOnlyHint` for the listing you tested: it can't tell a tool that changes behaviour without
   changing its listing. Its tool descriptions and results reach the model verbatim ([security.md](security.md)). If a
@@ -241,8 +246,8 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Linear's are revoked, best effort.
 - **Folded views reopen from scratch**: an earlier view in the dock is closed when it folds and opened again (from
   the kept result, the last 50) when you show it, so its own state (a filter, a scroll) is lost.
-- **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit); other shortcuts stay in the
-  view while it has focus.
+- **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit), only while the view has the
+  focus and at most four a second; other shortcuts stay in the view while it has focus.
 - **Secret material outside Secrets** (tokens in CRD specs, passwords in ConfigMaps) shows in the IDE as the
   cluster returns it. Only what the agent reads is scrubbed.
 - **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its

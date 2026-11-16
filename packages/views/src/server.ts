@@ -11,7 +11,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { issueLine, issuesOf, MAX_ISSUES, type Issue } from "./errors.js";
 import { VIEW_CARD_HTML, VIEW_CARD_URI } from "./app/page.js";
-import { Id } from "./schema.js";
+import { Id, Text } from "./schema.js";
 
 /** What a render or patch answers: Claude's text, and for the dock's card the view's id, title, version and blocks. */
 export type ViewAnswer =
@@ -31,7 +31,9 @@ export interface ViewBinding {
 }
 
 // Each tool's arguments, checked here so a bad one comes back in D222's words (the SDK's own check would answer zod's).
-const Note = z.string().max(200);
+// A version's note is Claude's text, shown in the disclosure's list and kept in the history: checked as the document's
+// text is (review of wave 10 part 2, L5).
+const Note = Text(200);
 export const ToolArgs = {
   view_context: z.object({}).strict(),
   render_view: z.object({ document: z.record(z.string(), z.unknown()), note: Note.optional() }).strict(),

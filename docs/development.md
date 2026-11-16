@@ -211,9 +211,13 @@ desktop `views-main.test.ts` (`ViewService` with a fake agent and the real `View
 channels' Secrets check, electron mocked), `view-store.test.ts` (the window's store; typechecked with
 `tsconfig.web.json`), `app-host.test.ts` and `mcp-main.test.ts`. The e2e `test/views.e2e.test.ts` drives the built app
 with the fake agent: a prompt whose first line is `view-script: <name>` makes `fake-acp-agent.mjs` call
-`landlens-views` through the real gateway with `test/fixtures/views/<name>.json` (`__PROBE__`, `__WSPROBE__` and
-`__STUNPROBE__` become the test's own loopback listeners, `LANDLENS_FAKE_PROBE` and `LANDLENS_FAKE_STUN`) and write
-each answer to `fake-agent-results.jsonl` beside the session folders. It makes and removes a Deployment `views-e2e`
+`landlens-views` through the real gateway with `test/fixtures/views/<name>.json` and write each answer to
+`fake-agent-results.jsonl` beside the session folders. `__NETHOST__`, `__PROBE__`, `__WSPROBE__` and `__STUNPROBE__`
+in a fixture become what the test wrote to `agent-sessions/fake-agent-env.json` (`nethost`: the run's random
+`views-e2e-<hex>.test`, which e2e 4's net log must never name; `stun`: its UDP listener's port): the fake agent gets
+only Landlens's allowlisted environment, so a `LANDLENS_FAKE_*` variable wouldn't reach it. Also
+`packages/views/test/runtime.test.ts` (`view.el` in a stand-in document) and `security-app.test.ts` (`hardenApp`'s
+DNS prefetch switch, electron mocked). It makes and removes a Deployment `views-e2e`
 and a ConfigMap in `landlens-dev`. With `LANDLENS_INTEGRATION=orbstack,claude`, `-t "live: Claude"` asks your own
 Claude for a view of `landlens-dev` and, with `LANDLENS_SHOTS`, writes what it built to `w10p2-live-view.json`.
 

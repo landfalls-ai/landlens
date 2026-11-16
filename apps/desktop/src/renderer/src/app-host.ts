@@ -16,6 +16,8 @@ export const MAX_HEIGHT = 640;
 export const VIEW_MAX_HEIGHT = 2000;
 /** Larger messages from a view are dropped. */
 const MAX_MESSAGE = 1_000_000;
+/** Keys a view may hand back in one second (review of wave 10 part 2, L2): a person types fewer chords than this. */
+export const KEYS_PER_SECOND = 4;
 
 export type HostContext = {
   theme: "light" | "dark";
@@ -55,6 +57,12 @@ export type HostDeps = {
   resize(height: number): void;
   /** A key typed in the view that the app answers (Escape, ⌘/Ctrl chords): replay it in the host. */
   key?(k: ViewKey): void;
+  /**
+   * Whether the view's frame has the focus now (the person is typing in it). A key from a frame that hasn't is the
+   * view's own script, not the person, and is dropped (review of wave 10 part 2, L2).
+   */
+  focused?(): boolean;
+  now?(): number;
   context(): HostContext;
   log?(level: string, data: unknown): void;
 };
@@ -166,7 +174,8 @@ export class AppHost {
       }
       case "ui/notifications/landlens-key": {
         const k = viewKey(params);
-        if (k) this.deps.key?.(k);
+        if (!k || !this.keyAllowed()) return;
+        this.deps.key?.(k);
         return;
       }
       case "notifications/message":
@@ -228,6 +237,17 @@ export class AppHost {
       return err(-32603, (e as Error).message ?? "failed");
     }
   }
+
+  /** A key only from a frame the person is in, and at most KEYS_PER_SECOND a second, so a script can't drive the app. */
+  private keyAllowed(): boolean {
+    if (this.deps.focused && !this.deps.focused()) return false;
+    const t = (this.deps.now ?? Date.now)();
+    this.keys = this.keys.filter((x) => t - x < 1_000);
+    if (this.keys.length >= KEYS_PER_SECOND) return false;
+    this.keys.push(t);
+    return true;
+  }
+  private keys: number[] = [];
 
   private notify(method: string, params: unknown) {
     this.deps.post({ jsonrpc: "2.0", method, params });
