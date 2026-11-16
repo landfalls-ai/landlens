@@ -193,6 +193,17 @@ to `kube-mcp`'s `server.test.ts`, the prompt's words to `prompt.test.ts`, and ca
 Preview of `cluster_overview`, and with `LANDLENS_INTEGRATION=orbstack,claude` a live session answering from
 `gcp_alerts`.
 
+Views on demand (wave 10, [spec](specs/010-views/spec.md)): part 1's unit tests are `packages/views/test`
+(`schema`, `path`, `transform` with a seeded property test, `patch` and the limits), `packages/kube/test/watch.test.ts`
+(selectors and the cap) and `frontdoor-fetch.test.ts` (a real front door before a fake sidecar), and
+`apps/desktop/test/view-runtime.test.ts`, which runs `ViewRuntime` against `test/view-fakes.ts`: an in-memory API
+and front door that apply the real token policy (`authorize`), record every request with the token's label, stream
+watches and followed logs, and can hold or refuse a path. On OrbStack, `LANDLENS_INTEGRATION=orbstack pnpm --filter
+@landlens/desktop test:integration` runs `view-runtime.integration.test.ts` through a real front door and sidecar: it
+applies a throwaway Deployment (busybox, `IfNotPresent`) and ConfigMap named `view-check-*` (labelled
+`scenario=view-check`) in `landlens-dev`, scales the Deployment once, reads Helm's `landlens-demo`, and deletes both by
+label at the end. Desktop's `pnpm test` skips `*.integration.test.ts`.
+
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
 every request (`/_fake/state`). The fake Landfall records any trigger, timeline or artifact request in `forbidden`.

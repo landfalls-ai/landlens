@@ -1,5 +1,5 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
-import { checkAccess, ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
+import { checkAccess, ClusterManager, FrontDoor, listReleases, loopbackCert, WatchHub } from "@landlens/kube";
 import { MetricsService } from "@landlens/metrics";
 import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, safeStorage, shell } from "electron";
 import { existsSync } from "node:fs";
@@ -24,6 +24,7 @@ import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
 import { connectedOf, gcpMode, GcpService } from "./gcp";
 import { cloudMonitoringSource, sessionSeries } from "./metrics-source";
+import { ViewRuntime } from "./view-runtime";
 import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
 import { FamilySentStore } from "@landlens/connections";
@@ -108,6 +109,19 @@ async function start() {
   // series reads from the cluster is read as the session. The usage numbers are Clickland's, Prometheus's, the shared
   // sampler's, or Cloud Monitoring's only for a project of the session's Google grant, holding its autonomy first (D194).
   const series = sessionSeries(metrics);
+  // Views on demand (wave 10, docs/specs/010-views): each open view reads with its own read-only front-door token,
+  // labelled `view · <context>`. Part 1 is the engine only: nothing opens a view until part 2 gives the page its
+  // channels, so its pushes go nowhere yet.
+  const views = new ViewRuntime({
+    clusters,
+    frontDoor,
+    // D211: the doctor's and Helm's closed summaries, derived with your read (as the Overview and the Helm page are).
+    doctor: (handle) => doctor.report(handle),
+    helm: (handle, namespace) => listReleases(clusters.get(handle).client, namespace),
+    // Usage over time as a Claude session reads it, through the view's token, with no Google grant (D194).
+    metrics: (handle, r, read) => series(handle, r, read),
+    push: () => {},
+  });
   const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
   // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
   const connections = new ConnectionsService({
@@ -344,6 +358,7 @@ async function start() {
   const service = mcp;
   shutdown = async () => {
     await secrets.quit();
+    views.closeAll();
     forwards.stopAll();
     metrics.stopAll();
     connections.stop();
@@ -371,11 +386,21 @@ async function start() {
   });
   win.once("ready-to-show", () => win.show());
   // A reload or a crashed renderer leaves no dock to show the agent sessions: end them, which revokes their tokens.
+  // The same for open views: they close, and their tokens are revoked (D209).
   win.webContents.on("did-start-navigation", (d) => {
-    if (d.isMainFrame && !d.isSameDocument) void agent.closeAll();
+    if (d.isMainFrame && !d.isSameDocument) {
+      void agent.closeAll();
+      views.closeAll();
+    }
   });
-  win.webContents.on("render-process-gone", () => void agent.closeAll());
-  win.webContents.on("destroyed", () => void agent.closeAll());
+  win.webContents.on("render-process-gone", () => {
+    void agent.closeAll();
+    views.closeAll();
+  });
+  win.webContents.on("destroyed", () => {
+    void agent.closeAll();
+    views.closeAll();
+  });
   if (DEV_URL) await win.loadURL(DEV_URL);
   else await win.loadFile(RENDERER_INDEX);
 }

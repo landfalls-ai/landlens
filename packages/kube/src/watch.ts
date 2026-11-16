@@ -7,7 +7,11 @@
 import type { KubeObject } from "@landlens/contracts";
 import { apiPath, KubeError, slim, toKubeError, type KubeClient } from "./client.js";
 
-export type WatchTarget = { group: string; version: string; resource: string; namespace?: string };
+export type WatchTarget = {
+  group: string; version: string; resource: string; namespace?: string;
+  /** Sent as query parameters (never in the path), to the list and the watch alike (wave 10, D207). */
+  labelSelector?: string; fieldSelector?: string;
+};
 
 export type WatcherEvent =
   | { type: "snapshot"; items: KubeObject[] }
@@ -21,6 +25,11 @@ export type WatcherOptions = {
   /** Backoff after a failure, doubled up to maxBackoffMs. */
   backoffMs?: number;
   maxBackoffMs?: number;
+  /**
+   * The most objects kept (wave 10, D225: a view's watch keeps 10,000). Past it the list stops paging, objects the
+   * watch adds are dropped, and `truncated` says so until a relist fits. Absent: no cap (the IDE's own tables).
+   */
+  maxItems?: number;
 };
 
 class Gone extends Error {}
@@ -36,7 +45,8 @@ export class ResourceWatcher {
   /** Ends a backoff sleep early, so stop() doesn't wait up to maxBackoffMs. */
   private wake: (() => void) | undefined;
   private stopped = false;
-  private readonly opts: Required<WatcherOptions>;
+  private readonly opts: Required<Omit<WatcherOptions, "maxItems">> & { maxItems: number };
+  private cut = false;
   /** Resolves when the loop has ended after stop(). */
   done: Promise<void> = Promise.resolve();
 
@@ -46,7 +56,14 @@ export class ResourceWatcher {
     private readonly onEvent: (e: WatcherEvent) => void,
     opts: WatcherOptions = {},
   ) {
-    this.opts = { pageSize: 500, batchMs: 250, timeoutSeconds: 600, backoffMs: 1000, maxBackoffMs: 30_000, ...opts };
+    const max = opts.maxItems;
+    if (max !== undefined && !(Number.isInteger(max) && max > 0)) throw new RangeError("maxItems must be a positive integer");
+    this.opts = { pageSize: 500, batchMs: 250, timeoutSeconds: 600, backoffMs: 1000, maxBackoffMs: 30_000, ...opts, maxItems: max ?? Infinity };
+  }
+
+  /** Whether objects were left out at `maxItems` since the last list that fitted. */
+  get truncated(): boolean {
+    return this.cut;
   }
 
   start(): this {
@@ -108,8 +125,9 @@ export class ResourceWatcher {
     const items = new Map<string, KubeObject>();
     let cont: string | undefined;
     let rv = "";
+    let cut = false;
     do {
-      const q = new URLSearchParams({ limit: String(this.opts.pageSize) });
+      const q = this.query({ limit: String(this.opts.pageSize) });
       if (cont) q.set("continue", cont);
       this.abort = new AbortController();
       const res = await this.client.request(`${this.path()}?${q}`, { signal: this.abort.signal });
@@ -118,13 +136,21 @@ export class ResourceWatcher {
       if (!res.ok) throw toKubeError(res.status, text);
       const page = JSON.parse(text);
       for (const o of page.items ?? []) {
+        if (items.size >= this.opts.maxItems) {
+          cut = true;
+          break;
+        }
         const obj = this.withKind(o, page);
         items.set(obj.metadata.uid, obj);
       }
       cont = page.metadata?.continue || undefined;
       rv = page.metadata?.resourceVersion ?? rv;
-    } while (cont && !this.stopped);
+      // Past the cap, stop paging: every page of one list shares the first page's resourceVersion, so the watch can
+      // still start from it (objects it then adds are dropped below).
+      if (cont && items.size >= this.opts.maxItems) cut = true;
+    } while (cont && !cut && !this.stopped);
 
+    this.cut = cut;
     this.items.clear();
     for (const [k, v] of items) this.items.set(k, v);
     this.pendingUpserts.clear();
@@ -135,7 +161,7 @@ export class ResourceWatcher {
 
   /** One watch request; returns the resourceVersion to resume from. */
   private async watch(rv: string): Promise<string> {
-    const q = new URLSearchParams({
+    const q = this.query({
       watch: "1",
       resourceVersion: rv,
       allowWatchBookmarks: "true",
@@ -176,6 +202,10 @@ export class ResourceWatcher {
       case "ADDED":
       case "MODIFIED": {
         const obj = slim(o as KubeObject);
+        if (!this.items.has(obj.metadata.uid) && this.items.size >= this.opts.maxItems) {
+          this.cut = true;
+          break;
+        }
         this.items.set(obj.metadata.uid, obj);
         this.pendingRemoved.delete(obj.metadata.uid);
         this.pendingUpserts.set(obj.metadata.uid, obj);
@@ -224,6 +254,14 @@ export class ResourceWatcher {
 
   private path() {
     return apiPath(this.target, this.target.namespace);
+  }
+
+  /** The list's and the watch's query, with the target's selectors. */
+  private query(q: Record<string, string>): URLSearchParams {
+    const out = new URLSearchParams(q);
+    if (this.target.labelSelector) out.set("labelSelector", this.target.labelSelector);
+    if (this.target.fieldSelector) out.set("fieldSelector", this.target.fieldSelector);
+    return out;
   }
 
   /** List items carry no apiVersion/kind; fill them from the list so the UI and YAML are complete. */

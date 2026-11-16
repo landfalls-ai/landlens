@@ -130,3 +130,56 @@ describe("ResourceWatcher", () => {
     expect(Date.now() - t0).toBeLessThan(500);
   });
 });
+
+describe("ResourceWatcher's selectors and cap (wave 10)", () => {
+  it("sends label and field selectors on the list and the watch", async () => {
+    const { client, calls } = scripted({ list: [json({ kind: "PodList", apiVersion: "v1", metadata: { resourceVersion: "1" }, items: [] })], watch: [] });
+    const target = { group: "", version: "v1", resource: "pods", namespace: "a", labelSelector: "app=api,tier!=db", fieldSelector: "status.phase=Running" };
+    const { watcher } = await collect((on) => new ResourceWatcher(client, target, on, { batchMs: 10 }), (e) => e.some((x) => x.type === "snapshot"));
+    await new Promise((r) => setTimeout(r, 20));
+    await watcher.stop();
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const c of calls) {
+      const q = new URL(c).searchParams;
+      expect(q.get("labelSelector")).toBe("app=api,tier!=db");
+      expect(q.get("fieldSelector")).toBe("status.phase=Running");
+    }
+  });
+
+  it("keeps at most maxItems: stops paging, drops watch adds, says it is truncated", async () => {
+    const { client, calls } = scripted({
+      list: [
+        json({ kind: "PodList", apiVersion: "v1", metadata: { continue: "c1", resourceVersion: "10" }, items: [pod("u1", "1"), pod("u2", "2")] }),
+        json({ kind: "PodList", apiVersion: "v1", metadata: { resourceVersion: "10" }, items: [pod("u3", "3")] }),
+      ],
+      watch: [() => stream({ type: "ADDED", object: pod("u4", "11") }, { type: "MODIFIED", object: pod("u1", "12") })],
+    });
+    const { watcher } = await collect(
+      (on) => new ResourceWatcher(client, { group: "", version: "v1", resource: "pods", namespace: "a" }, on, { batchMs: 10, maxItems: 2 }),
+      (e) => e.some((x) => x.type === "delta"),
+    );
+    await watcher.stop();
+    expect(calls.filter((c) => new URL(c).searchParams.get("watch") !== "1")).toHaveLength(1); // the second page wasn't asked
+    expect(watcher.snapshot().map((o) => o.metadata.uid).sort()).toEqual(["u1", "u2"]);
+    expect(watcher.snapshot().find((o) => o.metadata.uid === "u1")!.metadata.resourceVersion).toBe("12");
+    expect(watcher.truncated).toBe(true);
+  });
+
+  it("cuts a single page that holds more than maxItems", async () => {
+    const { client } = scripted({ list: [json({ kind: "PodList", apiVersion: "v1", metadata: { resourceVersion: "1" }, items: [pod("u1", "1"), pod("u2", "2"), pod("u3", "3")] })], watch: [] });
+    const { watcher } = await collect((on) => new ResourceWatcher(client, { group: "", version: "v1", resource: "pods" }, on, { maxItems: 2 }), (e) => e.some((x) => x.type === "snapshot"));
+    await watcher.stop();
+    expect(watcher.snapshot()).toHaveLength(2);
+    expect(watcher.truncated).toBe(true);
+  });
+
+  it("is not truncated when everything fits, and refuses a cap that isn't a positive integer", async () => {
+    const { client } = scripted({ list: [json({ kind: "PodList", apiVersion: "v1", metadata: { resourceVersion: "1" }, items: [pod("u1", "1"), pod("u2", "2")] })], watch: [] });
+    const { watcher } = await collect((on) => new ResourceWatcher(client, { group: "", version: "v1", resource: "pods" }, on, { maxItems: 2 }), (e) => e.some((x) => x.type === "snapshot"));
+    await watcher.stop();
+    expect(watcher.truncated).toBe(false);
+    for (const maxItems of [0, -1, 1.5, Number.NaN, Infinity]) {
+      expect(() => new ResourceWatcher(client, { group: "", version: "v1", resource: "pods" }, () => {}, { maxItems })).toThrow(RangeError);
+    }
+  });
+});

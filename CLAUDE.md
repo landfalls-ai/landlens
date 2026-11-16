@@ -17,7 +17,8 @@ suggestions. The study and the approved plan are in `docs/`; the code is being b
 ## Layout
 
 - `apps/desktop` (Electron main, preload, sandboxed React renderer), `packages/contracts` (typed IPC),
-  `packages/kube` (catalog, sidecar, front door, policies, watches), `sidecar/kube-proxy` (Go credential holder).
+  `packages/kube` (catalog, sidecar, front door, policies, watches), `packages/views` (Views on demand: the view
+  document's schema, field paths, transforms, patches, limits), `sidecar/kube-proxy` (Go credential holder).
   `docs/architecture.md` has the code map; `docs/security.md` every security rule and its test.
 
 - `upstream/` (git-ignored): the open-source projects we study, pinned by `scripts/fetch-upstream.sh`: OpenLens

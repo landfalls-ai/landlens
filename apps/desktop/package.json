@@ -9,8 +9,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json",
-    "test": "vitest run --dir test --exclude '**/*.e2e.test.ts'",
-    "test:integration": "echo none",
+    "test": "vitest run --dir test --exclude '**/*.e2e.test.ts' --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run --dir test integration",
     "test:e2e": "electron-vite build && LANDLENS_INTEGRATION=${LANDLENS_INTEGRATION:-orbstack} vitest run --dir test --no-file-parallelism e2e",
     "check:fuses": "node scripts/check-fuses.mjs"
   },
@@ -27,6 +27,7 @@
     "@landlens/mcp-gateway": "workspace:*",
     "@landlens/metrics": "workspace:*",
     "@landlens/telemetry": "workspace:*",
+    "@landlens/views": "workspace:*",
     "node-pty": "1.1.0"
   },
   "devDependencies": {

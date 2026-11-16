@@ -554,6 +554,29 @@ checked for scheme only, and its host is shown before it opens. Left open by par
 instructions), so they reach a prompt only as quoted data under the hold above. Traces are found by service name, so
 two workloads with the same `app` label in different namespaces share a list.
 
+## Views on demand
+
+Wave 10 ([spec](specs/010-views/spec.md), [tasks](specs/010-views/tasks.md)). A view is a document Claude writes: what
+to read (sources), how to shape it (transforms) and how to show it (blocks). Part 1 is the engine in main; nothing
+opens a view until part 2 gives the page its channels. The spec's other rows (the page, app blocks, intents, saved
+views, connections) become true with parts 2–4.
+
+| Rule | How it's checked |
+|---|---|
+| A view document is validated in main by a strict schema before anything runs: every object `.strict()`, a closed catalog of sources and steps, `secrets` refused by name with a fixed sentence, selectors of a fixed charset, field paths that never name `__proto__`, `constructor` or `prototype` and read own properties only, no `<html>`, `<head>`, `<base>`, `<meta>`, `<iframe>`, `<object>`, `<embed>`, `<link>` or `<form>` in a fragment's html, css or js, no invisible characters in its text, every D225 limit (each limit can only be narrowed, never raised or set to NaN or Infinity). A patch is checked whole: a stale base first, `~` escapes and forbidden tokens, then the result against the schema; any failure leaves the document as it was | `schema.test.ts` (each limit at and one past), `path.test.ts`, `patch.test.ts`, `transform.test.ts` (a property test: no step returns a key outside its declared fields) |
+| A view reads with its own front-door token, `view · <context>`: the agent's read-only policy (get, list and watch only, never Secrets, every answer scrubbed: env values, last-applied configuration, credential shapes) and the namespaces of the session that built it. Its client reaches only the front door (`frontDoorFetch`: https on 127.0.0.1 with the `/c/<handle>/` prefix and the run's CA pinned), so the policy, the scrub and the audit apply to every read. The token is revoked when the view closes, when its cluster goes, and when the window reloads, crashes or closes and at quit; revoking it ends its open watches and logs | `view-runtime.test.ts` (the policy and label; revoked on close, cluster gone and `closeAll`), `frontdoor-fetch.test.ts` (Secrets, writes and other namespaces refused, scrubbed, a revoked token ends a watch, the token never sent elsewhere), `view-runtime.integration.test.ts` on OrbStack |
+| A source naming a namespace outside the view's limit is `forbidden` and sends no request; `"*"` in a limited view is one read per namespace of the limit; usage for the whole cluster or a node in a limited view is refused | `view-runtime.test.ts` (no request with `kube-system` in it) |
+| Two sources are derived by Landlens with your read, in a closed shape, and nothing else is: the doctor's problems (only the view's namespaces, each text one cleaned line, the checks that were skipped said) and Helm's release summaries (eight fields, each held to its shape; values, notes and manifests never) | `view-runtime.test.ts`, `helmRows`; integration (`landlens-demo`'s eight fields) |
+| Every cell is one line, cleaned of control, format, separator, private-use and invisible characters before it is redacted (so a zero-width character can't split a credential past the scrub) and redacted before it is cut, at most 2,000 characters; a path to an object or a list gives no value | `path.test.ts` (`cellText`) |
+| No silent all-clear: a source is `loading`, `ok`, `forbidden`, `unknown`, `unavailable`, `off` or `error`, each with a fixed sentence; a failed read never shows as an empty list; a watch cut at 10,000 objects, rows cut at 2,000, a workload's log following some of its pods, Helm releases it couldn't read, hidden owner watches it couldn't read, and a join whose other side isn't read whole are each said, with `truncated` | `view-runtime.test.ts`, `watch.test.ts` |
+| Bounded: 4 open views, 24 reads a view, shared by target; at most one push a second per source; Refresh at most once in 5 s; a hidden view's reads stop after 30 s; nothing read for an older version, parameter or a closed view is delivered (a poll's run number, the current-feed check and the push's generation, each enough alone) | `view-runtime.test.ts` (held reads released after a parameter change and after close) |
+| The runtime's arguments are checked as IPC requests are: the handle, at most 50 namespace names, parameter names and values (a namespace parameter must be a namespace name, a choice one of its options), 16-hex view ids; an extra field is refused | `view-runtime.test.ts` |
+
+Part 1's rows were checked by removing each rule once (42 mutations, each failing its test; the layered ones fail with
+every layer removed). Its Fable review is still to come. Left open, to state there: a view shows the agent's scrubbed
+reading, so it can differ from the drawer; the doctor's and Helm's sources are read with your access, which is why
+their shape is closed.
+
 ## What this doesn't stop
 
 Landlens runs as you. Another process running as your user can read your kubeconfig directly, and could read

@@ -1896,6 +1896,51 @@ export type AgentStatus =
   | { state: "starting" | "ready" }
   | { state: "stopped"; message: string }
   | { state: "answered"; request: string };
+// Views on demand (wave 10, docs/specs/010-views): what a view's sources deliver. The view document's own schema and
+// type are in @landlens/views (it needs these names, so a re-export here would make the two packages a cycle).
+/** A view's id: 16 hex characters, made by main. */
+export const ViewId = z.string().regex(/^[0-9a-f]{16}$/, "not a view id");
+export type ViewId = z.infer<typeof ViewId>;
+/**
+ * The object a row of a `kube.*` source is (D207): built by main from the object itself, never from the document's
+ * fields, so opening or acting on a row can't be pointed elsewhere.
+ */
+export const RowRef = z.object({
+  group: GroupName,
+  version: VersionName,
+  resource: ResourceName,
+  kind: KindName,
+  namespace: NamespaceName.optional(),
+  name: ObjectName,
+}).strict();
+export type RowRef = z.infer<typeof RowRef>;
+/** One value of a row: strings are cleaned and cut to 2,000 characters by main. */
+export type ViewCell = string | number | boolean | null;
+export type ViewTone = "ok" | "warn" | "bad" | "muted";
+/** A row: the source's fields, plus the hidden `_ref` (kube rows) and `_tone`. */
+export type ViewRow = { [field: string]: ViewCell | RowRef | undefined; _ref?: RowRef; _tone?: ViewTone };
+/**
+ * loading (nothing read yet); ok; forbidden (the view's scope or your RBAC); unknown (the cluster has no such kind);
+ * unavailable (the cluster has no metrics-server, say); off (a connection isn't readable now); error (a read failed).
+ * Anything but ok comes with one of D222's fixed sentences in `message`, so an empty list is never an all-clear.
+ */
+export type ViewSourceState = "loading" | "ok" | "forbidden" | "unknown" | "unavailable" | "off" | "error";
+export type ViewLogLine = { n: number; text: string; failure: boolean };
+export type SourceData = {
+  state: ViewSourceState;
+  /** One of D222's fixed sentences: why the state isn't ok, or what was left out when `truncated`. */
+  message?: string;
+  rows: ViewRow[];
+  /** Rows before the 2,000-row cut (or lines, for a log). */
+  total: number;
+  /** Something was left out: rows past 2,000, objects past 10,000, a log's older lines, a doctor check not made. */
+  truncated: boolean;
+  /** When main last changed this (ms), 0 before the first read. */
+  at: number;
+  series?: MetricsSeries;
+  lines?: ViewLogLine[];
+};
+
 export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 
 /** Main → renderer push channels. */

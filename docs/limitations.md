@@ -54,7 +54,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
   guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
 - **The sidebar is 232px wide, always** ([design.md](design.md#layout)): its sections fold (D139), but it has no drag
-  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 13) moves both
+  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 14) moves both
   to a settings file.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
@@ -121,8 +121,14 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
   main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
   only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
+- **Views on demand has only its engine** ([spec](specs/010-views/spec.md), wave 10 part 1): the view document, its
+  checks and the runtime that reads a view's sources with its own read-only token are in main, but no page, channel or
+  Claude tool opens a view yet (parts 2–4: the page and `landlens-views`, native blocks and actions, saving and the
+  connections' sources). When it does, a view shows what Claude could read, so env values show as `<redacted>` and
+  Secrets never appear; usage over time is never read from Cloud Monitoring (a view has no Google grant); a
+  workload's log follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
-- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 13).
+- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 14).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
   both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
