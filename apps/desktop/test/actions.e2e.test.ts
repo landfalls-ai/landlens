@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chooseNamespace } from "./e2e-helpers";
 
 const run = (process.env.LANDLENS_INTEGRATION ?? "").split(",").includes("orbstack");
 const shots = process.env.LANDLENS_SHOTS;
@@ -36,7 +37,7 @@ describe.runIf(run)("your actions on OrbStack", () => {
     // A sheet left open by an earlier failure would cover the sidebar.
     if (await sheet().count()) await page.keyboard.press("Escape");
     await page.getByRole("button", { name: kind, exact: true }).click();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
     const row = page.locator(".tr", { hasText: name }).first();
     await row.waitFor({ timeout: 30_000 });
     return row;

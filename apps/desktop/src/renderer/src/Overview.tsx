@@ -2,7 +2,7 @@
 // them all), the recent warnings, and the nodes. All from cluster:health (packages/kube/src/health.ts), which the agent's cluster_overview shares.
 import type { ClusterHealth, HealthEvent, HealthProblem, MetricsRange, MetricsSeries } from "@landlens/contracts";
 import { age } from "@landlens/kube/status";
-import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
+import { ChevronRight, CircleCheck, CircleDashed, CircleX, Clock, Layers, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Ic, iconOfKind, kindIcon } from "./icons";
 import { plural } from "./health";
@@ -26,6 +26,8 @@ export function Overview(props: {
   error?: ApiError;
   /** A namespace is chosen; when not, a 403 means the account can't read across all namespaces. */
   scoped?: boolean;
+  /** Several namespaces are chosen (D158): this page still shows the whole cluster, and says so. */
+  several?: number;
   onNamespace?: (ns: string) => void;
   now: number;
   onOpenList: (resource: "nodes" | "pods" | "deployments", failing?: boolean) => void;
@@ -59,6 +61,7 @@ export function Overview(props: {
   const p = h.pods;
   return (
     <div className="ov">
+      {props.several ? <div className="chip ov-scope" role="note"><Ic icon={Layers} size={12} />{props.several} namespaces selected: this page shows the whole cluster</div> : null}
       <Verdict h={h} onAsk={props.onAskAll} />
       <ChecksStrip h={h} />
       <div className="tiles">

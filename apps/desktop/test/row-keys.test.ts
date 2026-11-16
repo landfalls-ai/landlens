@@ -19,4 +19,14 @@ describe("a row's keys", () => {
     expect(key("l", { onRow: false })).toBeUndefined();
     expect(key("Enter", { onRow: false })).toBeUndefined();
   });
+
+  it("part 3 (D156): x or Space toggles the row, ⌘A or Ctrl+A takes every row shown; neither from a field in the row or held down", () => {
+    expect(["x", "X", " "].map((k) => key(k))).toEqual(["toggle", "toggle", "toggle"]);
+    expect(key("a", { metaKey: true })).toBe("all");
+    expect(key("a", { ctrlKey: true })).toBe("all");
+    expect(key("a", { metaKey: true, shiftKey: true })).toBeUndefined();
+    expect(key("x", { onRow: false })).toBeUndefined();
+    expect(key(" ", { repeat: true })).toBeUndefined();
+    expect(key("a")).toBeUndefined();
+  });
 });

@@ -261,7 +261,7 @@ export class ActionService {
     const what = targets.length === 1 ? `${t0.namespace ? `${t0.namespace}/` : ""}${t0.name}` : `${targets.length} ${t0.type.resource}`;
     const verb = a.kind === "suspend" && !a.suspend ? "resume" : a.kind;
     const deadline = this.now + REVIEW_MS;
-    const res = await asYou(this.d, r.handle, `${verb} ${what}`, async (unguarded): Promise<{ review: ActionReview; detail?: string; reasons?: string[] }> => {
+    const res = await asYou(this.d, r.handle, `${verb} ${what}`, async (unguarded): Promise<{ review: ActionReview; detail?: string; reasons?: string[]; kept?: ActionTarget[] }> => {
       // Every series goes through D153's fence (a Node's delete is a node write too).
       // The review's reads and dry runs share one minute.
       const send = bounded(this.guard(r.handle, unguarded), () => deadline - this.now, SLOW_REVIEW);
@@ -285,39 +285,43 @@ export class ActionService {
         if (e instanceof ActionError) throw fail(e.status, e.message);
         throw e;
       }
-      const review = await this.edits.reviewOps(send, ops);
+      // Several objects (part 3, D156): one refused at the dry run is left out, shown as a problem on its own line, and
+      // the rest stand. Everything after this (facts, main's dialog, its count, the title, the log) is about the kept.
+      const review = await this.edits.reviewOps(send, ops, { leaveOut: targets.length > 1 });
       if (!review.id) {
         const { prepared: _none, ...rest } = review;
         return { review: rest as ActionReview };
       }
+      const kept = keptTargets(targets, review.prepared);
       let facts: ActionFact[];
       try {
-        facts = await this.facts(send, a, targets, review.prepared, cronJob);
+        facts = await this.facts(send, a, kept, review.prepared, cronJob);
       } catch {
         facts = [{ tone: "info", code: "couldnt-check", text: "Landlens couldn't check what else this touches." }];
       }
       // Main's dialog is decided from every fact, before they are cut to the card's eight (M4, M5).
-      const reasons = asksInMain(a.kind, targets, facts, review.prepared.map((p) => ({ group: p.op.type.group, resource: p.op.type.resource, obj: p.current })));
+      const reasons = asksInMain(a.kind, kept, facts, review.prepared.map((p) => ({ group: p.op.type.group, resource: p.op.type.resource, obj: p.current })));
       const before = (review.prepared[0]?.current as any)?.spec?.replicas;
       const detail = a.kind === "scale" && typeof before === "number" ? `${before} → ${a.replicas} replica${a.replicas === 1 ? "" : "s"}` : undefined;
       // The current objects go once the facts are made: nothing of them is kept.
       const { prepared: _drop, ...rest } = review;
-      return { review: { ...rest, facts: capFacts(facts) } as ActionReview, reasons, ...(detail ? { detail } : {}) };
+      return { review: { ...rest, facts: capFacts(facts) } as ActionReview, reasons, kept, ...(detail ? { detail } : {}) };
     });
-    const { review: out, detail, reasons } = res as { review: ActionReview; detail?: string; reasons?: string[] };
+    const { review: out, detail, reasons, kept: keptOrAll } = res as { review: ActionReview; detail?: string; reasons?: string[]; kept?: ActionTarget[] };
     if (!out.id) return out;
+    const kept = keptOrAll ?? targets;
     const context = this.d.clusters.get(r.handle).info.context;
-    const title = titleOf(a, targets);
-    const native = asksAlways(a, targets, reasons ?? []);
+    const title = titleOf(a, kept);
+    const native = asksAlways(a, kept, reasons ?? []);
     const { digest: requests, ...card } = { ...out, title, ...(native ? { native: true as const } : {}) };
     const digest = cardDigest(card, requests);
     this.remember(out.id, {
       wc, handle: r.handle, expires: this.now + EDIT_TTL_MS, digest, ...(requests ? { requests } : {}),
-      question: questionOf(a, targets, context, reasons ?? []), native, objects: a.kind === "trigger" ? 1 : targets.length, cancels: 0,
+      question: questionOf(a, kept, context, reasons ?? []), native, objects: a.kind === "trigger" ? 1 : kept.length, cancels: 0,
       log: {
         action: verb, kind: t0.type.kind, group: t0.type.group, resource: t0.type.resource,
-        ...(t0.namespace && targets.every((t) => t.namespace === t0.namespace) ? { namespace: t0.namespace } : {}),
-        names: a.kind === "trigger" ? [t0.name] : targets.map((t) => t.name), ...(detail ? { detail } : {}),
+        ...(kept[0]!.namespace && kept.every((t) => t.namespace === kept[0]!.namespace) ? { namespace: kept[0]!.namespace } : {}),
+        names: a.kind === "trigger" ? [t0.name] : kept.map((t) => t.name), ...(detail ? { detail } : {}),
       },
     });
     return { ...card, digest };
@@ -854,6 +858,16 @@ export function asksAlways(a: Action, ts: ActionTarget[], reasons: string[]): bo
   if (a.kind === "delete") return ts.length > 1 || reasons.length > 0;
   if (a.kind === "restart") return ts.length > CARD_BUDGET;
   return false;
+}
+
+/**
+ * The targets whose operation passed its dry run (part 3, D156), in the window's order: a bulk review keeps those and
+ * leaves the refused out, so main's dialog, its count, the title and the log name only what Apply can send.
+ */
+export function keptTargets(targets: ActionTarget[], prepared: { op: { namespace?: string; name: string } }[]): ActionTarget[] {
+  if (prepared.length === targets.length) return targets;
+  const ok = new Set(prepared.map((p) => `${p.op.namespace ?? ""}/${p.op.name}`));
+  return targets.filter((t) => ok.has(`${t.namespace ?? ""}/${t.name}`));
 }
 
 /** The dialog's line when a window is past its budget (M2). */

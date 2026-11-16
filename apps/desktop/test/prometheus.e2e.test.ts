@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chooseNamespace } from "./e2e-helpers";
 
 const run = (process.env.LANDLENS_INTEGRATION ?? "").split(",").includes("orbstack");
 const shots = process.env.LANDLENS_SHOTS;
@@ -63,7 +64,7 @@ describe.runIf(run)("graphs from Prometheus on OrbStack", () => {
 
   it("draws a deployment's pods in its Metrics tab", async () => {
     await page.getByRole("button", { name: "Deployments", exact: true }).click();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
     await page.locator(".tr", { hasText: "landlens-demo" }).first().click();
     await page.getByRole("tab", { name: "Metrics" }).click();
     const tab = page.locator(".mtab");

@@ -6,6 +6,7 @@ import { Ic, kindIcon, TONE_ICON } from "./icons";
 import type { Cell, Column } from "./kinds";
 import { restartTone, splitName, statusTone } from "./present";
 import { rowKey } from "./rowKeys";
+import { headState, headToggled, rangeToggled, toggled, type Sort } from "./tableState";
 
 const ROW = 32;
 const NUMERIC = new Set(["restarts", "age", "count", "last", "keys"]);
@@ -41,9 +42,23 @@ export function ResourceTable(props: {
   onMenu?: (o: KubeObject, x: number, y: number) => void;
   /** Single-key actions on the focused row (D6): L logs, S shell. */
   onAction?: (o: KubeObject, action: "logs" | "shell" | "edit" | "delete") => void;
+  /** Column ids you hid (D157); Name never is. The width rules apply to what is left. */
+  hidden?: readonly string[];
+  /** The sort, held by the caller so it is remembered per kind (D157); without it the table keeps its own. */
+  sort?: Sort;
+  onSort?: (s: Sort) => void;
+  /**
+   * Checkboxes and bulk selection (D156), by uid: a checkbox column, a tri-state head over the rows shown, Shift+click
+   * for a range, `x` or Space on a row, ⌘A. Without it the table is as before (Problems, Helm).
+   */
+  selection?: { uids: ReadonlySet<string>; onChange: (uids: Set<string>) => void };
 }) {
-  const { items, now } = props;
-  const [sort, setSort] = useState<{ id: string; dir: 1 | -1 }>({ id: "name", dir: 1 });
+  const { items, now, selection } = props;
+  const [ownSort, setOwnSort] = useState<Sort>({ id: "name", dir: 1 });
+  const sort = props.sort ?? ownSort;
+  const setSort = (f: (s: Sort) => Sort) => (props.onSort ? props.onSort(f(sort)) : setOwnSort(f));
+  // The last row whose checkbox was toggled: Shift+click takes the range from it.
+  const anchor = useRef<string>(undefined);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(600);
   const [focus, setFocus] = useState(-1);
@@ -62,11 +77,11 @@ export function ResourceTable(props: {
     const drop = (id: string) =>
       (id === "node" && w < 860) || (id === "ready" && hasStatus && w < 700) || (id === "age" && w < 600) ||
       (id === "namespace" && (props.oneNamespace || w < 540)) || (id === "restarts" && w < 470);
-    const kept = props.columns.filter((c) => !drop(c.id));
+    const kept = props.columns.filter((c) => !drop(c.id) && (c.id === "name" || !props.hidden?.includes(c.id)));
     const status = kept.find((c) => c.id === "status");
     if (!covered || !status || w >= 420) return kept;
     return [{ ...status, id: "status-icon", label: "", width: "32px" }, ...kept.filter((c) => c !== status)];
-  }, [props.columns, props.width, props.oneNamespace, covered]);
+  }, [props.columns, props.width, props.oneNamespace, covered, props.hidden]);
 
   const rows = useMemo(() => {
     const col = props.columns.find((c) => c.id === sort.id) ?? props.columns[0]!;
@@ -94,13 +109,20 @@ export function ResourceTable(props: {
     }
   }, [items, props.columns, now]);
 
-  const widths = columns.map((c) => c.width ?? "minmax(100px, 1fr)");
+  const widths = [...(selection ? ["28px"] : []), ...columns.map((c) => c.width ?? "minmax(100px, 1fr)")];
   const template: CSSProperties = { gridTemplateColumns: widths.join(" ") };
   // The narrowest the columns can go; below that the table scrolls sideways instead of clipping columns.
   const minWidth = widths.reduce((sum, w) => sum + Number(/(\d+)px/.exec(w)?.[1] ?? 100), 0) + 28;
   const first = Math.max(0, Math.floor(scrollTop / ROW) - 10);
   const last = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW) + 10);
   const split = SPLIT.has(props.resource);
+  const order = useMemo(() => rows.map((o) => o.metadata.uid), [rows]);
+  const head = selection ? headState(selection.uids, order) : "none";
+  const toggle = (uid: string, range: boolean) => {
+    if (!selection) return;
+    selection.onChange(range ? rangeToggled(selection.uids, order, anchor.current, uid) : toggled(selection.uids, uid));
+    anchor.current = uid;
+  };
 
   const moveFocus = (to: number) => {
     const el = box.current;
@@ -119,9 +141,19 @@ export function ResourceTable(props: {
   };
 
   return (
-    <div className="table" role="grid" aria-rowcount={rows.length}>
+    <div className="table" role="grid" aria-rowcount={rows.length} {...(selection ? { "aria-multiselectable": true } : {})}>
       <div className="table-inner" style={{ minWidth }}>
         <div className="thead" style={template} role="row">
+          {selection ? (
+            <span role="columnheader" className="th th-check">
+              <span role="checkbox" className={`tick${head !== "none" ? " on" : ""}`} tabIndex={0} aria-checked={head === "all" ? "true" : head === "some" ? "mixed" : "false"}
+                aria-label="Select every row shown" title={head === "all" ? "Clear the rows shown" : "Select every row shown"}
+                onClick={() => selection.onChange(headToggled(selection.uids, order))}
+                onKeyDown={(e) => (e.key === " " || e.key === "Enter") && !e.repeat && (e.preventDefault(), selection.onChange(headToggled(selection.uids, order)))}>
+                {head === "all" ? <Ic icon={Check} size={11} /> : head === "some" ? <Ic icon={Minus} size={11} /> : null}
+              </span>
+            </span>
+          ) : null}
           {columns.map((c) => {
             const id = c.id === "status-icon" ? "status" : c.id;
             const on = sort.id === id;
@@ -148,6 +180,7 @@ export function ResourceTable(props: {
           }}
           onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
           onKeyDown={onKey}
+          onMouseDown={(e) => e.shiftKey && (e.target as HTMLElement).closest(".tick") && e.preventDefault()}
         >
           {props.loading ? (
             <Skeleton />
@@ -163,13 +196,15 @@ export function ResourceTable(props: {
                 const idx = first + i;
                 const tone = rowTone(props.columns, o, now);
                 const flash = Date.now() - (changedAt.current.get(o.metadata.uid) ?? 0) < 600;
+                const checked = !!selection?.uids.has(o.metadata.uid);
                 return (
                   <div
                     key={o.metadata.uid}
                     role="row"
                     data-idx={idx}
                     tabIndex={idx === focus || (focus < 0 && idx === 0) ? 0 : -1}
-                    className={"tr" + (props.selected === o.metadata.uid ? " selected" : "") + (tone === "bad" || tone === "warn" ? ` row-${tone}` : "") + (flash ? " flash" : "")}
+                    className={"tr" + (props.selected === o.metadata.uid ? " selected" : "") + (checked ? " checked" : "") + (tone === "bad" || tone === "warn" ? ` row-${tone}` : "") + (flash ? " flash" : "")}
+                    {...(selection ? { "aria-selected": checked } : {})}
                     style={{ ...template, position: "absolute", top: idx * ROW, left: 0, right: 0, height: ROW }}
                     onClick={() => {
                       setFocus(idx);
@@ -184,6 +219,12 @@ export function ResourceTable(props: {
                     onKeyDown={(e) => {
                       const k = rowKey({ key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, repeat: e.repeat, onRow: e.target === e.currentTarget });
                       if (k === "select") return props.onSelect(o);
+                      // The selection's keys (D156): x or Space toggles this row, ⌘A takes every row shown.
+                      if (k === "toggle" || k === "all") {
+                        if (!selection) return;
+                        e.preventDefault();
+                        return k === "toggle" ? toggle(o.metadata.uid, false) : selection.onChange(new Set([...selection.uids, ...order]));
+                      }
                       if (k === "menu") {
                         e.preventDefault();
                         const r = e.currentTarget.getBoundingClientRect();
@@ -194,6 +235,14 @@ export function ResourceTable(props: {
                       if (k) props.onAction?.(o, k);
                     }}
                   >
+                    {selection ? (
+                      <span role="gridcell" className="td td-check">
+                        <span role="checkbox" className={`tick${checked ? " on" : ""}`} aria-checked={checked} aria-label={`Select ${o.metadata.name}`}
+                          onClick={(e) => (e.stopPropagation(), setFocus(idx), toggle(o.metadata.uid, e.shiftKey))}>
+                          {checked ? <Ic icon={Check} size={11} /> : null}
+                        </span>
+                      </span>
+                    ) : null}
                     {columns.map((c) => <Td key={c.id} col={c} cell={c.cell(o, now)} o={o} rowTone={tone} split={split} />)}
                   </div>
                 );

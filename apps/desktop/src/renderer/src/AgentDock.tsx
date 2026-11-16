@@ -30,8 +30,11 @@ export function AgentDock(props: {
   context: AskContext[];
   onContextChange: (c: AskContext[]) => void;
   onClose: () => void;
-  /** A question to send as soon as the session is ready (Overview's "Ask Claude what's wrong"). */
-  pending?: { id: number; text: string };
+  /**
+   * A question to send as soon as the session is ready (Overview's "Ask Claude what's wrong"). `draft`: put it in the
+   * box selected, for you to overwrite, and send nothing ("Ask Claude about these N", D160).
+   */
+  pending?: { id: number; text: string; draft?: true };
   /** A third suggestion, built from the cluster's worst problem. */
   suggestion?: string;
   /** What Claude is doing, for the status bar. */
@@ -54,6 +57,7 @@ export function AgentDock(props: {
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
+  const selectDraft = useRef(false);
   const [mode, setMode] = useState<string>();
   const [fence, setFence] = useState(false);
   const [panel, setPanel] = useState<"history">();
@@ -217,6 +221,11 @@ export function AgentDock(props: {
   useEffect(() => {
     if (info && props.pending && sent.current !== props.pending.id) {
       sent.current = props.pending.id;
+      if (props.pending.draft) {
+        if (draft === props.pending.text) return void (box.current?.focus(), box.current?.select());
+        selectDraft.current = true;
+        return setDraft(props.pending.text);
+      }
       // Busy with a turn: the question waits in the box with its chips, and sending is left to you (D64).
       if (busy) setDraft(props.pending.text);
       else void send(props.pending.text);
@@ -233,10 +242,15 @@ export function AgentDock(props: {
   }, [busy, asks.length, items, waiting.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => props.onActivity(undefined), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The composer grows with its text, up to eight lines.
+  // The composer grows with its text, up to eight lines. A draft put there for you to overwrite is selected (D160).
   useEffect(() => {
     const el = box.current;
     if (!el) return;
+    if (selectDraft.current) {
+      selectDraft.current = false;
+      el.focus();
+      el.select();
+    }
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 156)}px`;
   }, [draft]);

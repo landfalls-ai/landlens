@@ -3,9 +3,13 @@
 // last, in the bad colour. An action the person's role can't take is shown disabled with the reason; RBAC is read
 // through `cluster:access` (SelfSubjectAccessReview as you) and kept 60 seconds. A Secret has Delete only, and no
 // Ask Claude. Arrow keys, Home and End, type-ahead, Esc.
+// Part 3 (D159): Ask Claude opens a submenu of the kind's preset asks (→ or a click or hover; ← or Esc goes back),
+// with "Why is this failing?" first on a row in trouble; its first item attaches the object without a question.
 import type { ActionKind, KubeObject, ResourceType } from "@landlens/contracts";
-import { Ban, CircleCheck, CircleSlash, Copy, LogOut, Pause, Pencil, Play, RotateCcw, Scale, ScrollText, Sparkles, SquareTerminal, Trash2 } from "lucide-react";
+import type { Tone } from "@landlens/kube/status";
+import { Ban, ChevronRight, CircleCheck, CircleSlash, Copy, LogOut, Paperclip, Pause, Pencil, Play, RotateCcw, Scale, ScrollText, Sparkles, SquareTerminal, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { presetsFor, type PresetId } from "./askPresets";
 import { accessFor, actionsFor, isSecretType } from "./actionAsks";
 import { api } from "./api";
 import { copyText } from "./present";
@@ -45,9 +49,9 @@ const cant = (k: ActionKind, type: ResourceType, ns?: string) => {
   return `Your role can't ${a.verb} ${a.resource}${a.subresource ? `/${a.subresource}` : ""}${ns && type.namespaced ? ` in ${ns}` : ""}`;
 };
 
-type Item = { key: string; label: string; icon: LucideIcon; kbd?: string; disabled?: boolean; why?: string; tone?: "bad"; run: () => void; section: string };
+type Item = { key: string; label: string; icon: LucideIcon; kbd?: string; disabled?: boolean; why?: string; tone?: "bad"; run: () => void; section: string; sub?: true };
 
-export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction, onAsk, onClose, label }: {
+export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction, onAsk, onPreset, tone, onClose, label }: {
   at: { x: number; y: number };
   handle: string;
   type: ResourceType;
@@ -58,10 +62,19 @@ export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction
   /** `flag`: suspend (true) or resume for Suspend; cordon (true) or uncordon for Cordon. */
   onAction: (kind: ActionKind, flag?: boolean) => void;
   onAsk: () => void;
+  /** A preset ask (D159): its fixed question, with the object attached as Ask Claude attaches it. */
+  onPreset?: (id: PresetId) => void;
+  /** The row's tone: "Why is this failing?" comes first when it is bad or warn. */
+  tone?: Tone;
   onClose: () => void;
   label?: string;
 }) {
   const self = useRef<HTMLDivElement>(null);
+  const subBox = useRef<HTMLDivElement>(null);
+  const [sub, setSubNow] = useState<{ top: number }>();
+  const subOpen = useRef(false);
+  const setSub = (v: { top: number } | undefined) => ((subOpen.current = !!v), setSubNow(v));
+  const presets = onPreset ? presetsFor(type, tone) : [];
   const secret = isSecretType(type);
   const acts = actionsFor(type, o);
   const can = useCanAct(handle, type, o.metadata.namespace, acts.map((a) => a.kind));
@@ -80,18 +93,42 @@ export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction
     const icon = ICON[a.kind === "suspend" && !a.suspend ? "resume" : a.kind === "cordon" && !a.on ? "uncordon" : a.kind];
     items.push({ section: "Actions", key: a.kind, label: a.label, icon, disabled: no, ...(no ? { why: cant(a.kind, type, o.metadata.namespace) } : {}), run: run(() => onAction(a.kind, a.kind === "cordon" ? a.on : a.suspend)) });
   }
-  if (!secret) items.push({ section: "Ask", key: "ask", label: "Ask Claude", icon: Sparkles, run: run(onAsk) });
+  if (!secret) {
+    items.push(presets.length
+      ? { section: "Ask", key: "ask", label: "Ask Claude", icon: Sparkles, sub: true, run: () => openSub() }
+      : { section: "Ask", key: "ask", label: "Ask Claude", icon: Sparkles, run: run(onAsk) });
+  }
   items.push({ section: "Ask", key: "copy", label: "Copy name", icon: Copy, run: run(() => void copyText(o.metadata.name)) });
   if (acts.some((a) => a.kind === "delete")) {
     const no = can.delete === false;
     items.push({ section: "Delete", key: "delete", label: "Delete…", icon: no ? Ban : Trash2, kbd: "⌫", tone: "bad", disabled: no, ...(no ? { why: cant("delete", type, o.metadata.namespace) } : {}), run: run(() => onAction("delete")) });
   }
 
+  /** The Ask submenu, beside its item; focus on its first preset. */
+  const openSub = () => {
+    const item = self.current?.querySelector<HTMLElement>('[data-key="ask"]');
+    setSub({ top: item ? item.offsetTop - 4 : 0 });
+    setTimeout(() => subBox.current?.querySelector<HTMLButtonElement>("button[data-sub]:not([data-attach])")?.focus(), 0);
+  };
+  /** Hover opens the submenu without moving focus. */
+  const openSubQuiet = () => {
+    const item = self.current?.querySelector<HTMLElement>('[data-key="ask"]');
+    setSub({ top: item ? item.offsetTop - 4 : 0 });
+  };
+  const closeSub = () => {
+    setSub(undefined);
+    self.current?.querySelector<HTMLButtonElement>('[data-key="ask"]')?.focus();
+  };
+
   useEffect(() => {
     const close = (e: MouseEvent) => !self.current?.contains(e.target as Node) && onClose();
     const key = (e: KeyboardEvent) => {
-      const btns = [...(self.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+      // Inside the Ask submenu the keys move among its items; ← or Esc goes back to Ask Claude.
+      const inSub = subOpen.current;
+      const btns = [...(self.current?.querySelectorAll<HTMLButtonElement>(inSub ? "button[data-sub]:not(:disabled)" : "button[data-main]:not(:disabled)") ?? [])];
       const i = btns.indexOf(document.activeElement as HTMLButtonElement);
+      if (inSub && (e.key === "Escape" || e.key === "ArrowLeft")) return (e.preventDefault(), e.stopPropagation(), closeSub());
+      if (!inSub && e.key === "ArrowRight" && (document.activeElement as HTMLElement | null)?.dataset.key === "ask" && presets.length) return (e.preventDefault(), openSub());
       if (e.key === "Escape") return (e.preventDefault(), e.stopPropagation(), onClose());
       if (e.key === "Tab") return (e.preventDefault(), onClose());
       if (e.key === "ArrowDown" || e.key === "ArrowUp") return (e.preventDefault(), btns[(i + (e.key === "ArrowDown" ? 1 : btns.length - 1)) % btns.length]?.focus());
@@ -107,7 +144,7 @@ export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction
     };
     window.addEventListener("mousedown", close);
     window.addEventListener("keydown", key, true);
-    self.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    self.current?.querySelector<HTMLButtonElement>("button[data-main]:not(:disabled)")?.focus();
     return () => {
       window.removeEventListener("mousedown", close);
       window.removeEventListener("keydown", key, true);
@@ -126,14 +163,65 @@ export function ObjectMenu({ at, handle, type, object: o, pods, onOpen, onAction
         return (
           <div key={it.key} className="menu-group" role="none">
             {hr ? <hr /> : null}
-            <button className={`cluster-option${it.tone === "bad" ? " bad" : ""}${it.why ? " with-why" : ""}`} role="menuitem" data-label={it.label} disabled={!!it.disabled} title={it.why} onClick={it.run}>
+            <button className={`cluster-option${it.tone === "bad" ? " bad" : ""}${it.why ? " with-why" : ""}${it.sub && sub ? " on" : ""}`} role="menuitem" data-main="" data-key={it.key} data-label={it.label} disabled={!!it.disabled} title={it.why}
+              {...(it.sub ? { "aria-haspopup": "menu" as const, "aria-expanded": !!sub } : {})}
+              onClick={it.run} onMouseEnter={() => (it.sub ? !sub && openSubQuiet() : sub && setSub(undefined))}>
               <Ic icon={it.icon} size={14} />
               <span className="name">{it.label}{it.why ? <small className="why-line">{it.why}</small> : null}</span>
-              {!it.why && it.kbd ? <kbd>{it.kbd}</kbd> : null}
+              {it.sub ? <Ic icon={ChevronRight} size={13} className="sub-chev" /> : !it.why && it.kbd ? <kbd>{it.kbd}</kbd> : null}
             </button>
           </div>
         );
       })}
+      {sub ? (
+        <div ref={subBox} className={`menu object-menu ask-sub${left + 240 + 236 > window.innerWidth ? " to-left" : ""}`} role="menu" aria-label="Ask Claude" style={{ top: sub.top }}>
+          <button className="cluster-option" role="menuitem" data-sub="" data-attach="" data-label="Attach" onClick={run(onAsk)}>
+            <Ic icon={Paperclip} size={14} /><span className="name">Attach to a question</span>
+          </button>
+          <hr />
+          {presets.map((p) => (
+            <button key={p.id} className="cluster-option" role="menuitem" data-sub="" data-label={p.label} onClick={run(() => onPreset!(p.id))}>
+              <Ic icon={Sparkles} size={14} /><span className="name">{p.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The drawer's Ask Claude caret (D159): the kind's preset asks as a small menu under it. Arrow keys, Home and End,
+ * Esc; a click outside closes it.
+ */
+export function PresetMenu({ at, type, tone, onPick, onClose }: { at: { x: number; y: number }; type: ResourceType; tone?: Tone; onPick: (id: PresetId) => void; onClose: () => void }) {
+  const self = useRef<HTMLDivElement>(null);
+  const presets = presetsFor(type, tone);
+  useEffect(() => {
+    const close = (e: MouseEvent) => !self.current?.contains(e.target as Node) && onClose();
+    const key = (e: KeyboardEvent) => {
+      const btns = [...(self.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      const i = btns.indexOf(document.activeElement as HTMLButtonElement);
+      if (e.key === "Escape" || e.key === "Tab") return (e.preventDefault(), e.stopPropagation(), onClose());
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") return (e.preventDefault(), btns[(i + (e.key === "ArrowDown" ? 1 : btns.length - 1)) % btns.length]?.focus());
+      if (e.key === "Home" || e.key === "End") return (e.preventDefault(), (e.key === "Home" ? btns[0] : btns.at(-1))?.focus());
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", key, true);
+    self.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const left = Math.max(8, Math.min(at.x, window.innerWidth - 228));
+  return (
+    <div ref={self} className="menu row-menu object-menu preset-menu" role="menu" aria-label="Preset asks" style={{ left, top: at.y }}>
+      {presets.map((p) => (
+        <button key={p.id} className="cluster-option" role="menuitem" onClick={() => (onClose(), onPick(p.id))}>
+          <Ic icon={Sparkles} size={14} /><span className="name">{p.label}</span>
+        </button>
+      ))}
     </div>
   );
 }

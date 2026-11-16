@@ -1,8 +1,10 @@
-// The main pane's toolbar: title and count, the status filter (pods), the namespace, the filter, and Ask Claude.
-import { ChevronDown, Folder, Plus, RefreshCw, Search, Sparkles } from "lucide-react";
+// The main pane's toolbar: title and count, the status filter (pods), the namespaces, the filter, the columns, Create
+// and Ask Claude. With rows selected (wave 8 part 3, D156) its right side is the selection bar.
+import { Plus, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 import { age } from "@landlens/kube/status";
 import { Ic, MOD } from "./icons";
+import { ColumnPicker, NamespacePicker, SelectionBar } from "./TablePickers";
 
 export type StatusFilter = "all" | "bad" | "warn";
 
@@ -13,7 +15,12 @@ export function Toolbar(props: {
   hideCount?: boolean;
   updatedAt?: string;
   seg?: { value: StatusFilter; all: number; bad: number; warn: number; onChange: (v: StatusFilter) => void };
-  namespaces?: { list: string[]; value: string; onChange: (ns: string) => void };
+  /** The namespaces chosen (none: all), several at once (D158). */
+  namespaces?: { list: string[]; value: string[]; onChange: (ns: string[]) => void };
+  /** The kind's columns, and the ones you hid (D157). */
+  columns?: { all: { id: string; label: string }[]; hidden: string[]; onChange: (hidden: string[]) => void };
+  /** Rows selected (D156): the selection bar takes the right side. */
+  selection?: { count: number; actions: ("restart" | "delete")[]; onAction: (k: "restart" | "delete") => void; onAsk?: () => void; onClear: () => void };
   filter?: { value: string; onChange: (v: string) => void; ref: RefObject<HTMLInputElement | null>; short: boolean };
   onAsk?: () => void;
   /** Create from YAML (D32). */
@@ -37,17 +44,8 @@ export function Toolbar(props: {
         </div>
       ) : null}
       <div className="grow" />
-      {props.namespaces ? (
-        <label className="field select">
-          <Ic icon={Folder} size={13} />
-          <span className="sr-only">Namespace</span>
-          <select value={props.namespaces.value} onChange={(e) => props.namespaces!.onChange(e.target.value)}>
-            <option value="">All namespaces</option>
-            {props.namespaces.list.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <Ic icon={ChevronDown} size={13} className="chev" />
-        </label>
-      ) : null}
+      {props.selection?.count ? <SelectionBar {...props.selection} /> : <>
+      {props.namespaces ? <NamespacePicker {...props.namespaces} /> : null}
       {props.filter ? (
         <label className={"field search" + (props.filter.short ? " short" : "")}>
           <Ic icon={Search} size={13} />
@@ -70,8 +68,10 @@ export function Toolbar(props: {
         </label>
       ) : null}
       {props.onRefresh ? <button className="icon-btn" aria-label="Refresh" title="Refresh" onClick={props.onRefresh}><Ic icon={RefreshCw} size={15} /></button> : null}
+      {props.columns ? <ColumnPicker {...props.columns} /> : null}
       {props.onCreate ? <button className="icon-btn create-btn" aria-label="Create from YAML" title="Create from YAML" onClick={props.onCreate}><Ic icon={Plus} size={15} /></button> : null}
       {props.onAsk ? <button className="ask-btn" aria-label="Ask Claude" title={`Ask Claude (${MOD}J)`} onClick={props.onAsk}><Ic icon={Sparkles} size={14} /><span className="ask-word">Ask Claude</span><kbd aria-hidden="true">{MOD}J</kbd></button> : null}
+      </>}
     </header>
   );
 }

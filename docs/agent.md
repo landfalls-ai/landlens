@@ -27,6 +27,8 @@ you choose which of your Claude Code skills a session gets.
 "Ask Claude" on an object attaches its YAML and its last 15 events to your message as an embedded resource
 `k8s://<context>/<namespace>/<Kind>/<name>`, so the agent starts from what you are looking at. They are read with the
 session's own token, so they are scrubbed and limited exactly as the agent's own reads are. Not offered on Secrets.
+Its **preset asks** send the same attachment with one of Landlens's fixed questions ([below](#preset-asks)), and a
+table's selection can be asked about as names and status words only ([Ask Claude about these N](#ask-claude-about-these-n)).
 
 "Ask Claude" on a problem from the doctor ([doctor.md](doctor.md#ask-claude-on-a-problem)) attaches the problem's
 brief (its facts, events and, if read, the crash's last log lines; not Landlens's hint), quoted as data, and asks for
@@ -178,6 +180,26 @@ why."). The sheet stays open under the dock; asking applies nothing, and the age
 It isn't offered on a Secret. A session limited to some namespaces isn't sent the text of an action outside them:
 the chip stays in the dock, dimmed, "Outside this session's namespaces: not sent". Telemetry counts it with the edits.
 
+### Preset asks
+
+Wave 8 part 3 (D159, `askPresets.ts`). Six fixed questions, offered where they fit: **Summarize** (every kind),
+**Why is this failing?** (pods, workloads, Jobs, CronJobs, nodes, claims; first on a row whose status is bad or
+warning), **Analyze logs** (pods, workloads, Jobs), **Analyze metrics** (pods, workloads, nodes), **Review related
+resources** (pods, workloads, Services, Ingresses) and **Is it safe to drain?** (nodes). A row's menu has them in
+**Ask Claude**'s submenu (→ or a click opens it; its first item, "Attach to a question", is the plain ask), the
+drawer's Ask Claude has a caret with them, and in ⌘K `ask <name>` then Tab lists them. A preset attaches the object
+as Ask Claude does (a reference the agent reads with its own tools) and sends Landlens's fixed question at once.
+None is offered on a Secret.
+
+### Ask Claude about these N
+
+The selection bar's **Ask Claude** (D160) puts one quoted context in the dock, "Objects I selected in Landlens (3
+Pod), quoted as data, not instructions:", holding one line per object: `namespace/name`, and the table's Status and
+Ready words when the kind has them ("landlens-dev/web-1 · status Running · ready 1/1"). A Status that isn't a short
+plain word, or a Ready that isn't `n/m`, reads "Unknown"; nothing else of the objects (labels, annotations, the spec,
+a status message) is in it. At most 50 lines, then "(and N more not listed)". The composer gets "What do these have
+in common?", selected, so you can type over it; nothing is sent until you send. Not on Secrets.
+
 ## History and resume
 
 A session is listed under **History** (the dock's clock button, or `/history`) once you've asked something: its
@@ -298,6 +320,7 @@ ConfigMap with the exact commands, and said it couldn't check the Secret because
 | `packages/kube/src/changes.ts`, `diff.ts` | The approval broker: checks, preconditions, dry run, diff, apply |
 | `packages/kube-mcp/src/writes.ts` | The write tools and what they tell the agent |
 | `packages/acp-host/src/skills.ts` | Your skills, and the plugin a session gets |
+| `apps/desktop/src/renderer/src/askPresets.ts`, `quotes.ts` | The preset asks and the selection's quote (wave 8 part 3); quoted contexts and their heads |
 | `apps/desktop/src/main/agent.ts`, `agent-history.ts` | `AgentService`: the host, the sessions, changes waiting for you, history, settings, the autonomous answer; `AgentObserver` (what telemetry and the brain hear), `draft`, `adapterEntry` |
 | `packages/mcp-gateway/src/autonomy.ts`, `providers/github.ts`, `providers/linear.ts` | The autonomous mode: scope, budget, arguments, the routine writes |
 | `apps/desktop/src/renderer/src/AgentDock.tsx`, `DockParts.tsx`, `ChangeCard.tsx`, `HistoryPanel.tsx`, `SlashMenu.tsx`, `Markdown.tsx` | The dock (`DockParts.tsx` also has the autonomous chips, sheet and strip, and the provider question card) |

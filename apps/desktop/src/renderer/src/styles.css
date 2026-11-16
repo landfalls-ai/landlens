@@ -254,6 +254,43 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
   .toolbar .field.search.short { width: 96px; }
 }
 @container main (max-width: 520px) { .toolbar .count-badge, .toolbar .updated { display: none; } .toolbar .field.select > .ic:first-child { display: none; } }
+/* the namespace button (D158): a field that opens a popover; the column picker (D157); the selection bar (D156) */
+.field.ns-btn { padding-right: 28px; cursor: pointer; color: var(--ink-3); font: inherit; }
+.field.ns-btn .ns-label { color: var(--ink); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field.ns-btn:focus-visible { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); }
+.field.ns-btn[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--accent-line); }
+@container main (max-width: 560px) { .toolbar .field.ns-btn .ns-label { max-width: 96px; } }
+.icon-btn.on { color: var(--accent); }
+.table-pop { position: fixed; z-index: 45; overflow-y: auto; box-shadow: inset 0 0 0 1px var(--line), var(--shadow-2); align-content: start; }
+.table-pop.measuring { visibility: hidden; }
+.table-pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+.table-pop .pop-filter { margin: 2px 2px 6px; height: 28px; width: auto; }
+.table-pop .pop-list { display: grid; gap: 1px; overflow-y: auto; max-height: 340px; }
+.pop-row { display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 8px; border-radius: var(--r-2); color: var(--ink-2); cursor: pointer; min-width: 0; }
+.pop-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop-row .mono { font-size: 12px; }
+.pop-row:hover, .pop-row:focus-visible { background: var(--hover); color: var(--ink); outline: none; box-shadow: none; }
+.pop-row:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-line); }
+.pop-row[aria-checked="true"] { color: var(--ink); }
+.pop-row[aria-disabled="true"] { cursor: default; color: var(--ink-3); }
+.pop-row > .ic { color: var(--ink-3); }
+.pop-row .only { opacity: 0; font-size: var(--t-115, 11.5px); padding: 2px 4px; border-radius: var(--r-1); }
+.pop-row:hover .only, .pop-row:focus-visible .only, .pop-row .only:focus-visible { opacity: 1; }
+.tick.fixed { opacity: .45; cursor: default; }
+.pop-empty, .pop-foot { padding: 6px 8px; }
+.pop-foot { border-top: 1px solid var(--line); margin-top: 4px; }
+.selection-bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.selection-bar .sel-count { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 8px; border-radius: var(--r-2); background: var(--sel); color: var(--ink); font-weight: 500; font-size: 12.5px; box-shadow: inset 0 0 0 1px var(--accent-line); }
+.selection-bar .sel-count .ic { color: var(--accent); }
+.selection-bar .sel-over { color: var(--warn-text); }
+.selection-bar button.secondary.sm, .selection-bar .ask-btn.sm { height: 26px; padding: 0 9px; font-size: 12.5px; }
+.selection-bar .sel-delete:not(:disabled), .selection-bar .sel-delete:not(:disabled) .ic { color: var(--bad-text); }
+.selection-bar button:disabled { opacity: .5; cursor: default; }
+/* A narrow pane (the dock open at 1024px): the bar's buttons become their icons, named for assistive tech. */
+@container main (max-width: 720px) {
+  .selection-bar .sel-word { display: none; }
+  .selection-bar button.secondary.sm, .toolbar .selection-bar .ask-btn.sm { width: 28px; padding: 0; justify-content: center; }
+}
 
 /* table */
 .table { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-x: auto; overflow-y: hidden; }
@@ -268,6 +305,13 @@ button.secondary:hover, .stop:hover { background: var(--bg-4); }
 .tr { display: grid; align-items: center; height: var(--row-h); border-radius: var(--r-2); position: relative; cursor: default; transition: background var(--dur-1) var(--ease); }
 .tr:hover { background: var(--hover); }
 .tr.selected { background: var(--sel); box-shadow: inset 0 0 0 1px var(--accent-line); }
+/* the selection (D156): a 28px checkbox column; checked rows take --sel and keep their tone edge */
+.tr.checked { background: var(--sel); }
+.th-check, .td-check { display: flex; align-items: center; justify-content: center; padding: 0; }
+.tick { width: 14px; height: 14px; border-radius: 4px; display: inline-grid; place-items: center; box-shadow: inset 0 0 0 1.5px var(--ink-4); color: var(--accent-ink, #fff); cursor: pointer; user-select: none; flex: none; }
+.tick:hover { box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.tick.on { background: var(--accent-fill); box-shadow: none; }
+.tick:focus-visible { outline: none; box-shadow: var(--focus-in); }
 .tr:focus-visible { box-shadow: var(--focus-in); }
 .tr.row-bad::before, .tr.row-warn::before { content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 2px 2px 0; background: var(--bad); }
 .tr.row-warn::before { background: var(--warn); }
@@ -645,3 +689,4 @@ a.tile:hover { box-shadow: inset 0 0 0 1px var(--line-2), var(--shadow-1); }
 .ns-needed .field { width: 220px; }
 .ns-needed input { font-family: var(--mono); font-size: 12px; width: 100%; }
 .ns-needed button { height: 30px; }
+.ov-scope { justify-self: start; align-self: start; color: var(--ink-2); }

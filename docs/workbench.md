@@ -363,6 +363,46 @@ Code: `packages/kube/src/actions.ts` (builders, the kind table in `action-kinds.
 `apps/desktop/src/main/actions.ts` (`ActionService`), `as-you.ts`, `native-confirm.ts`, `action-log.ts`, and the
 renderer's `ActionSheet.tsx`, `ReviewCard.tsx`, `ObjectMenu.tsx`, `RecentActions.tsx`, `actionAsks.ts`.
 
+## Tables: selection, columns, namespaces
+
+Wave 8 part 3 (D155–D158). Every resource table can select rows, hide columns, keep its sort and list several
+namespaces at once.
+
+- **Selection** (D156). A 28 px checkbox column on the left; the head's checkbox (tri-state, "Select every row
+  shown") takes or drops the rows the filter shows. Shift+click on a checkbox takes the range from the last row you
+  toggled. On a focused row `x` or Space toggles it, ⌘A (Ctrl+A) takes every row shown; Esc clears the selection
+  before it closes the drawer. Rows are selected by uid: a row that leaves the watch leaves the selection, and the
+  selection is cleared when you change kind or namespaces. While rows are selected the toolbar's right side is the
+  selection bar: "3 selected", the kind's bulk actions (**Restart** for Deployments, StatefulSets and DaemonSets;
+  **Delete…** for any kind main deletes in bulk, not the cluster-wide ones such as Namespaces or Nodes), **Ask
+  Claude** (not on Secrets) and Clear. In a narrow pane the buttons are their icons. Past 50 the actions are off ("At
+  most 50 at once").
+- **Bulk actions** go through the same sheet and card as one object ("Delete 3 configmaps in landlens-dev"): one
+  review in main, one diff per object (past three, the rest fold to their head lines with "Show N more"), one Apply,
+  digest-checked, and main's own dialog by the same rules as any action (a delete of more than one object always
+  asks; a restart of more than 3; the window's budget of 3 changed objects a minute). An object the dry run refuses
+  is left out of the bulk, and the card says so ("2 of 3 can be deleted. Left out, in the cluster's words:" and the
+  cluster's message); main's dialog, title and Recent actions name only the objects Apply sends. When every object is
+  refused there is nothing to apply.
+- **Columns and sort** (D157). The Columns button (after Refresh) lists the kind's columns as checkboxes; Name is
+  always shown; Reset shows them all. A header click sorts, and the sort is kept per kind. Both are stored in
+  `localStorage` under `landlens.table.v1` (per kind key `resource` or `resource.group`), with the namespaces chosen
+  per context, read through a tolerant parser (`tableState.ts`): at most 200 kinds and contexts, 40 column ids, 50
+  namespaces, Kubernetes names only; anything else is dropped and a damaged value is no choices.
+- **Several namespaces** (D158). The namespace button opens a popover: a filter, **All namespaces**, a checkbox per
+  namespace (the chosen first) and **Only** on hover; Only and All choose and close. The button reads "All
+  namespaces", the one name, or "3 namespaces". Two to eight are watched one watch each, merged by uid; more than
+  eight use the all-namespaces watch filtered in the window, and if your account can't list across namespaces, the
+  first eight (the status bar says how many are left out). Helm releases and the Problems list keep the chosen
+  namespaces (problems with no namespace stay); the Overview shows the whole cluster and says so ("3 namespaces
+  selected: this page shows the whole cluster"). A link to an object outside the chosen set adds its namespace when
+  several are chosen, and moves to it when one is.
+
+Code: `apps/desktop/src/renderer/src/tableState.ts` (the stored state, the parser, the watch plan, the selection's
+rules, `bulkActions`), `TablePickers.tsx` (the namespace popover, the column picker, the selection bar),
+`ResourceTable.tsx`, `rowKeys.ts`, `api.ts` (`useWatchMany`), `Workspace.tsx`, and main's `keptTargets` in
+`apps/desktop/src/main/actions.ts`.
+
 ## Nodes: cordon and drain
 
 Wave 8 part 2 (D149–D154). A Node's menu (and the drawer's ⋯, and ⌘K's `cordon`, `uncordon` and `drain` verbs) has
@@ -463,6 +503,18 @@ cordon's facts, `schedulable`), `frontdoor.ts` (`nodeWrite`, the front door's ru
   cordon's preview, ⌘K, the YAML editor's node change refused by the front door; with main's run channels stubbed, the
   chip, the re-opened sheet, Stop and the ending; the node and every landlens-dev pod's uid as they were). A real
   drain runs only against the fake.
+- Tables and asks (wave 8 part 3): `apps/desktop` `table-state.test.ts` (the parser: caps, names, `__proto__`;
+  Name never hidden; the watch plan; Shift ranges, pruning, the head's tri-state; the bulk actions per kind),
+  `ask-presets.test.ts` (the presets per kind, failing first, none on Secrets, the fixed questions; the selection's
+  quote: names and status words only, a marker in labels, annotations, env and a status message never in it, odd
+  words read Unknown, 50 lines, never for Secrets; the quote's head), `row-keys.test.ts` (`x`, Space and ⌘A),
+  `actions-main.test.ts` (a refused object left out and never named by main's dialog, title or log; every object
+  refused; across namespaces) and, on OrbStack, `tables.e2e.test.ts` (it makes ConfigMaps `hands-bulk-1..6` in
+  landlens-dev and removes them: three selected by click and Shift+click deleted through one card, main's dialog
+  answered Cancel then yes, the other three still there; `x`, ⌘A, Esc; Age hidden and the sort kept across a reload;
+  landlens-dev and default together; Summarize from a row's menu reaching the fake agent with the object attached;
+  Ask Claude about these 2 leaving its question selected and sending nothing; a Secret's selection with no ask; ⌘K's
+  presets).
 - Your actions (wave 8): `packages/kube` `actions.test.ts` (each body, kubectl's Job, the kind table and refusals,
   every fact, no copied text), `edits.test.ts` (`reviewOps`, apply each, the digest, a Secret's delete), on OrbStack
   `actions.integration.test.ts` (scale, restart, suspend and trigger hands-* for real and put back; the triggered Job

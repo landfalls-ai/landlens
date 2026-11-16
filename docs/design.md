@@ -293,6 +293,19 @@ all N) and Recent warnings; Nodes. It reads
   `CircleCheck` gone in ok, `CircleSlash` blocked and `CircleX` failed in bad), the elapsed time in mono in the
   head, **Stop**; at the end the summary, **Uncordon…** and **Done**.
 
+### Tables (wave 8 part 3)
+
+The checkbox column is 28 px, `.tick` (a 14 px rounded square, the accent when on, a dash when some); a checked row
+is `.tr.checked` (the accent at 8%, a 2 px accent edge when focused). The selection bar replaces the toolbar's right
+side: a count chip with a check, small secondary buttons (Delete in the bad colour), the ask button and a close
+icon; below 720 px of pane the buttons are their icons. The namespace button is a field with a folder icon and the
+label; its popover (260 px) and the column menu (220 px) are `.table-pop` menus under their button, rows `.pop-row`
+with a `.tick`, **Only** shown on hover, a foot line when several are chosen. The object menu's Ask Claude opens a
+submenu (`.ask-sub`, left of the menu when there is no room right) with a paperclip "Attach to a question", a rule,
+then the presets with the sparkle; the drawer's Ask is a split button (`.ask-split`) with a caret. The Overview under
+several namespaces shows a chip with the layers icon. A bulk card folds operations past three (`.change-folded`) and
+lists what was left out (`.left-out`).
+
 ## Components
 
 Reuse these classes before writing new ones: `button.primary`, `.secondary`, `.ask-btn`, `.icon-btn`, `.link-btn`;
@@ -335,6 +348,9 @@ The rules come from the dataviz method; the code is `apps/desktop/src/renderer/s
 
 ## Keyboard
 
+On a focused row, `x` or Space toggles its checkbox and ⌘A selects every row shown (wave 8 part 3); Esc clears a
+selection before it closes the drawer. Shift+click on a checkbox takes a range. In the object menu → opens Ask
+Claude's submenu and ← or Esc goes back; in ⌘K, Tab on an `ask <name>` row lists its preset asks.
 On a focused row, ⌫ (or Delete) opens the delete review (wave 8); every other action is in the row's menu (Shift+F10)
 or ⌘K, so a stray letter can't start a write. In the object menu: ↑/↓, Home/End, a letter jumps by name, Esc. In
 Scale's field, ↑/↓ step one and Shift+↑/↓ ten.
@@ -354,8 +370,13 @@ The e2e test finds things by role and name, so keep (wave 8 adds menu "<Kind> <n
 "Done", "Review again", "Recent actions"; region "Review your action"; list "What happened"; dialog "Recent actions"
 with `.recent-row`; part 2 adds button "Nodes", menuitems "Cordon", "Uncordon", "Drain…", regions "Blocked", "Will be
 evicted", "Stay" with `li[data-pod="<namespace>/<name>"]`, checkboxes "Delete pods that nothing will recreate" and
-"Lose emptyDir data", role note with the preview-only sentence, buttons "Drain…", "Stop", "Uncordon…"): heading "Pick a cluster"; buttons "Pods", "Deployments",
-"Secrets", "Ask Claude", "Stop", "Send"; combobox "Namespace"; tabs "Overview", "YAML"; textbox "Message Claude
+"Lose emptyDir data", role note with the preview-only sentence, buttons "Drain…", "Stop", "Uncordon…"; part 3 adds
+checkboxes "Select <name>" and "Select every row shown", toolbar "Selection" with buttons "Restart", "Delete…", "Ask
+Claude", "Clear the selection"; button "Namespaces: <label>" and dialog "Namespaces" with searchbox "Filter
+namespaces", checkboxes by namespace and "All namespaces", buttons "Only <ns>"; button "Columns" and menu "Columns"
+with menuitemcheckboxes; menu "Ask Claude" (the submenu) and button "Preset asks"; e2e helpers `chooseNamespace` and
+`chosenNamespaces` in `test/e2e-helpers.ts`): heading "Pick a cluster"; buttons "Pods", "Deployments",
+"Secrets", "Ask Claude", "Stop", "Send"; tabs "Overview", "YAML"; textbox "Message Claude
 Code"; landmark "Claude Code"; classes `.tr`, `.drawer`, `.yaml`, `.ctx-chip`, `.tool`, `.tool summary`,
 `.tool-failed`, `.msg-agent`, `.ask button.primary`, `.dock`. Google Cloud: button "Google Cloud" (the sidebar's
 complementary "Resources" and Welcome); regions "Projects", "Types", "Resources" and "Google Cloud connection";

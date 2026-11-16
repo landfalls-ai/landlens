@@ -106,7 +106,18 @@ Departures from the spec, and why:
 
 ## Part 3: tables and asks (D155–D160)
 
-- [ ] Multi-select, bulk actions (main's dialog), the column picker, remembered sort, several namespaces, preset asks
+- [x] Multi-select, bulk actions (main's dialog), the column picker, remembered sort, several namespaces, preset asks
+  (16 Nov 2026; [workbench.md](../../workbench.md#tables-selection-columns-namespaces),
+  [agent.md](../../agent.md#preset-asks)). Departures:
+- **A dry run's refusal in a bulk** leaves that object out (the card lists it with the cluster's words) instead of
+  failing the review; main's dialog, title, facts and log name only the objects kept.
+- **The selection bar** is `.selection-bar` (`.sel-bar` was taken by the logs' selection) and replaces the toolbar's
+  whole right side; in a narrow pane its buttons are icons.
+- **Ask Claude's submenu** starts with "Attach to a question" (the plain ask) so the menu's Ask still attaches
+  without a question.
+- **Only and All namespaces** choose and close the popover; a checkbox keeps it open.
+- **A link to an object** outside several chosen namespaces adds its namespace (one chosen: moves to it); the
+  Problems list keeps problems with no namespace when several are chosen.
 
 ## Part 4: Secrets (D161–D168)
 

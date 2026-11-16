@@ -18,6 +18,7 @@ import { _electron as electron, type ElectronApplication, type Page } from "play
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeGcp, GCP_TOKEN } from "../../../packages/gcp/test/fake-gcp";
 import { FAKE_GCLOUD, sdkDir } from "../../../packages/gcp/test/helpers";
+import { chosenNamespaces } from "./e2e-helpers";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -172,7 +173,7 @@ describe.runIf(run)("GKE clusters and the agent's Google Cloud tools, against th
     await needed.getByRole("textbox", { name: "Namespace" }).fill(NS);
     await needed.getByRole("button", { name: "Open" }).click();
     await page.getByRole("region", { name: "Verdict" }).waitFor({ timeout: 30_000 });
-    await expect(page.getByRole("combobox", { name: "Namespace" }).inputValue()).resolves.toBe(NS);
+    await expect(chosenNamespaces(page)).resolves.toBe(NS);
     // Kept with its address, a hash of its CA and the account: a cluster recreated under the name asks again.
     expect(JSON.parse(readFileSync(join(userData, "gcp.json"), "utf8")).confirmed).toEqual([{ context: CONTEXT, endpoint: expect.stringMatching(/^127\.0\.0\.1:\d+$/), ca: expect.stringMatching(/^[0-9a-f]{64}$/), account: "person@example.com" }]);
     // Connected as the ServiceAccount: what its Role allows, and nothing it doesn't.

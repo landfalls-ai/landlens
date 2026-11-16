@@ -9,6 +9,8 @@ import { Diff, ORDER, RISK } from "./ChangeCard";
 import { Ic } from "./icons";
 
 const SHORT = 40;
+/** Several operations (a bulk action, D145, D156): the first three open, the rest folded to their head lines. */
+const OPEN_OPS = 3;
 
 /** The dry run, as a card of your own (D27): no iris ring, "Your edit", the diff, Apply or Back to editing. */
 export function ReviewCard(props: {
@@ -34,12 +36,19 @@ export function ReviewCard(props: {
    * not the cluster's dry run. This sentence stands in place of "Dry run passed", and Apply is off.
    */
   previewOnly?: string;
+  /**
+   * A bulk review that left objects out (D156): "5 of 6 can be deleted", and each refusal on its own line, in the
+   * cluster's words. Apply sends only the kept.
+   */
+  leftOut?: { kept: number; of: number; verb: string; messages: string[] };
 }) {
   const ops = props.review.operations ?? [];
   const risks: ChangeRisk[] = ORDER.filter((r) => ops.some((o) => o.risk.includes(r)));
   const danger = risks.some((r) => RISK[r].level === "danger");
   const [confirm, setConfirm] = useState(false);
   const [uncapped, setUncapped] = useState<Set<number>>(new Set());
+  const [unfolded, setUnfolded] = useState(false);
+  const folded = ops.length > OPEN_OPS && !unfolded;
   const warnings = ops.flatMap((o) => o.warnings);
   // Apply is a press of the Apply button itself (Enter on it, or a click), not Enter anywhere in the card, and not in
   // the first half second, so a key meant for something else can't send it (security review, part 2, finding 2).
@@ -52,13 +61,14 @@ export function ReviewCard(props: {
     window.addEventListener("keydown", down, true);
     return () => window.removeEventListener("keydown", down, true);
   }, []);
-  const capped = ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
+  // Folded operations count as capped: the whole change is on screen before Apply can send it.
+  const capped = folded || ops.some((op, i) => op.diff.lines.length > SHORT && !uncapped.has(i));
   const apply = (e: React.MouseEvent) => {
     if (props.previewOnly) return;
     // A keyboard press (detail 0) in the first half second is a key meant for something else; a click is deliberate.
     if (e.detail === 0 && (repeating.current || Date.now() - shownAt.current < 500)) return;
     // The whole change is on screen before it can be sent.
-    if (capped) return setUncapped(new Set(ops.map((_, i) => i)));
+    if (capped) return (setUnfolded(true), setUncapped(new Set(ops.map((_, i) => i))));
     // A review main asks about in its own dialog (D143) has that as its second step, not the card's.
     if (danger && !confirm && !props.nativeLabel) return setConfirm(true);
     props.onApply();
@@ -90,18 +100,35 @@ export function ReviewCard(props: {
           })}
         </ul>
       ) : null}
+      {props.leftOut ? (
+        <div className="change-warn warn left-out" role="note">
+          <Ic icon={TriangleAlert} size={13} />
+          <div>
+            <b>{props.leftOut.kept} of {props.leftOut.of} can be {props.leftOut.verb}.</b> Left out, in the cluster's words:
+            <ul>{props.leftOut.messages.slice(0, 20).map((m, i) => <li key={i} className="small">{m}</li>)}</ul>
+          </div>
+        </div>
+      ) : null}
       {props.owners?.length ? (
         <div className="change-warn warn">
           <Ic icon={TriangleAlert} size={13} />
           <span>{props.owners.map((o) => <span key={o.path + o.manager} className="owner"><b className="mono">{o.path}</b> is managed by <b>{o.manager}</b>{o.line ? ` (line ${o.line})` : ""}. It may set it back. </span>)}</span>
         </div>
       ) : null}
-      {ops.map((op, i) => (
+      {(folded ? ops.slice(0, OPEN_OPS) : ops).map((op, i) => (
         <div key={i} className="change-op">
           {ops.length > 1 ? <div className="change-op-head mono"><span className="change-verb">{op.verb}</span> {op.kind} {op.namespace ? `${op.namespace}/` : ""}{op.name}</div> : null}
           <Diff op={op} capped={op.diff.lines.length > SHORT && !uncapped.has(i)} create={op.verb === "create"} onUncap={() => setUncapped((s) => new Set(s).add(i))} />
         </div>
       ))}
+      {folded ? (
+        <div className="change-folded">
+          <ul aria-label="Folded">
+            {ops.slice(OPEN_OPS).map((op, i) => <li key={i} className="change-op-head mono"><span className="change-verb">{op.verb}</span> {op.kind} {op.namespace ? `${op.namespace}/` : ""}{op.name}</li>)}
+          </ul>
+          <button className="link-btn small" onClick={() => setUnfolded(true)}>Show {ops.length - OPEN_OPS} more</button>
+        </div>
+      ) : null}
       {warnings.length ? (
         <div className="change-warnings">
           <span className="change-fact">The cluster's warnings, in its words:</span>

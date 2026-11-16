@@ -194,9 +194,13 @@ function ChangeSheet(props: SheetProps) {
               title={stage.review.title ?? sheetTitle(d)}
               review={stage.review}
               {...(stage.review.facts?.length ? { facts: stage.review.facts } : {})}
-              {...(stage.review.native ? { nativeLabel: `${d.kind === "delete" ? "Delete" : d.kind === "restart" ? "Restart" : "Apply"}${d.objects.length > 1 ? ` ${d.objects.length}` : ""}…` } : {})}
+              {...(stage.review.native ? { nativeLabel: `${d.kind === "delete" ? "Delete" : d.kind === "restart" ? "Restart" : "Apply"}${(stage.review.operations?.length ?? 0) > 1 ? ` ${stage.review.operations!.length}` : ""}…` } : {})}
               applying={stage.s === "applying"}
               {...(stage.review.previewOnly ? { previewOnly: PREVIEW_ONLY } : {})}
+              {...(d.objects.length > 1 && stage.review.problems?.length ? { leftOut: {
+                kept: stage.review.operations?.length ?? 0, of: d.objects.length, verb: d.kind === "delete" ? "deleted" : "restarted",
+                messages: stage.review.problems.map((p) => p.message),
+              } } : {})}
               applyRef={applyBtn}
               onApply={() => void apply()}
               onBack={back}

@@ -630,3 +630,49 @@ describe("security review of part 1: the named rules, each with its test (M6, L2
     expect(svc.history("h1234567").map((x) => x.id)).toEqual([rows[0].id]);
   });
 });
+
+describe("part 3: a bulk action from the table's selection (D156)", () => {
+  const CM = (n: number) => `/api/v1/namespaces/landlens-dev/configmaps/hands-cm-${n}`;
+
+  it("an object refused at its dry run is left out: a problem on its own line; main's dialog, its count, the title and the log name only the rest", async () => {
+    const { svc, rows } = setup();
+    const a = window();
+    refuse = (q) => (q.method === "DELETE" && q.path.startsWith(CM(2)) ? 403 : undefined);
+    const r = await svc.review({ handle: "h1234567", action: { kind: "delete", targets: [1, 2, 3].map(cmRef) } }, a);
+    expect(r.id).toMatch(/^ed/);
+    expect(r.operations!.map((o) => o.name)).toEqual(["hands-cm-1", "hands-cm-3"]);
+    expect(r.problems).toEqual([{ message: "configmap landlens-dev/hands-cm-2: refused 403" }]);
+    expect(r.title).toBe("Delete 2 configmaps in landlens-dev");
+    expect(r.native).toBe(true);
+    const asked: any[] = [];
+    await expect(svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toThrow(/Cancelled/);
+    expect(asked[0]).toEqual({ message: "Delete 2 ConfigMaps in landlens-dev on orbstack?", detail: "2 ConfigMaps: 2 in landlens-dev.\n\nlandlens-dev/hands-cm-1\nlandlens-dev/hands-cm-3", yes: "Delete 2" });
+    refuse = undefined;
+    sent.length = 0;
+    const out = await svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async () => true) as { results: ActionResult[] };
+    expect(out.results.map((x) => [x.target, x.outcome])).toEqual([["configmap landlens-dev/hands-cm-1", "applied"], ["configmap landlens-dev/hands-cm-3", "applied"]]);
+    expect(sent.filter((s) => s.method === "DELETE").map((s) => s.path.split("?")[0])).toEqual([CM(1), CM(3)]);
+    expect(objects[CM(2)]).toBeDefined();
+    expect(rows.at(-1)).toMatchObject({ action: "delete", names: ["hands-cm-1", "hands-cm-3"], outcome: "applied" });
+  });
+
+  it("a bulk whose every object is refused has nothing to apply", async () => {
+    const { svc } = setup();
+    refuse = (q) => (q.method === "DELETE" ? 403 : undefined);
+    const r = await svc.review({ handle: "h1234567", action: { kind: "delete", targets: [1, 2].map(cmRef) } }, window());
+    expect(r.id).toBeUndefined();
+    expect(r.problems).toHaveLength(2);
+  });
+
+  it("a bulk delete across namespaces (several chosen) still asks, naming each namespace", async () => {
+    const { svc } = setup();
+    objects["/api/v1/namespaces/default/configmaps/hands-cm-9"] = { ...cm(9), metadata: { ...cm(9).metadata, namespace: "default" } };
+    const a = window();
+    const r = await svc.review({ handle: "h1234567", action: { kind: "delete", targets: [cmRef(1), { ...cmRef(9), namespace: "default" }] } }, a);
+    expect(r.native).toBe(true);
+    const asked: any[] = [];
+    await expect(svc.apply({ handle: "h1234567", id: r.id!, digest: r.digest! }, a, async (q) => (asked.push(q), false))).rejects.toThrow(/Cancelled/);
+    expect(asked[0].message).toBe("Delete 2 ConfigMaps in 2 namespaces on orbstack?");
+    expect(asked[0].detail).toContain("default/hands-cm-9");
+  });
+});

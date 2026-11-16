@@ -2,7 +2,7 @@
 // drawn: lucide-react, inline SVG, stroke 1.75, aria-hidden, currentColor.
 import {
   Bot, Box, Cable, Cloud, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
-  KeyRound, Layers, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints, Zap,
+  KeyRound, Layers, ListChecks, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints, Zap,
   Workflow, type LucideIcon,
 } from "lucide-react";
 import type { Tone } from "@landlens/kube/status";
@@ -71,8 +71,8 @@ export function Ic({ icon: I, size = 15, className }: { icon: LucideIcon; size?:
 export const MOD = /Mac/.test(navigator.platform) ? "⌘" : "Ctrl ";
 
 /** A dock chip's icon: the object's kind, or logs or a terminal for selected lines. */
-export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" | "helm" | "problem" | "gcp" | "landflow" | "action" }): LucideIcon {
-  return c.kind === "problem" ? Stethoscope : c.kind === "action" ? Zap : c.kind === "landflow" ? Workflow : c.kind === "gcp" ? Cloud : c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : c.kind === "helm" ? Package : SquareTerminal;
+export function contextIcon(c: { ref?: { resource: string }; kind?: "logs" | "terminal" | "edit" | "helm" | "problem" | "gcp" | "landflow" | "action" | "selection" }): LucideIcon {
+  return c.kind === "selection" ? ListChecks : c.kind === "problem" ? Stethoscope : c.kind === "action" ? Zap : c.kind === "landflow" ? Workflow : c.kind === "gcp" ? Cloud : c.ref ? kindIcon(c.ref.resource) : c.kind === "logs" ? ScrollText : c.kind === "edit" ? Pencil : c.kind === "helm" ? Package : SquareTerminal;
 }
 
 /**

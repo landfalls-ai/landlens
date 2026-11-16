@@ -384,6 +384,14 @@
 .object-menu .cluster-option.with-why > .ic { margin-top: 1px; }
 .object-menu .name { display: grid; gap: 1px; white-space: normal; }
 .object-menu .why-line { font-size: var(--t-11, 11px); color: var(--ink-3); line-height: 1.3; }
+/* Ask Claude's preset asks (D159): a submenu beside the object menu, a small menu under the drawer's caret */
+.object-menu .sub-chev { margin-left: auto; color: var(--ink-3); }
+.ask-sub { position: absolute; left: calc(100% + 4px); width: 228px; min-width: 228px; z-index: 41; }
+.ask-sub.to-left { left: auto; right: calc(100% + 4px); }
+.preset-menu { width: 220px; min-width: 220px; }
+.ask-split { display: inline-flex; align-items: stretch; }
+.ask-split > .ask-btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ask-split > .ask-btn.caret { width: 24px; padding: 0; justify-content: center; border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: 1px; }
 .dialog.action-sheet { width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 12vh - 32px); display: flex; flex-direction: column; }
 .action-sheet .dialog-body { overflow: auto; min-height: 0; }
 .action-sheet .change.mine { margin: 0; }
@@ -457,3 +465,10 @@
 .drain-stale { opacity: .55; transition: opacity var(--dur-2) var(--ease); }
 .drain-sheet .dialog-foot .small .spinner { margin-right: 6px; }
 .drain-sheet .dialog-foot .link-btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+
+/* a bulk review (D156): the left-out objects, and the operations folded past three */
+.change.mine .left-out ul { margin: 4px 0 0; padding-left: 16px; display: grid; gap: 2px; color: var(--ink-2); }
+.change.mine .left-out b { color: var(--ink); font-weight: 500; }
+.change-folded { display: grid; gap: 4px; padding: 6px 0 2px; }
+.change-folded ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 180px; overflow-y: auto; }
+.change-folded .link-btn { justify-self: start; }

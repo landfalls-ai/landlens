@@ -50,6 +50,9 @@ acp
       const status = await callKube(s.servers).catch(() => "unreachable");
       await say(`I read the cluster's API resources (${status}). `);
       await say("Everything I was asked about looks fine.");
+      // What was attached, by its address only (wave 8 part 3's preset asks check the object reached the agent).
+      const uris = ctx.params.prompt.filter((b) => b.type === "resource" || b.type === "resource_link").map((b) => b.resource?.uri ?? b.uri).filter(Boolean);
+      if (uris.length) await say(` Attached: ${uris.join(", ")}.`);
     }
     s.cost += 0.0125;
     await ctx.client.notify(acp.methods.client.session.update, {

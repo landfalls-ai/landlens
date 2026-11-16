@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import { _electron as electron, type ElectronApplication, type Frame, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FAMILY_NOTES } from "@landlens/contracts";
+import { chooseNamespace } from "./e2e-helpers";
 
 const flags = (process.env.LANDLENS_INTEGRATION ?? "").split(",");
 const run = flags.includes("orbstack");
@@ -155,7 +156,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
     expect(await page.locator(".tr").count()).toBeGreaterThan(3);
     await shot(page, "02-pods-all-namespaces");
 
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("kube-system");
+    await chooseNamespace(page, "kube-system");
     await page.locator(".tr", { hasText: "coredns" }).first().waitFor();
     await page.locator(".tr", { hasText: "coredns" }).first().click();
     await page.getByRole("tab", { name: /Overview/ }).waitFor();
@@ -204,7 +205,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
 
   it("shows deployments across namespaces", async () => {
     await page.getByRole("button", { name: "Deployments", exact: true }).click();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("");
+    await chooseNamespace(page, "");
     await page.locator(".tr").first().waitFor({ timeout: 30_000 });
     await shot(page, "05-deployments");
   }, 60_000);
@@ -227,11 +228,15 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
   it("shows a failing pod's diagnosis, in dark and light, at 1440×880 and 1024×700", async () => {
     const failing = async () => {
       await page.getByRole("button", { name: "Pods", exact: true }).click();
-      await page.getByRole("combobox", { name: "Namespace" }).selectOption("");
+      await chooseNamespace(page, "");
+      // The table renders the rows in view only: at 1024×700 with every namespace's pods, find it by name first.
+      const filter = page.getByRole("searchbox", { name: "Filter by name" });
+      await filter.fill("orders-api");
       const row = page.locator(".tr", { hasText: "orders-api" }).first();
       await row.waitFor({ timeout: 30_000 });
       await row.click();
       await page.getByRole("region", { name: "Diagnosis" }).waitFor();
+      await filter.fill("");
       await expect(page.locator(".tr.row-bad").count()).resolves.toBeGreaterThan(0);
     };
     const overview = async () => {
@@ -493,7 +498,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
       await page.mouse.move(0, 0);
 
       await page.getByRole("button", { name: "Pods", exact: true }).click();
-      await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+      await chooseNamespace(page, "landlens-dev");
       await page.locator(".tr", { hasText: "catalog-api" }).first().click();
       await page.getByRole("tab", { name: "Metrics" }).click();
       const tab = page.locator(".mtab");
@@ -568,7 +573,7 @@ describe.runIf(run)("Landlens app on OrbStack", () => {
 
   it.runIf(claude)("asks Claude why the crash-looping pod fails, and shows the evidence it read", async () => {
     await page.getByRole("button", { name: "Pods", exact: true }).click();
-    await page.getByRole("combobox", { name: "Namespace" }).selectOption("landlens-dev");
+    await chooseNamespace(page, "landlens-dev");
     const row = page.locator(".tr", { hasText: "orders-api" }).first();
     await row.waitFor({ timeout: 30_000 });
     await row.click();

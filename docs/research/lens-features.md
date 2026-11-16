@@ -48,7 +48,9 @@ extensions that are not part of this snapshot. Freelens moved them into core as 
 (`freelens/packages/core/src/renderer/components/node-pod-menu/`). Landlens took Cordon and Drain in wave 8 part 2
 (D149–D154), not as Freelens runs them (`kubectl cordon` and `kubectl drain` in a terminal tab,
 `node-pod-menu/node-menu.tsx:61-67`) but as a reviewed patch and a previewed plan run in main
-([workbench.md](../workbench.md#nodes-cordon-and-drain)).
+([workbench.md](../workbench.md#nodes-cordon-and-drain)). Wave 8 part 3 took the tables' multi-select with bulk
+Restart and Delete (one reviewed card, main's dialog), the column picker, a kept sort and several namespaces at once
+(D155–D158) ([workbench.md](../workbench.md#tables-selection-columns-namespaces)).
 
 ---
 
