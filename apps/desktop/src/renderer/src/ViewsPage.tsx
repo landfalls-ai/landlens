@@ -3,15 +3,18 @@
 // page shows the ask and Claude's tool lines; once a version exists the chat folds to a strip at the bottom edge
 // (Claude's last line and a composer), and the dock opens beside the view with ⌘J. Undo and Redo are the person's
 // (D214); "How Claude built this" says what each source reads, with whose access, and the requests behind it (D223).
-import type { AgentUpdate, ClusterInfo, SourceData, ViewAuditEntry, ViewState } from "@landlens/contracts";
+import type { AgentUpdate, ClusterInfo, ResourceType, RowRef, SourceData, ViewAuditEntry, ViewIntent, ViewState } from "@landlens/contracts";
 import { ArrowUp, ChevronDown, CircleX, Code, MessageSquare, Plus, Redo2, ScrollText, Undo2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { ObjectTarget } from "./app-host";
 import { Ic } from "./icons";
 import { copyText } from "./present";
-import { ViewBlock, type BlockDoc } from "./ViewBuilt";
-import { useView, viewStore } from "./viewStore";
+import type { RowHands } from "./blocks/hands";
+import { SelectionBar } from "./TablePickers";
+import { oneKind, refKey, refLabel, selectionActions } from "./viewBlocks";
+import { ViewBlock, type BlockDoc } from "./ViewGrid";
+import { resourceRef, useView, viewStore } from "./viewStore";
 
 type Doc = { title: string; params?: { name: string; type: string; label?: string; options?: string[]; default?: string }[]; sources: Record<string, Record<string, unknown>>; blocks: BlockDoc[] };
 
@@ -51,7 +54,7 @@ function useSessionLines(session: string | undefined) {
 
 const toolWords = (t: string) => t.replace(/^mcp__landlens-(views|kube)__/, "").replace(/_/g, " ");
 
-function Composer(props: { placeholder: string; onSend: (text: string) => void; busy?: boolean; big?: boolean; label: string; chip?: { title: string; clear: () => void } }) {
+function Composer(props: { placeholder: string; onSend: (text: string) => void; busy?: boolean; big?: boolean; label: string; chip?: { title: string; clear: () => void }; objects?: { label: string; clear: () => void }[] }) {
   const [text, setText] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -67,6 +70,9 @@ function Composer(props: { placeholder: string; onSend: (text: string) => void; 
       {props.chip ? (
         <span className="ctx-chip">About {props.chip.title}<button className="icon-btn" aria-label="Remove" onClick={props.chip.clear}><Ic icon={X} size={11} /></button></span>
       ) : null}
+      {(props.objects ?? []).map((o) => (
+        <span key={o.label} className="ctx-chip obj-chip" title={o.label}>{o.label}<button className="icon-btn" aria-label={`Remove ${o.label}`} onClick={o.clear}><Ic icon={X} size={11} /></button></span>
+      ))}
       <textarea
         ref={box}
         aria-label={props.label}
@@ -179,6 +185,18 @@ export function ViewsPage(props: {
   onFoldDock: () => void;
   onOpenObject: (t: ObjectTarget) => void;
   height: number;
+  /**
+   * The person's own hands on a native block's rows (wave 10 part 3, D218): the drawer, wave 8's object menu and row
+   * keys, each through the Workspace's existing paths, with the person's own access.
+   */
+  hands: Omit<RowHands, "picked" | "pick">;
+  /** The kind a row's object is (discovery), for what the selection bar offers. */
+  typeOf: (r: Pick<RowRef, "group" | "resource">) => ResourceType | undefined;
+  /** Restart or Delete on the chosen rows: wave 8's one sheet and one review. A block's selection never gets Delete. */
+  onBulk: (kind: "restart" | "delete", refs: RowRef[], by: "you" | "block") => void;
+  /** A block's object, logs or action intent, as main accepted it (D219): the Workspace opens Landlens's own card. */
+  onIntent: (i: ViewIntent) => boolean;
+  now: number;
 }) {
   const snap = useView();
   const v = snap.view;
@@ -194,6 +212,26 @@ export function ViewsPage(props: {
   const [menu, setMenu] = useState(false);
   const page = useRef<HTMLDivElement>(null);
   const data = (s: string) => viewStore.data(s);
+  const sel = v?.selection;
+  const picked = useMemo(() => new Set((sel?.refs ?? []).map(refKey)), [sel]);
+  // The selection is of rows the view shows (wave 8's review of part 3, M2): a row that leaves its source leaves it.
+  const shownKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const d of Object.values(v?.data ?? {})) if (d.version === st?.version) for (const r of d.data.rows) if (r._ref) keys.add(refKey(r._ref));
+    return keys;
+  }, [v?.data, st?.version]);
+  useEffect(() => {
+    if (sel && sel.refs.some((r) => !shownKeys.has(refKey(r)))) viewStore.select(sel.refs.filter((r) => shownKeys.has(refKey(r))), sel.by);
+  }, [shownKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hands: RowHands = { ...props.hands, picked, pick: (refs) => viewStore.select(refs, "you") };
+  /** A block's intent (D219): ask and select are the page's own; object, logs and actions go to the Workspace. */
+  const intent = (i: ViewIntent) => {
+    if (i.kind === "ask") return (i.refs.forEach((r) => viewStore.chip(r)), props.onFoldDock(), true);
+    if (i.kind === "select") return (viewStore.select(i.refs, "block"), true);
+    return props.onIntent(i);
+  };
+  const selKind = sel ? oneKind(sel.refs) : undefined;
+  const selType = selKind ? props.typeOf(selKind) : undefined;
 
   // The view's sources run only while the page is on screen (D210: they stop 30 s after it leaves).
   useEffect(() => {
@@ -205,8 +243,10 @@ export function ViewsPage(props: {
   // ⌘Z and ⇧⌘Z move the shown version, with focus on the page and not in a field (D214).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!st || !(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.altKey) return;
       const t = e.target as HTMLElement | null;
+      // Esc clears the selection before anything else (D156), outside a field, the dock, a menu or a dialog.
+      if (e.key === "Escape" && viewStore.get().view?.selection && !t?.closest("input, textarea, select, .dock, .menu, .dialog, .drawer")) return viewStore.select([]);
+      if (!st || !(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z" || e.altKey) return;
       if (t?.closest("input, textarea, select, [contenteditable], .dock")) return;
       const to = e.shiftKey ? redoTo(st) : undoTo(st);
       if (to === undefined) return;
@@ -300,9 +340,20 @@ export function ViewsPage(props: {
         </div>
       </header>
       {st.refused ? <RefusedRow refused={st.refused} open={refusedOpen} onToggle={() => setRefusedOpen((o) => !o)} /> : null}
+      {sel ? (
+        <div className={"view-selection" + (sel.by === "block" ? " by-block" : "")} role="region" aria-label="Chosen rows">
+          {sel.by === "block" ? <span className="small view-sel-who">Chosen by a block Claude built. Nothing happens until you act.</span> : null}
+          {!selKind ? <span className="small dim">Rows of several kinds: no action covers them all.</span> : null}
+          <SelectionBar count={sel.refs.length} actions={selectionActions(selType, sel.by)}
+            onAction={(k) => props.onBulk(k, sel.refs, sel.by)}
+            onAsk={() => (sel.refs.slice(0, 10).forEach((r) => viewStore.chip(r)), props.onFoldDock())}
+            onClear={() => viewStore.select([])} />
+        </div>
+      ) : null}
       <div className={"view-grid" + (single ? " single" : "")}>
         {blocks.map((b, i) => (
           <ViewBlock key={`${st.version}-${i}`} view={v!.id} version={st.version} b={b} i={i} data={data} single={single} height={fillHeight}
+            hands={hands} onIntent={intent} now={props.now}
             onOpenObject={props.onOpenObject} onAsk={(block, title) => (setAbout({ block, title, version: st.version }), props.onFoldDock())} />
         ))}
       </div>
@@ -312,9 +363,11 @@ export function ViewsPage(props: {
           <span className="view-strip-line small" title={line}>{st.busy ? <><span className="spinner" /> Claude is working…</> : line || "Ask for a change to this view."}</span>
           <Composer label="Ask Claude" placeholder="Ask for a change, or about what you see" busy={st.busy}
             {...(about ? { chip: { title: about.title, clear: () => setAbout(undefined) } } : {})}
+            objects={(v!.chips ?? []).map((r) => ({ label: refLabel(r), clear: () => viewStore.unchip(r) }))}
             onSend={(t) => {
-              void viewStore.send(t, [], about ? { block: about.block, version: about.version } : undefined).catch(() => {});
+              void viewStore.send(t, (v!.chips ?? []).map(resourceRef), about ? { block: about.block, version: about.version } : undefined).catch(() => {});
               setAbout(undefined);
+              viewStore.unchip();
             }} />
         </div>
       ) : null}

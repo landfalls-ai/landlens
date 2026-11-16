@@ -52,6 +52,8 @@ export function ResourceTable(props: {
    * for a range, `x` or Space on a row, ⌘A. Without it the table is as before (Problems, Helm).
    */
   selection?: { uids: ReadonlySet<string>; onChange: (uids: Set<string>) => void };
+  /** A row's tone when it isn't read from Status or Ready (a view's rows carry their own, wave 10 part 3). */
+  toneOf?: (o: KubeObject) => Tone | undefined;
 }) {
   const { items, now, selection } = props;
   const [ownSort, setOwnSort] = useState<Sort>({ id: "name", dir: 1 });
@@ -84,6 +86,8 @@ export function ResourceTable(props: {
   }, [props.columns, props.width, props.oneNamespace, covered, props.hidden]);
 
   const rows = useMemo(() => {
+    // No sort chosen (a view's table, until a header is pressed): the rows stay in the order they came.
+    if (!sort.id) return items;
     const col = props.columns.find((c) => c.id === sort.id) ?? props.columns[0]!;
     const keyed = items.map((o) => {
       const cell = col.cell(o, now);
@@ -194,7 +198,7 @@ export function ResourceTable(props: {
             <div style={{ height: rows.length * ROW, position: "relative" }}>
               {rows.slice(first, last).map((o, i) => {
                 const idx = first + i;
-                const tone = rowTone(props.columns, o, now);
+                const tone = props.toneOf ? props.toneOf(o) : rowTone(props.columns, o, now);
                 const flash = Date.now() - (changedAt.current.get(o.metadata.uid) ?? 0) < 600;
                 const checked = !!selection?.uids.has(o.metadata.uid);
                 return (

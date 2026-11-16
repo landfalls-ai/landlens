@@ -121,18 +121,20 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
   main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
   only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
-- **Views on demand has its engine and its page, not yet its own blocks, actions or saving** ([views.md](views.md),
-  wave 10 parts 1–2): Claude builds a view on the Views page and it goes live, but native blocks are drawn plainly (a
-  table of text cells, a number, a chart's points as a small table) until part 3 gives them the app's table, chart
-  and log components; a view has no actions, and a block's action and ask intents are refused (part 3); a view isn't
-  kept: it lives in the window until **New view**, a reload or a disconnect, one at a time, with no Save, Export,
-  Duplicate, tweaks or example chips (part 4); it reads only this cluster, never Google Cloud, GitHub, Linear or a
-  family service (part 4). A view shows what Claude could read, so env values show as `<redacted>` and Secrets never
-  appear; usage over time is never read from Cloud Monitoring (a view has no Google grant); a workload's log follows
-  at most five started pods; the doctor's problems are polled every 15 s, not pushed. Opening an object from a view
-  leaves the Views page for the object's own (the view is there when you come back). **View source** in How Claude
-  built this is plain text, not the editor. "Ask about this block" sends rows as JSON in a fence (Claude reads them
-  fine; they aren't a table), and a question about a block is refused once the view moved to another version.
+- **Views on demand has its engine, page, blocks and actions, not yet saving** ([views.md](views.md), wave 10 parts
+  1–3): a view isn't kept: it lives in the window until **New view**, a reload or a disconnect, one at a time, with no
+  Save, Export or Duplicate, and your tweaks (a table's sort) last only as long (part 4: saved with the view, with
+  column widths, and example chips); a view's rows aren't listed in ⌘K (part 4); it reads only this cluster, never
+  Google Cloud, GitHub, Linear or a family service (part 4). A view shows what Claude could read, so env values show
+  as `<redacted>` and Secrets never appear; usage over time is never read from Cloud Monitoring (a view has no Google
+  grant); a workload's log follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
+  A view row's object menu and drawer read the object as you when they open, so a row the view still shows that is
+  already gone says so then. A block's selection never offers Delete, and a frame can't start a delete or a drain at
+  all: open the object and use its menu. An intent while a sheet is open is dropped, and more than six a minute from
+  one frame are refused, without telling the block. Intents find objects only among the rows of the block's own
+  sources. Object chips on the strip's composer go with the next question only (at most 10). **View source** in How
+  Claude built this is plain text, not the editor. "Ask about this block" sends rows as JSON in a fence (Claude reads
+  them fine; they aren't a table), and a question about a block is refused once the view moved to another version.
   `view.el` sets addresses only to `https:`, `mailto:`, `landlens:` and `#…` (not a relative path) and makes no
   `script`, frame, `object`, `embed`, `link`, `meta` or `base`.
 - **A private key logged a line at a time is redacted from its BEGIN to its END, up to 200 lines** (wave 10 part 1's

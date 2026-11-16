@@ -25,18 +25,21 @@ class FakeNode {
 
 type El = (tag: string, attrs?: Record<string, unknown> | null, ...children: unknown[]) => FakeNode;
 
-function load(): { el: El; made: string[] } {
+type Intents = { openObject(r: unknown): unknown; logs(r: unknown): unknown; ask(r: unknown): unknown; select(r: unknown): unknown; action(v: string, r: unknown): unknown };
+
+function load(): { el: El; made: string[]; view: Intents; posted: { method?: string; params?: { url?: string } }[] } {
   const made: string[] = [];
+  const posted: { method?: string; params?: { url?: string } }[] = [];
   const document = {
     createElement: (t: string) => (made.push(t), new FakeNode(t)),
     createTextNode: (t: string) => ({ text: t }),
     getElementById: () => null,
     documentElement: { setAttribute() {}, style: { setProperty() {} }, classList: { toggle() {}, contains: () => false } },
   };
-  const window: Record<string, unknown> = { parent: { postMessage() {} }, addEventListener() {} };
+  const window: Record<string, unknown> = { parent: { postMessage: (m: { method?: string }) => posted.push(m) }, addEventListener() {} };
   const src = readFileSync(join(__dirname, "../src/app/runtime.js"), "utf8");
   new Function("window", "document", "Node", "ResizeObserver", src)(window, document, FakeNode, class {});
-  return { el: (window.view as { el: El }).el, made };
+  return { el: (window.view as { el: El }).el, made, view: window.view as Intents, posted };
 }
 
 describe("view.el (review of wave 10 part 2, L1)", () => {
@@ -66,5 +69,39 @@ describe("view.el (review of wave 10 part 2, L1)", () => {
     const d = el("div", { srcdoc: "<script>x</script>", SrcDoc: "x", onclick: "x", ONMOUSEOVER: "x", title: "kept" }, "<b>text</b>");
     expect([...d.attrs.keys()]).toEqual(["title"]);
     expect(d.children).toEqual([{ text: "<b>text</b>" }]);
+  });
+});
+
+describe("view's intents (wave 10 part 3, D219)", () => {
+  it("asks for each intent as a landlens:// link that parseIntent takes", async () => {
+    const { parseIntent } = await import("../src/intent");
+    const { view, posted } = load();
+    const ref = { group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespace: "landlens-dev", name: "api" };
+    view.openObject(ref);
+    view.logs(ref);
+    view.ask(ref);
+    view.action("restart", ref);
+    view.select([ref, { ...ref, name: "web" }, null]);
+    view.select([{ kind: "ClusterRole", name: "system:view" }]);
+    const urls = posted.filter((m) => m.method === "ui/open-link").map((m) => m.params!.url!);
+    expect(urls).toEqual([
+      "landlens://object/Deployment/landlens-dev/api",
+      "landlens://logs/Deployment/landlens-dev/api",
+      "landlens://ask/Deployment/landlens-dev/api",
+      "landlens://action/restart/Deployment/landlens-dev/api",
+      "landlens://select/Deployment/landlens-dev/api/landlens-dev/web",
+      "landlens://select/ClusterRole/_/system%3Aview",
+    ]);
+    for (const u of urls) expect(parseIntent(u), u).toBeDefined();
+    // A delete is spelled the same way and refused by the parser (and again by main).
+    view.action("delete", ref);
+    expect(parseIntent(posted.at(-1)!.params!.url)).toBeUndefined();
+  });
+
+  it("sends nothing for an empty selection", async () => {
+    const { view, posted } = load();
+    const n = posted.length;
+    await expect(view.select([])).resolves.toEqual({ isError: true });
+    expect(posted.length).toBe(n);
   });
 });

@@ -42,19 +42,54 @@
 .vb-ask { opacity: .6; }
 .vb:hover .vb-ask, .vb-ask:focus-visible { opacity: 1; }
 .vb-note { display: flex; align-items: center; gap: 6px; font-size: var(--t-12); }
-.vb-table-wrap { overflow: auto; max-height: 560px; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line); }
-.vb-table { width: 100%; border-collapse: collapse; font-size: var(--t-12); }
-.vb-table th { position: sticky; top: 0; background: var(--bg-3); text-align: left; font-weight: 500; color: var(--ink-2); padding: 6px 10px; white-space: nowrap; }
-.vb-table td { padding: 5px 10px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.vb-table td.num { font-variant-numeric: tabular-nums; text-align: right; }
-.vb-table .link-btn { font-weight: 500; text-align: left; }
-.tone-row-bad td:first-child, li.tone-row-bad { box-shadow: inset 2px 0 0 var(--bad); }
-.tone-row-warn td:first-child, li.tone-row-warn { box-shadow: inset 2px 0 0 var(--warn); }
-.vb-stat-value { font-size: var(--t-26); font-weight: 600; color: var(--ink); line-height: 1.1; }
-.vb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: var(--t-125); }
-.vb-list li { padding: 3px 8px; overflow-wrap: anywhere; }
-.vb-logs { margin: 0; max-height: 420px; overflow: auto; padding: 8px 10px; font: var(--t-115)/1.55 var(--mono); background: var(--bg-0); border-radius: var(--r-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-.vb-text p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-13); }
+/* Part 3's native blocks (D206, D218): Landlens's own components in a block's card, light and dark from Iris tokens. */
+.vb-empty { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.vb-rt { display: flex; flex-direction: column; min-height: 0; margin: 0 -8px -6px; }
+.vb-rt .table { container-type: normal; }
+.vb-rt .thead { padding-right: 10px; }
+.vb-statbox { display: grid; gap: 2px; }
+.vb-stat-value { font-size: var(--t-26); font-weight: 600; color: var(--ink); line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vb-statbox.tone-bad .vb-stat-value { color: var(--bad-text); }
+.vb-statbox.tone-warn .vb-stat-value { color: var(--warn-text); }
+.vb-statbox.tone-ok .vb-stat-value { color: var(--ok-text); }
+.vb-statbox.tone-muted .vb-stat-value { color: var(--ink-3); }
+.vb-stat-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.vb-stat-label { font-size: var(--t-12); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-spark { flex: none; }
+.vb-charts { display: grid; gap: 14px; min-width: 0; }
+.vb-lines .chart-plot { overflow: hidden; }
+.vb-items, .vb-probs { list-style: none; margin: 0 -6px; padding: 0; display: grid; gap: 1px; }
+.vb-li { position: relative; display: flex; align-items: baseline; gap: 10px; min-height: 30px; padding: 5px 8px; border-radius: var(--r-2); font-size: var(--t-125); min-width: 0; }
+.vb-li.actionable { cursor: pointer; }
+.vb-li.actionable:hover, .vb-li.on { background: var(--hover); }
+.vb-li.on { box-shadow: inset 0 0 0 1px var(--accent-line); background: var(--sel); }
+.vb-li:focus-visible { box-shadow: var(--focus-in); outline: none; }
+.vb-li.row-bad::before, .vb-li.row-warn::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 0 2px 2px 0; background: var(--bad); }
+.vb-li.row-warn::before { background: var(--warn); }
+.vb-primary { font-weight: 500; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.vb-secondary { flex: 1; min-width: 0; color: var(--ink-3); font-size: var(--t-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-more { margin-left: auto; align-self: center; opacity: 0; }
+.vb-li:hover .vb-more, .vb-li:focus-within .vb-more { opacity: 1; }
+.vb-probs .ov-row.on { background: var(--sel); }
+.vb-logs-wrap { display: grid; gap: 6px; min-width: 0; }
+.vb-logs-seg { margin-left: 0; justify-self: start; }
+.vb-loglines { margin: 0; max-height: 420px; overflow: auto; padding: 8px 10px; font: var(--t-115)/1.55 var(--mono); background: var(--bg-0); border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line); }
+.vb-line { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.vb-line.fail { color: var(--bad-text); }
+.vb-md .md { font-size: var(--t-13); }
+.vb-md .md p { overflow-wrap: anywhere; }
+.view-selection { position: sticky; top: 48px; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 10px 16px 0; padding: 6px 8px 6px 12px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: var(--shadow-1), inset 0 0 0 1px var(--line-2); }
+.view-selection .selection-bar { margin-left: auto; }
+.view-selection.by-block { box-shadow: var(--shadow-1), inset 0 0 0 1px var(--accent-line); }
+.view-sel-who { color: var(--ink-2); }
+.obj-chip { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-asker { margin: 0 0 8px; padding: 6px 10px; border-radius: var(--r-2); background: var(--sel); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--accent-line); }
+@container main (max-width: 720px) {
+  /* The title takes its own line, the header's buttons the next, so they don't wrap one by one. */
+  .view-title { flex-basis: 100%; }
+  .view-selection { top: 0; margin: 8px 10px 0; }
+  .view-grid { padding: 10px; gap: 10px; }
+}
 .vb-app { padding: 8px; }
 .app-third.built .app-third-cap { color: var(--ink-3); font-size: var(--t-11); }
 

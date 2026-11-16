@@ -533,10 +533,12 @@ export class ViewRuntime {
    * The row object a frame's link names (kind, namespace, name: all a landlens://object link carries), when it is one
    * of the rows the view shows now; else none (D219: a frame can't aim at an object the view doesn't show).
    */
-  findRef(viewId: string, t: { kind: string; namespace?: string; name: string }): RowRef | undefined {
+  findRef(viewId: string, t: { kind: string; namespace?: string; name: string }, sources?: readonly string[]): RowRef | undefined {
     const v = this.views.get(viewId);
     if (!v || v.ready !== v.gen) return undefined;
-    for (const s of v.sources.values()) {
+    for (const [id, s] of v.sources) {
+      // A block's intent finds its targets among its own sources only (wave 10 part 3, D219).
+      if (sources && !sources.includes(id)) continue;
       for (const row of s.data.rows) {
         const r = row._ref;
         if (r && r.kind === t.kind && r.name === t.name && (r.namespace ?? undefined) === (t.namespace ?? undefined)) return structuredClone(r);

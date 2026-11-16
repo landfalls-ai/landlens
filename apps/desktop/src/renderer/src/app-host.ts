@@ -8,6 +8,7 @@
 // conversation (ui/message), change what the model sees (ui/update-model-context), read resources or change display
 // mode: those are refused or answered "inline".
 import type { McpAppView, McpToolResult } from "@landlens/contracts";
+import { parseIntent } from "@landlens/views/intent";
 
 export const PROTOCOL_VERSION = "2026-01-26";
 export const MIN_HEIGHT = 48;
@@ -47,6 +48,12 @@ export type HostDeps = {
   openObject(t: ObjectTarget): void | boolean | Promise<boolean>;
   /** landlens://view/<id> from Landlens's own card (landlens-views only): show that view. */
   openView?(id: string): void;
+  /**
+   * A block of a view (wave 10 part 3, D219): every `landlens://` intent (object, logs, ask, select, a non-destructive
+   * action) goes here once `parseIntent` takes it, and main decides; true when Landlens showed something. Without it
+   * (a server's view in the dock) only landlens://object opens, as before.
+   */
+  intent?(url: string): Promise<boolean>;
   /**
    * The tools the view may call. A block of a view may call only view_data (D204): every other name is refused with
    * -32601 here, and again in main.
@@ -214,6 +221,9 @@ export class AppHost {
         }
         case "ui/open-link": {
           const url = typeof params.url === "string" ? params.url : "";
+          // A block's intents: the allowlist here first, then main's; the answer says only whether anything showed,
+          // never what the person did with it (D219).
+          if (this.deps.intent && url.startsWith("landlens://")) return ok(parseIntent(url) && (await this.deps.intent(url)) ? {} : { isError: true });
           const target = objectLink(url);
           if (target) return ok((await this.deps.openObject(target)) === false ? { isError: true } : {});
           const view = VIEW_LINK.exec(url);

@@ -322,6 +322,10 @@ cluster deletes; Background propagation, pinned to the object's uid and resource
   `scale`, `restart`, `trigger` and `delete` (delete is never an object's first row). ⌫ (or Delete) on a focused row
   opens the delete review, only when the row itself has focus and the key isn't held (`rowKeys.ts`); no other key
   writes. A Secret has Delete only, and no Ask Claude.
+- **From a view** (wave 10 part 3, [views.md](views.md#the-page)). A native block's row with an object has the same
+  menu, keys and drawer, read with `resource:get` as you when it opens; a table with `select` feeds the same selection
+  bar. An app block Claude built can only ask for a sheet (Scale, Restart, Trigger, Suspend, Resume, Cordon, Uncordon,
+  never Delete or Drain): it opens with the eyebrow "Asked for by this view", and the review and Apply are yours.
 - **The sheet** (`ActionSheet.tsx`). Scale has a form (a number with − and +; arrows step one, Shift+arrows ten);
   the others open on the review. "Checking with the cluster…" while main reads and dry-runs as you; then the card:
   "Your action", main's title ("Scale deployment landlens-dev/hands-web to 3 replicas"), risk tags, main's facts,

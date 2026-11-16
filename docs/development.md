@@ -217,9 +217,12 @@ in a fixture become what the test wrote to `agent-sessions/fake-agent-env.json` 
 `views-e2e-<hex>.test`, which e2e 4's net log must never name; `stun`: its UDP listener's port): the fake agent gets
 only Landlens's allowlisted environment, so a `LANDLENS_FAKE_*` variable wouldn't reach it. Also
 `packages/views/test/runtime.test.ts` (`view.el` in a stand-in document) and `security-app.test.ts` (`hardenApp`'s
-DNS prefetch switch, electron mocked). It makes and removes a Deployment `views-e2e`
+DNS prefetch switch, electron mocked). Part 3 adds `packages/views/test/intent.test.ts` (the intents' grammar) and
+`view-blocks.test.ts` (the native blocks' rules); a fixture's `"__SHOWN__"` becomes the version the fake agent last
+heard (a patch's base). It makes and removes the Deployments `views-e2e` and `views-e2e-log` (busybox, a line a second)
 and a ConfigMap in `landlens-dev`. With `LANDLENS_INTEGRATION=orbstack,claude`, `-t "live: Claude"` asks your own
-Claude for a view of `landlens-dev` and, with `LANDLENS_SHOTS`, writes what it built to `w10p2-live-view.json`.
+Claude for a view of `landlens-dev` in native blocks and, with `LANDLENS_SHOTS`, writes what it built to
+`w10p3-live-view.json`.
 
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records

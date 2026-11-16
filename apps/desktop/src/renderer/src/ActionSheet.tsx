@@ -6,7 +6,7 @@
 import type { ActionResult, ActionReview, ClusterInfo, KubeObject } from "@landlens/contracts";
 import { CircleCheck, CircleX, Minus, Plus, TriangleAlert, X, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { askFirst, PREVIEW_ONLY, sheetHeading, verbOf, type ActionDraft } from "./actionAsks";
+import { askFirst, eyebrowOf, PREVIEW_ONLY, sheetHeading, verbOf, type ActionDraft } from "./actionAsks";
 import { api, type ApiError } from "./api";
 import type { NavTarget } from "./Details";
 import { DrainSheet } from "./DrainPlanView";
@@ -157,6 +157,7 @@ function ChangeSheet(props: SheetProps) {
           <button className="icon-btn sm" aria-label="Close" disabled={busy} onClick={close}><Ic icon={X} size={14} /></button>
         </header>
         <div className="dialog-body action-body">
+          {d.asker === "view" && stage.s !== "review" && stage.s !== "applying" ? <p className="action-asker small" role="note">{eyebrowOf(d)}. Nothing is sent until you review it and apply.</p> : null}
           {stage.s === "form" ? (
             <form className="action-form" onSubmit={(e) => (e.preventDefault(), void review())}>
               <p className="small dim">Now <b className="mono">{current}</b> replica{current === 1 ? "" : "s"}. Landlens checks the change with the cluster before anything is sent.</p>
@@ -177,7 +178,7 @@ function ChangeSheet(props: SheetProps) {
             </div>
           ) : stage.s === "review" || stage.s === "applying" ? (
             <ReviewCard
-              eyebrow="Your action"
+              eyebrow={eyebrowOf(d)}
               title={sheetHeading(d, stage.review)}
               review={stage.review}
               {...(stage.review.facts?.length ? { facts: stage.review.facts } : {})}

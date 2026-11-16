@@ -1150,6 +1150,19 @@ export const RowRef = z.object({
   name: ObjectName,
 }).strict();
 export type RowRef = z.infer<typeof RowRef>;
+/**
+ * What a custom block may ask Landlens to start (D219, wave 10 part 3): the non-destructive actions only. Delete and
+ * drain are never started from a frame (the person's decision, 16 Nov 2026): the person opens the object and uses its
+ * menu.
+ */
+export const FRAME_VERBS = ["scale", "restart", "trigger", "suspend", "resume", "cordon", "uncordon"] as const;
+export type FrameVerb = (typeof FRAME_VERBS)[number];
+/**
+ * A frame's intent as main accepted it (D219): open an object, open its logs, put it on the composer as a chip (ask),
+ * choose rows (select, one kind, at most 50) or open a non-destructive action's sheet. `refs` are the view's own rows'
+ * `_ref`s, found by main among the block's sources, never the frame's words.
+ */
+export type ViewIntent = { kind: "object" | "logs" | "ask" | "select" | "action"; verb?: FrameVerb; refs: RowRef[] };
 /** One value of a row: strings are cleaned and cut to 2,000 characters by main. */
 export type ViewCell = string | number | boolean | null;
 export type ViewTone = "ok" | "warn" | "bad" | "muted";
@@ -1593,8 +1606,11 @@ export type Responses = {
   "views:close": { ok: true };
   "views:app-open": McpAppView;
   "views:app-call": McpToolResult;
-  /** What the page may open for a frame's intent: only an object that is one of the view's rows (D219). */
-  "views:intent": { object?: RowRef };
+  /**
+   * What the page may show for a frame's intent (D219): only objects that are rows of the block's own sources, and only
+   * the intents and verbs in the allowlist. Nothing when main refused it.
+   */
+  "views:intent": { intent?: ViewIntent };
   "views:audit": { label: string; entries: ViewAuditEntry[] };
 };
 

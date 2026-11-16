@@ -190,6 +190,50 @@ describe("the MCP Apps host core", () => {
       expect(w.opened).toEqual(["0123456789abcdef"]);
     });
 
+    it("sends a block's intents in the allowlist to main, and refuses the rest in the window (wave 10 part 3, D219)", async () => {
+      const asked: string[] = [];
+      // Main's answer stands in: it shows the logs of api only.
+      const w = raw({ intent: async (url) => (asked.push(url), url === "landlens://logs/Deployment/landlens-dev/api") });
+      await init(w.host);
+      const urls = [
+        "landlens://action/restart/Deployment/landlens-dev/api",
+        "landlens://logs/Deployment/landlens-dev/api",
+        "landlens://ask/Deployment/landlens-dev/api",
+        "landlens://select/Deployment/landlens-dev/api/landlens-dev/web",
+        "landlens://object/Deployment/landlens-dev/api",
+        // Refused here, never sent: destructive verbs, an unknown intent or verb, a bad shape, a view link from a block.
+        "landlens://action/delete/Deployment/landlens-dev/api",
+        "landlens://action/drain/Node/_/orbstack",
+        "landlens://delete/Deployment/landlens-dev/api",
+        "landlens://action/rollback/Deployment/landlens-dev/api",
+        "landlens://object/Deployment/landlens-dev/api/x",
+        "landlens://logs/ConfigMap/landlens-dev/cfg",
+        "landlens://view/0123456789abcdef",
+      ];
+      urls.forEach((url, i) => w.host.receive({ jsonrpc: "2.0", id: 100 + i, method: "ui/open-link", params: { url } }));
+      await tick();
+      expect(asked).toEqual(urls.slice(0, 5));
+      // The block hears only whether something showed: {} for the logs main showed, an error for everything else.
+      expect(w.posts.find((p) => p.id === 101)).toEqual({ jsonrpc: "2.0", id: 101, result: {} });
+      for (const i of [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) expect(w.posts.find((p) => p.id === 100 + i), urls[i]).toMatchObject({ result: { isError: true } });
+      expect(w.objects).toEqual([]);
+      expect(w.opened).toEqual([]);
+    });
+
+    it("keeps a server's view in the dock to landlens://object: no action, ask, logs or select (no intent dep)", async () => {
+      const objects: ObjectTarget[] = [];
+      const posts: any[] = [];
+      const h = new AppHost(view, { post: (m) => posts.push(m), callTool: async () => ({ content: [] }), openLink: async () => true, openObject: (t) => void objects.push(t), resize: () => {}, context: () => ctx() });
+      h.receive({ jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} });
+      for (const [i, url] of ["landlens://action/restart/Deployment/landlens-dev/api", "landlens://ask/Deployment/landlens-dev/api", "landlens://select/Deployment/landlens-dev/api", "landlens://logs/Pod/landlens-dev/api"].entries()) {
+        h.receive({ jsonrpc: "2.0", id: 10 + i, method: "ui/open-link", params: { url } });
+      }
+      h.receive({ jsonrpc: "2.0", id: 20, method: "ui/open-link", params: { url: "landlens://object/Pod/landlens-dev/api" } });
+      await tick();
+      for (const id of [10, 11, 12, 13]) expect(posts.find((p) => p.id === id)).toMatchObject({ result: { isError: true } });
+      expect(objects).toEqual([{ kind: "Pod", namespace: "landlens-dev", name: "api" }]);
+    });
+
     it("grows a block up to its own maximum", async () => {
       const w = raw();
       await init(w.host);

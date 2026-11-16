@@ -283,17 +283,110 @@ describe("a block's frame (D204)", () => {
     await expect(svc.appCall(f.view, "view_data", { source: "pods" })).rejects.toThrow(/too often/);
   });
 
-  it("opens only an object that is one of the view's rows; actions and asks wait for part 3", async () => {
+  it("opens only an object that is one of the view's rows", async () => {
     const { claude, view, svc } = await started();
     await claude.callTool({ name: "render_view", arguments: { document: appDoc() } });
     const f = svc.appOpen(view, "count");
-    expect(svc.intent(f.view, `landlens://object/Pod/landlens-dev/${INJECTION}`)).toEqual({ object: { group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: INJECTION } });
+    expect(svc.intent(f.view, `landlens://object/Pod/landlens-dev/${INJECTION}`)).toEqual({ intent: { kind: "object", refs: [{ group: "", version: "v1", resource: "pods", kind: "Pod", namespace: "landlens-dev", name: INJECTION }] } });
     expect(svc.intent(f.view, "landlens://object/Pod/landlens-dev/not-shown")).toEqual({});
     expect(svc.intent(f.view, `landlens://action/delete/Pod/landlens-dev/${INJECTION}`)).toEqual({});
     expect(svc.intent(f.view, `landlens://object/Pod/landlens-dev/${INJECTION}/extra`)).toEqual({});
     expect(svc.intent(f.view, "landlens://object/Pod/_/x")).toEqual({});
     expect(svc.intent(f.view, "https://example.com")).toEqual({});
     expect(() => svc.intent(f.view, "x")).toThrow(/too often/);
+  });
+});
+
+describe("a block's intents (wave 10 part 3, D219)", () => {
+  const dep = (name: string, ns = "landlens-dev") => ({ metadata: { name, namespace: ns, labels: { app: name } }, spec: { replicas: 1, selector: { matchLabels: { app: name } } }, status: { readyReplicas: 1 } });
+  /** A block over deployments and pods, and another block over ConfigMaps only. */
+  const intentsDoc = () => ({
+    schema: 1, title: "Intents",
+    sources: {
+      deps: { kind: "kube.list", resource: "deployments", group: "apps", namespace: "landlens-dev", fields: { name: "$name" } },
+      pods: { kind: "kube.list", resource: "pods", namespace: "landlens-dev", fields: { name: "$name" } },
+      cms: { kind: "kube.list", resource: "configmaps", namespace: "landlens-dev", fields: { name: "$name" } },
+    },
+    blocks: [
+      { type: "app", id: "hands", uses: ["deps", "pods"], html: "<p>x</p>" },
+      { type: "app", id: "other", uses: ["cms"], html: "<p>y</p>" },
+    ],
+  });
+  async function intents(o: Parameters<typeof setup>[0] = {}) {
+    const s = await started(o);
+    s.api.add("deployments", dep("api"));
+    s.api.add("deployments", dep("web"));
+    s.api.add("deployments", dep("hidden", "kube-system"));
+    s.api.add("configmaps", { metadata: { name: "cfg", namespace: "landlens-dev" } });
+    await s.claude.callTool({ name: "render_view", arguments: { document: intentsDoc() } });
+    await until(() => (s.svc.get(s.view).sources.deps?.rows ?? 0) >= 2 && (s.svc.get(s.view).sources.cms?.rows ?? 0) >= 1);
+    return { ...s, f: s.svc.appOpen(s.view, "hands"), other: s.svc.appOpen(s.view, "other") };
+  }
+  const D = (name: string) => ({ group: "apps", version: "v1", resource: "deployments", kind: "Deployment", namespace: "landlens-dev", name });
+
+  it("gives back main's own refs for each intent in the allowlist", async () => {
+    const { svc, f } = await intents();
+    expect(svc.intent(f.view, "landlens://action/restart/Deployment/landlens-dev/api")).toEqual({ intent: { kind: "action", verb: "restart", refs: [D("api")] } });
+    expect(svc.intent(f.view, "landlens://action/scale/Deployment/landlens-dev/web")).toEqual({ intent: { kind: "action", verb: "scale", refs: [D("web")] } });
+    expect(svc.intent(f.view, "landlens://logs/Deployment/landlens-dev/api")).toEqual({ intent: { kind: "logs", refs: [D("api")] } });
+    expect(svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api")).toEqual({ intent: { kind: "ask", refs: [D("api")] } });
+    expect(svc.intent(f.view, "landlens://select/Deployment/landlens-dev/api/landlens-dev/web")).toEqual({ intent: { kind: "select", refs: [D("api"), D("web")] } });
+  });
+
+  it("refuses delete and drain, any verb the kind doesn't take, and anything not in the allowlist", async () => {
+    const { svc, f } = await intents();
+    for (const url of [
+      "landlens://action/delete/Deployment/landlens-dev/api",
+      "landlens://action/drain/Node/_/orbstack",
+      "landlens://delete/Deployment/landlens-dev/api",
+      "landlens://action/Delete/Deployment/landlens-dev/api",
+    ]) expect(svc.intent(f.view, url), url).toEqual({});
+    // A frame's verb must fit the row's kind (wave 8's actionFits): a Deployment can't be triggered, suspended or
+    // cordoned, a Pod can't be restarted or scaled.
+    for (const url of [
+      "landlens://action/trigger/Deployment/landlens-dev/api",
+      "landlens://action/suspend/Deployment/landlens-dev/web",
+    ]) expect(svc.intent(f.view, url), url).toEqual({});
+  });
+
+  it("refuses an action on a pod (no restart or scale takes it) and logs of a kind without them", async () => {
+    const { svc, f } = await intents();
+    expect(svc.intent(f.view, `landlens://action/restart/Pod/landlens-dev/${INJECTION}`)).toEqual({});
+    expect(svc.intent(f.view, `landlens://action/scale/Pod/landlens-dev/${INJECTION}`)).toEqual({});
+    expect(svc.intent(f.view, `landlens://logs/Pod/landlens-dev/${INJECTION}`)).toMatchObject({ intent: { kind: "logs" } });
+    expect(svc.intent(f.view, "landlens://logs/ConfigMap/landlens-dev/cfg")).toEqual({});
+  });
+
+  it("finds targets only among the block's own sources, and never an object the view doesn't show", async () => {
+    const { svc, f, other } = await intents();
+    // cfg is a row of the view, but of another block's source.
+    expect(svc.intent(f.view, "landlens://ask/ConfigMap/landlens-dev/cfg")).toEqual({});
+    expect(svc.intent(other.view, "landlens://ask/ConfigMap/landlens-dev/cfg")).toMatchObject({ intent: { kind: "ask" } });
+    expect(svc.intent(other.view, "landlens://action/restart/Deployment/landlens-dev/api")).toEqual({});
+    // In another namespace, so not a row: nothing, even for a name the view has elsewhere.
+    expect(svc.intent(f.view, "landlens://action/restart/Deployment/kube-system/hidden")).toEqual({});
+    expect(svc.intent(f.view, "landlens://action/restart/Deployment/kube-system/api")).toEqual({});
+    // One target the block doesn't show refuses the whole selection.
+    expect(svc.intent(f.view, "landlens://select/Deployment/landlens-dev/api/landlens-dev/nope")).toEqual({});
+  });
+
+  it("answers at most six intents a minute per frame, refused ones counted, and counts each frame apart", async () => {
+    let t = 1_000_000;
+    const { svc, f, other } = await intents({ now: () => t });
+    for (let i = 0; i < 3; i++) svc.intent(f.view, "landlens://action/delete/Deployment/landlens-dev/api");
+    for (let i = 0; i < 3; i++) expect(svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api").intent).toBeDefined();
+    expect(() => svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api")).toThrow(/too often/);
+    expect(svc.intent(other.view, "landlens://ask/ConfigMap/landlens-dev/cfg").intent).toBeDefined();
+    t += 60_000;
+    expect(svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api").intent).toBeDefined();
+  });
+
+  it("refuses a frame that isn't a view's block, and a closed view's", async () => {
+    const { svc, f, frames, view } = await intents();
+    const plain = frames.add({ call: "call-1", server: "landlens-kube", tool: "describe", html: "", csp: "" });
+    expect(() => svc.intent(plain.id, "landlens://ask/Deployment/landlens-dev/api")).toThrow(/closed/);
+    await svc.close(view);
+    expect(() => svc.intent(f.view, "landlens://ask/Deployment/landlens-dev/api")).toThrow(/closed/);
   });
 });
 

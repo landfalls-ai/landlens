@@ -14,7 +14,16 @@ export const PREVIEW_ONLY = "Development build: preview only. Nothing is sent to
  * What the sheet is asked to do: an action on objects of one kind, as the window has them. `suspend`: suspend (true)
  * or resume; `on`: cordon (true) or uncordon; `run`: a drain running in main to re-attach to (M4).
  */
-export type ActionDraft = { kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean; run?: string };
+export type ActionDraft = {
+  kind: ActionKind; type: ResourceType; objects: KubeObject[]; suspend?: boolean; on?: boolean; run?: string;
+  /**
+   * A block on the Views page asked for this sheet (wave 10 part 3, D219): its review card says so ("Asked for by this
+   * view") and nothing else changes; the person reviews the same dry run and applies with their own access.
+   */
+  asker?: "view";
+};
+/** The review card's eyebrow: whose action this is. */
+export const eyebrowOf = (d: Pick<ActionDraft, "asker">) => (d.asker === "view" ? "Asked for by this view" : "Your action");
 
 /** The sheet's own title for a draft, before main has reviewed it. */
 export function sheetTitle(d: ActionDraft): string {

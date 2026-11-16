@@ -2,7 +2,7 @@
 // frames it with sandbox="allow-scripts" only. No allow-same-origin: the view's origin is opaque, so it can't reach
 // this page, window.landlens or any storage; no allow-popups, allow-forms or allow-top-navigation. Messages are taken
 // only from this frame's own window, and app-host.ts answers them.
-import type { McpAppView } from "@landlens/contracts";
+import type { McpAppView, ViewIntent } from "@landlens/contracts";
 import { BUILTIN_MCP_SERVER, VIEWS_MCP_SERVER } from "@landlens/contracts";
 
 /** The one tool a block of a view may call (D204). */
@@ -40,7 +40,14 @@ export type BlockFrame = { view: string; block: string; uses: string[]; version:
  * block Claude wrote sits in the same ring captioned "Built by Claude" (D204). A block may call only view_data, its
  * data arrives from the page's store, and the objects it opens are checked by main (views:intent).
  */
-export function AppFrame(props: { call?: string; block?: BlockFrame; onOpenObject: (t: ObjectTarget) => void; onOpenView?: (id: string) => void; cap?: number }) {
+export function AppFrame(props: {
+  call?: string; block?: BlockFrame; onOpenObject: (t: ObjectTarget) => void; onOpenView?: (id: string) => void; cap?: number;
+  /**
+   * A block's intent as main accepted it (wave 10 part 3, D219): the page shows it to the person (a drawer, the logs,
+   * a chip, the selection bar, an action's sheet) and answers whether it did; the block hears only that.
+   */
+  onIntent?: (i: ViewIntent) => boolean;
+}) {
   const b = props.block;
   const [view, setView] = useState<McpAppView>();
   const [error, setError] = useState<string>();
@@ -50,6 +57,8 @@ export function AppFrame(props: { call?: string; block?: BlockFrame; onOpenObjec
   const frame = useRef<HTMLIFrameElement>(null);
   const open = useRef(props.onOpenObject);
   open.current = props.onOpenObject;
+  const onIntent = useRef(props.onIntent);
+  onIntent.current = props.onIntent;
 
   useEffect(() => {
     let closed = false;
@@ -71,15 +80,15 @@ export function AppFrame(props: { call?: string; block?: BlockFrame; onOpenObjec
       post: (m) => frame.current?.contentWindow?.postMessage(m, "*"),
       callTool: (name, args) => (b ? api.invoke("views:app-call", { frame: view.view, name, arguments: args }) : api.invoke("mcp:app-call", { view: view.view, name, arguments: args })),
       openLink: (url) => api.invoke("mcp:app-link", { view: view.view, url }).then((r) => r.opened, () => false),
-      // A block opens only what main finds among the view's rows (D219); a tool's view opens what it names.
-      openObject: b
-        ? async (t) => {
-            const r = await api.invoke("views:intent", { frame: view.view, url: `landlens://object/${t.kind}/${t.namespace ?? "_"}/${t.name}` }).catch(() => ({ object: undefined }));
-            if (!r.object) return false;
-            open.current({ kind: r.object.kind, name: r.object.name, ...(r.object.namespace ? { namespace: r.object.namespace } : {}) });
-            return true;
-          }
-        : (t) => open.current(t),
+      // A block's every landlens:// address is an intent: main checks it against the allowlist and the block's own
+      // rows, and the page shows what main found (D219). A tool's view opens what it names, as before.
+      openObject: b ? () => false : (t) => open.current(t),
+      ...(b ? {
+        intent: async (url: string) => {
+          const r = await api.invoke("views:intent", { frame: view.view, url }).catch((): { intent?: ViewIntent } => ({}));
+          return r.intent ? onIntent.current?.(r.intent) ?? false : false;
+        },
+      } : {}),
       ...(props.onOpenView ? { openView: props.onOpenView } : {}),
       ...(b ? { tools: VIEW_TOOLS, maxHeight: VIEW_MAX_HEIGHT } : {}),
       resize: (h) => (b?.fill ? undefined : setHeight(h), setReady(true)),

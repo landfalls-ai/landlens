@@ -378,7 +378,65 @@ acp-host 36; the rest as before); `views.e2e.test.ts` 7 of 7 with the fake agent
 
 ## Part 3: native blocks and actions
 
-- [ ] As section 13 lists, and e2e 2, 4's intent and 5
+Built 16 Nov 2026 ([views.md](../../views.md#native-blocks-part-3), [security.md](../../security.md#views-on-demand)).
+
+- [x] Native blocks drawn by Landlens (`blocks/`, `ViewGrid.tsx` in place of part 2's `ViewBuilt.tsx`, pure rules in
+  `viewBlocks.ts`): `table` on `ResourceTable` (virtual scroll, sortable headers, narrow rules, tones, formats), `stat`
+  with a sparkline, `chart` on the Overview's `TimeChart` and `Bars` (and the same chart styles for line and area over
+  rows, with a table toggle), `list`, `logs` on `logRows.ts` with Failures only, `problems` as the Overview's rows,
+  `text` through the dock's `Markdown`. Every value a text node; tones only from the closed set. Iris tokens, light and
+  dark; one column and a wrapped header under 720 px.
+- [x] D218: a row with `_ref` opens the object's drawer over the view (read with `resource:get` as you, kept live by
+  its kind's watch in its namespace); right-click, `⋯`, ⇧F10 and the row keys give `ObjectMenu` unchanged; Logs and
+  Shell open in the panel; Ask Claude puts an object chip on the strip's composer; `select: true` gives the selection
+  bar (Restart, Delete, Ask about these, Clear, Esc); `rowActions: false` hides the menu and checkboxes. All through
+  wave 8's sheet, review and apply, as you.
+- [x] D219: `@landlens/views/intent` parses `object`, `logs`, `ask`, `select` and `action/<verb>` (the seven verbs), in
+  the window (`app-host.ts`, before anything leaves it) and again in main (`ViewService.intent`), which counts six a
+  minute per frame (refused ones counted), finds each target among the rows of the block's own sources in the shown
+  version, refuses Secrets, a verb the kind doesn't take (`actionFits`) and a select across kinds, and answers its own
+  refs. The page shows the drawer, the panel, a chip, the selection bar ("Chosen by a block Claude built", no Delete)
+  or the action's sheet with the eyebrow "Asked for by this view" (`ActionDraft.asker`), one sheet at a time.
+- [x] The runtime's `view.logs`, `view.ask`, `view.select` and `view.action`; the catalog says which native block fits
+  and that Claude names no action.
+- [x] Tests: `intent.test.ts` (6), `runtime.test.ts` (the intents' addresses), `view-blocks.test.ts` (15),
+  `views-main.test.ts` (each intent; delete, drain, an unknown intent, a verb the kind doesn't take, a pod's restart,
+  logs of a ConfigMap, another block's source, another namespace, a select with one row not shown, the flood: the
+  seventh in a minute refused, refused ones counted, each frame apart; a frame that isn't a block's), `app-host.test.ts`
+  (allowlisted intents to main, the rest refused in the window; a server's view still only `object`); e2e on OrbStack:
+  native blocks (screenshots), 2 (a patch, Undo, Redo), 5 (a row's menu Restart applied: the `restartedAt` annotation
+  changes), 4's intents (delete, drain and a row not shown refused and nothing opens; a restart's sheet applied; ask,
+  select without Delete, logs in the panel).
+
+### Departures
+
+1. **A refused intent answers the block with an error, a shown one with `{}`** (the spec says `{}` for every intent).
+   It keeps part 2's object behaviour and e2e 4's "refused"; the block still learns nothing of an action's outcome.
+2. **Two more intents than the spec's three: `logs` and `select`**, as the brief asked. A block's selection never offers
+   Delete, so a frame can't bring a delete one click closer.
+3. **An intent's targets are looked up only among the block's own sources** (its `uses`), not every row of the view.
+4. **The flood is refused, not dropped silently**: main answers the seventh in a minute with 429, which the window turns
+   into the block's error. An intent while a sheet is open is dropped (answered as shown, nothing opens).
+5. **Object chips go on the view strip's composer**, not the dock's: the strip is the view session's composer, and the
+   dock (bound to the same session) stays folded so the view keeps the page.
+6. **A table's sort is kept in the window only.** Persisting tweaks (`views:tweak`) and column widths move to part 4,
+   with saving. A view's rows aren't listed in ⌘K (part 4).
+7. **Part 2's departure 9 is undone**: an object from a view opens in its drawer over the view (D218), not on its own
+   page.
+8. **The fake agent substitutes `"__SHOWN__"`** with the version the last answer named, so `patch-restarts` patches
+   whatever version e2e 2 reaches.
+
+### Checks
+
+`pnpm typecheck` 0; `pnpm -r test` (desktop 52 files, 762 tests; views 90; the rest as before); `npx electron-vite
+build`; `views.e2e.test.ts` 11 of 11 with the fake agent on OrbStack (e2e 7 timed out once waiting for a follow-up to
+reach the fake agent and passed on the rerun and the run after). Live once with the person's Claude: asked for the
+pods not Running, a chart by status, the doctor's problems and a table, Claude built "landlens-dev pods" v2 in under 30
+seconds; the screenshot (`w10p3-05-live`) shows native blocks: a stat (11 not Running), a bar chart of six statuses
+and the doctor's problems, with more below the fold. The test's last step read the clipboard before **Copy document**
+had written it, so the document itself wasn't recorded; the test now waits for the copy. Five intent rules were taken
+out one at a time and each failed its test (own sources, rate, verb fits kind, the window's parse, no Delete for a
+block's selection); main's Secret check on a target is a second layer no row can reach (no Secret source exists).
 
 ## Part 4: keeping views and the connections
 

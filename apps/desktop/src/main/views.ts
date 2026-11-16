@@ -6,11 +6,12 @@
 // counts (D215); the page gets the shown version and each source's data, stamped with the version; a frame of an app
 // block gets data in host messages only and may call view_data for the sources its block names, nothing else (D204).
 import { randomBytes } from "node:crypto";
-import type { McpAppView, McpToolResult, ResourceRef, RowRef, SourceData, ViewAuditEntry, ViewState } from "@landlens/contracts";
+import type { ActionKind, FrameVerb, McpAppView, McpToolResult, ResourceRef, RowRef, SourceData, ViewAuditEntry, ViewIntent, ViewState } from "@landlens/contracts";
 import { GroupName, ResourceName, VIEWS_MCP_SERVER } from "@landlens/contracts";
 import type { AuditEntry, ClusterManager } from "@landlens/kube";
+import { actionFits } from "@landlens/kube/action-kinds";
 import {
-  applyPatch, blockPage, blockUri, cellText, fitData, parseDocument, SENTENCES, statusLines, VIEW_CATALOG, VIEW_LIMITS, ViewHistory,
+  applyPatch, blockPage, blockUri, cellText, fitData, parseDocument, parseIntent, SENTENCES, statusLines, VIEW_CATALOG, VIEW_LIMITS, ViewHistory,
   type Issue, type ViewDocument,
 } from "@landlens/views";
 import { viewsMcpServer, type ViewAnswer, type ViewBinding } from "@landlens/views/server";
@@ -21,8 +22,8 @@ import type { SourceStatus, ViewPush, ViewRuntime } from "./view-runtime";
 
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 const NO_CSP = { connectDomains: [], resourceDomains: [], frameDomains: [], baseUriDomains: [] };
-/** A landlens://object link from a frame (the runtime's openObject): kind, namespace or _, name. */
-const OBJECT_LINK = /^landlens:\/\/object\/([A-Za-z][A-Za-z0-9]{0,62})\/([a-z0-9][a-z0-9.-]{0,252}|_)\/([a-z0-9][a-z0-9.:-]{0,252})$/;
+/** The action a frame's verb opens (D219): resume is suspend's other way, uncordon cordon's. Never delete or drain. */
+const VERB_ACTION: Record<FrameVerb, ActionKind> = { scale: "scale", restart: "restart", trigger: "trigger", suspend: "suspend", resume: "suspend", cordon: "cordon", uncordon: "cordon" };
 /** Front-door requests kept for the disclosure (D223), over every view of the window. */
 const AUDIT_KEEP = 500;
 /** "Ask about this block" (D215): at most this many rows, in at most this many characters. */
@@ -270,26 +271,34 @@ export class ViewService {
   }
 
   /**
-   * views:intent: what a frame's link may open (D219). Part 2 opens only an object that is one of the view's rows now;
-   * actions and asks wait for part 3, and anything else opens nothing.
+   * views:intent: what a frame's link may ask Landlens to show (D219, wave 10 part 3). Counted first (six a minute per
+   * frame, refused ones included), then parsed by the one allowlist (`parseIntent`: object, logs, ask, select, and the
+   * non-destructive verbs; never delete or drain), then each target looked up among the rows of the block's own
+   * sources in the shown version: what goes back is main's `_ref`s, never the frame's words. An action's verb must fit
+   * the row's kind (wave 8's `actionFits`), and no target is ever a Secret. Anything refused shows nothing.
    */
-  intent(frame: string, url: string): { object?: RowRef } {
-    const { w } = this.frameOf(frame);
+  intent(frame: string, url: string): { intent?: ViewIntent } {
+    const { w, uses } = this.frameOf(frame);
     const minute = Math.floor(this.now() / 60_000);
     const n = w.intents.get(frame);
     const count = n && n.minute === minute ? n.count + 1 : 1;
     w.intents.set(frame, { minute, count });
     if (count > VIEW_LIMITS.intents) throw fail(429, "That view is asking Landlens to open things too often.");
-    const m = OBJECT_LINK.exec(url);
-    if (!m || !w.runtime) return {};
-    let name: string;
-    try {
-      name = decodeURIComponent(m[3]!);
-    } catch {
-      return {};
+    const p = parseIntent(url);
+    if (!p || !w.runtime || !uses.length) return {};
+    const refs: RowRef[] = [];
+    for (const t of p.targets) {
+      const ref = this.deps.runtime.findRef(w.runtime, t, uses);
+      if (!ref || (ref.group === "" && ref.resource === "secrets")) {
+        // One target the block doesn't show refuses the whole intent: a selection is exactly what the frame named.
+        return {};
+      }
+      refs.push(ref);
     }
-    const ref = this.deps.runtime.findRef(w.runtime, { kind: m[1]!, ...(m[2] !== "_" ? { namespace: m[2]! } : {}), name });
-    return ref ? { object: ref } : {};
+    if (!refs.length) return {};
+    if (p.kind === "action" && (!p.verb || !actionFits(VERB_ACTION[p.verb], refs[0]!))) return {};
+    if (p.kind === "select" && new Set(refs.map((r) => `${r.group}/${r.resource}`)).size !== 1) return {};
+    return { intent: { kind: p.kind, ...(p.verb ? { verb: p.verb } : {}), refs } };
   }
 
   /** views:audit: the front-door requests made with the view's token since it opened (D223). */

@@ -2,9 +2,9 @@
 
 Wave 10 ([spec](specs/010-views/spec.md), [tasks](specs/010-views/tasks.md)). You say what you want to see; your own
 Claude Code builds a live view of the cluster you're connected to, from read-only sources, and the view takes the
-page. Parts 1 (the engine) and 2 (the page and Claude, with app blocks) are built; native blocks drawn with the app's
-own table, chart and log components, a view's actions (part 3) and saving views and the connections' sources (part 4)
-are not yet.
+page. Parts 1 (the engine), 2 (the page and Claude, with app blocks) and 3 (native blocks drawn with the app's own
+components, and your actions on a view's rows) are built; saving views and the connections' sources (part 4) are not
+yet.
 
 ## The page
 
@@ -35,8 +35,18 @@ hidden (the page owns the session; **New view** closes it).
   question you send next carries that block's rows (D215). The chip belongs to the version you chose it in: Undo,
   Redo or Claude's next version removes it, and main refuses a block of a version that isn't shown, so rows of
   another block never go under its name.
-- **Opening an object.** A table's first cell opens its row's object on its own page; going back to Views finds the
-  view as you left it (it lives in the window until **New view**, a reload or a disconnect).
+- **A row is the object (part 3, D218).** A click on a table's or list's row (or a problem) opens the object's drawer
+  over the view, the IDE's own read as you, live, with its tabs. Right-click, `⋯`, ⇧F10 or the row keys (L logs,
+  S shell, E edit, ⌫ delete) give wave 8's object menu unchanged: what it offers comes from the kind and your role
+  (`useCanAct`), never from the document, and each action goes through its sheet, the cluster's dry run and Apply,
+  with your own access. Logs and shells open in the panel under the view. **Ask Claude** on a row puts the object on
+  the strip's composer as a chip ("Deployment landlens-dev/web"); the next question carries it as a reference, which
+  the session reads with its own token. A table with `select` has checkboxes: the selection bar offers the kind's
+  Restart and Delete (one sheet, one review, at most 50), **Ask about these** and Clear (Esc).
+  `rowActions: false` hides the menu and the checkboxes. The view's own token stays read-only throughout.
+- **Sorting a table** (its header) is your tweak: it moves no version and isn't sent to Claude; a column the shown
+  version no longer has goes back to Claude's order. Kept in the window (saving it is part 4's).
+- The view lives in the window until **New view**, a reload or a disconnect; going to another page and back finds it.
 - One open view per window. Its sources run only while the page is on screen, and stop 30 s after it leaves (D210).
   A cluster that disconnects takes its view with it: its reads, token, frames and session end.
 
@@ -85,8 +95,22 @@ A view is a JSON document: a title, parameters, **sources** (what to read: `kube
 `kube.top`, `metrics.series`, `doctor.problems`, `helm.releases`), each with **steps** (filter, sort, group, join,
 limit…) and **blocks** (`table`, `stat`, `chart`, `list`, `logs`, `problems`, `text`, `app`). The schema, field
 paths, computed names, steps and limits are part 1's, in `packages/views` ([spec §3–4](specs/010-views/spec.md)).
-Part 2 draws the native blocks plainly: a table as text cells, a number, a list, log lines, a chart's points as a
-small table; part 3 gives them the app's own components.
+
+### Native blocks (part 3)
+
+Landlens draws them with its own components, in the Iris tokens, light and dark, and every value as a React text node:
+nothing a source delivers is ever markup.
+
+| Block | Drawn with |
+|---|---|
+| `table` | `ResourceTable`: virtual scroll to 2,000 rows, sortable headers, the narrow-pane rules (node, ready, age, namespace and restarts give way first), a row's tone from `_tone` (only `ok`, `warn`, `bad`, `muted`) or a column's `toneField`, formats `number`, `age`, `bytes`, `cpu`, `percent`, `status`, `mono`. A row with `_ref` has the object's hands (above) |
+| `stat` | A number in its format and tone, its label, and a sparkline of `sparkField` over the rows |
+| `chart` | `metrics.series`: the Overview's `TimeChart` per panel. `bar`: the Overview's ranked bars. `line`/`area` over rows: the same chart styles (grid, axis, slots `s1`–`s4`), with a table toggle and a legend; `unit` is `cpu`, `bytes`, `count` or `percent` |
+| `list` | Rows with a tone edge; a row opens its object, its `⋯` the menu |
+| `logs` | The log view's rules (`plain()`, `ansi()` colours), failures in the bad tone, **All** / **Failures only**, following the end |
+| `problems` | The doctor's rows as the Overview draws them, each opening its object |
+| `text` | The dock's Markdown: a link shows its host and opens through `link:open` with your yes |
+
 
 ## App blocks
 
@@ -106,7 +130,10 @@ The runtime gives the script one object, `view`:
 | `view.onData(source, fn)`, `view.data(source)` | The source's data now and on every change. Data comes only in host messages: the tool result's `structuredContent.data` first, then `ui/notifications/landlens-data` (Landlens's addition to the protocol), each cut to the frame's message limit with a note |
 | `view.read(source)` | `tools/call view_data`, for the block's own sources (its `uses`) in the shown version only; 60 calls a minute |
 | `view.el(tag, attrs, ...children)` | Builds DOM with text children. Makes no `script`, `iframe`, `frame`, `object`, `embed`, `link`, `meta` or `base` (it throws); drops every `on…` attribute and `srcdoc`; an address attribute (`href`, `src`, `action`, `poster`, …) only to `https:`, `mailto:`, `landlens:` or `#…`, read with tabs, newlines and control characters taken out as the URL parser does, so `java\tscript:` is `javascript:` |
-| `view.openObject(row._ref)` | Opens the object in Landlens, only if it's one of the view's rows; six intents a minute |
+| `view.openObject(row._ref)`, `view.logs(ref)` | Opens the object's drawer over the view, or its logs in the panel (pods and workloads) |
+| `view.ask(ref)` | Puts the object on the strip's composer as a chip; sends nothing |
+| `view.select(refs)` | Chooses rows of one kind (at most 50) for the selection bar, which says "Chosen by a block Claude built" and never offers Delete |
+| `view.action(verb, ref)` | Opens wave 8's sheet for the object with "Asked for by this view": `scale`, `restart`, `trigger`, `suspend`, `resume`, `cordon`, `uncordon`. Never delete or drain |
 | `view.params`, `view.info`, `view.format.age/bytes/cpu` | The parameters, the view's id and version, Landlens's formats |
 
 A block's https link opens only after your yes in Landlens's own dialog, as any MCP App's ([mcp.md](mcp.md#mcp-apps)):
@@ -116,9 +143,20 @@ without one. Escape and ⌘/Ctrl chords typed in a block reach the app only whil
 four a second, so a block's script can't press them. The frame can't resolve names either: DNS prefetching is off
 for every page and frame (Blink's `dnsPrefetchingEnabled=false`, set by main before the app is ready), as a
 `<link rel="dns-prefetch">` is under no CSP directive and would otherwise carry a block's data out in a lookup.
+**Intents (D219, part 3).** Each is a `landlens://` address sent as `ui/open-link`. The window parses it with
+`@landlens/views/intent` (one strict grammar: the five intents, the seven verbs, Kubernetes names after decoding, a
+select of one kind) and refuses anything else there; main parses it again, counts it (six a minute per frame,
+refused ones included) and looks each target up among the rows of **the block's own sources** in the shown version.
+A target that isn't one, a Secret, a verb the kind doesn't take (wave 8's `actionFits`), or a select across kinds is
+refused. Only then does the page show anything, and only Landlens's own: a drawer, the panel, a chip, the selection
+bar, or the action's sheet, one at a time (an intent while a sheet is open is dropped). Nothing is applied by an
+intent: the person reviews the dry run and presses Apply, with their own access. The block hears `{}` when something
+was shown and an error otherwise, never the outcome. Delete and drain can't be started from a frame (the person's
+decision, 2026-11-16): the frame's `select` gets no Delete either.
+
 Refused to a block: every other tool (`-32601`, in the window and again in main, and `mcp:app-call` refuses a block's
 frame outright), `ui/message` and `ui/update-model-context` (a block can't write to Claude), resources, any other
-link, and the action and ask intents (part 3). mcp-ui's older action names (`tool`, `prompt`, `link`,
+link or intent. mcp-ui's older action names (`tool`, `prompt`, `link`,
 `intent`, `notify`) aren't spoken: `@mcp-ui/*` implements MCP Apps over JSON-RPC now, so they get "Method not found".
 
 ## Authority
@@ -139,13 +177,18 @@ Landlens with your access, in a closed shape (D211). No view reads Google Cloud,
 | `packages/views/src/app/` | `page.ts` (a block's page), `runtime.js` (`view`), `card.js` (the dock card), `base.css` |
 | `apps/desktop/src/main/views.ts` | `ViewService`: a view ↔ its session, versions, what crosses to Claude, frames, intents, the audit |
 | `apps/desktop/src/main/view-runtime.ts` | Part 1's runtime: sources, the view's token, pushes (stamped with the version) |
-| `apps/desktop/src/renderer/src/ViewsPage.tsx`, `ViewBuilt.tsx`, `viewStore.ts`, `views.css` | The page, its blocks, its state in the window |
-| `apps/desktop/src/renderer/src/app-host.ts`, `AppFrame.tsx` | The frame's host: `landlens-data`, the tool filter, block heights |
+| `apps/desktop/src/renderer/src/ViewsPage.tsx`, `ViewGrid.tsx`, `viewStore.ts`, `views.css` | The page, the grid, the selection bar and chips, its state in the window |
+| `apps/desktop/src/renderer/src/blocks/`, `viewBlocks.ts` | The native blocks; formats, tones, columns, charts and the selection's actions as pure functions |
+| `packages/views/src/intent.ts` | The intents' grammar, used by the window and main |
+| `apps/desktop/src/renderer/src/app-host.ts`, `AppFrame.tsx` | The frame's host: `landlens-data`, the tool filter, block heights, intents up to main |
+| `apps/desktop/src/renderer/src/Workspace.tsx` | A view row's drawer, object menu, bulk sheet and a block's intents, through wave 8's paths |
 | `apps/desktop/test/fixtures/views/*.json` | The fake agent's `view-script:` steps |
 
 ## Tests
 
-Unit: `packages/views/test/server.test.ts`, `schema.test.ts`, `runtime.test.ts` (`view.el`);
+Unit: `packages/views/test/server.test.ts`, `schema.test.ts`, `runtime.test.ts` (`view.el`, each intent's address),
+`intent.test.ts`; `apps/desktop/test/view-blocks.test.ts` (formats, tones, columns, stat, charts, the selection's
+actions, the sort tweak);
 `packages/mcp-gateway/test/gateway.test.ts` ("built-ins: landlens-views"); `packages/acp-host/test/fence.test.ts`,
 `prompt.test.ts`; `apps/desktop/test/views-main.test.ts`, `views-ipc.test.ts`, `view-store.test.ts`,
 `app-host.test.ts`, `mcp-main.test.ts`, `view-runtime.test.ts`, `security-app.test.ts` (the DNS prefetch switch). End to end, on OrbStack with the
@@ -158,7 +201,12 @@ LANDLENS_INTEGRATION=orbstack npx vitest run --no-file-parallelism test/views.e2
 LANDLENS_INTEGRATION=orbstack,claude npx vitest run --no-file-parallelism test/views.e2e.test.ts -t "live: Claude"   # your Claude
 ```
 
-The e2e makes its own Deployment and ConfigMap in `landlens-dev` and removes them. A hostile block (e2e 4) aims each
+The e2e makes its own Deployments (one a busybox that logs a failure every third line) and ConfigMap in
+`landlens-dev` and removes them. Part 3's cases: the native blocks live in both themes, wide and narrow; a patch
+(`patch-restarts`: `get_view`, then `patch_view` on the version it named) with Undo and Redo; a row's menu restarting
+the test's Deployment through the review card; and an app block's intents (`intent-block`): delete, drain and a row
+it doesn't show refused with nothing opened, a restart's sheet "Asked for by this view" applied, an ask chip, a
+selection with no Delete, logs in the panel. A hostile block (e2e 4) aims each
 attempt at a name of its own under this run's random `views-e2e-<hex>.test`: fetch, XHR, `sendBeacon`, WebSocket,
 EventSource, a worker, dynamic `import`, `FontFace`, an image, a CSS background, `@import` and `@font-face`, a
 stylesheet, prefetch and preconnect links, video, audio, a script, a frame, an object, an embed, two

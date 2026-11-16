@@ -36,7 +36,8 @@ async function callKube(servers) {
  * so a hostile block can aim at them; `__NETHOST__` the test's own unique host name, which its net log must never show.
  * They come from fake-agent-env.json beside the session folders, written by the test: Landlens hands the agent only
  * its allowlisted environment (agentEnv), so a LANDLENS_FAKE_* variable never reaches this process. Results go to
- * fake-agent-results.jsonl, in the same folder, for the test.
+ * fake-agent-results.jsonl, in the same folder, for the test. `"__SHOWN__"` becomes the version the last answer named
+ * (a patch's base, wave 10 part 3), as Claude reads it from get_view.
  */
 const VIEWS = join(dirname(fileURLToPath(import.meta.url)), "views");
 async function viewScript(name, s, sessionId, notify, say) {
@@ -57,12 +58,17 @@ async function viewScript(name, s, sessionId, notify, say) {
   const client = new Client({ name: "fake-acp-agent", version: "0.0.1" });
   await client.connect(new StreamableHTTPClientTransport(new URL(views.url), { requestInit: { headers } }));
   try {
+    // "__SHOWN__" (a patch's base) is the version the last answer named ("View <id> vN"), as Claude would read it.
+    let shown = 0;
     for (const step of steps) {
       const toolCallId = randomUUID();
       const title = `mcp__landlens-views__${step.tool}`;
-      await notify({ sessionUpdate: "tool_call", toolCallId, title, kind: "other", status: "in_progress", rawInput: step.arguments, _meta: { claudeCode: { toolName: title } } });
-      const r = await client.callTool({ name: step.tool, arguments: step.arguments });
+      const args = JSON.parse(JSON.stringify(step.arguments ?? {}).replaceAll('"__SHOWN__"', String(shown)));
+      await notify({ sessionUpdate: "tool_call", toolCallId, title, kind: "other", status: "in_progress", rawInput: args, _meta: { claudeCode: { toolName: title } } });
+      const r = await client.callTool({ name: step.tool, arguments: args });
       const text = (r.content ?? []).map((c) => c.text ?? "").join("\n");
+      const v = /^View [0-9a-f]{16} v(\d+)/.exec(text);
+      if (v) shown = Number(v[1]);
       await notify({ sessionUpdate: "tool_call_update", toolCallId, status: r.isError ? "failed" : "completed", content: [{ type: "content", content: { type: "text", text } }] });
       try {
         if (s.cwd) appendFileSync(join(s.cwd, "..", "fake-agent-results.jsonl"), `${JSON.stringify({ tool: step.tool, text, isError: !!r.isError })}\n`);

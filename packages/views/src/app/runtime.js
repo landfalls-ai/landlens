@@ -215,6 +215,18 @@
     ask: function (ref) {
       return request("ui/open-link", { url: refUrl("ask", ref) });
     },
+    /** Open the object's logs in Landlens's panel (a pod, or a workload whose pods log). */
+    logs: function (ref) {
+      return request("ui/open-link", { url: refUrl("logs", ref) });
+    },
+    /** Choose rows of one kind (at most 50): Landlens shows them in its selection bar; the person acts. */
+    select: function (refs) {
+      var list = Array.isArray(refs) ? refs.filter(function (r) { return r && typeof r === "object"; }).slice(0, 50) : [];
+      if (!list.length) return Promise.resolve({ isError: true });
+      var url = "landlens://select/" + encodeURIComponent(String(list[0].kind || ""));
+      for (var i = 0; i < list.length; i++) url += "/" + encodeURIComponent(String(list[i].namespace || "_")) + "/" + encodeURIComponent(String(list[i].name || ""));
+      return request("ui/open-link", { url: url });
+    },
     openLink: function (url) {
       return request("ui/open-link", { url: String(url) });
     },

@@ -1,0 +1,47 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "a block that asks",
+      "document": {
+        "schema": 1,
+        "title": "views-e2e, a block that asks",
+        "sources": {
+          "deps": {
+            "kind": "kube.list",
+            "resource": "deployments",
+            "group": "apps",
+            "namespace": "landlens-dev",
+            "labelSelector": "app=views-e2e",
+            "fields": {
+              "name": "$name"
+            }
+          },
+          "pods": {
+            "kind": "kube.list",
+            "resource": "pods",
+            "namespace": "landlens-dev",
+            "labelSelector": "app=views-e2e",
+            "fields": {
+              "name": "$name"
+            }
+          }
+        },
+        "blocks": [
+          {
+            "type": "app",
+            "id": "asks",
+            "title": "A block that asks",
+            "uses": [
+              "deps",
+              "pods"
+            ],
+            "html": "<div class=\"card\"><div class=\"grow\"><div class=\"t\" id=\"dep\">\u2026</div><div id=\"out\" class=\"dim\">intents</div></div></div><div class=\"card\"><button id=\"restart\" type=\"button\">restart</button><button id=\"delete\" type=\"button\">delete</button><button id=\"drain\" type=\"button\">drain</button><button id=\"notshown\" type=\"button\">notshown</button><button id=\"ask\" type=\"button\">ask</button><button id=\"select\" type=\"button\">select</button><button id=\"logs\" type=\"button\">logs</button></div>",
+            "css": "button { margin: 0 6px 6px 0; }",
+            "js": "var dep, pods = [];\nfunction out(k, v) { document.getElementById('out').setAttribute('data-' + k, v); }\nfunction said(k) { return function (r) { out(k, r && r.isError ? 'refused' : 'shown'); }; }\nview.onData('deps', function (d) { dep = d.rows.filter(function (r) { return r.name === 'views-e2e'; })[0]; document.getElementById('dep').textContent = dep ? 'Deployment: ' + dep.name : 'no deployment'; });\nview.onData('pods', function (d) { pods = d.rows; });\nfunction on(id, fn) { document.getElementById(id).addEventListener('click', fn); }\non('restart', function () { view.action('restart', dep._ref).then(said('restart')); });\non('delete', function () { view.action('delete', dep._ref).then(said('delete')); });\non('drain', function () { view.action('drain', { kind: 'Node', name: 'orbstack' }).then(said('drain')); });\non('notshown', function () { view.action('restart', { kind: 'Deployment', namespace: 'landlens-dev', name: 'not-in-this-view' }).then(said('notshown')); });\non('ask', function () { view.ask(dep._ref).then(said('ask')); });\non('select', function () { view.select(pods.map(function (r) { return r._ref; })).then(said('select')); });\non('logs', function () { view.logs(dep._ref).then(said('logs')); });"
+          }
+        ]
+      }
+    }
+  }
+]

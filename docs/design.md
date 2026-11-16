@@ -331,7 +331,7 @@ all N) and Recent warnings; Nodes. It reads
   **Drain…**; during the run each row's state on its right (`Clock` waiting, a spinning `LoaderCircle` evicting,
   `CircleCheck` gone in ok, `CircleSlash` blocked and `CircleX` failed in bad), the elapsed time in mono in the
   head, **Stop**; at the end the summary, **Uncordon…** and **Done**.
-- **Views** (wave 10 part 2, `ViewsPage.tsx`, `ViewBuilt.tsx`, `views.css`; [views.md](views.md)). The first
+- **Views** (wave 10 parts 2–3, `ViewsPage.tsx`, `ViewGrid.tsx`, `blocks/`, `views.css`; [views.md](views.md)). The first
   Workspace row (`LayoutDashboard`). Blank: one centred 640px column, an `h2` in `--t-16` "Describe what you want to
   see on <context>.", one `--ink-2` sentence (read-only, never Secrets) and a three-line composer with the placeholder
   "Pods that restarted today, worst first"; no dock, no chips. Building: the ask as the heading, a spinner and
@@ -342,9 +342,17 @@ all N) and Recent warnings; Nodes. It reads
   is one `--warn-soft` row, a link that opens its pointers in mono. Blocks on a 12-column grid with 12px gaps (span
   from the document, a stat 3 by default; every block full width when the main column is under 720px), each a
   `--bg-2` card with an inset `--line`, its title in `--t-125` 600 `--ink-2`, and an "Ask Claude about …" icon
-  (`MessageSquarePlus`) at .6 opacity until hover. Native blocks are plain in part 2: a table with a sticky `--bg-3`
-  head, numbers right-aligned and tabular, the first cell a `.link-btn` to the row's object and a 2px left edge in
-  `--bad` or `--warn` for a row's tone; a stat in `--t-26` 600 with its label dim; logs in mono on `--bg-0`. An app
+  (`MessageSquarePlus`) at .6 opacity until hover. Native blocks (part 3) are the app's own: a table is
+  `ResourceTable` inside the card (its sticky head, tones, the row's 2px edge, the selection checkboxes, its narrow
+  rules), up to 480px tall; a stat in `--t-26` 600 in its tone with its label in `--ink-2` and a 64×20 sparkline
+  (`.spark-line`); a chart is the Overview's (`TimeChart`, `Bars`, or the same grid, axis and `s1`–`s4` slots for
+  rows), with a legend of `key line|area` marks and a table toggle; a list's rows are 30px with a 3px tone edge and a
+  `⋯` (`Ellipsis`) shown on hover or focus; logs in mono on `--bg-0` with failures in `--bad-text` and an **All /
+  Failures only** segment; problems as the Overview's `ov-row`s with their kind tile; text through the dock's
+  Markdown. A selection shows a sticky bar under the header (`--bg-2`, `--shadow-1`), ringed in `--accent-line` with
+  "Chosen by a block Claude built. Nothing happens until you act." when a block chose it. An action a block asked for
+  opens wave 8's sheet with the eyebrow "Asked for by this view" and a note in `--sel` above the form. Objects on the
+  strip's composer are `.ctx-chip`s (at most 220px, ellipsed). An app
   block is an `AppFrame` in the quieter `.app-third` ring captioned "Built by Claude" in `--ink-3`. The chat folds to
   a sticky strip at the bottom (`--bg-2`, radius 4, `--shadow-2`): `MessageSquare` (opens the dock, ⌘J), Claude's last
   line (or a spinner and "Claude is working…"), and a one-line composer that can carry an "About <block>" chip; the

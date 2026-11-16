@@ -14,4 +14,5 @@ export * from "./projection.js";
 export * from "./history.js";
 export * from "./status.js";
 export * from "./catalog.js";
+export * from "./intent.js";
 export * from "./app/page.js";

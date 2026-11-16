@@ -3,13 +3,26 @@
 // every change goes through a views:* channel and comes back as a views:state push; a data push carries the version it
 // belongs to, and one for another version is dropped (part 1's review). Outside React, so the page and the dock share
 // it and it outlives a move to another page; useView() reads it.
-import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ResourceRef, SourceData, ViewDataPush, ViewState } from "@landlens/contracts";
-import { useSyncExternalStore } from "react";
+import type { AgentPermissionRequest, AgentSessionInfo, AgentStatus, AgentUpdate, ResourceRef, RowRef, SourceData, ViewDataPush, ViewState } from "@landlens/contracts";
+import { useState, useSyncExternalStore } from "react";
+import type { Sort } from "./tableState";
 import { api } from "./api";
 
 export type ViewSnapshot = {
   /** The working view, its state and its session, once views:start answered. */
-  view?: { id: string; session: AgentSessionInfo; ask: string; state?: ViewState; data: Record<string, { version: number; data: SourceData }> };
+  view?: {
+    id: string; session: AgentSessionInfo; ask: string; state?: ViewState; data: Record<string, { version: number; data: SourceData }>;
+    /**
+     * Objects on the composer as chips (wave 10 part 3): a row's Ask Claude, or a block's ask intent (D219). They go
+     * with the next question as references (the session reads each with its own token); nothing is sent by adding one.
+     */
+    chips?: RowRef[];
+    /**
+     * Rows chosen for the selection bar (D156, D218): by the person's checkboxes, or by a block's select intent (D219),
+     * which never offers Delete.
+     */
+    selection?: { refs: RowRef[]; by: "you" | "block" };
+  };
   /** Sending the first ask (views:start hasn't answered). */
   starting?: string;
   error?: string;
@@ -126,6 +139,26 @@ export const viewStore = {
     return api.invoke("views:prompt", { view: v.id, text, ...(context.length ? { context } : {}), ...(block ? { block: block.block, version: block.version } : {}) });
   },
 
+  /** A row's object on the composer, at most 10 (views:prompt's context limit); a Secret never (main refuses it too). */
+  chip(ref: RowRef) {
+    const v = snap.view;
+    if (!v || (ref.group === "" && ref.resource === "secrets")) return;
+    const chips = v.chips ?? [];
+    if (chips.some((c) => sameRef(c, ref)) || chips.length >= 10) return;
+    set({ ...snap, view: { ...v, chips: [...chips, ref] } });
+  },
+  unchip(ref?: RowRef) {
+    const v = snap.view;
+    if (v) set({ ...snap, view: { ...v, chips: ref ? (v.chips ?? []).filter((c) => !sameRef(c, ref)) : [] } });
+  },
+  /** The selection bar's rows, and who chose them; none clears it. */
+  select(refs: RowRef[], by: "you" | "block" = "you") {
+    const v = snap.view;
+    if (!v) return;
+    const { selection: _, ...rest } = v;
+    set({ ...snap, view: refs.length ? { ...rest, selection: { refs: refs.slice(0, 50), by } } : rest });
+  },
+
   async version(to: number) {
     const v = snap.view;
     if (v) await api.invoke("views:version", { view: v.id, to });
@@ -144,9 +177,25 @@ export const viewStore = {
   },
 };
 
+export const sameRef = (a: RowRef, b: RowRef) => a.group === b.group && a.resource === b.resource && (a.namespace ?? "") === (b.namespace ?? "") && a.name === b.name;
+/** A row's object as views:prompt's context takes it (ResourceRef: no kind). */
+export const resourceRef = (r: RowRef): ResourceRef => ({ group: r.group, version: r.version, resource: r.resource, name: r.name, ...(r.namespace ? { namespace: r.namespace } : {}) });
+
 export function useView(): ViewSnapshot {
   return useSyncExternalStore(viewStore.subscribe, viewStore.get);
 }
 
 /** A block's key for "Ask about this block" and the frames: an app block's id, else `block-<index>`. */
 export const blockKey = (b: { type: string; id?: string }, i: number) => (b.type === "app" && b.id ? b.id : `block-${i}`);
+
+/**
+ * The person's own tweaks to a block (D214: a table's sort), kept in the window per view and block until the view
+ * closes; they change nothing in the document and nothing goes to Claude. Saving them with the view is part 4's.
+ */
+export type Tweak = { sort?: Sort };
+const tweaks = new Map<string, Tweak>();
+export function useTweak(view: string, block: string): [Tweak, (t: Tweak) => void] {
+  const key = `${view}/${block}`;
+  const [t, setT] = useState<Tweak>(() => tweaks.get(key) ?? {});
+  return [t, (n: Tweak) => (tweaks.set(key, n), setT(n))];
+}
