@@ -102,7 +102,7 @@ export function GcpNotice(props: { status: GcpStatus; onCheck: () => void; onCho
     return (
       <div className="notice gcp-notice" role="status">
         <Ic icon={CircleDashed} size={15} className="dim" />
-        <div className="notice-body"><strong>Off in development builds</strong><p>An unpackaged Landlens doesn't talk to Google Cloud unless it is pointed at a local fake (<span className="mono">LANDLENS_GCP_ENDPOINT</span>) or you set <span className="mono">LANDLENS_GCP_REAL=1</span> to try your own project.</p></div>
+        <div className="notice-body"><strong>Google Cloud is off</strong><p>This run was started with <span className="mono">LANDLENS_GCP_REAL=0</span> (as tests are). Start Landlens without it to read your projects with your gcloud.</p></div>
       </div>
     );
   }

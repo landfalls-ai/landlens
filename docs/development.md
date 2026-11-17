@@ -139,8 +139,8 @@ build has Google Cloud off unless it reads one of:
 |---|---|
 | `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: the five Google origins become this fake |
 | `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the fake); otherwise it is looked up on the login PATH |
-| `LANDLENS_GCP_REAL=1` | an unpackaged build may reach the real Google Cloud with your gcloud; only the person sets it |
-| `LANDLENS_GKE_REAL=1` | with `LANDLENS_GCP_REAL=1` and no fake endpoint, an unpackaged build may also connect a real GKE cluster; without it, it opens only the fake's clusters on `127.x`. Only the person sets it, and never against a cluster during development (CLAUDE.md) |
+| `LANDLENS_GCP_REAL=0` | turns Google Cloud off in an unpackaged build. Without it (and without a fake endpoint) `pnpm dev` reads the real Google Cloud with your gcloud, as a packaged app does. `test:e2e`, `test:integration` and every e2e launch set it; an agent running the app sets it too |
+| `LANDLENS_GKE_REAL=1` | with no fake endpoint, an unpackaged build may also connect a real GKE cluster; without it, it opens only the fake's clusters on `127.x`. Only the person sets it, and never against a cluster during development (CLAUDE.md) |
 
 A packaged app reads none of them. `pnpm test` also runs `@landlens/gcp-mcp`'s tests (`landlens-gcp` against the
 fake). The e2e: `pnpm -s build`, then in `apps/desktop` `LANDLENS_INTEGRATION=orbstack npx vitest run

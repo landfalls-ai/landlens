@@ -65,7 +65,7 @@ subjects: [{ kind: ServiceAccount, name: ${SA}, namespace: ${NS} }]
 const baseEnv = () => {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(LANDLENS_GCP_|LANDLENS_GCLOUD|CLOUDSDK_)/.test(k)) env[k] = v;
-  return { ...env, ELECTRON_RENDERER_URL: "" };
+  return { ...env, ELECTRON_RENDERER_URL: "", LANDLENS_GCP_REAL: "0" };
 };
 /** Every file under a folder, read as text (to say no token is in any of them). */
 const allText = (dir: string): string => readdirSync(dir, { withFileTypes: true }).map((d) => {

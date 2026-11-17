@@ -51,7 +51,8 @@ A change to the front door, policies, IPC or the renderer's privileges updates `
 ## Local only
 
 - Run only on this machine. Clusters: the OrbStack Kubernetes cluster (`--context orbstack`); Landlens's own test
-  workloads go in namespace `landlens-dev`. Never point Landlens or its agent at a cloud cluster during development,
+  workloads go in namespace `landlens-dev`. Google Cloud is on by default in `pnpm dev` (the person's choice, 2026-11-17): when you run the app yourself, set
+  `LANDLENS_GCP_REAL=0` (the test scripts already do) so nothing reaches Google. Never point Landlens or its agent at a cloud cluster during development,
   never deploy to a cloud, never push images.
 - Other projects share the OrbStack cluster and Docker engine (`landflow-dev`, `clickland-dev`, …): read them, but
   write only in `landlens-dev`, and don't prune.

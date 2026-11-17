@@ -53,14 +53,18 @@ function service(o: { mode?: GcpMode; dir?: string; gcloud?: string | undefined;
 }
 
 describe("when Google Cloud is on (D86)", () => {
-  it("a packaged app is on and takes no override; an unpackaged one is off without a loopback fake or LANDLENS_GCP_REAL=1", () => {
+  it("a packaged app is on and takes no override; an unpackaged one is on by default, off only with LANDLENS_GCP_REAL=0 and no loopback fake", () => {
     const env = { LANDLENS_GCP_ENDPOINT: "http://127.0.0.1:4000", LANDLENS_GCLOUD: "/tmp/fake-gcloud", LANDLENS_GCP_REAL: "1" };
     expect(gcpMode(env, true)).toEqual({ on: true });
-    expect(gcpMode({}, false)).toEqual({ on: false });
-    expect(gcpMode({ LANDLENS_GCLOUD: "/tmp/fake-gcloud" }, false)).toEqual({ on: false });
-    expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "https://cloudasset.googleapis.com" }, false)).toEqual({ on: false });
-    expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "http://localhost:4000" }, false)).toEqual({ on: false });
-    expect(gcpMode({ LANDLENS_GCP_REAL: "true" }, false)).toEqual({ on: false });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0" }, true)).toEqual({ on: true });
+    expect(gcpMode({}, false)).toEqual({ on: true, dev: true });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0" }, false)).toEqual({ on: false });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0", LANDLENS_GCLOUD: "/tmp/fake-gcloud" }, false)).toEqual({ on: false });
+    // Only a loopback http fake counts as one: anything else is ignored, and LANDLENS_GCP_REAL=0 still turns it off.
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0", LANDLENS_GCP_ENDPOINT: "https://cloudasset.googleapis.com" }, false)).toEqual({ on: false });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0", LANDLENS_GCP_ENDPOINT: "http://localhost:4000" }, false)).toEqual({ on: false });
+    expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "http://localhost:4000" }, false)).toEqual({ on: true, dev: true });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0", LANDLENS_GCP_ENDPOINT: "http://127.0.0.1:4000" }, false)).toEqual({ on: true, dev: true, endpoint: "http://127.0.0.1:4000" });
     expect(gcpMode(env, false)).toEqual({ on: true, dev: true, endpoint: "http://127.0.0.1:4000", gcloud: "/tmp/fake-gcloud" });
     expect(gcpMode({ LANDLENS_GCP_REAL: "1", LANDLENS_GCLOUD: "relative/gcloud" }, false)).toEqual({ on: true, dev: true });
   });
@@ -600,8 +604,9 @@ describe("Fable's security review of part 5, fixed", () => {
   });
 
   it("L4: an unpackaged build opens only the fake's clusters on this machine, unless LANDLENS_GKE_REAL=1 too", async () => {
-    expect(gcpMode({ LANDLENS_GCP_REAL: "1" }, false)).toEqual({ on: true, dev: true });
-    expect(gcpMode({ LANDLENS_GCP_REAL: "1", LANDLENS_GKE_REAL: "1" }, false)).toEqual({ on: true, dev: true, gkeReal: true });
+    expect(gcpMode({}, false)).toEqual({ on: true, dev: true });
+    expect(gcpMode({ LANDLENS_GKE_REAL: "1" }, false)).toEqual({ on: true, dev: true, gkeReal: true });
+    expect(gcpMode({ LANDLENS_GCP_REAL: "0", LANDLENS_GKE_REAL: "1" }, false)).toEqual({ on: false });
     expect(gcpMode({ LANDLENS_GCP_ENDPOINT: "http://127.0.0.1:4000", LANDLENS_GKE_REAL: "1" }, false)).toEqual({ on: true, dev: true, endpoint: "http://127.0.0.1:4000" });
     expect(gcpMode({ LANDLENS_GKE_REAL: "1" }, true)).toEqual({ on: true });
     const ctx = "gke_demo-shop_us-central1_shop-prod";
