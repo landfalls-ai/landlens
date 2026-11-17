@@ -1,0 +1,33 @@
+{
+  "name": "@landlens/views",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run --dir test --exclude '**/*.integration.test.ts'",
+    "test:integration": "echo none"
+  },
+  "dependencies": {
+    "@landlens/contracts": "workspace:*",
+    "@landlens/gcp": "workspace:*",
+    "@landlens/kube": "workspace:*",
+    "@landlens/metrics": "workspace:*",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./intent": "./src/intent.ts",
+    "./literal": "./src/literal.ts"
+  }
+}

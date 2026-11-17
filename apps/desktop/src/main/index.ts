@@ -1,8 +1,8 @@
 // Landlens main process: the security baseline, the front door, the clusters and their watches, and the window.
-import { checkAccess, ClusterManager, FrontDoor, loopbackCert, WatchHub } from "@landlens/kube";
+import { checkAccess, ClusterManager, FrontDoor, listReleases, loopbackCert, WatchHub } from "@landlens/kube";
 import { MetricsService } from "@landlens/metrics";
 import { app, BrowserWindow, clipboard, ClipboardItem, dialog, nativeTheme, safeStorage, shell } from "electron";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { AgentHistory, AgentSettings } from "./agent-history";
 import { adapterEntry, AgentService } from "./agent";
@@ -18,12 +18,16 @@ import { ForwardService } from "./forwards";
 import { WorkbenchService } from "./workbench";
 import { ActionService, nodeWritesFrom, quitQuestion } from "./actions";
 import { ActionLog } from "./action-log";
-import { clipboardFormats, clipboardMarker, SecretService } from "./secrets";
+import { clipboardFormats, clipboardMarker, SecretService, testClipboardOn } from "./secrets";
 import { McpService, moveClicklandServer } from "./mcp";
 import { McpServerStore } from "./mcp-store";
 import { connectionOverrides, ConnectionsService } from "./connections";
 import { connectedOf, gcpMode, GcpService } from "./gcp";
 import { cloudMonitoringSource, sessionSeries } from "./metrics-source";
+import { clicklandReadsFree, ViewRuntime } from "./view-runtime";
+import { readImport } from "./view-file-read";
+import { ViewService } from "./views";
+import { ViewStore } from "./views-store";
 import { familyOverrides, FamilyService } from "./family";
 import { LandflowActions } from "./landflow";
 import { FamilySentStore } from "@landlens/connections";
@@ -57,6 +61,8 @@ async function start() {
   hardenSession();
   const binary = sidecarBinary();
   let mcp: McpService | undefined;
+  /** The Views page's main side (wave 10 part 2), once made: the runtime's pushes and the front door's audit reach it. */
+  let viewService: ViewService | undefined;
   /** The agent service, once made: the gateway's autonomy pushes go through it (M1 of the wave 7 part 2 review). */
   let agentRef: AgentService | undefined;
   /** Landlens's own telemetry (wave 7 part 5): off until the person turns it on. */
@@ -67,6 +73,7 @@ async function start() {
   const nodeWrites = nodeWritesFrom(process.env, app.isPackaged);
   const frontDoor = new FrontDoor(await loopbackCert(binary), (e) => {
     mcp?.onAudit(e);
+    viewService?.onAudit(e);
     telemetry?.audit(e);
   }, { nodeWrites });
   await frontDoor.start();
@@ -108,6 +115,29 @@ async function start() {
   // series reads from the cluster is read as the session. The usage numbers are Clickland's, Prometheus's, the shared
   // sampler's, or Cloud Monitoring's only for a project of the session's Google grant, holding its autonomy first (D194).
   const series = sessionSeries(metrics);
+  // Views on demand (wave 10, docs/views.md): each open view reads with its own read-only front-door token, labelled
+  // `view · <context>`. ViewService (below) opens them for the Views page and passes their pushes on.
+  const views = new ViewRuntime({
+    clusters,
+    frontDoor,
+    // D211: the doctor's and Helm's closed summaries, derived with your read (as the Overview and the Helm page are).
+    doctor: (handle) => doctor.report(handle),
+    helm: (handle, namespace) => listReleases(clusters.get(handle).client, namespace),
+    // Usage over time as a Claude session reads it, through the view's token, with no Google grant (D194).
+    metrics: (handle, r, read) => series(handle, r, read),
+    // Part 4 (D212): the connections, each only where a Claude session on this cluster could read it without asking,
+    // asked at every read. Google Cloud as an agent session's reader (the person's grant, its chosen projects, the
+    // view's namespaces as its limit); Clickland through the IDE's own client (its key stays in main) while Tools for
+    // Claude and Reads run without asking are on; a gateway server's pre-allowed read through the view's own session.
+    gcp: async (handle, namespaces) => (await mcp?.viewGcp(handle, namespaces))?.reader,
+    clickland: {
+      on: () => clicklandReadsFree(family.info("clickland")),
+      logs: (req) => history!.logs(req),
+      traces: (req) => history!.traces(req),
+    },
+    tool: (handle, server, tool, args) => (mcp ? mcp.viewRead(handle, server, tool, args) : Promise.resolve({ off: `${server} isn't connected for this cluster's Claude sessions.` })),
+    push: (p) => viewService?.onPush(p),
+  });
   const mcpStore = new McpServerStore(join(app.getPath("userData"), "mcp-servers.json"), safeStorage);
   // GitHub and Linear (docs/connections.md). The provider overrides are for tests and development only.
   const connections = new ConnectionsService({
@@ -325,10 +355,13 @@ async function start() {
   // Secret values (wave 8 part 4, D161–D168): one key to the window that unlocked it, or to the clipboard from main
   // with the platform's markers in the same write (macOS's concealed type; Windows's no-monitor, no-history, no-cloud);
   // cleared after 30 s, and at quit, if the clipboard still holds it (read only while the marker is still there).
+  // An unpackaged build run by the e2e tests (LANDLENS_TEST_CLIPBOARD=1) writes to a clipboard in memory instead, which
+  // the test reads through main: a test run never reads or overwrites the person's own clipboard.
+  const memClip = testClipboardOn(app.isPackaged, process.env) ? testClipboard() : undefined;
   const secrets = new SecretService({
     clusters, frontDoor,
     log: actionLog,
-    clipboard: {
+    clipboard: memClip ?? {
       write: (text) => clipboard.write([new ClipboardItem(clipboardFormats(process.platform, text))]),
       marked: async () => {
         const f = clipboardMarker(process.platform);
@@ -340,10 +373,58 @@ async function start() {
   });
   liveDrains = () => actions.liveRuns();
   endDrains = () => actions.quit();
-  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets, gkeHandles);
+  /** view_context's connections (D212): what a view may read now, in Claude's words; each checked again at every read. */
+  const viewConnections = async (handle: string, namespaces?: string[]): Promise<string[]> => {
+    const out: string[] = [];
+    const g = await mcpSvc.viewGcp(handle, namespaces);
+    if (g) out.push(`Google Cloud (gcp.resources, gcp.clusters, gcp.alerts, gcp.recommendations, gcp.metrics): the projects ${g.projects.join(", ")}.`);
+    if (clicklandReadsFree(family.info("clickland"))) out.push("Clickland (clickland.logs, clickland.traces): this cluster's logs and traces of one pod or workload.");
+    const reads = await mcpSvc.viewReads(handle);
+    if (reads.length) out.push(`Tool sources (tool), each a read that runs without asking: ${reads.join(", ")}.`);
+    return out;
+  };
+  viewService = new ViewService({
+    runtime: views, agent, frames: mcp.views, clusters, push: send, link: (who, url) => mcpSvc.confirmLink(who, url), log: (l) => console.warn(l),
+    // Saved views (part 4, D216): userData/views.json, 0600.
+    store: new ViewStore(join(app.getPath("userData"), "views.json")),
+    // Files only through main's own dialogs (D217): the renderer never names a path.
+    dialogs: {
+      open: async () => {
+        const opts = { title: "Import a view", properties: ["openFile" as const], filters: [{ name: "Landlens view", extensions: ["json"] }] };
+        const r = win && !win.isDestroyed() ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+        const path = r.canceled ? undefined : r.filePaths[0];
+        if (!path) return undefined;
+        // A regular file only, at most 512,000 bytes read, off main's thread (security review of part 4, M1).
+        return readImport(path);
+      },
+      save: async (name, text) => {
+        const opts = { title: "Export this view", defaultPath: join(app.getPath("downloads"), name), filters: [{ name: "Landlens view", extensions: ["json"] }] };
+        const r = win && !win.isDestroyed() ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+        if (r.canceled || !r.filePath) return false;
+        writeFileSync(r.filePath, text, { mode: 0o644 });
+        return true;
+      },
+      confirm: async ({ message, detail, yes }) => {
+        const opts = { type: "question" as const, buttons: [yes, "Cancel"], defaultId: 1, cancelId: 1, message, detail, noLink: true };
+        const r = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+        return r.response === 0;
+      },
+    },
+    readable: (handle, namespaces) => viewConnections(handle, namespaces),
+    holds: {
+      gcp: (session) => mcpSvc.gateway.gcpQuoted(session),
+      family: (session, sibling) => mcpSvc.gateway.familyQuoted(session, sibling),
+      tool: (session, server) => mcpSvc.gateway.hold(session, `a view's ${server} rows were quoted into this session`),
+    },
+    count: (what) => tel.view(what),
+  });
+  const viewsSvc = viewService;
+  registerIpc(clusters, hub, agent, { service: metrics, settings, prometheus, history }, mcp, workbench, forwards, doctor, connections, gcp, family, landflow, { telemetry: tel, brain }, actions, secrets, gkeHandles, viewService);
   const service = mcp;
   shutdown = async () => {
     await secrets.quit();
+    viewsSvc.closeAll();
+    views.closeAll();
     forwards.stopAll();
     metrics.stopAll();
     connections.stop();
@@ -371,11 +452,24 @@ async function start() {
   });
   win.once("ready-to-show", () => win.show());
   // A reload or a crashed renderer leaves no dock to show the agent sessions: end them, which revokes their tokens.
+  // The same for open views: they close, and their tokens are revoked (D209).
   win.webContents.on("did-start-navigation", (d) => {
-    if (d.isMainFrame && !d.isSameDocument) void agent.closeAll();
+    if (d.isMainFrame && !d.isSameDocument) {
+      void agent.closeAll();
+      viewsSvc.closeAll();
+      views.closeAll();
+    }
   });
-  win.webContents.on("render-process-gone", () => void agent.closeAll());
-  win.webContents.on("destroyed", () => void agent.closeAll());
+  win.webContents.on("render-process-gone", () => {
+    void agent.closeAll();
+    viewsSvc.closeAll();
+    views.closeAll();
+  });
+  win.webContents.on("destroyed", () => {
+    void agent.closeAll();
+    viewsSvc.closeAll();
+    views.closeAll();
+  });
   if (DEV_URL) await win.loadURL(DEV_URL);
   else await win.loadFile(RENDERER_INDEX);
 }
@@ -408,3 +502,27 @@ app.on("before-quit", (event) => {
   endDrains();
   void shutdown().finally(() => app.quit());
 });
+
+/**
+ * The e2e tests' clipboard (unpackaged builds only, LANDLENS_TEST_CLIPBOARD=1): the text and the formats main wrote, on
+ * `globalThis.landlensTestClipboard` for the test to read with app.evaluate. The person's clipboard is never touched.
+ */
+function testClipboard() {
+  const box = { text: "", formats: [] as string[] };
+  (globalThis as unknown as { landlensTestClipboard: typeof box }).landlensTestClipboard = box;
+  return {
+    write: async (text: string) => {
+      box.text = text;
+      box.formats = Object.keys(clipboardFormats(process.platform, text));
+    },
+    marked: async () => {
+      const f = clipboardMarker(process.platform);
+      return f ? box.formats.includes(f) : true;
+    },
+    readText: async () => box.text,
+    clear: () => {
+      box.text = "";
+      box.formats = [];
+    },
+  };
+}

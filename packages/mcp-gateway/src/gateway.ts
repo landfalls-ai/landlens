@@ -9,9 +9,10 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, type AnyProvider, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
+import { BUILTIN_MCP_SERVER, GCP_MCP_SERVER, VIEWS_MCP_SERVER, type AnyProvider, type AutonomyOff, type AutonomyScope, type AutonomyState, type ConnProvider, type McpCall, type McpToolResult } from "@landlens/contracts";
 import type { AuditEntry } from "@landlens/kube";
 import { APP_HTML, CALL_META, type AgentCluster } from "@landlens/kube-mcp";
+import { VIEW_CARD_HTML, VIEW_CARD_URI } from "@landlens/views";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -35,16 +36,18 @@ const hash = (t: string) => createHash("sha256").update(t).digest();
 export type Origin = McpCall["origin"];
 
 /**
- * Landlens's own servers, in memory: landlens-kube at /mcp (every session) and landlens-gcp at /mcp/landlens-gcp (only
- * when the person lets Claude read their Google Cloud projects). Allowed whole, like landlens-kube: their tools only
- * read, and run in main under Landlens's own limits. No remote server may take one of these names.
+ * Landlens's own servers, in memory: landlens-kube at /mcp (every session), landlens-gcp at /mcp/landlens-gcp (only
+ * when the person lets Claude read their Google Cloud projects) and landlens-views at /mcp/landlens-views (only in a
+ * session started from the Views page, wave 10). Allowed whole, like landlens-kube: their tools only read (or, for
+ * landlens-views, hand main a view document), and run in main under Landlens's own limits. No remote server may take
+ * one of these names.
  */
-export const BUILTIN_SERVERS: ReadonlySet<string> = new Set([BUILTIN_MCP_SERVER, GCP_MCP_SERVER]);
+export const BUILTIN_SERVERS: ReadonlySet<string> = new Set([BUILTIN_MCP_SERVER, GCP_MCP_SERVER, VIEWS_MCP_SERVER]);
 export const isBuiltin = (name: string) => BUILTIN_SERVERS.has(name);
 /** The refusal of a call made while Claude drafts the brain's summary (L4). */
 export const DRAFTING = "no tool runs while Claude drafts the brain's summary.";
 /** A built-in other than landlens-kube, for one session. */
-export type BuiltinSpec = { name: typeof GCP_MCP_SERVER; server: () => McpServer };
+export type BuiltinSpec = { name: typeof GCP_MCP_SERVER | typeof VIEWS_MCP_SERVER; server: () => McpServer };
 
 /** What a view's resource declares: its CSP domains, border preference and permissions (MCP Apps `_meta.ui`). */
 export type AppResource = {
@@ -57,7 +60,8 @@ export type SessionInit = {
   /** "agent 3 · orbstack", "you · orbstack". */
   label: string;
   context: string;
-  origin: "agent" | "you";
+  /** "view": the Views page's tool sources (wave 10 part 4, D212): pre-allowed reads only, never landlens-kube. */
+  origin: "agent" | "you" | "view";
   /** The session's cluster, through the front door with its own token. */
   cluster: AgentCluster;
   /** The remote servers turned on for this cluster, with their headers. */
@@ -118,7 +122,7 @@ export class GatewaySession {
 
   constructor(readonly gateway: McpGateway, readonly token: string, readonly init: SessionInit) {
     this.upstreams.set(BUILTIN_MCP_SERVER, new BuiltinUpstream(BUILTIN_MCP_SERVER, init.cluster));
-    for (const b of init.builtins ?? []) if (b.name === GCP_MCP_SERVER) this.upstreams.set(b.name, new BuiltinUpstream(b.name, b.server));
+    for (const b of init.builtins ?? []) if (b.name === GCP_MCP_SERVER || b.name === VIEWS_MCP_SERVER) this.upstreams.set(b.name, new BuiltinUpstream(b.name, b.server));
     for (const r of init.remotes) {
       this.upstreams.set(r.name, new RemoteUpstream(r));
       if (r.provider && r.readUrl && r.readUrl !== r.url) this.readUpstreams.set(r.name, new RemoteUpstream({ ...r, url: r.readUrl }));
@@ -226,7 +230,7 @@ export class GatewaySession {
   }
 
   /** Call a tool as an app's view or as you; the agent's calls come in over HTTP. */
-  call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you", onCall?: (id: string) => void): Promise<CallToolResult> {
+  call(server: string, tool: string, args: Record<string, unknown>, origin: "app" | "you" | "view", onCall?: (id: string) => void): Promise<CallToolResult> {
     return this.gateway.run(this, server, tool, args, origin, onCall ? { onCall } : {});
   }
 
@@ -640,6 +644,17 @@ export class McpGateway {
         if (!yes) return refuse(`you didn't allow ${server} · ${tool}.`);
       }
       if (!isBuiltin(server)) this.log.gate(id, free ? "read" : "asked");
+    } else if (origin === "view") {
+      // A view's tool source (wave 10 part 4, D212): only a read this cluster's Claude sessions run without asking (the
+      // same listing pin and vendor read list: the session's pre-allowed set, as it stands at this call), with no
+      // question ever; Landlens's own servers have their own source kinds. Nothing here holds a session's autonomy:
+      // the data goes to the page, not to a conversation.
+      const notFree = `${server} · ${tool} isn't a read that runs without asking.`;
+      if (s.init.origin !== "view") return refuse(notFree);
+      if (isBuiltin(server)) return refuse(`${server}'s data has its own source kinds in a view.`);
+      if (!offered || !readOnly || !modelMayCall(t) || !s.allow.includes(`mcp__${server}__${tool}`)) return refuse(notFree);
+      if (provider && isSibling(provider.id) && !s.readsFree.has(server)) return refuse(notFree);
+      this.log.gate(id, "read");
     } else if (!offered) {
       return refuse(unoffered);
     } else if (!readOnly) {
@@ -682,6 +697,12 @@ export class McpGateway {
       const html = APP_HTML[uri];
       if (!html) throw new Error(`Landlens: no view ${uri}`);
       return { html, csp: { connectDomains: [], resourceDomains: [], frameDomains: [], baseUriDomains: [] }, prefersBorder: false };
+    }
+    // landlens-views has one view of its own, the dock's card (D205); a view's app blocks are main's, never a resource
+    // read through the gateway.
+    if (server === VIEWS_MCP_SERVER) {
+      if (uri !== VIEW_CARD_URI) throw new Error(`Landlens: no view ${uri}`);
+      return { html: VIEW_CARD_HTML, csp: { connectDomains: [], resourceDomains: [], frameDomains: [], baseUriDomains: [] }, prefersBorder: false };
     }
     const up = s && !s.closed ? s.upstreams.get(server) : undefined;
     const live = up ? s!.init.remotes.find((r) => r.name === server)?.url : undefined;

@@ -24,6 +24,8 @@ const MCP_SERVER = "landlens-kube";
  * exact rule, a second constant, not a looser pattern (MCP_RULE still refuses every other `landlens` name).
  */
 export const GCP_RULE = "mcp__landlens-gcp";
+/** landlens-views (wave 10, D205), allowed whole in a session started from the Views page: again this exact rule. */
+export const VIEWS_RULE = "mcp__landlens-views";
 
 /** Folders and files holding credentials the agent must never read, relative to your home folder. */
 export const CREDENTIAL_PATHS = [
@@ -119,7 +121,11 @@ export function sessionOptions(i: FenceInput) {
       permissions: {
         // Landlens's own cluster tools are read-only and go through the front door: no prompt for each one. A proxied
         // tool runs without one only if its server says it only reads; the rest ask, and the dock shows the ask.
-        allow: [`mcp__${MCP_SERVER}`, ...((i.mcpAllow ?? []).includes(GCP_RULE) ? [GCP_RULE] : []), ...(i.mcpAllow ?? []).filter((r) => MCP_RULE.test(r))],
+        allow: [
+          `mcp__${MCP_SERVER}`,
+          ...[GCP_RULE, VIEWS_RULE].filter((r) => (i.mcpAllow ?? []).includes(r)),
+          ...(i.mcpAllow ?? []).filter((r) => MCP_RULE.test(r)),
+        ],
         deny: [
           ...CREDENTIAL_PATHS.flatMap((p) => [`Read(~/${p})`, `Read(~/${p}/**)`, `Edit(~/${p}/**)`]),
           ...kubeconfigs.map((k) => `Read(/${k})`),

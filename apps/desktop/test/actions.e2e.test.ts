@@ -75,9 +75,10 @@ describe.runIf(run)("your actions on OrbStack", () => {
       kubectl("scale", "deploy/hands-web", "--replicas=2");
       for (const j of jobs) kubectl("delete", "job", j, "--ignore-not-found", "--wait=false");
       kubectl("annotate", "deploy/hands-web", "landlens.dev/e2e-");
-      kubectl("rollout", "status", "deploy/hands-web", "--timeout=120s");
+      // The test's restart rolls both pods; on a busy OrbStack that took over two minutes once (wave 10 part 4's run).
+      kubectl("rollout", "status", "deploy/hands-web", "--timeout=300s");
     }
-  }, 200_000);
+  }, 330_000);
 
   it("scales hands-web from its row's menu: a form, the cluster's dry run, Apply as you, then back to 2", async () => {
     const row = await list("Deployments", "hands-web");
@@ -133,10 +134,16 @@ describe.runIf(run)("your actions on OrbStack", () => {
 
   it("Enter on a fresh card sends nothing; a change between review and Apply is a conflict, and Review again reads it anew", async () => {
     const row = await list("Deployments", "hands-web");
+    // The row may still hold the count before the last scale (the watch's next event), and the sheet starts from the
+    // row: a stale 3 would make 3 no change, with Review disabled (the stale-row race of a full serial run). Wait for
+    // the row to say 2, then open the sheet and check it starts there.
+    await expect.poll(() => row.innerText(), { timeout: 60_000 }).toMatch(/\b2\/2\b/);
     await row.click({ button: "right" });
     await page.getByRole("menuitem", { name: "Scale…" }).click();
-    // The row may still hold the count before the last scale (the watch's next event): type the number.
-    await sheet().getByRole("spinbutton", { name: "Replicas" }).fill("3");
+    const field = sheet().getByRole("spinbutton", { name: "Replicas" });
+    await expect.poll(() => field.inputValue(), { timeout: 10_000 }).toBe("2");
+    await field.fill("3");
+    await expect.poll(() => sheet().getByRole("button", { name: "Review" }).isEnabled(), { timeout: 10_000 }).toBe(true);
     await sheet().getByRole("button", { name: "Review" }).click();
     await card().waitFor({ timeout: 20_000 });
     await page.keyboard.press("Enter"); // the Apply button has focus, but the card is less than half a second old

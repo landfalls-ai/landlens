@@ -9,6 +9,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { viewsMcpServer } from "@landlens/views/server";
+import { VIEW_CARD_HTML, VIEW_CARD_URI } from "@landlens/views";
 import { DRAFTING, listingHash, McpGateway, newCallId, testRemote, type GatewaySession, type RemoteSpec } from "../src/index.js";
 
 const types: ResourceType[] = [
@@ -389,5 +391,53 @@ describe("built-ins as a map: landlens-gcp (wave 6, D93)", () => {
     for (const name of ["landlens-gcp", "landlens-kube", "landlens-x"]) {
       await expect(gateway.open({ label: "x", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [{ name, url: remoteUrl }] })).rejects.toThrow(/bad MCP server name/);
     }
+  });
+});
+
+describe("built-ins: landlens-views (wave 10, D205)", () => {
+  const views = () => viewsMcpServer({
+    context: () => "ctx",
+    render: async () => ({ ok: true, text: "View 0123456789abcdef v1 shown.\npods: ok, 2 rows.", card: { id: "0123456789abcdef", title: "Pods", version: 1, blocks: 1 } }),
+    patch: async () => ({ ok: false, issues: [{ pointer: "/base", message: "stale" }] }),
+    get: () => "none",
+    data: () => ({ state: "ok", rows: [{ name: "secret-row" }], total: 1, truncated: false, at: 1 }),
+  });
+
+  it("serves it to a Views session, allowed whole; the model never gets view_data or the card's facts", async () => {
+    const s = await gateway.open({ label: "agent 11 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [], builtins: [{ name: "landlens-views", server: views }] });
+    try {
+      s.bind("acp-11");
+      expect(s.allow).toEqual(["mcp__landlens-kube", "mcp__landlens-views"]);
+      const c = await connect(`${gateway.url}/landlens-views`, s.token);
+      const { tools } = await c.listTools();
+      expect(tools.map((t) => t.name).sort()).toEqual(["get_view", "patch_view", "render_view", "view_context"]);
+      const r: any = await c.callTool({ name: "render_view", arguments: { document: { schema: 1 } } });
+      expect(r.content[0].text).toBe("View 0123456789abcdef v1 shown.\npods: ok, 2 rows.");
+      expect(r.structuredContent).toBeUndefined();
+      const d: any = await c.callTool({ name: "view_data", arguments: { source: "pods" } });
+      expect(d.isError).toBe(true);
+      expect(JSON.stringify(d)).not.toContain("secret-row");
+      await c.close();
+      const call = gateway.log.list().find((x) => x.server === "landlens-views" && x.tool === "render_view" && x.session === "acp-11")!;
+      expect(call).toMatchObject({ status: "ok", app: VIEW_CARD_URI });
+      const res = await gateway.appResource(s, "landlens-views", VIEW_CARD_URI);
+      expect(res.html).toBe(VIEW_CARD_HTML);
+      expect(res.csp.connectDomains).toEqual([]);
+      await expect(gateway.appResource(s, "landlens-views", "ui://landlens-views/0123456789abcdef/x")).rejects.toThrow(/no view/);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("isn't served to a session that wasn't given it", async () => {
+    const plain = await gateway.open({ label: "agent 12 · orbstack", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [] });
+    try {
+      expect(plain.allow).toEqual(["mcp__landlens-kube"]);
+      const post = await fetch(`${gateway.url}/landlens-views`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${plain.token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      expect(post.status).toBe(404);
+    } finally {
+      await plain.close();
+    }
+    await expect(gateway.open({ label: "x", context: "orbstack", origin: "agent", cluster: fakeCluster(() => {}), remotes: [{ name: "landlens-views", url: remoteUrl }] })).rejects.toThrow(/bad MCP server name/);
   });
 });

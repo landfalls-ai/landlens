@@ -54,7 +54,7 @@ What Landlens can't do yet, and why. Each item names the wave that lifts it ([pl
   using anything else (`..`, ranges, functions) is empty. Without the right to list CRDs, which kinds are custom is
   guessed from their group. Pins live in the window's storage, so they don't follow you to another Mac.
 - **The sidebar is 232px wide, always** ([design.md](design.md#layout)): its sections fold (D139), but it has no drag
-  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 13) moves both
+  edge, and its folds live in the window's `localStorage` beside the pins until the packaged app (wave 14) moves both
   to a settings file.
 - **Jump to (⌘K) is small**: kinds, and objects in the list already loaded. Clusters, actions and a search across
   every kind come with wave 4's command palette.
@@ -121,8 +121,46 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Pods that arrive between the preview and the cordon are counted at the end ("Drain again"), not evicted. A run is
   main's: it ends with its window (a reload included) or with Landlens, and an ended run is kept for ten minutes;
   only the window that started it sees its chip. A drain's chip shows while its cluster is the one connected.
+- **Views on demand: what a view can't do yet** ([views.md](views.md), wave 10 parts 1–4). One view open at a time;
+  an unsaved one lives in the window until **New view**, a reload or a disconnect. Saved views keep the document and
+  your tweaks (sort, column widths), not the versions or the chat; reopening one starts no session, and a follow-up
+  starts a new one. A This-cluster view opens only on its own context at its own API server, so a renamed context or
+  a moved server needs it saved again; Any cluster is refused while the document names a literal namespace or object.
+  Rename, Duplicate and Delete are on the page's list, not the sidebar's rows; column widths take a pointer, not keys.
+  An imported file is saved for Any cluster (This cluster when it names literal names); its custom blocks and its
+  Google Cloud, Clickland and tool reads wait for your yes, which covers exactly what the dialog named; its native
+  blocks read what its Kubernetes sources name within the view's access. A label selector isn't counted as a literal
+  name, there is no general high-entropy credential check, and a This-cluster view knows its cluster by context name
+  and API server only. A connection is read only where a Claude session could read it without
+  asking: Google Cloud under your grant (polled every 5 minutes), Clickland's logs and traces of one pod or workload
+  (every 30 s), a gateway read (every 2 minutes; GitHub's answers seen only through the fake, as text, so one row).
+  A view shows what Claude could read, so env values show as `<redacted>` and Secrets never appear; usage over time
+  comes from Cloud Monitoring only through a `gcp.metrics` source under your Google Cloud grant; a workload's log
+  follows at most five started pods; the doctor's problems are polled every 15 s, not pushed.
+  A view row's object menu and drawer read the object as you when they open, so a row the view still shows that is
+  already gone says so then. A selection holding any row a block chose never offers Delete, also after you tick more
+  rows (untick the block's, or Clear and tick your own), and a frame can't start a delete or a drain at all: open the
+  object and use its menu. A block's intent counts only while its frame has the focus and you clicked or typed in the
+  last few seconds (Chromium's user activation), so a block can still open a non-destructive sheet a moment after you
+  click in it; that sheet takes no focus, and Apply needs your press. An intent while a sheet is open, or an object
+  while a drawer is open, is dropped, and more than six a minute from one frame are refused, without telling the
+  block. A view closes when you switch cluster: switching back means asking again. Asking about quoted lines in the
+  drawer over a view isn't offered (ask about the object, or open it in its list). Intents find objects only among the rows of the block's own
+  sources. Object chips on the strip's composer go with the next question only (at most 10). **View source** in How
+  Claude built this is plain text, not the editor. "Ask about this block" sends rows as JSON in a fence (Claude reads
+  them fine; they aren't a table), and a question about a block is refused once the view moved to another version.
+  `view.el` sets addresses only to `https:`, `mailto:`, `landlens:` and `#…` (not a relative path) and makes no
+  `script`, frame, `object`, `embed`, `link`, `meta` or `base`.
+- **A private key logged a line at a time is redacted from its BEGIN to its END, up to 200 lines** (wave 10 part 1's
+  review, M1): a longer one shows its lines past the 200th, and a followed read whose tail begins at a key's last body
+  line when that line is shorter than 16 characters shows that line (a few bytes). The front door holds a followed
+  log's leading base64-only lines (16 characters or more) until another line comes, so a container whose first lines
+  are such and then goes quiet shows them late.
+- **A view's work and memory have caps** (review M3, M5): a join past 500,000 units of work isn't worked out (filter or
+  limit a side); a source reads at most 10,000 objects over its watches, a view's watches keep 20,000 objects and 32
+  MiB together, and a source's rows hold 8 MiB of text. Each is said when it cuts.
 - **One cluster at a time** in the window. Connecting to another disconnects the first.
-- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 13).
+- **Development build only.** No packaged app yet, so the hardened fuses are verified on a clone, not shipped (wave 14).
 - **Attach** passes through the front door and the sidecar but has no UI or live test. Exec and port-forward have
   both ([workbench.md](workbench.md)).
 - **The audit trail** is shown only through MCP calls: the MCP page's call log shows each `landlens-kube` call's
@@ -133,7 +171,9 @@ person's check reads them), and Ask Claude sends one problem at a time.
 - **MCP servers** are remote and streamable HTTP only: no stdio servers, no OAuth (a header you paste), and a session
   gets the servers on for its cluster, with their tool lists, when it starts. MCP App views can't write to the
   conversation (`ui/message`), change the model's context, read resources or go fullscreen; they run without Geist
-  (fonts only from `data:`), and a view that tries to navigate is left blank.
+  (fonts only from `data:`), and a view that tries to navigate is left blank. A view's https link over 500
+  characters is refused (the dialog shows an address whole or not at all), and no page or frame prefetches DNS
+  (`dnsPrefetchingEnabled=false` for the whole app, wave 10 part 2's review, H1).
 - **A remote server's tools ask every time** unless you turn on its auto-run switch, and that switch trusts the
   server's own `readOnlyHint` for the listing you tested: it can't tell a tool that changes behaviour without
   changing its listing. Its tool descriptions and results reach the model verbatim ([security.md](security.md)). If a
@@ -222,8 +262,8 @@ person's check reads them), and Ask Claude sends one problem at a time.
   Linear's are revoked, best effort.
 - **Folded views reopen from scratch**: an earlier view in the dock is closed when it folds and opened again (from
   the kept result, the last 50) when you show it, so its own state (a filter, a scroll) is lost.
-- **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit); other shortcuts stay in the
-  view while it has focus.
+- **Views get only a few of the app's keys** (Escape, ⌘/Ctrl with K, J, B or a digit), only while the view has the
+  focus and at most four a second; other shortcuts stay in the view while it has focus.
 - **Secret material outside Secrets** (tokens in CRD specs, passwords in ConfigMaps) shows in the IDE as the
   cluster returns it. Only what the agent reads is scrubbed.
 - **A same-user process** can read your kubeconfig and could debug Landlens; Landlens narrows what borrowing its

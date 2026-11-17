@@ -1,0 +1,216 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "native blocks",
+      "document": {
+        "schema": 1,
+        "title": "views-e2e, in Landlens's own blocks",
+        "sources": {
+          "deps": {
+            "kind": "kube.list",
+            "resource": "deployments",
+            "group": "apps",
+            "namespace": "landlens-dev",
+            "labelSelector": "app in (views-e2e, views-e2e-log)",
+            "fields": {
+              "name": "$name",
+              "ready": "$replicas",
+              "images": "$images",
+              "age": "$age"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ]
+          },
+          "pods": {
+            "kind": "kube.list",
+            "resource": "pods",
+            "namespace": "landlens-dev",
+            "labelSelector": "app=views-e2e",
+            "fields": {
+              "name": "$name",
+              "status": "$status",
+              "restarts": "$restarts",
+              "node": "$node",
+              "age": "$age"
+            },
+            "pipe": [
+              {
+                "sort": [
+                  {
+                    "field": "name"
+                  }
+                ]
+              }
+            ]
+          },
+          "bystatus": {
+            "kind": "kube.list",
+            "resource": "pods",
+            "namespace": "landlens-dev",
+            "labelSelector": "app in (views-e2e, views-e2e-log)",
+            "fields": {
+              "status": "$status",
+              "name": "$name"
+            },
+            "pipe": [
+              {
+                "group": {
+                  "by": [
+                    "status"
+                  ],
+                  "agg": {
+                    "count": {
+                      "fn": "count"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "total": {
+            "kind": "kube.list",
+            "resource": "pods",
+            "namespace": "landlens-dev",
+            "labelSelector": "app in (views-e2e, views-e2e-log)",
+            "fields": {
+              "name": "$name"
+            },
+            "pipe": [
+              {
+                "group": {
+                  "by": [],
+                  "agg": {
+                    "count": {
+                      "fn": "count"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "ticks": {
+            "kind": "kube.logs",
+            "namespace": "landlens-dev",
+            "workload": {
+              "kind": "Deployment",
+              "name": "views-e2e-log"
+            },
+            "tailLines": 50
+          },
+          "problems": {
+            "kind": "doctor.problems",
+            "namespace": "landlens-dev"
+          }
+        },
+        "blocks": [
+          {
+            "type": "stat",
+            "source": "total",
+            "field": "count",
+            "label": "Pods in the test's two deployments",
+            "title": "Pods now",
+            "span": 3
+          },
+          {
+            "type": "chart",
+            "source": "bystatus",
+            "kind": "bar",
+            "x": "status",
+            "y": [
+              "count"
+            ],
+            "unit": "count",
+            "title": "By status",
+            "span": 6
+          },
+          {
+            "type": "list",
+            "source": "deps",
+            "primary": "name",
+            "secondary": "images",
+            "title": "Deployments",
+            "span": 3
+          },
+          {
+            "type": "text",
+            "markdown": "**What this shows.** The test's own deployments in `landlens-dev`, live. Docs: [Kubernetes deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/). A long one: [the long runbook](https://docs.example.com/run?d=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx).",
+            "span": 12
+          },
+          {
+            "type": "table",
+            "source": "deps",
+            "title": "Deployments table",
+            "select": true,
+            "span": 6,
+            "columns": [
+              {
+                "field": "name",
+                "header": "Name"
+              },
+              {
+                "field": "ready",
+                "header": "Ready"
+              },
+              {
+                "field": "images",
+                "header": "Images",
+                "format": "mono"
+              },
+              {
+                "field": "age",
+                "header": "Age",
+                "format": "age"
+              }
+            ]
+          },
+          {
+            "type": "table",
+            "source": "pods",
+            "title": "Pods",
+            "span": 6,
+            "columns": [
+              {
+                "field": "name",
+                "header": "Name"
+              },
+              {
+                "field": "status",
+                "header": "Status",
+                "format": "status"
+              },
+              {
+                "field": "node",
+                "header": "Node"
+              },
+              {
+                "field": "age",
+                "header": "Age",
+                "format": "age"
+              }
+            ]
+          },
+          {
+            "type": "logs",
+            "source": "ticks",
+            "title": "Log",
+            "span": 6
+          },
+          {
+            "type": "problems",
+            "source": "problems",
+            "title": "Problems",
+            "span": 6
+          }
+        ]
+      }
+    }
+  }
+]

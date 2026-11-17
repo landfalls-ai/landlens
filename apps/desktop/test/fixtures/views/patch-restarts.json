@@ -1,0 +1,24 @@
+[
+  {
+    "tool": "get_view",
+    "arguments": {}
+  },
+  {
+    "tool": "patch_view",
+    "arguments": {
+      "base": "__SHOWN__",
+      "note": "restarts column",
+      "ops": [
+        {
+          "op": "add",
+          "path": "/blocks/5/columns/-",
+          "value": {
+            "field": "restarts",
+            "header": "Restarts",
+            "format": "number"
+          }
+        }
+      ]
+    }
+  }
+]

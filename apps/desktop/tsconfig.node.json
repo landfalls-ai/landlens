@@ -1,5 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "types": ["node", "electron-vite/node"] },
-  "include": ["electron.vite.config.ts", "src/main", "src/preload", "test"]
+  "include": ["electron.vite.config.ts", "src/main", "src/preload", "test"],
+  // A renderer store's test runs in the window's types (tsconfig.web.json).
+  "exclude": ["test/view-store.test.ts"]
 }

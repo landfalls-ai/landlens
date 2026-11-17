@@ -8,13 +8,17 @@ import type { Badge } from "./problemRules";
 export const NAV_KEY = "landlens.nav.v1";
 export const navGroupsKey = (context: string) => `landlens.nav.groups.${context}`;
 
-/** The group above Pinned: Connections, MCP and Agent. */
+/** The group above Pinned: Views, Connections, MCP and Agent. */
 export const WORKSPACE = "Workspace";
+/** Workspace's rows, in order: Views (wave 10, D213) first. */
+export const WORKSPACE_PAGES = [["views", "Views"], ["connections", "Connections"], ["mcp", "MCP"], ["agent", "Agent"]] as const;
+/** The saved views' sub-list under Views (wave 10 part 4, D216): folds as its own section, open by default. */
+export const VIEWS_FOLD = "Views";
 export const PINNED = "Pinned";
 export const CLOUD = "Cloud";
 
 /** Open until you fold them; every other section (each extra API group, Custom resources) starts folded. */
-export const OPEN_BY_DEFAULT: readonly string[] = [WORKSPACE, PINNED, CLOUD, "Workloads", "Network", "Config", "Storage", "Access", "Cluster"];
+export const OPEN_BY_DEFAULT: readonly string[] = [WORKSPACE, VIEWS_FOLD, PINNED, CLOUD, "Workloads", "Network", "Config", "Storage", "Access", "Cluster"];
 
 /**
  * What you chose, both ways, so a default can change later without overriding a choice, and a section discovered

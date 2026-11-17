@@ -8,19 +8,25 @@
 // conversation (ui/message), change what the model sees (ui/update-model-context), read resources or change display
 // mode: those are refused or answered "inline".
 import type { McpAppView, McpToolResult } from "@landlens/contracts";
+import { parseIntent } from "@landlens/views/intent";
 
 export const PROTOCOL_VERSION = "2026-01-26";
 export const MIN_HEIGHT = 48;
 export const MAX_HEIGHT = 640;
+/** A block Claude wrote, on the Views page (wave 10, D204): as tall as it says, up to this. */
+export const VIEW_MAX_HEIGHT = 2000;
 /** Larger messages from a view are dropped. */
 const MAX_MESSAGE = 1_000_000;
+/** Keys a view may hand back in one second (review of wave 10 part 2, L2): a person types fewer chords than this. */
+export const KEYS_PER_SECOND = 4;
 
 export type HostContext = {
   theme: "light" | "dark";
   styles: { variables: Record<string, string> };
   displayMode: "inline";
   availableDisplayModes: ["inline"];
-  containerDimensions: { maxHeight: number; width?: number };
+  /** `height`: a fixed height (a Views page block that fills the page); otherwise the view grows up to maxHeight. */
+  containerDimensions: { maxHeight: number; width?: number; height?: number };
   locale: string;
   timeZone: string;
   platform: "desktop";
@@ -35,11 +41,42 @@ export type HostDeps = {
   callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
   /** https only; main shows the host and asks you. */
   openLink(url: string): Promise<boolean>;
-  /** Move the main view to an object (the view's "Open in Landlens"). */
-  openObject(t: ObjectTarget): void;
+  /**
+   * Move the main view to an object (the view's "Open in Landlens"). A block of a view answers false when main says the
+   * object isn't one of the view's rows (D219): then nothing opens.
+   */
+  openObject(t: ObjectTarget): void | boolean | Promise<boolean>;
+  /** landlens://view/<id> from Landlens's own card (landlens-views only): show that view. */
+  openView?(id: string): void;
+  /**
+   * A block of a view (wave 10 part 3, D219): every `landlens://` intent (object, logs, ask, select, a non-destructive
+   * action) goes here once `parseIntent` takes it, and main decides; true when Landlens showed something. Without it
+   * (a server's view in the dock) only landlens://object opens, as before.
+   */
+  intent?(url: string): Promise<boolean>;
+  /**
+   * The tools the view may call. A block of a view may call only view_data (D204): every other name is refused with
+   * -32601 here, and again in main.
+   */
+  tools?: ReadonlySet<string>;
+  /** The tallest the frame may be (MAX_HEIGHT in the dock; VIEW_MAX_HEIGHT on the Views page). */
+  maxHeight?: number;
   resize(height: number): void;
   /** A key typed in the view that the app answers (Escape, ⌘/Ctrl chords): replay it in the host. */
   key?(k: ViewKey): void;
+  /**
+   * Whether the view's frame has the focus now (the person is typing in it). A key from a frame that hasn't is the
+   * view's own script, not the person, and is dropped (review of wave 10 part 2, L2).
+   */
+  focused?(): boolean;
+  /**
+   * Whether the person has just acted in this window (a click or a key in the last few seconds: Chromium's transient
+   * user activation, which a gesture inside the frame gives its parent too). A block's intent counts only with the
+   * frame focused and such a gesture: a script on a timer can't open Landlens's sheet, drawer or panel while the
+   * person is elsewhere (security review of wave 10 part 3, M1). Without it, focus alone decides.
+   */
+  gesture?(): boolean;
+  now?(): number;
   context(): HostContext;
   log?(level: string, data: unknown): void;
 };
@@ -56,6 +93,7 @@ export function viewKey(p: Record<string, unknown>): ViewKey | undefined {
 
 type Msg = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown; result?: unknown; error?: unknown };
 
+const VIEW_LINK = /^landlens:\/\/view\/([0-9a-f]{16})$/;
 const OBJECT_LINK = /^landlens:\/\/object\/([A-Za-z][A-Za-z0-9]{0,62})\/([a-z0-9][a-z0-9.-]{0,252}|_)\/([a-z0-9][a-z0-9.:-]{0,252})$/;
 
 /** landlens://object/<Kind>/<namespace or _>/<name>, the one non-https link a view may ask for. */
@@ -99,6 +137,18 @@ export class AppHost {
     void this.request(m.id, m.method, params);
   }
 
+  /**
+   * A source's new data for a block of a view: `ui/notifications/landlens-data`, a Landlens extension (the 2026-01-26
+   * protocol has no host-to-view update after the first result). Only after the view has its first result.
+   */
+  pushData(source: string, data: unknown): void {
+    if (this.closed) return;
+    // Before the first result is out, the newest of each source waits, and follows the result.
+    if (!this.delivered) return void this.queued.set(source, data);
+    this.notify("ui/notifications/landlens-data", { source, data });
+  }
+  private readonly queued = new Map<string, unknown>();
+
   /** The theme or size changed: tell the view. */
   contextChanged(): void {
     if (this.initialized && !this.closed) this.notify("ui/notifications/host-context-changed", this.deps.context());
@@ -128,15 +178,18 @@ export class AppHost {
         // What the tool was called with, then what it returned: the view renders from these.
         this.notify("ui/notifications/tool-input", { arguments: this.view.input });
         this.notify("ui/notifications/tool-result", this.view.result);
+        for (const [source, data] of this.queued) this.notify("ui/notifications/landlens-data", { source, data });
+        this.queued.clear();
         return;
       case "ui/notifications/size-changed": {
         const h = Number(params.height);
-        if (Number.isFinite(h)) this.deps.resize(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(h))));
+        if (Number.isFinite(h)) this.deps.resize(Math.max(MIN_HEIGHT, Math.min(this.deps.maxHeight ?? MAX_HEIGHT, Math.ceil(h))));
         return;
       }
       case "ui/notifications/landlens-key": {
         const k = viewKey(params);
-        if (k) this.deps.key?.(k);
+        if (!k || !this.keyAllowed()) return;
+        this.deps.key?.(k);
         return;
       }
       case "notifications/message":
@@ -170,13 +223,19 @@ export class AppHost {
           const name = typeof params.name === "string" ? params.name : "";
           const args = params.arguments && typeof params.arguments === "object" && !Array.isArray(params.arguments) ? (params.arguments as Record<string, unknown>) : {};
           if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name)) return err(-32602, "Invalid tool name");
+          if (this.deps.tools && !this.deps.tools.has(name)) return err(-32601, "Landlens doesn't offer that tool to this view");
           return ok(await this.deps.callTool(name, args));
         }
         case "ui/open-link": {
           const url = typeof params.url === "string" ? params.url : "";
+          // A block's intents: the allowlist here first, then main's; the answer says only whether anything showed,
+          // never what the person did with it (D219).
+          if (this.deps.intent && url.startsWith("landlens://")) return ok(parseIntent(url) && this.personHere() && (await this.deps.intent(url)) ? {} : { isError: true });
           const target = objectLink(url);
-          if (target) {
-            this.deps.openObject(target);
+          if (target) return ok((await this.deps.openObject(target)) === false ? { isError: true } : {});
+          const view = VIEW_LINK.exec(url);
+          if (view && this.deps.openView && this.view.server === "landlens-views") {
+            this.deps.openView(view[1]!);
             return ok({});
           }
           if (!/^https:\/\//i.test(url)) return ok({ isError: true });
@@ -194,6 +253,25 @@ export class AppHost {
     } catch (e) {
       return err(-32603, (e as Error).message ?? "failed");
     }
+  }
+
+  /** A key only from a frame the person is in, and at most KEYS_PER_SECOND a second, so a script can't drive the app. */
+  private keyAllowed(): boolean {
+    if (this.deps.focused && !this.deps.focused()) return false;
+    const t = (this.deps.now ?? Date.now)();
+    this.keys = this.keys.filter((x) => t - x < 1_000);
+    if (this.keys.length >= KEYS_PER_SECOND) return false;
+    this.keys.push(t);
+    return true;
+  }
+  private keys: number[] = [];
+
+  /**
+   * A block's intent only in answer to the person (security review of wave 10 part 3, M1): its frame has the focus, and
+   * they acted just now. A host with no `focused` (never a block's: AppFrame always gives one) refuses every intent.
+   */
+  private personHere(): boolean {
+    return this.deps.focused?.() === true && (this.deps.gesture?.() ?? true);
   }
 
   private notify(method: string, params: unknown) {

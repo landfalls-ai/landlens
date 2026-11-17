@@ -1,0 +1,20 @@
+[
+  {
+    "tool": "render_view",
+    "arguments": {
+      "note": "Cloud SQL and the shop's branches",
+      "document": {
+        "schema": 1,
+        "title": "Cloud SQL and branches",
+        "sources": {
+          "sql": { "kind": "gcp.resources", "project": "demo-shop", "fields": { "name": "displayName", "state": "state", "location": "location" } },
+          "branches": { "kind": "tool", "server": "github", "tool": "list_branches", "arguments": { "owner": "acme", "repo": "shop" } }
+        },
+        "blocks": [
+          { "type": "table", "source": "sql", "title": "Google Cloud resources", "columns": [{ "field": "name", "header": "Name" }, { "field": "state", "header": "State" }, { "field": "location", "header": "Location" }] },
+          { "type": "table", "source": "branches", "title": "Branches", "columns": [{ "field": "text", "header": "Answer" }] }
+        ]
+      }
+    }
+  }
+]

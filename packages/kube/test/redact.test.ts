@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capResult, MAX_STRING, redactObject, redactPart, redactText, scrubCut } from "../src/redact.js";
+import { capResult, KEY_LINES, keyState, LineScrubber, MAX_STRING, redactObject, redactPart, redactText, scrubBatch, scrubCut, scrubLine, scrubLines } from "../src/redact.js";
 
 describe("redactObject", () => {
   const deployment = {
@@ -171,5 +171,57 @@ describe("redactPart and scrubCut", () => {
     expect(out.text).not.toContain("c2Vjb25k");
     expect(out.text).not.toContain("END RSA");
     expect(out.cut).toBe(true);
+  });
+});
+
+// Security review of wave 10 part 1, M1: a private key logged one line at a time.
+describe("scrubLine: a stream read line by line", () => {
+  const PEM = ["-----BEGIN EC PRIVATE KEY-----", "MHcCAQEEIBsecretsecretsecretsecret", "oAoGCCqGSM49AwEHoUQDQgAEsecret", "-----END EC PRIVATE KEY-----"];
+  it("redacts every line from a key's BEGIN to its END, keeps a timestamp, and reads text after the END", () => {
+    const st = keyState();
+    const out = ["before", ...PEM.slice(0, 3), `${PEM[3]} after token=ghp_abcdefghijklmnopqrstuvwxyz0123`, "next"].map((l) => scrubLine(l, st));
+    expect(out).toEqual(["before", "<redacted private key>", "<redacted private key>", "<redacted private key>", "<redacted private key> after token=<redacted github token>", "next"]);
+    expect(st.open).toBe(false);
+    const ts = keyState();
+    expect(["2026-11-16T10:00:00Z " + PEM[0], "2026-11-16T10:00:01Z " + PEM[1]].map((l) => scrubLine(l, ts))).toEqual(["2026-11-16T10:00:00Z <redacted private key>", "2026-11-16T10:00:01Z <redacted private key>"]);
+  });
+  it("a BEGIN with no END hides at most KEY_LINES lines", () => {
+    const st = keyState();
+    scrubLine(PEM[0]!, st);
+    for (let i = 0; i < KEY_LINES; i++) expect(scrubLine(`line ${i}`, st)).toBe("<redacted private key>");
+    expect(scrubLine("back to the log", st)).toBe("back to the log");
+    expect(st.open).toBe(false);
+  });
+  it("scrubLines: a whole text, a key left open at its end taken to the end", () => {
+    expect(scrubLines(["a", ...PEM.slice(0, 3)].join("\n"))).toBe(["a", "<redacted private key>", "<redacted private key>", "<redacted private key>"].join("\n"));
+    expect(scrubLines(["a", ...PEM, "b"].join("\n"))).toBe("a\n<redacted private key>\nb");
+  });
+  it("scrubBatch: a read that began inside a key takes the base64 lines before its END back, and no further", () => {
+    const R = "<redacted private key>";
+    expect(scrubBatch(["hello world", PEM[1]!, PEM[2]!, PEM[3]!, "after"], keyState())).toEqual(["hello world", R, R, R, "after"]);
+    const ts = "2026-11-16T10:00:00Z ";
+    expect(scrubBatch([ts + PEM[2]!, ts + PEM[3]!, ts + "tick"], keyState())).toEqual([ts + R, ts + R, ts + "tick"]);
+    // An END after a whole key is no lead-in: nothing before the key is touched.
+    expect(scrubBatch(["Zm9v", ...PEM], keyState())).toEqual(["Zm9v", R, R, R, R]);
+  });
+  it("LineScrubber: a stream that begins inside a key, a line a chunk, holds its leading base64 lines until the END", () => {
+    const R = "<redacted private key>";
+    const sc = new LineScrubber();
+    expect(sc.push([PEM[1]!])).toEqual([]);
+    expect(sc.push([PEM[2]!])).toEqual([]);
+    expect(sc.push([PEM[3]!])).toEqual([R, R, R]);
+    expect(sc.push(["tick"])).toEqual(["tick"]);
+    // From then on nothing is held: a lone base64 line goes out at once.
+    expect(sc.push(["Zm9vYmFy"])).toEqual(["Zm9vYmFy"]);
+    // Leading base64 lines that aren't a key's are released by the first other line.
+    const ok = new LineScrubber();
+    expect(ok.push(["abc123abc123abc123"])).toEqual([]);
+    expect(ok.push(["hello world"])).toEqual(["abc123abc123abc123", "hello world"]);
+    // A short word (base64's letters too) starts no run.
+    expect(new LineScrubber().push(["starting"])).toEqual(["starting"]);
+    // A stream that ends while they are held: taken as a key's.
+    const cut = new LineScrubber();
+    cut.push([PEM[1]!]);
+    expect(cut.end()).toEqual([R]);
   });
 });

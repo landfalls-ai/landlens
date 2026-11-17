@@ -23,11 +23,14 @@ const CHANNELS: readonly Channel[] = [
   "agent:autonomy",
   "gcp:status", "gcp:projects", "gcp:choose", "gcp:agent-read", "gcp:types", "gcp:resources", "gcp:resource", "gcp:clusters",
   "gcp:cluster-view", "gcp:cluster-item",
+  "views:start", "views:prompt", "views:get", "views:version", "views:param", "views:refresh", "views:visible", "views:close",
+  "views:app-open", "views:app-call", "views:intent", "views:audit", "views:link",
+  "views:list", "views:open", "views:save", "views:rename", "views:duplicate", "views:remove", "views:export", "views:import", "views:trust-apps", "views:tweak",
 ];
 const PUSH: readonly PushChannel[] = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
-  "family:update", "action:progress",
+  "family:update", "action:progress", "views:state", "views:data",
 ];
 
 /** Main sends errors as JSON {status, message} inside Electron's "Error invoking remote method" wrapper. */

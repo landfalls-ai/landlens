@@ -33,7 +33,7 @@ export const SEVERITIES = ["info", "warn", "error"] as const;
 /** The person's own actions (wave 8, D147) and how each ended. Reveal and copy of a Secret value are never counted. */
 export const ACTIONS = ["scale", "restart", "delete", "trigger", "suspend", "resume", "cordon", "uncordon", "drain"] as const;
 export const ACTION_OUTCOMES = ["applied", "partial", "failed", "conflict", "cancelled", "stopped"] as const;
-export const SUMS = ["landlens.sessions", "landlens.agent.turns", "landlens.tool.calls", "landlens.cluster.writes", "landlens.frontdoor.requests", "gen_ai.client.token.usage", "landlens.actions"] as const;
+export const SUMS = ["landlens.sessions", "landlens.agent.turns", "landlens.tool.calls", "landlens.cluster.writes", "landlens.frontdoor.requests", "gen_ai.client.token.usage", "landlens.actions", "landlens.views.rendered", "landlens.views.patched", "landlens.views.saved"] as const;
 export const GAUGES = ["landlens.clusters.connected", "landlens.doctor.problems"] as const;
 export const SPAN_NAMES = { turn: `invoke_agent ${AGENT_NAME}`, change: "landlens.change" } as const;
 

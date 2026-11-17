@@ -11,7 +11,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { createServer, type Server } from "node:https";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import { authorize, isCanonicalPath, parseRequest, type ParsedRequest, type Policy, type ScopeOf } from "./policy.js";
-import { redactObject, redactText } from "./redact.js";
+import { LineScrubber, redactObject, scrubLines } from "./redact.js";
 import { SIDECAR_HEADER, type LoopbackCert } from "./sidecar.js";
 
 export type Upstream = {
@@ -365,8 +365,10 @@ function scrubResponse(upRes: IncomingMessage, res: ServerResponse, stream: bool
   delete headers["content-length"];
   delete headers["content-encoding"];
   delete headers["transfer-encoding"];
-  const scrubLine = (line: string): string | undefined => {
-    if (text) return redactText(line);
+  // A followed log is scrubbed by its own LineScrubber, so a private key logged one line at a time is remembered across
+  // lines and chunks, and a tail that begins inside a key is taken too (security review of wave 10 part 1, M1).
+  const lines = new LineScrubber();
+  const scrubOne = (line: string): string | undefined => {
     if (!line.trim()) return line;
     try {
       return JSON.stringify(redactObject(JSON.parse(line)));
@@ -382,13 +384,18 @@ function scrubResponse(upRes: IncomingMessage, res: ServerResponse, stream: bool
     upRes.on("data", (chunk: string) => {
       pending += chunk;
       if (pending.length > MAX_SCRUBBED) return refuse("a line too long to scrub");
-      const lines = pending.split("\n");
-      pending = lines.pop() ?? "";
-      const out = lines.map(scrubLine).filter((l): l is string => l !== undefined);
+      const parts = pending.split("\n");
+      pending = parts.pop() ?? "";
+      const out = text ? lines.push(parts) : parts.map(scrubOne).filter((l): l is string => l !== undefined);
       if (out.length) res.write(out.join("\n") + "\n");
     });
     upRes.on("end", () => {
-      const last = pending ? scrubLine(pending) : undefined;
+      if (text) {
+        // Lines still held go out (redacted) before the last, unended line.
+        const out = [...lines.push(pending ? [pending] : []), ...lines.end()];
+        return void res.end(out.map((l, i) => (i < out.length - 1 || !pending ? `${l}\n` : l)).join(""));
+      }
+      const last = pending ? scrubOne(pending) : undefined;
       res.end(last ?? "");
     });
     upRes.on("error", () => res.destroy());
@@ -406,7 +413,7 @@ function scrubResponse(upRes: IncomingMessage, res: ServerResponse, stream: bool
     if (res.headersSent || res.destroyed) return;
     const body = Buffer.concat(chunks).toString("utf8");
     let out: string;
-    if (text) out = redactText(body);
+    if (text) out = scrubLines(body);
     else {
       try {
         out = JSON.stringify(redactObject(JSON.parse(body)));

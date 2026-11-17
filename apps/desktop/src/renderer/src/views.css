@@ -1,0 +1,166 @@
+/* The Views page (wave 10 part 2, docs/views.md): a blank page with one composer, then the view on a 12-column grid,
+   with the chat folded to a strip at the bottom edge (D213). Iris tokens only (docs/design.md). */
+.dock-holder { display: contents; }
+.dock-holder[hidden] { display: none; }
+
+.views-page { flex: 1; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
+.views-page.blank, .views-page.building { align-items: center; justify-content: center; padding: 24px; }
+.views-blank { width: min(640px, 100%); display: grid; gap: 14px; }
+.views-blank h2 { margin: 0; font-size: var(--t-16); font-weight: 600; color: var(--ink); }
+.views-blank > p { margin: 0; font-size: var(--t-125); }
+.views-ask { white-space: pre-wrap; overflow-wrap: anywhere; }
+.views-composer textarea { min-height: 64px; }
+.views-building { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--t-125); }
+.views-building-links { display: flex; gap: 16px; }
+.views-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; border-radius: var(--r-3); overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); }
+.views-tools li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px; background: var(--bg-2); }
+.views-tools li.tool-failed .dim { color: var(--bad-text); }
+
+.views-page.has-view { padding: 0 0 12px; }
+.views-page.has-view.with-strip { padding-bottom: 0; }
+.view-head { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: var(--bg-1); border-bottom: 1px solid var(--line); }
+.view-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.view-title h2 { margin: 0; font-size: var(--t-15); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The cluster a view reads, always named beside its title (security review of part 3, H1). */
+.view-cluster { flex: none; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: var(--r-1); color: var(--ink-2); font-family: var(--mono); white-space: nowrap; }
+/* A view from a file says so while it is open (security review of wave 10 part 4, M6). */
+.view-file { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border: 1px solid var(--line-2); border-radius: var(--r-1); color: var(--ink-2); white-space: nowrap; }
+.view-held-reads { margin: 2px 0; padding-left: 16px; overflow-wrap: anywhere; }
+.view-live { display: inline-flex; align-items: center; gap: 5px; font-size: var(--t-115); color: var(--ink-3); }
+.view-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-4); }
+.view-live .dot.on { background: var(--ok); }
+.view-param { display: inline-flex; align-items: center; gap: 6px; }
+.view-param input { width: 140px; }
+.view-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: nowrap; }
+.view-param select, .view-param input { height: 26px; padding: 0 6px; background: var(--bg-2); border: 0; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.view-head .menu-wrap { position: relative; }
+.view-head .menu { position: absolute; right: 0; top: 30px; z-index: 10; min-width: 160px; display: grid; padding: 4px; background: var(--bg-2); border-radius: var(--r-3); box-shadow: var(--shadow-2), inset 0 0 0 1px var(--line-2); }
+.view-head .menu button { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: var(--r-2); text-align: left; }
+.view-head .menu button:hover { background: var(--hover); }
+.view-refused { margin: 10px 16px 0; padding: 8px 12px; border-radius: var(--r-3); background: var(--warn-soft); }
+.view-refused ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+
+.view-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; padding: 12px 16px; align-items: start; }
+.view-grid.single { flex: 1; }
+@container main (max-width: 720px) { .view-grid > .vb { grid-column: span 12 !important; } }
+.vb { grid-column: span var(--span, 12); min-width: 0; display: grid; gap: 8px; padding: 10px 12px 12px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); }
+.vb-head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.vb-title { flex: 1; min-width: 0; font-size: var(--t-125); font-weight: 600; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-ask { opacity: .6; }
+.vb:hover .vb-ask, .vb-ask:focus-visible { opacity: 1; }
+.vb-note { display: flex; align-items: center; gap: 6px; font-size: var(--t-12); }
+/* Part 3's native blocks (D206, D218): Landlens's own components in a block's card, light and dark from Iris tokens. */
+.vb-empty { margin: 0; display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.vb-rt { display: flex; flex-direction: column; min-height: 0; margin: 0 -8px -6px; }
+.vb-rt .table { container-type: normal; }
+.vb-rt .thead { padding-right: 10px; }
+.vb-statbox { display: grid; gap: 2px; }
+.vb-stat-value { font-size: var(--t-26); font-weight: 600; color: var(--ink); line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vb-statbox.tone-bad .vb-stat-value { color: var(--bad-text); }
+.vb-statbox.tone-warn .vb-stat-value { color: var(--warn-text); }
+.vb-statbox.tone-ok .vb-stat-value { color: var(--ok-text); }
+.vb-statbox.tone-muted .vb-stat-value { color: var(--ink-3); }
+.vb-stat-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.vb-stat-label { font-size: var(--t-12); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-spark { flex: none; }
+.vb-charts { display: grid; gap: 14px; min-width: 0; }
+.vb-lines .chart-plot { overflow: hidden; }
+.vb-items, .vb-probs { list-style: none; margin: 0 -6px; padding: 0; display: grid; gap: 1px; }
+.vb-li { position: relative; display: flex; align-items: baseline; gap: 10px; min-height: 30px; padding: 5px 8px; border-radius: var(--r-2); font-size: var(--t-125); min-width: 0; }
+.vb-li.actionable { cursor: pointer; }
+.vb-li.actionable:hover, .vb-li.on { background: var(--hover); }
+.vb-li.on { box-shadow: inset 0 0 0 1px var(--accent-line); background: var(--sel); }
+.vb-li:focus-visible { box-shadow: var(--focus-in); outline: none; }
+.vb-li.row-bad::before, .vb-li.row-warn::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 0 2px 2px 0; background: var(--bad); }
+.vb-li.row-warn::before { background: var(--warn); }
+.vb-primary { font-weight: 500; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.vb-secondary { flex: 1; min-width: 0; color: var(--ink-3); font-size: var(--t-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-more { margin-left: auto; align-self: center; opacity: 0; }
+.vb-li:hover .vb-more, .vb-li:focus-within .vb-more { opacity: 1; }
+.vb-probs .ov-row.on { background: var(--sel); }
+.vb-logs-wrap { display: grid; gap: 6px; min-width: 0; }
+.vb-logs-seg { margin-left: 0; justify-self: start; }
+.vb-loglines { margin: 0; max-height: 420px; overflow: auto; padding: 8px 10px; font: var(--t-115)/1.55 var(--mono); background: var(--bg-0); border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line); }
+.vb-line { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.vb-line.fail { color: var(--bad-text); }
+.vb-md .md { font-size: var(--t-13); }
+.vb-md .md p { overflow-wrap: anywhere; }
+.view-selection { position: sticky; top: 48px; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 10px 16px 0; padding: 6px 8px 6px 12px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: var(--shadow-1), inset 0 0 0 1px var(--line-2); }
+.view-selection .selection-bar { margin-left: auto; }
+.view-selection.by-block { box-shadow: var(--shadow-1), inset 0 0 0 1px var(--accent-line); }
+.view-sel-who { color: var(--ink-2); }
+.obj-chip { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-asker { margin: 0 0 8px; padding: 6px 10px; border-radius: var(--r-2); background: var(--sel); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--accent-line); }
+@container main (max-width: 720px) {
+  /* The title takes its own line, the header's buttons the next, so they don't wrap one by one. */
+  .view-title { flex-basis: 100%; }
+  .view-selection { top: 0; margin: 8px 10px 0; }
+  .view-grid { padding: 10px; gap: 10px; }
+}
+.vb-app { padding: 8px; }
+.app-third.built .app-third-cap { color: var(--ink-3); font-size: var(--t-11); }
+
+.view-strip { position: absolute; left: 16px; right: 16px; bottom: 12px; z-index: 4; display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 10px; border-radius: var(--r-4); background: var(--bg-2); box-shadow: var(--shadow-2), inset 0 0 0 1px var(--line-2); }
+/* The page's own colour under the strip, so rows don't show through the gap below it. */
+.view-strip::after { content: ""; position: absolute; left: -16px; right: -16px; top: 100%; height: 13px; background: var(--bg-1); }
+.views-page.has-view .view-strip { position: sticky; margin: auto 16px 12px; left: auto; right: auto; bottom: 12px; }
+.view-strip-line { flex: 0 1 38%; min-width: 0; display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strip-composer { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 10px; box-shadow: inset 0 0 0 1px var(--line); }
+.strip-composer textarea { min-height: 22px; max-height: 80px; flex: 1; }
+.strip-composer .composer-foot { flex: none; }
+
+.views-drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 8; width: min(440px, 90%); }
+.views-drawer .drawer-body { overflow: auto; padding: 0 18px 18px; display: grid; gap: 10px; align-content: start; }
+.views-drawer h3 { margin: 8px 0 0; font-size: var(--t-12); color: var(--ink-3); font-weight: 600; text-transform: none; }
+.vd-source { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--r-3); box-shadow: inset 0 0 0 1px var(--line); }
+.vd-source p { margin: 0; font-size: var(--t-125); overflow-wrap: anywhere; }
+.vd-source-head { display: flex; justify-content: space-between; gap: 8px; }
+.vd-json { margin: 4px 0 0; max-height: 260px; overflow: auto; padding: 8px 10px; font: var(--t-115)/1.5 var(--mono); background: var(--bg-0); border-radius: var(--r-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vd-audit, .vd-versions { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.vd-audit li { overflow-wrap: anywhere; }
+.vd-versions li.on { font-weight: 600; }
+
+/* Part 4 (D216, D217, D224): example chips, the saved views' list, the save sheet, an import's held custom blocks, and
+   a view table's column handles. */
+.views-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn { height: 26px; padding: 0 10px; border: 0; border-radius: 13px; background: var(--bg-2); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line-2); cursor: pointer; }
+.chip-btn:hover { color: var(--ink); background: var(--bg-3, var(--bg-2)); }
+.views-list { display: grid; gap: 8px; margin-top: 8px; }
+.views-list-head { display: flex; align-items: center; gap: 8px; }
+.views-list-head h3 { margin: 0; font-size: var(--t-13); font-weight: 600; color: var(--ink-2); }
+.views-saved { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; border-radius: var(--r-3); overflow: visible; box-shadow: inset 0 0 0 1px var(--line); }
+.views-saved:empty { display: none; }
+.views-saved-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 0; background: var(--bg-2); }
+.views-saved-open { display: grid; gap: 1px; text-align: left; padding: 4px 10px; border: 0; background: none; color: var(--ink); cursor: pointer; min-width: 0; }
+.views-saved-open .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.views-saved-open:hover .name { text-decoration: underline; }
+.views-rename { display: flex; gap: 6px; padding-left: 8px; }
+.views-rename input { flex: 1; height: 26px; padding: 0 6px; background: var(--bg-1); border: 0; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.views-confirm { display: inline-flex; align-items: center; gap: 8px; }
+.views-import { display: grid; gap: 6px; padding: 10px; border-radius: var(--r-3); background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line); }
+.views-import p { margin: 0; }
+.views-import select { min-height: 48px; background: var(--bg-1); border: 0; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.views-import-go { display: flex; align-items: center; gap: 12px; }
+.views-list-sheet { width: min(560px, calc(100vw - 32px)); padding: 12px 14px; max-height: min(640px, calc(100vh - 64px)); overflow: auto; }
+.save-view { width: min(460px, calc(100vw - 32px)); }
+.save-view-body { display: grid; gap: 14px; padding: 14px; }
+.save-view-body input { height: 30px; padding: 0 8px; background: var(--bg-2); border: 0; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.save-view-body .notice { margin: 6px 0 0; flex-wrap: wrap; }
+.view-note { display: flex; align-items: center; gap: 6px; margin: 8px 16px 0; }
+.view-held { margin: 10px 16px 0; align-items: center; }
+.view-held .notice-body { display: grid; gap: 2px; flex: 1; }
+.vb-held { padding: 18px; text-align: center; }
+.th { position: relative; }
+.th-resize { position: absolute; top: 4px; bottom: 4px; right: -3px; width: 6px; cursor: col-resize; border-radius: 3px; z-index: 1; }
+.th-resize:hover { background: var(--line-2); }
+@media (max-width: 760px) {
+  .views-saved-row { flex-wrap: wrap; }
+  .views-examples { gap: 4px; }
+}
+/* The saved views under Views in the sidebar (D216). */
+.nav-subsec { display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 8px 2px 28px; font-size: 10.5px; font-weight: 500; color: var(--ink-3); flex: none; }
+.nav-subsec:hover { color: var(--ink-2); }
+.nav-subsec .ic { opacity: .6; transition: transform var(--dur-2) var(--ease); }
+.nav-subsec.closed .ic { transform: rotate(-90deg); }
+.nav-sub .nav-item { padding-left: 28px; }
+.nav-sub .nav-item .nav-label { font-size: 12px; }

@@ -7,8 +7,9 @@ import * as acp from "@agentclientprotocol/sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Readable, Writable } from "node:stream";
 
 const MODEL = "claude-fake-1";
@@ -23,6 +24,59 @@ async function callKube(servers) {
   try {
     const r = await client.callTool({ name: "api_resources", arguments: {} });
     return r.isError ? "error" : "ok";
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+/**
+ * Wave 10: a prompt whose first line is `view-script: <name>` runs fixtures/views/<name>.json, an array of
+ * `{ tool, arguments }` for landlens-views, through the session's server (the real gateway), each as a tool card, and
+ * says each result. `__PROBE__`, `__WSPROBE__` and `__STUNPROBE__` in the arguments become the test's own listeners,
+ * so a hostile block can aim at them; `__NETHOST__` the test's own unique host name, which its net log must never show.
+ * They come from fake-agent-env.json beside the session folders, written by the test: Landlens hands the agent only
+ * its allowlisted environment (agentEnv), so a LANDLENS_FAKE_* variable never reaches this process. Results go to
+ * fake-agent-results.jsonl, in the same folder, for the test. `"__SHOWN__"` becomes the version the last answer named
+ * (a patch's base, wave 10 part 3), as Claude reads it from get_view.
+ */
+const VIEWS = join(dirname(fileURLToPath(import.meta.url)), "views");
+async function viewScript(name, s, sessionId, notify, say) {
+  const views = s.servers.find((x) => x.name === "landlens-views");
+  if (!views) return say("This session has no landlens-views.");
+  let given = {};
+  try {
+    if (s.cwd) given = JSON.parse(readFileSync(join(s.cwd, "..", "fake-agent-env.json"), "utf8"));
+  } catch {
+    // none written: the defaults below
+  }
+  const probe = given.probe ?? "http://127.0.0.1:9";
+  const u = new URL(probe);
+  let raw = readFileSync(join(VIEWS, `${name}.json`), "utf8");
+  raw = raw.replaceAll("__NETHOST__", given.nethost ?? "views-e2e.invalid").replaceAll("__PROBE__", probe).replaceAll("__WSPROBE__", `ws://${u.host}`).replaceAll("__STUNPROBE__", `stun:${u.hostname}:${given.stun ?? "9"}`);
+  const steps = JSON.parse(raw);
+  const headers = Object.fromEntries((views.headers ?? []).map((h) => [h.name, h.value]));
+  const client = new Client({ name: "fake-acp-agent", version: "0.0.1" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(views.url), { requestInit: { headers } }));
+  try {
+    // "__SHOWN__" (a patch's base) is the version the last answer named ("View <id> vN"), as Claude would read it.
+    let shown = 0;
+    for (const step of steps) {
+      const toolCallId = randomUUID();
+      const title = `mcp__landlens-views__${step.tool}`;
+      const args = JSON.parse(JSON.stringify(step.arguments ?? {}).replaceAll('"__SHOWN__"', String(shown)));
+      await notify({ sessionUpdate: "tool_call", toolCallId, title, kind: "other", status: "in_progress", rawInput: args, _meta: { claudeCode: { toolName: title } } });
+      const r = await client.callTool({ name: step.tool, arguments: args });
+      const text = (r.content ?? []).map((c) => c.text ?? "").join("\n");
+      const v = /^View [0-9a-f]{16} v(\d+)/.exec(text);
+      if (v) shown = Number(v[1]);
+      await notify({ sessionUpdate: "tool_call_update", toolCallId, status: r.isError ? "failed" : "completed", content: [{ type: "content", content: { type: "text", text } }] });
+      try {
+        if (s.cwd) appendFileSync(join(s.cwd, "..", "fake-agent-results.jsonl"), `${JSON.stringify({ tool: step.tool, text, isError: !!r.isError })}\n`);
+      } catch {
+        // as for prompts
+      }
+      await say(`${step.tool}: ${text.split("\n")[0]}\n`);
+    }
   } finally {
     await client.close().catch(() => {});
   }
@@ -53,7 +107,11 @@ acp
       // a folder that went is no prompt lost to the test: it then finds nothing
     }
     const say = (t) => ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: t } } });
-    if (/^Summarise this session/.test(text)) {
+    const script = /^view-script: ([a-z0-9-]{1,40})$/m.exec(text.split("\n")[0] ?? "");
+    if (script) {
+      const notify = (update) => ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update });
+      await viewScript(script[1], s, ctx.params.sessionId, notify, say).catch((e) => say(`The script failed: ${e.message}`));
+    } else if (/^Summarise this session/.test(text)) {
       await say("Checked the cluster's API resources; ");
       await say("nothing was changed.");
     } else {

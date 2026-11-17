@@ -1,0 +1,48 @@
+{
+  "landlensView": 1,
+  "name": "Shared: deployments and a count",
+  "exportedAt": "2026-11-16T10:00:00.000Z",
+  "document": {
+    "schema": 1,
+    "title": "Deployments and a count",
+    "sources": {
+      "deps": {
+        "kind": "kube.list",
+        "resource": "deployments",
+        "group": "apps",
+        "labelSelector": "app=views-e2e-saved",
+        "fields": {
+          "name": "$name",
+          "ready": "$ready"
+        }
+      }
+    },
+    "blocks": [
+      {
+        "type": "table",
+        "source": "deps",
+        "title": "Deployments",
+        "columns": [
+          {
+            "field": "name",
+            "header": "Name"
+          },
+          {
+            "field": "ready",
+            "header": "Ready"
+          }
+        ]
+      },
+      {
+        "type": "app",
+        "id": "count",
+        "title": "Count",
+        "uses": [
+          "deps"
+        ],
+        "html": "<p id=\"n\">waiting</p>",
+        "js": "view.onData('deps', function (d) { document.getElementById('n').textContent = d.rows.length + ' deployments'; });"
+      }
+    ]
+  }
+}

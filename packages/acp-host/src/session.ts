@@ -42,7 +42,11 @@ export const NO_GOOGLE: SessionGoogle = Object.freeze({ projects: () => [], hold
 
 /** The MCP gateway as a session sees it (the desktop's McpGateway, through its store of servers). */
 export interface SessionMcp {
-  open(s: { label: string; context: string; handle: string; cluster: AgentCluster }): Promise<{
+  /**
+   * `views`: a session started from the Views page (wave 10, D205) also gets landlens-views, built by this factory (an
+   * McpServer; typed loosely here, since acp-host doesn't load the MCP SDK itself).
+   */
+  open(s: { label: string; context: string; handle: string; cluster: AgentCluster; views?: () => unknown }): Promise<{
     /** Every MCP server the session gets: all on the gateway, each with the session's token. */
     servers: { name: string; url: string; headers: { name: string; value: string }[] }[];
     /** Tools that run without asking (`mcp__landlens-kube`, and proxied tools that only read). */
@@ -57,6 +61,8 @@ export interface SessionMcp {
     gcp?: string[];
     /** What the session's kube tools may use of Google Cloud (D194); without it, nothing. */
     google?: SessionGoogle;
+    /** The session has landlens-views (wave 10): the standing rules gain the views paragraph. */
+    views?: boolean;
     /** Tell the gateway Claude Code's id for the session, so the call log and the dock agree. */
     bind(sessionId: string): void;
     close(): Promise<void>;
@@ -99,6 +105,8 @@ export async function startClusterSession(deps: {
   namespaces?: string[];
   /** Resume an earlier session: Claude Code replays its history; it gets new tokens and the same folder path. */
   resume?: { sessionId: string; cwd: string };
+  /** A session started from the Views page: landlens-views, from this factory (main's ViewService, D205). */
+  views?: () => unknown;
 }): Promise<ClusterSession> {
   const c = deps.clusters.get(req.handle);
   const types = await deps.clusters.discovery(req.handle); // also gives the front door the kinds' scope
@@ -160,7 +168,7 @@ export async function startClusterSession(deps: {
   });
   let mcp: Awaited<ReturnType<SessionMcp["open"]>>;
   try {
-    mcp = await deps.mcp.open({ label, context: c.info.context, handle: req.handle, cluster });
+    mcp = await deps.mcp.open({ label, context: c.info.context, handle: req.handle, cluster, ...(req.views ? { views: req.views } : {}) });
     if (mcp.google) google = mcp.google;
   } catch (err) {
     revokeTokens();
@@ -179,7 +187,7 @@ export async function startClusterSession(deps: {
     mcpServers: mcp.servers.map((m) => ({ type: "http" as const, ...m })),
     systemPrompt: {
       mode: "append",
-      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes, ...(mcp.providers?.length || mcp.family?.length ? { providers: mcp.providers ?? [], readsFree: mcp.readsFree ?? [] } : {}), ...(mcp.family?.length ? { family: mcp.family } : {}), ...(mcp.gcp?.length ? { gcp: mcp.gcp } : {}) }) }],
+      content: [{ type: "text", text: clusterSystemPrompt({ context: c.info.context, server: c.info.server, version: c.info.version, ...(req.namespaces ? { namespaces: req.namespaces } : {}), writes: !!deps.changes, ...(mcp.providers?.length || mcp.family?.length ? { providers: mcp.providers ?? [], readsFree: mcp.readsFree ?? [] } : {}), ...(mcp.family?.length ? { family: mcp.family } : {}), ...(mcp.gcp?.length ? { gcp: mcp.gcp } : {}), ...(mcp.views ? { views: true } : {}) }) }],
     },
     _meta: { claudeCode: { options: sessionOptions({
       home: deps.home, cwd, kubeconfig, token, path: deps.path, frontDoorPort: Number(new URL(deps.frontDoor.url).port), mcpAllow: mcp.allow,

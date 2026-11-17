@@ -391,7 +391,7 @@ const CALL_STATUS: Record<McpCall["status"], { word: string; icon: typeof Circle
   error: { word: "Failed", icon: CircleX, cls: "tone-bad" },
   refused: { word: "Refused", icon: Ban, cls: "tone-warn" },
 };
-const ORIGIN_WORD: Record<McpCall["origin"], string> = { agent: "agent", app: "view", you: "you" };
+const ORIGIN_WORD: Record<McpCall["origin"], string> = { agent: "agent", app: "an app's view", you: "you", view: "a view on the Views page" };
 
 /** "kind namespace/name", or the arguments as words ("range 1h · scope cluster"); never raw JSON in a row. */
 export function argsLine(args: unknown): string {
@@ -478,7 +478,7 @@ function Calls(props: { calls: McpCall[]; selected?: string; onSelect: (id: stri
                     {c.status === "running" ? <span className="spinner" aria-label="Running" /> : <span role="img" aria-label={st.word} title={st.word}><Ic icon={st.icon} size={14} className={st.cls} /></span>}
                     <div className="ov-main">
                       <div className="ov-name"><span className="mono">{c.server} · {c.tool}</span><span className="dim">{argsLine(c.args)}</span></div>
-                      <div className="ov-detail">{c.label}{c.origin === "app" ? " · from a view" : ""}{c.error ? ` · ${c.error}` : ""}</div>
+                      <div className="ov-detail">{c.label}{c.origin === "app" ? " · from an app's view" : c.origin === "view" ? " · from a view" : ""}{c.error ? ` · ${c.error}` : ""}</div>
                     </div>
                     {c.gate === "autonomous" ? <span className="chip auto-chip" title="Ran without asking: a routine write in the session's autonomous scope"><Ic icon={Zap} size={11} />ran on its own</span> : null}
                     {c.app && c.status === "ok" ? <span className="chip"><Ic icon={LayoutPanelTop} size={11} />view</span> : null}

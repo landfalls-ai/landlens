@@ -7,7 +7,11 @@
 import type { KubeObject } from "@landlens/contracts";
 import { apiPath, KubeError, slim, toKubeError, type KubeClient } from "./client.js";
 
-export type WatchTarget = { group: string; version: string; resource: string; namespace?: string };
+export type WatchTarget = {
+  group: string; version: string; resource: string; namespace?: string;
+  /** Sent as query parameters (never in the path), to the list and the watch alike (wave 10, D207). */
+  labelSelector?: string; fieldSelector?: string;
+};
 
 export type WatcherEvent =
   | { type: "snapshot"; items: KubeObject[] }
@@ -21,7 +25,32 @@ export type WatcherOptions = {
   /** Backoff after a failure, doubled up to maxBackoffMs. */
   backoffMs?: number;
   maxBackoffMs?: number;
+  /**
+   * The most objects kept (wave 10, D225: a view's watch keeps 10,000). Past it the list stops paging, objects the
+   * watch adds are dropped, and `truncated` says so until a relist fits. Absent: no cap (the IDE's own tables).
+   */
+  maxItems?: number;
+  /**
+   * Trims each object as it arrives (wave 10's views keep only what their document reads; security review of wave 10
+   * part 1, M5). It must keep `metadata.uid`.
+   */
+  project?: (o: KubeObject) => KubeObject;
+  /** Shared by several watchers (one view's): objects and characters of JSON they keep together. */
+  budget?: WatchBudget;
 };
+
+/**
+ * What several watchers may keep together (security review of wave 10 part 1, M5): objects, and characters of their
+ * JSON (each object measured once, as kept, after `project`). A watcher that would pass either stops adding, and says
+ * `cutBy: "budget"`; a stopped watcher gives its share back.
+ */
+export class WatchBudget {
+  objects = 0;
+  chars = 0;
+  constructor(readonly maxObjects: number, readonly maxChars: number) {
+    if (!(Number.isInteger(maxObjects) && maxObjects > 0 && Number.isInteger(maxChars) && maxChars > 0)) throw new RangeError("a watch budget must be positive integers");
+  }
+}
 
 class Gone extends Error {}
 
@@ -36,7 +65,13 @@ export class ResourceWatcher {
   /** Ends a backoff sleep early, so stop() doesn't wait up to maxBackoffMs. */
   private wake: (() => void) | undefined;
   private stopped = false;
-  private readonly opts: Required<WatcherOptions>;
+  private readonly opts: Required<Omit<WatcherOptions, "maxItems" | "project" | "budget">> & { maxItems: number };
+  private readonly project: ((o: KubeObject) => KubeObject) | undefined;
+  private readonly budget: WatchBudget | undefined;
+  /** Each kept object's size, and this watcher's share of the budget (only with a budget). */
+  private sizes = new Map<string, number>();
+  private own = { objects: 0, chars: 0 };
+  private cut: false | "items" | "budget" = false;
   /** Resolves when the loop has ended after stop(). */
   done: Promise<void> = Promise.resolve();
 
@@ -46,7 +81,22 @@ export class ResourceWatcher {
     private readonly onEvent: (e: WatcherEvent) => void,
     opts: WatcherOptions = {},
   ) {
-    this.opts = { pageSize: 500, batchMs: 250, timeoutSeconds: 600, backoffMs: 1000, maxBackoffMs: 30_000, ...opts };
+    const max = opts.maxItems;
+    if (max !== undefined && !(Number.isInteger(max) && max > 0)) throw new RangeError("maxItems must be a positive integer");
+    const { project, budget, ...rest } = opts;
+    this.opts = { pageSize: 500, batchMs: 250, timeoutSeconds: 600, backoffMs: 1000, maxBackoffMs: 30_000, ...rest, maxItems: max ?? Infinity };
+    this.project = project;
+    this.budget = budget;
+  }
+
+  /** Whether objects were left out at `maxItems` since the last list that fitted. */
+  get truncated(): boolean {
+    return !!this.cut;
+  }
+
+  /** Why objects were left out: this watcher's own cap, or the budget it shares. */
+  get cutBy(): false | "items" | "budget" {
+    return this.cut;
   }
 
   start(): this {
@@ -59,6 +109,14 @@ export class ResourceWatcher {
     this.abort?.abort();
     this.wake?.();
     clearTimeout(this.flushTimer);
+    // A budgeted watcher (a view's) gives its share back and lets go of its objects at once.
+    if (this.budget) {
+      this.budget.objects -= this.own.objects;
+      this.budget.chars -= this.own.chars;
+      this.own = { objects: 0, chars: 0 };
+      this.sizes.clear();
+      this.items.clear();
+    }
     await this.done.catch(() => {});
   }
 
@@ -106,10 +164,13 @@ export class ResourceWatcher {
 
   private async list(): Promise<string> {
     const items = new Map<string, KubeObject>();
+    const sizes = new Map<string, number>();
+    let chars = 0;
     let cont: string | undefined;
     let rv = "";
+    let cut: false | "items" | "budget" = false;
     do {
-      const q = new URLSearchParams({ limit: String(this.opts.pageSize) });
+      const q = this.query({ limit: String(this.opts.pageSize) });
       if (cont) q.set("continue", cont);
       this.abort = new AbortController();
       const res = await this.client.request(`${this.path()}?${q}`, { signal: this.abort.signal });
@@ -118,13 +179,39 @@ export class ResourceWatcher {
       if (!res.ok) throw toKubeError(res.status, text);
       const page = JSON.parse(text);
       for (const o of page.items ?? []) {
-        const obj = this.withKind(o, page);
+        if (items.size >= this.opts.maxItems) {
+          cut = "items";
+          break;
+        }
+        const obj = this.prepare(this.withKind(o, page));
+        if (this.budget) {
+          // What the other watchers keep now, and this list so far (this watcher's old share is replaced by it).
+          const n = JSON.stringify(obj).length;
+          const b = this.budget;
+          if (b.objects - this.own.objects + items.size + 1 > b.maxObjects || b.chars - this.own.chars + chars + n > b.maxChars) {
+            cut = "budget";
+            break;
+          }
+          sizes.set(obj.metadata.uid, n);
+          chars += n;
+        }
         items.set(obj.metadata.uid, obj);
       }
       cont = page.metadata?.continue || undefined;
       rv = page.metadata?.resourceVersion ?? rv;
-    } while (cont && !this.stopped);
+      // Past the cap, stop paging: every page of one list shares the first page's resourceVersion, so the watch can
+      // still start from it (objects it then adds are dropped below).
+      if (cont && !cut && items.size >= this.opts.maxItems) cut = "items";
+    } while (cont && !cut && !this.stopped);
+    if (this.stopped) return rv;
 
+    this.cut = cut;
+    if (this.budget) {
+      this.budget.objects += items.size - this.own.objects;
+      this.budget.chars += chars - this.own.chars;
+      this.own = { objects: items.size, chars };
+      this.sizes = sizes;
+    }
     this.items.clear();
     for (const [k, v] of items) this.items.set(k, v);
     this.pendingUpserts.clear();
@@ -135,7 +222,7 @@ export class ResourceWatcher {
 
   /** One watch request; returns the resourceVersion to resume from. */
   private async watch(rv: string): Promise<string> {
-    const q = new URLSearchParams({
+    const q = this.query({
       watch: "1",
       resourceVersion: rv,
       allowWatchBookmarks: "true",
@@ -172,22 +259,41 @@ export class ResourceWatcher {
 
   private apply(ev: { type: string; object: any }, rv: string): string {
     const o = ev.object;
+    if (this.stopped) return rv;
     switch (ev.type) {
       case "ADDED":
       case "MODIFIED": {
-        const obj = slim(o as KubeObject);
+        const obj = this.prepare(slim(o as KubeObject));
+        const uid = obj.metadata.uid;
+        const had = this.items.has(uid);
+        if (!had && this.items.size >= this.opts.maxItems) {
+          this.cut = "items";
+          break;
+        }
+        if (this.budget) {
+          const b = this.budget;
+          const n = JSON.stringify(obj).length;
+          const old = this.sizes.get(uid) ?? 0;
+          if (b.objects + (had ? 0 : 1) > b.maxObjects || b.chars - old + n > b.maxChars) {
+            this.cut = "budget";
+            // An object that grew past the budget isn't kept as it was: it goes, and the cut says so.
+            if (had) this.forget(uid);
+            break;
+          }
+          b.objects += had ? 0 : 1;
+          b.chars += n - old;
+          this.own.objects += had ? 0 : 1;
+          this.own.chars += n - old;
+          this.sizes.set(uid, n);
+        }
         this.items.set(obj.metadata.uid, obj);
         this.pendingRemoved.delete(obj.metadata.uid);
         this.pendingUpserts.set(obj.metadata.uid, obj);
         break;
       }
-      case "DELETED": {
-        const uid = o.metadata.uid as string;
-        this.items.delete(uid);
-        this.pendingUpserts.delete(uid);
-        this.pendingRemoved.add(uid);
+      case "DELETED":
+        this.forget(o.metadata.uid as string);
         break;
-      }
       case "BOOKMARK":
         break;
       case "ERROR":
@@ -211,6 +317,25 @@ export class ResourceWatcher {
     }, this.opts.batchMs);
   }
 
+  /** An object gone (deleted, or past the budget): out of the items, its share given back, and reported removed. */
+  private forget(uid: string) {
+    if (this.budget && this.items.has(uid)) {
+      const n = this.sizes.get(uid) ?? 0;
+      this.budget.objects -= 1;
+      this.budget.chars -= n;
+      this.own.objects -= 1;
+      this.own.chars -= n;
+      this.sizes.delete(uid);
+    }
+    this.items.delete(uid);
+    this.pendingUpserts.delete(uid);
+    this.pendingRemoved.add(uid);
+  }
+
+  private prepare(o: KubeObject): KubeObject {
+    return this.project ? this.project(o) : o;
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const t = setTimeout(() => this.wake?.(), ms);
@@ -224,6 +349,14 @@ export class ResourceWatcher {
 
   private path() {
     return apiPath(this.target, this.target.namespace);
+  }
+
+  /** The list's and the watch's query, with the target's selectors. */
+  private query(q: Record<string, string>): URLSearchParams {
+    const out = new URLSearchParams(q);
+    if (this.target.labelSelector) out.set("labelSelector", this.target.labelSelector);
+    if (this.target.fieldSelector) out.set("fieldSelector", this.target.fieldSelector);
+    return out;
   }
 
   /** List items carry no apiVersion/kind; fill them from the list so the UI and YAML are complete. */

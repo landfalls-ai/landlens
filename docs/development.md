@@ -193,6 +193,46 @@ to `kube-mcp`'s `server.test.ts`, the prompt's words to `prompt.test.ts`, and ca
 Preview of `cluster_overview`, and with `LANDLENS_INTEGRATION=orbstack,claude` a live session answering from
 `gcp_alerts`.
 
+Views on demand (wave 10, [spec](specs/010-views/spec.md)): part 1's unit tests are `packages/views/test`
+(`schema`, `path`, `transform` with a seeded property test, `patch`, `projection` and the limits), `packages/kube/test/watch.test.ts`
+(selectors and the cap) and `frontdoor-fetch.test.ts` (a real front door before a fake sidecar), and
+`apps/desktop/test/view-runtime.test.ts`, which runs `ViewRuntime` against `test/view-fakes.ts`: an in-memory API
+and front door that apply the real token policy (`authorize`), record every request with the token's label, stream
+watches and followed logs, and can hold or refuse a path; for a redacting token it scrubs answers as the front door does (`scrubs = false` only to
+hold the runtime's own layer). On OrbStack, `LANDLENS_INTEGRATION=orbstack pnpm --filter
+@landlens/desktop test:integration` runs `view-runtime.integration.test.ts` through a real front door and sidecar: it
+applies a throwaway Deployment (busybox, `IfNotPresent`) and ConfigMap named `view-check-*` (labelled
+`scenario=view-check`) in `landlens-dev`, scales the Deployment once, reads Helm's `landlens-demo`, and deletes both by
+label at the end. Desktop's `pnpm test` skips `*.integration.test.ts`.
+
+Part 2 ([views.md](views.md#tests)): `packages/views/test/server.test.ts` (the tools, versions, status lines, the
+frame's cut, a block's page), the gateway's "built-ins: landlens-views", acp-host's fence and prompt tests, and in
+desktop `views-main.test.ts` (`ViewService` with a fake agent and the real `ViewRuntime`), `views-ipc.test.ts` (the
+channels' Secrets check, electron mocked), `view-store.test.ts` (the window's store; typechecked with
+`tsconfig.web.json`), `app-host.test.ts` and `mcp-main.test.ts`. The e2e `test/views.e2e.test.ts` drives the built app
+with the fake agent: a prompt whose first line is `view-script: <name>` makes `fake-acp-agent.mjs` call
+`landlens-views` through the real gateway with `test/fixtures/views/<name>.json` and write each answer to
+`fake-agent-results.jsonl` beside the session folders. `__NETHOST__`, `__PROBE__`, `__WSPROBE__` and `__STUNPROBE__`
+in a fixture become what the test wrote to `agent-sessions/fake-agent-env.json` (`nethost`: the run's random
+`views-e2e-<hex>.test`, which e2e 4's net log must never name; `stun`: its UDP listener's port): the fake agent gets
+only Landlens's allowlisted environment, so a `LANDLENS_FAKE_*` variable wouldn't reach it. Also
+`packages/views/test/runtime.test.ts` (`view.el` in a stand-in document) and `security-app.test.ts` (`hardenApp`'s
+DNS prefetch switch, electron mocked). Part 3 adds `packages/views/test/intent.test.ts` (the intents' grammar) and
+`view-blocks.test.ts` (the native blocks' rules); a fixture's `"__SHOWN__"` becomes the version the fake agent last
+heard (a patch's base). It makes and removes the Deployments `views-e2e` and `views-e2e-log` (busybox, a line a second)
+and a ConfigMap in `landlens-dev`. With `LANDLENS_INTEGRATION=orbstack,claude`, `-t "live: Claude"` asks your own
+Claude for a view of `landlens-dev` in native blocks, saves it, and, with `LANDLENS_SHOTS`, writes what it built to
+`w10p3-live-view.json` (the document read from a stubbed clipboard in the page and over `views:get`, never your
+clipboard). Part 4 adds `packages/views/test/part4.test.ts` (the connection kinds, view files, `literalNames`, tweaks,
+a rows path; its security review's literals, credential shapes and trust items) and in desktop `views-saved.test.ts`
+(the store, save, open, export, import, the hold of a file's custom blocks and connection reads, the trust dialog),
+`view-file-read.test.ts` (import's read: links, devices, a FIFO via `mkfifo`, a sparse 2 GB file),
+`view-connections.test.ts` (Google Cloud, Clickland and tool sources against fakes), `view-examples.test.ts`; the
+gateway's `providers.test.ts` and `family.test.ts` cover origin `"view"`. Its e2e describes run in apps of their own:
+saved views across a restart (`saved-pods`, the Deployment `views-e2e-saved`), Export and Import with main's dialogs
+stubbed (`fixtures/shared-view.landlens-view.json`), and `connections` against `FakeGcp` (`LANDLENS_GCP_ENDPOINT`,
+the fake gcloud) and the fake GitHub (`LANDLENS_GITHUB_ENDPOINT`, a pasted token).
+
 Land family ([family.md](family.md)): `pnpm test` runs the family's unit tests in `@landlens/connections` against
 `packages/connections/test/fake-family.ts`, one loopback fake each of Clickland, Landflow and Landfall that records
 every request (`/_fake/state`). The fake Landfall records any trigger, timeline or artifact request in `forbidden`.
@@ -202,6 +242,7 @@ unpackaged build reads:
 | Variable | What |
 |---|---|
 | `LANDLENS_FAMILY_HTTP_HOSTS` | comma-separated host names (each `^[a-z0-9.-]{1,253}$`, at most 20) a sibling's address may reach over plain http, such as `landflow-host.landflow-dev.svc.cluster.local` for the local Landflow. Without it, plain http goes only to `127.0.0.1`, `localhost` and `[::1]` |
+| `LANDLENS_TEST_CLIPBOARD` | `1`: Secrets' Copy writes to a clipboard in main's memory (`globalThis.landlensTestClipboard`) instead of the system's, for `secrets.e2e` (wave 10 part 4); unpackaged builds only |
 | `LANDLENS_ACP_AGENT` | an ACP agent's `.js` or `.mjs` script run in place of claude-agent-acp (wave 7 part 5's e2e uses `test/fixtures/fake-acp-agent.mjs`: no Claude Code runs) |
 
 A packaged app reads none: forward the service in Landlens and use `http://127.0.0.1:<port>`. The e2e: `pnpm -s

@@ -2,7 +2,7 @@
 // drawn: lucide-react, inline SVG, stroke 1.75, aria-hidden, currentColor.
 import {
   BellRing, Bot, Box, Cable, Cloud, CircleCheck, CircleDashed, CircleX, Clock, Copy, Cylinder, Database, FileText, Folder, Gauge, Globe, HardDrive,
-  KeyRound, Layers, ListChecks, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints, Zap,
+  KeyRound, Layers, LayoutDashboard, ListChecks, LayoutGrid, Link, Lock, Package, Pencil, Play, Plug, Scale, ScrollText, Server, Shapes, Share2, Shield, SquareTerminal, Stethoscope, User, Waypoints, Zap,
   Workflow, type LucideIcon,
 } from "lucide-react";
 import type { Tone } from "@landlens/kube/status";
@@ -16,6 +16,7 @@ const BY_RESOURCE: Record<string, LucideIcon> = {
   connections: Cable,
   gcp: Cloud,
   agent: Bot,
+  views: LayoutDashboard,
   helm: Package,
   pods: Box,
   deployments: Layers,

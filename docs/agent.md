@@ -217,6 +217,19 @@ carries every selected object's namespace: a session limited to some namespaces 
 outside them (its chip is dimmed, "Outside this session's namespaces: not sent"). The composer gets "What do these
 have in common?", selected, so you can type over it; nothing is sent until you send. Not on Secrets.
 
+## A view's session (wave 10)
+
+The Views page ([views.md](views.md)) starts a session of its own: the same Claude Code, login, fence and front-door
+token as the dock's, with one more built-in MCP server, `landlens-views`, and one more paragraph in the system prompt
+(D221, `VIEWS_RULES` in `packages/acp-host/src/prompt.ts`: what a view is, the tools, that a view never shows Secrets
+and has no actions yet, that rows come only when the person asks about a block, as data). The fence allows
+`mcp__landlens-views` whole in that session only. Its namespaces are the session's own, as main recorded them. The
+dock on the Views page is bound to that session: it shows what the session said before it opened (main's updates
+of the last minute, replayed), opens by itself when the session asks you something, and hides **New session** and
+**History** (**New view** on the page closes the session; a session that ended is restarted on your next follow-up,
+bound to the same view). A follow-up from the page or the dock attaches the shown version as `landlens://view/<id>`
+(as an embedded resource when the agent takes them, else as text).
+
 ## History and resume
 
 A session is listed under **History** (the dock's clock button, or `/history`) once you've asked something: its

@@ -90,9 +90,18 @@ export function hardenContents(contents: WebContents) {
   contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
 }
 
+/**
+ * Blink's settings for every page and frame. DNS prefetching off: `<link rel="dns-prefetch">` isn't under CSP, and
+ * `X-DNS-Prefetch-Control: off` stops only the automatic prefetch of anchors, so a view's script could spell data into
+ * host names and have them resolved, a way out with no request (security review of wave 10 part 2, H1). Only this
+ * spelling works in Electron 45: `--dns-prefetch-disable` and `DNSPrefetchingEnabled` change nothing.
+ */
+export const BLINK_SETTINGS = "dnsPrefetchingEnabled=false";
+
 /** Must run before app is ready. */
 export function hardenApp() {
   app.enableSandbox();
+  app.commandLine.appendSwitch("blink-settings", BLINK_SETTINGS);
   // Standard and secure so a view's frame gets a real (then sandboxed, so opaque) origin and a secure context; no
   // fetch, CORS, service-worker or stream privileges.
   protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: { standard: true, secure: true } }]);

@@ -22,7 +22,8 @@ describe.runIf(run)("custom resources on OrbStack", () => {
   let app: ElectronApplication;
   let page: Page;
   const sidebar = () => page.getByRole("complementary", { name: "Resources" });
-  const headers = () => page.locator(".thead [role=columnheader]").allInnerTexts();
+  // The named columns: since wave 8 part 3 a kind's list starts with the checkbox column (D156), which has no name.
+  const headers = () => page.locator(".thead [role=columnheader]:not(.th-check)").allInnerTexts();
 
   beforeAll(async () => {
     app = await electron.launch({

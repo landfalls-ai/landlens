@@ -39,7 +39,10 @@ wave 6, GitHub and Linear are served on the gateway too, from Connections ([conn
   Claude Code ask, and the ask shows in the dock as for any tool. The gateway checks it too: an agent call to a tool
   that isn't pre-allowed runs only with the permit main hands over when you answer the ask (by tool call id, once, or
   for the session with "always"); without one it is refused and logged. Calls from a view to a tool that doesn't say
-  it only reads get a native dialog first. From the MCP page (Preview) only read-only tools run.
+  it only reads get a native dialog first. From the MCP page (Preview) only read-only tools run. A view's reads go
+  through the cluster's view session (`view · <context>`, origin `"view"`, [views.md](views.md#connections-in-a-view-part-4));
+  it closes when a server's unasked reads or the server are turned off, the server is edited or saved, a connection
+  changes or the cluster goes, and each read checks its servers against the store's and reopens on a difference.
 - **Connections' servers** (`github`, `linear`): every session, on every cluster, gets each ready connection with
   "Give to Claude sessions" on, after the servers you added. Main adds the token, pins every request to the provider's
   origins (`RemoteSpec.origins`), and hands Linear's OAuth sign-in to the transport as its `authProvider`. Which tools
@@ -146,11 +149,14 @@ the MCP `Protocol` class into the renderer, and the wire format is small. It is 
 answers `ui/initialize` (host capabilities: open links, server tools, logging; the host context with the theme and
 the standard variables filled from Iris tokens), then on `ui/notifications/initialized` sends `tool-input` and
 `tool-result`; `tools/call` goes to main (`mcp:app-call`) and through the gateway; `ui/open-link` opens https links
-after a native dialog that shows the host (one at a time, at most 3 a minute per view), and
+after a native dialog that shows the host and the whole address, says when it carries data after `?` and names the
+view's server and tool (one at a time, at most 3 a minute per view; an address over 500 characters is refused without
+a dialog), and
 `landlens://object/<Kind>/<namespace or _>/<name>` moves the main view to that object (Open in Landlens);
 `size-changed` sets the frame's height (48 to 640 px; past 640 the view's own body scrolls); a view hands back Escape
 and the app's ⌘/Ctrl chords (`ui/notifications/landlens-key`, a Landlens extension; only Escape and ⌘/Ctrl with K, J,
-B or a digit are accepted) and the page replays them on the frame element, so ⌘J and Escape work with focus in a view;
+B or a digit are accepted, only while the frame has the focus and at most four a second, so a view's script can't press
+them) and the page replays them on the frame element, so ⌘J and Escape work with focus in a view;
 `ui/request-display-mode` answers inline. A theme change sends `host-context-changed`. Refused: `ui/message` and
 `ui/update-model-context` (a view may not write to the agent's conversation or change what the model sees),
 resources and anything else.
@@ -159,6 +165,19 @@ resources and anything else.
 (`ui://clickland/view`) inline, under the same sandbox and CSP. The page draws them in a quieter ring, inset, with
 "View from <server>" above, so a remote view never reads as Landlens's own. Their HTML is cached by the server's
 address and the resource's URI.
+
+**landlens-views** (wave 10, [views.md](views.md)) is a third built-in, beside `landlens-kube` and `landlens-gcp`,
+served in memory by the gateway and given only to a Views session (the fence allows `mcp__landlens-views` whole
+there). Its five tools are read-only; `render_view` and `patch_view` show a small card (`ui://landlens-views/card`:
+the view's title, version and blocks, **Open view**, which sends `landlens://view/<id>`; the host honours that link
+only from `landlens-views`). `view_data` is app-only. A view's custom blocks (`ui://landlens-views/<view>/<block>`)
+aren't served by the gateway: main builds each block's page and serves it as a view of its own, with no network at
+all, whatever it declares. For them the host adds three things: `ui/notifications/landlens-data` (a source's new
+data, sent after the first result, the newest of each source waiting till then); a tool filter (a block's frame may
+call only `view_data`, through `views:app-call`; anything else gets `-32601` before it leaves the window, and main's
+`mcp:app-call` refuses a block's frame); and heights from 48 to 2,000 px, or the page's height for a view's only,
+filling block (`containerDimensions.height`). An object link from a block opens only an object that is one of the
+view's rows (`views:intent`).
 
 **In the dock** only the newest view stays open; an earlier one folds to its tool row and a one-line verdict (the
 tool's first line of text), and opens again on a click. A view shows at most 320 px until **Show all**.

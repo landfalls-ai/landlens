@@ -46,6 +46,9 @@ importers:
       '@landlens/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@landlens/views':
+        specifier: workspace:*
+        version: link:../../packages/views
       node-pty:
         specifier: 1.1.0
         version: 1.1.0
@@ -165,6 +168,9 @@ importers:
       '@landlens/mcp-gateway':
         specifier: workspace:*
         version: link:../mcp-gateway
+      '@landlens/views':
+        specifier: workspace:*
+        version: link:../views
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -327,6 +333,9 @@ importers:
       '@landlens/kube-mcp':
         specifier: workspace:*
         version: link:../kube-mcp
+      '@landlens/views':
+        specifier: workspace:*
+        version: link:../views
       '@modelcontextprotocol/sdk':
         specifier: 1.32.2
         version: 1.32.2(zod@4.6.7)
@@ -374,6 +383,40 @@ importers:
       '@landlens/kube':
         specifier: workspace:*
         version: link:../kube
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.12
+        version: 4.1.12(@opentelemetry/api@1.10.0)(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2)(yaml@2.9.1))
+
+  packages/views:
+    dependencies:
+      '@landlens/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@landlens/gcp':
+        specifier: workspace:*
+        version: link:../gcp
+      '@landlens/kube':
+        specifier: workspace:*
+        version: link:../kube
+      '@landlens/metrics':
+        specifier: workspace:*
+        version: link:../metrics
+      '@modelcontextprotocol/ext-apps':
+        specifier: 1.7.5
+        version: 1.7.5(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(zod@4.6.7)
+      '@modelcontextprotocol/sdk':
+        specifier: 1.32.2
+        version: 1.32.2(zod@4.6.7)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: 24.19.2

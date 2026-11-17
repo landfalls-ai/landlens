@@ -107,6 +107,13 @@ export function clipboardFormats(platform: NodeJS.Platform, text: string): Recor
   if (platform === "win32") return { "text/plain": text, [WIN_EXCLUDE]: zero(), [WIN_NO_HISTORY]: zero(), [WIN_NO_CLOUD]: zero() };
   return { "text/plain": text };
 }
+/**
+ * Whether main writes Secrets' copies to the e2e tests' clipboard in memory instead of the system's (wave 10 part 4):
+ * only an unpackaged build, only with `LANDLENS_TEST_CLIPBOARD=1`, so a test never touches the person's clipboard and
+ * a packaged build always uses the real one.
+ */
+export const testClipboardOn = (packaged: boolean, env: Record<string, string | undefined>): boolean => !packaged && env.LANDLENS_TEST_CLIPBOARD === "1";
+
 /** The marker main checks before it reads the clipboard back, if the platform has one. */
 export const clipboardMarker = (platform: NodeJS.Platform): string | undefined => (platform === "darwin" ? CONCEALED : platform === "win32" ? WIN_EXCLUDE : undefined);
 

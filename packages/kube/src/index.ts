@@ -4,6 +4,7 @@ export * from "./client.js";
 export * from "./clusters.js";
 export * from "./discovery.js";
 export * from "./frontdoor.js";
+export * from "./frontdoor-fetch.js";
 export * from "./policy.js";
 export * from "./sidecar.js";
 export * from "./tool-kubeconfig.js";

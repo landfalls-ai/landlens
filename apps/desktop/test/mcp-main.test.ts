@@ -4,7 +4,10 @@ import type { AddressInfo } from "node:net";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { AppViews, viewCsp, VIEW_HEADERS } from "../src/main/app-views";
 import { ClicklandSettingsStore, type Crypto } from "../src/main/clickland-settings";
 import { CSP_PROD } from "../src/main/csp";
@@ -185,7 +188,7 @@ describe("MCP App views on landlens-app:", () => {
 });
 
 describe("McpService", () => {
-  const service = (asked: { n: number; answer: () => Promise<boolean> }) => {
+  const service = (asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } }, opened: string[] = []) => {
     const dir = mkdtempSync(join(tmpdir(), "landlens-svc-"));
     const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
     const svc = new McpService({
@@ -195,7 +198,7 @@ describe("McpService", () => {
       clusters: { onGone: () => {} } as never,
       metrics: async () => { throw new Error("no metrics"); },
       push: () => {},
-      ask: { confirm: () => (asked.n++, asked.answer()), openExternal: async () => {} },
+      ask: { confirm: (q: { message: string; detail: string }) => (asked.n++, (asked.q = q), asked.answer()), openExternal: async (u: string) => void opened.push(u) },
     });
     return { st, svc };
   };
@@ -512,6 +515,13 @@ describe("McpService", () => {
     }
   });
 
+  it("refuses mcp:app-call to a view's block: it calls its own view's data through views:app-call only (wave 10)", async () => {
+    const { svc } = service({ n: 0, answer: async () => false });
+    const v = svc.views.add({ call: "", server: "landlens-views", tool: "render_view", html: "", csp: "", block: { view: "0123456789abcdef", block: "count" } });
+    await expect(svc.viewCall(v.id, "view_data", { source: "pods" })).rejects.toMatchObject({ status: 403 });
+    await expect(svc.viewCall(v.id, "list_resources", {})).rejects.toMatchObject({ status: 403 });
+  });
+
   it("asks about one view link at a time, at most three a minute per view", async () => {
     let release: (v: boolean) => void = () => {};
     const asked = { n: 0, answer: () => new Promise<boolean>((r) => (release = r)) };
@@ -529,5 +539,167 @@ describe("McpService", () => {
     await expect(svc.viewLink(v.id, "http://example.com/")).rejects.toMatchObject({ status: 429 });
     const w = svc.views.add({ call: "c2", server: "s", tool: "t", html: "", csp: "" });
     await expect(svc.viewLink(w.id, "http://example.com/")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("shows a view's link whole or not at all, and names a block as Claude's, not Landlens's (review of wave 10 part 2, M2)", async () => {
+    const asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } } = { n: 0, answer: async () => false };
+    const { svc } = service(asked);
+    const b = svc.views.add({ call: "", server: "landlens-views", tool: "render_view", html: "", csp: "", block: { view: "0123456789abcdef", block: "count", caption: "Pods in landlens-dev · Pod count" } });
+    // 480 harmless characters of path, then the rows: refused, and no dialog was shown.
+    const long = `https://docs.example.com/${"a".repeat(480)}?d=${"r".repeat(700)}`;
+    await expect(svc.viewLink(b.id, long)).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/1,2\d\d characters/) });
+    expect(asked.n).toBe(0);
+    const short = "https://docs.example.com/pods?d=abc";
+    expect(await svc.viewLink(b.id, short)).toBe(false);
+    expect(asked.n).toBe(1);
+    expect(asked.q!.detail).toBe(`A block Claude built on the Views page (Pods in landlens-dev · Pod count) wants to open this address, which carries data after the ?:\n${short}`);
+    expect(asked.q!.detail).not.toContain("render_view");
+    // At the limit the whole address is in the dialog.
+    const max = `https://docs.example.com/${"b".repeat(500 - "https://docs.example.com/".length)}`;
+    expect(max).toHaveLength(500);
+    expect(await svc.viewLink(b.id, max)).toBe(false);
+    expect(asked.q!.detail.endsWith(`:\n${max}`)).toBe(true);
+    // A block from a view file is named as the file's (security review of wave 10 part 4, M6).
+    const f = svc.views.add({ call: "", server: "landlens-views", tool: "render_view", html: "", csp: "", block: { view: "0123456789abcdef", block: "count", caption: "Shared · Count", by: "A block from a view file" } });
+    expect(await svc.viewLink(f.id, "https://docs.example.com/x")).toBe(false);
+    expect(asked.q!.detail).toBe("A block from a view file on the Views page (Shared · Count) wants to open this address:\nhttps://docs.example.com/x");
+    // A remote server's view keeps its own name, and the same rule.
+    const r = svc.views.add({ call: "c3", server: "docs-server", tool: "search", html: "", csp: "" });
+    expect(await svc.viewLink(r.id, "https://docs.example.com/x")).toBe(false);
+    expect(asked.q!.detail).toBe("The docs-server view (search) wants to open this address:\nhttps://docs.example.com/x");
+    await expect(svc.viewLink(r.id, `${max}c`)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("asks the same way for a text block's link: a 600-character one opens no dialog and nothing (security review of wave 10 part 3, L4)", async () => {
+    const opened: string[] = [];
+    const asked: { n: number; answer: () => Promise<boolean>; q?: { message: string; detail: string } } = { n: 0, answer: async () => true };
+    const { svc } = service(asked, opened);
+    const who = "A text block Claude built on the Views page (Runbook · Docs)";
+    await expect(svc.confirmLink(who, `https://docs.example.com/?d=${"x".repeat(600)}`)).rejects.toMatchObject({ status: 400 });
+    await expect(svc.confirmLink(who, "http://docs.example.com/")).rejects.toMatchObject({ status: 400 });
+    expect(asked.n).toBe(0);
+    expect(opened).toEqual([]);
+    expect(await svc.confirmLink(who, "https://docs.example.com/run?x=1")).toBe(true);
+    expect(asked.q!.detail).toBe(`${who} wants to open this address, which carries data after the ?:\nhttps://docs.example.com/run?x=1`);
+    expect(opened).toEqual(["https://docs.example.com/run?x=1"]);
+  });
+});
+
+// ---- a view's gateway session (wave 10 part 4, D212; security review of part 4, M4 and L5) -------------------------
+
+describe("McpService's view session", () => {
+  /** A loopback MCP server with one read-only tool, counting its calls. */
+  async function loopback() {
+    const seen = { calls: 0 };
+    const srv = createServer(async (req, res) => {
+      const s = new McpServer({ name: "mine", version: "1.0.0" });
+      s.registerTool("list_things", { description: "Lists things.", inputSchema: { filter: z.string().optional() }, annotations: { readOnlyHint: true } }, async () => (seen.calls++, { content: [{ type: "text", text: JSON.stringify([{ name: "a" }]) }] }));
+      const t = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+      res.on("close", () => void s.close());
+      await s.connect(t);
+      await t.handleRequest(req, res);
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    return { seen, url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/mcp`, close: () => srv.close() };
+  }
+
+  async function viewSetup(o: { connections?: ConstructorParameters<typeof McpService>[0]["connections"] } = {}) {
+    const up = await loopback();
+    const dir = mkdtempSync(join(tmpdir(), "landlens-view-mcp-"));
+    const st = new McpServerStore(join(dir, "mcp-servers.json"), fake());
+    let gone: (h: string) => void = () => {};
+    const svc = new McpService({
+      store: st,
+      clickland: new ClicklandSettingsStore(join(dir, "clickland.json"), fake()),
+      frontDoor: {} as never,
+      clusters: { onGone: (f: (h: string) => void) => void (gone = f), get: () => ({ info: { context: "orbstack", server: "https://127.0.0.1:6443" } }) } as never,
+      metrics: async () => { throw new Error("no metrics"); },
+      push: () => {},
+      ask: { confirm: async () => false, openExternal: async () => {} },
+      ...(o.connections ? { connections: o.connections } : {}),
+    });
+    await svc.start();
+    const a = st.save({ name: "mine", url: up.url });
+    st.enable(a.id, "orbstack", true);
+    expect((await svc.test({ id: a.id })).ok).toBe(true);
+    svc.autoRun(a.id, true, "orbstack");
+    const opened = vi.spyOn(svc.gateway, "open");
+    return { svc, st, id: a.id, up, opened, gone: (h: string) => gone(h), stop: async () => (await svc.stop(), up.close()) };
+  }
+
+  it("M4: turning a server's reads off, or the server off for the cluster, stops a view's reads at the next one", async () => {
+    const v = await viewSetup();
+    try {
+      expect(await v.svc.viewRead("h1", "mine", "list_things", {})).toEqual({ text: JSON.stringify([{ name: "a" }]) });
+      expect(v.up.seen.calls).toBe(1);
+      v.svc.autoRun(v.id, false, "orbstack");
+      expect(await v.svc.viewRead("h1", "mine", "list_things", {})).toEqual({ off: "mine · list_things isn't a read that runs without asking." });
+      v.svc.autoRun(v.id, true, "orbstack");
+      expect("text" in (await v.svc.viewRead("h1", "mine", "list_things", {}))).toBe(true);
+      v.svc.enable(v.id, "orbstack", false);
+      expect(await v.svc.viewRead("h1", "mine", "list_things", {})).toEqual({ off: "mine isn't connected for this cluster's Claude sessions." });
+      expect(v.up.seen.calls).toBe(2);
+    } finally {
+      await v.stop();
+    }
+  });
+
+  it("M4: a change the store makes behind McpService's back is seen at the read too (the session's remotes, checked each time)", async () => {
+    const v = await viewSetup();
+    try {
+      expect("text" in (await v.svc.viewRead("h1", "mine", "list_things", {}))).toBe(true);
+      v.st.setAutoRun(v.id, false, "orbstack");
+      expect("off" in (await v.svc.viewRead("h1", "mine", "list_things", {}))).toBe(true);
+      // A new address or header for the server: a new session too.
+      v.st.setAutoRun(v.id, true, "orbstack");
+      const n = v.opened.mock.calls.length;
+      v.svc.save({ id: v.id, name: "mine", url: v.up.url, header: { name: "X-Key", value: "k2" } });
+      await v.svc.viewRead("h1", "mine", "list_things", {});
+      expect(v.opened.mock.calls.length).toBe(n + 1);
+    } finally {
+      await v.stop();
+    }
+  });
+
+  it("L5 Q8: a built-in or a landlens server is refused before any session opens", async () => {
+    const v = await viewSetup();
+    try {
+      for (const server of ["landlens-kube", "landlens-gcp", "landlens-views"]) {
+        expect(await v.svc.viewRead("h1", server, "list_resources", {})).toEqual({ off: `${server} isn't a server a tool source reads: use its own source kinds.` });
+      }
+      expect(v.opened).not.toHaveBeenCalled();
+      expect(v.svc.calls()).toEqual([]);
+    } finally {
+      await v.stop();
+    }
+  });
+
+  it("L5 Q9: a view's read is the view session's, origin view, labelled view · <context>", async () => {
+    const v = await viewSetup();
+    try {
+      expect("text" in (await v.svc.viewRead("h1", "mine", "list_things", {}))).toBe(true);
+      expect(v.opened.mock.calls[0]![0]).toMatchObject({ origin: "view", label: "view · orbstack", context: "orbstack" });
+      expect(v.svc.calls().at(-1)).toMatchObject({ origin: "view", server: "mine", tool: "list_things" });
+    } finally {
+      await v.stop();
+    }
+  });
+
+  it("L5 Q10, Q11: the cluster going, or a connection changing, ends the view session; the next read opens another", async () => {
+    const v = await viewSetup({ connections: { remotes: async () => [], servers: () => [], drifted: () => {} } });
+    try {
+      await v.svc.viewRead("h1", "mine", "list_things", {});
+      expect(v.opened).toHaveBeenCalledTimes(1);
+      await v.svc.viewRead("h1", "mine", "list_things", {});
+      expect(v.opened).toHaveBeenCalledTimes(1);
+      v.gone("h1");
+      await v.svc.viewRead("h1", "mine", "list_things", {});
+      expect(v.opened).toHaveBeenCalledTimes(2);
+      v.svc.connectionChanged({ provider: "github", state: "ready", mode: "ask", readsAuto: false, give: true } as ConnInfo);
+      await v.svc.viewRead("h1", "mine", "list_things", {});
+      expect(v.opened).toHaveBeenCalledTimes(3);
+    } finally {
+      await v.stop();
+    }
   });
 });

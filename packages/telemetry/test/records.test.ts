@@ -158,6 +158,12 @@ const BUILDERS: Builder[] = [true, false].flatMap((names): Builder[] => [
     base: { value: 1, action: "scale", outcome: "applied", start: 1, at: 2 },
     build: (i) => sum("landlens.actions", i.value, { action: i.action, outcome: i.outcome }, i.start, i.at),
   },
+  {
+    // Views on demand (wave 10 part 4): views rendered, patched and saved, counts only: no title, document or data.
+    name: "sum of views", names: true,
+    base: { value: 1, start: 1, at: 2 },
+    build: (i) => sum("landlens.views.saved", i.value, {}, i.start, i.at),
+  },
   { name: "event", names: true, base: { n: 1, at: 1 }, build: (i) => event("gateway.refused", "warn", i.n, i.at) },
 ]);
 const ID_FIELDS = new Set(["traceId", "spanId", "parent"]);

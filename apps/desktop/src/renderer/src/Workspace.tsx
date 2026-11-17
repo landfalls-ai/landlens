@@ -1,6 +1,6 @@
 // A connected cluster: the sidebar, the main pane (Overview or a list), the details drawer and the agent dock, with
 // the width rules that keep the table readable (docs/design.md, "Layout").
-import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, GcpAlert, GkeAdvice, HealthProblem, KubeContext, KubeObject, ResourceType } from "@landlens/contracts";
+import type { ActionKind, ClicklandSettings as ClicklandView, ClusterInfo, DoctorEvidence, GcpAlert, GkeAdvice, HealthProblem, KubeContext, KubeObject, ResourceType, RowRef, ViewIntent, ViewTone } from "@landlens/contracts";
 import { CircleX, Lock } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentDock, type AskContext } from "./AgentDock";
@@ -15,6 +15,9 @@ import { ConnectionsPage } from "./ConnectionsPage";
 import { McpCallDrawer, McpPage, type McpTab } from "./McpPage";
 import { GcpDrawer, GcpPage, type GcpNav, type GcpPick, type GcpRows } from "./GcpPage";
 import { AgentPage, type AgentTab } from "./AgentPage";
+import { ViewsPage } from "./ViewsPage";
+import { resourceRef, useSavedViews, useView, viewOn, viewStore } from "./viewStore";
+import { bulkOffered, chipOf, refKey } from "./viewBlocks";
 import { buildNav, CUSTOM, SECTIONS, type NavItem } from "./kinds";
 import { useColumns, useCrd, usePins } from "./custom";
 import { Overview } from "./Overview";
@@ -48,7 +51,7 @@ import { TriageSheet } from "./TriageSheet";
 import { FlowSheet, type FlowSubject } from "./FlowSheet";
 import { ActionSheet } from "./ActionSheet";
 import { useDrainRuns } from "./DrainPlanView";
-import type { ActionDraft } from "./actionAsks";
+import { FRAME_VERB_ACTIONS, type ActionDraft } from "./actionAsks";
 import { ObjectMenu } from "./ObjectMenu";
 import { RecentActions, useActionLog } from "./RecentActions";
 import { isActionVerb } from "./paletteRules";
@@ -89,6 +92,14 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [creating, setCreating] = useState(false);
   const [want, setWant] = useState<NavTarget>();
   const [dock, setDock] = useState(false);
+  // The Views page's own chat (wave 10, D213): the dock bound to the view's session, folded to a strip at first.
+  const [viewDock, setViewDock] = useState(false);
+  // The working view only while it is this cluster's (security review of wave 10 part 3, H1): a view built on another
+  // context is closed when this cluster's Workspace mounts, and never shown or acted on under it.
+  const viewSnap = viewOn(useView(), cluster.handle);
+  useEffect(() => viewStore.bind(cluster.handle), [cluster.handle]);
+  /** Whether the working view is this cluster's, read at the moment of acting (the second layer of H1). */
+  const ownView = () => viewStore.get().view?.handle === cluster.handle;
   const [askContext, setAskContext] = useState<AskContext[]>([]);
   const [prompt, setPrompt] = useState<{ id: number; text: string; draft?: true }>();
   const [userRail, setUserRail] = useState<boolean>();
@@ -142,6 +153,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const [rowMenu, setRowMenu] = useState<{ o: KubeObject; x: number; y: number; drawer?: true; lk: string }>();
   // Your actions (wave 8, D145, D147): the sheet, and Recent actions read again after each apply.
   const [actionOn, setActionOn] = useState<ActionDraft>();
+  // A view's rows (wave 10 part 3, D218): the object in the drawer over the view, and its menu, read as you on open.
+  const [viewPick, setViewPick] = useState<{ type: ResourceType; o: KubeObject }>();
+  const [viewMenu, setViewMenu] = useState<{ ref: RowRef; type: ResourceType; o: KubeObject; x: number; y: number; tone?: ViewTone }>();
   const [actionsVersion, setActionsVersion] = useState(0);
   const [recentOpen, setRecentOpen] = useState(false);
   const actionLog = useActionLog(cluster.handle, actionsVersion);
@@ -201,6 +215,16 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const helm = useMemo(() => (several && helmAll.releases ? { ...helmAll, releases: helmAll.releases.filter((r) => namespaces.includes(r.namespace)) } : helmAll), [helmAll, several, namespaces]);
   const helmSel = helmPage && helmPick ? helm.releases?.find((r) => r.namespace === helmPick.namespace && r.name === helmPick.name) : undefined;
   const agentPage = current === "agent";
+  const viewsPage = current === "views";
+  // Saved views for the sidebar and ⌘K (D216): names only, this cluster's and every "any" view.
+  const savedViews = useSavedViews(cluster.handle);
+  const viewInfo = viewSnap.view;
+  // On the Views page the dock is the view's; elsewhere, the ordinary one.
+  const dockShown = viewsPage ? viewDock && !!viewInfo : dock;
+  // The view's session asks the person something: its dock opens, on the Views page, so the question is seen.
+  const viewSession = viewInfo?.state?.session || viewInfo?.session?.session;
+  const viewSessionInfo = viewInfo?.state?.info ?? viewInfo?.session;
+  useEffect(() => viewStore.onPermission((p) => p.session === viewSession && setViewDock(true)), [viewSession]);
   const nsWatch = useWatch({ handle: cluster.handle, group: "", version: "v1", resource: "namespaces" });
   const scoped = list?.type.namespaced && namespace ? namespace : undefined;
   // One namespace: its watch; two to eight: one each, merged; more: the cluster's, filtered (D158).
@@ -221,6 +245,11 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     return uids === cur && s.key === lk ? s : { key: lk, uids };
   });
   useEffect(() => setRowMenu(undefined), [current, lk]);
+  // A view's drawer and menu belong to the Views page and its view: leaving either closes them.
+  useEffect(() => (setViewPick(undefined), setViewMenu(undefined)), [current, viewSnap.view?.id]);
+  // The drawer over a view shows the live object: its kind's watch in its namespace, as a list's drawer does.
+  const viewWatch = useWatch(viewsPage && viewPick ? { handle: cluster.handle, group: viewPick.type.group, version: viewPick.type.version, resource: viewPick.type.resource, ...(viewPick.type.namespaced && viewPick.o.metadata.namespace ? { namespace: viewPick.o.metadata.namespace } : {}) } : undefined);
+  const viewLive = viewPick ? viewWatch.items.find((o) => o.metadata.uid === viewPick.o.metadata.uid) ?? viewPick.o : undefined;
   const pods = list?.type.resource === "pods" && list.type.group === "";
   // A custom kind's columns come from its definition's printer columns (D40).
   const crd = useCrd(cluster.handle, list);
@@ -353,6 +382,91 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
     ask(p.context);
     setPrompt({ id: Date.now(), text: p.question });
   };
+  // ---- a view's rows and a block's intents (wave 10 part 3, D218, D219) ----------------------------------------------
+  // Every one of these is the person's own hand: the object is read as you (resource:get, the IDE's own read), and each
+  // action goes through wave 8's sheet, review and apply. The view's read-only token is never used for any of it.
+  /** A row's kind, from discovery; one the sidebar doesn't list is taken from the row itself (no verbs: no delete). */
+  const typeOfRef = (r: Pick<RowRef, "group" | "resource"> & Partial<RowRef>): ResourceType | undefined =>
+    nav.find((n) => n.type.group === r.group && n.type.resource === r.resource)?.type
+    ?? (r.kind && r.version ? { group: r.group, version: r.version, resource: r.resource, kind: r.kind, namespaced: !!r.namespace, verbs: [] } : undefined);
+  /** The row's object, read now as you; a name that has gone says so. Never for a view of another cluster (H1). */
+  const readRef = async (r: RowRef): Promise<{ type: ResourceType; o: KubeObject } | undefined> => {
+    const type = typeOfRef(r);
+    if (!type || !ownView()) return undefined;
+    try {
+      return { type, o: (await api.invoke("resource:get", { handle: cluster.handle, ref: resourceRef(r) })).object };
+    } catch (e) {
+      setReachError(`${r.kind} ${r.name}: ${(e as ApiError).message}`);
+      return undefined;
+    }
+  };
+  const openViewRow = (r: RowRef, tab?: "logs" | "shell" | "edit") => void readRef(r).then((x) => {
+    if (!x) return;
+    setViewPick(x);
+    if (tab) setShow((s) => ({ tab, n: (s?.n ?? 0) + 1 }));
+  });
+  /** Logs and shells open in the panel under the view, so the view stays on screen (canvas-first). */
+  const viewRowAct = (x: { type: ResourceType; o: KubeObject }, ref: RowRef, a: "logs" | "shell" | "edit" | "delete") => {
+    if (a === "delete") return startAction(x.type, x.o, "delete");
+    if (a === "logs") {
+      const src = logSourceOf(x.type.kind, x.o);
+      return src ? (bench.openLogs(src), focusBench()) : undefined;
+    }
+    if (a === "shell" && x.type.group === "" && x.type.resource === "pods") {
+      const d = direct(x.o);
+      if (d) return (bench.openShell(d), focusBench());
+    }
+    if (a === "edit" && x.type.group === "" && x.type.resource === "secrets") return;
+    openViewRow(ref, a);
+  };
+  const viewHands = {
+    open: (r: RowRef) => openViewRow(r),
+    menu: (r: RowRef, at: { x: number; y: number }, tone?: ViewTone) => void readRef(r).then((x) => x && setViewMenu({ ref: r, ...x, ...at, ...(tone ? { tone } : {}) })),
+    key: (r: RowRef, a: "logs" | "shell" | "edit" | "delete") => void readRef(r).then((x) => x && viewRowAct(x, r, a)),
+    ...(viewPick ? { selected: refKey({ group: viewPick.type.group, resource: viewPick.type.resource, name: viewPick.o.metadata.name, namespace: viewPick.o.metadata.namespace }) } : {}),
+  };
+  /**
+   * Restart or Delete on a view's chosen rows: one sheet, one review (D156). A selection holding any row a block chose
+   * never gets Delete (`bulkOffered`, M2), and its sheet names the block. Never for a view of another cluster (H1).
+   */
+  const viewBulk = (kind: "restart" | "delete", refs: RowRef[], by: "you" | "block", block?: string) => {
+    const type = refs[0] ? typeOfRef(refs[0]) : undefined;
+    if (!type || !bulkOffered(kind, by) || actionOn || !ownView()) return;
+    // The sheet names objects; main reads each again for its review, so a name is all it takes from here.
+    const objects = refs.map((r) => ({ metadata: { name: r.name, uid: refKey(r), ...(r.namespace ? { namespace: r.namespace } : {}) } }) as KubeObject);
+    const author = viewStore.get().view?.state?.author;
+    setActionOn({ kind, type, objects, ...(by === "block" ? { asker: "view" as const, ...(block ? { block } : {}), ...(author ? { author } : {}) } : {}) });
+  };
+  /**
+   * A block's intent as main accepted it (D219), in answer to the person (the host's focus and gesture rule, M1): its
+   * object in the drawer (never over one already open), its logs in the panel (the focus stays where it is), or a
+   * non-destructive action's sheet saying which block Claude built asked, one sheet at a time (another while one is
+   * open is dropped). The person reviews the dry run and applies, as always. Never for a view of another cluster (H1).
+   */
+  const viewIntent = (i: ViewIntent, block: string): boolean => {
+    const r = i.refs[0];
+    if (!r || !ownView()) return false;
+    if (i.kind === "object") return viewPick ? false : (openViewRow(r), true);
+    if (i.kind === "logs") {
+      void readRef(r).then((x) => {
+        const src = x && logSourceOf(x.type.kind, x.o);
+        if (src) bench.openLogs(src);
+      });
+      return true;
+    }
+    if (i.kind !== "action" || !i.verb || actionOn) return false;
+    const v = FRAME_VERB_ACTIONS[i.verb];
+    // Who wrote the asking block, as main says (M6): a file's block is never named as Claude's.
+    const author = viewStore.get().view?.state?.author;
+    void readRef(r).then((x) => {
+      if (!x) return;
+      setActionOn((cur) => cur ?? {
+        kind: v.kind, type: x.type, objects: [x.o], asker: "view", block, ...(author ? { author } : {}),
+        ...(v.kind === "suspend" ? { suspend: !!v.flag } : {}), ...(v.kind === "cordon" ? { on: v.flag !== false } : {}),
+      });
+    });
+    return true;
+  };
   /** Restart or Delete on the selected rows (D156): one sheet, one review with a target per object. */
   const startBulk = (kind: "restart" | "delete") => {
     if (!list || !pickedObjects.length) return;
@@ -461,9 +575,9 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
 
   // Width rules: the table keeps at least ~600px. Drawer and dock together fold the sidebar to a rail; below 1280px
   // the dock alone does, and the drawer floats over the table.
-  const drawer = !!(selected && list) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && (problemSel || alertSel)) || !!(gcpPage && gcpPick);
+  const drawer = !!(selected && list) || !!(viewsPage && viewPick) || !!(mcp && mcpCall) || !!helmSel || !!(problemsPage && (problemSel || alertSel)) || !!(gcpPage && gcpPick);
   const narrow = width.app < 1280;
-  const autoRail = dock && (drawer || narrow);
+  const autoRail = dockShown && (drawer || narrow);
   const rail = userRail ?? autoRail;
   useEffect(() => setUserRail(undefined), [dock, drawer, narrow]);
   const dockW = dockWidth(dockChosen, width.app, drawer, narrow);
@@ -500,7 +614,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       if (mod && !e.shiftKey && !e.altKey) {
         const k = e.key.toLowerCase();
         if (k === "k") return e.preventDefault(), setJump((j) => !j);
-        if (k === "j") return e.preventDefault(), setDock((d) => !d);
+        if (k === "j") return e.preventDefault(), current === "views" ? setViewDock((d) => !d) : setDock((d) => !d);
         if (k === "b") return e.preventDefault(), setUserRail(!rail);
         if (k === "1") return e.preventDefault(), pick("overview");
         if (k === "3") return e.preventDefault(), pick("problems");
@@ -516,6 +630,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       if (e.key === "Escape" && !jump && !creating && !actionOn && !typing && picked.size && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine, .menu")) return setPicked(new Set());
       if (e.key === "Escape" && !jump && !creating && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine") && selected) setSelected(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && mcpCall) setMcpCall(undefined);
+      if (e.key === "Escape" && !jump && !actionOn && !typing && !t?.closest(".dock, .drawer .logs-pane, .yaml-edit, .change.mine, .menu, .dialog") && viewsPage && viewPick && !viewSnap.view?.selection) setViewPick(undefined);
       if (e.key === "Escape" && !jump && !t?.closest(".dock") && helmPick) setHelmPick(undefined);
       if (e.key === "Escape" && !jump && !typing && !t?.closest(".dock, .dialog, .cm-editor") && gcpPick) setGcpPick(undefined);
       if (e.key === "Escape" && !jump && !creating && !typing && !t?.closest(".dock, .drawer .logs") && problemSel) setProblemSel(undefined);
@@ -539,11 +654,11 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
   const worst = h?.problems.find((p) => p.tone === "bad");
   const suggestion = worst ? (worst.class === "crashloop" ? `Why is ${worst.kind === "Pod" ? splitByShape(worst.name).base : worst.name} crash-looping?` : `What's wrong with ${worst.kind.toLowerCase()} ${worst.name}?`) : undefined;
   const nsList = useMemo(() => [...new Set([...nsWatch.items.map((n) => n.metadata.name), ...(ctxNamespace ? [ctxNamespace] : []), ...namespaces])].sort(), [nsWatch.items, ctxNamespace, namespaces]);
-  const label = list?.label ?? (mcp ? "MCP" : connPage ? "Connections" : gcpPage ? "Google Cloud" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
+  const label = list?.label ?? (viewsPage ? "Views" : mcp ? "MCP" : connPage ? "Connections" : gcpPage ? "Google Cloud" : agentPage ? "Agent" : helmPage ? "Helm releases" : problemsPage ? "Problems" : "Overview");
 
   return (
     <div ref={app}
-      className={"app" + (rail ? " sidebar-rail" : "") + (narrow ? " narrow" : "") + (dock ? " with-dock" : "") + (drawer ? " with-drawer" : "") + (bench.open ? " with-bench" : "") + (bench.open && bench.max ? " bench-max" : "") + (width.height < 760 ? " short" : "")}
+      className={"app" + (rail ? " sidebar-rail" : "") + (narrow ? " narrow" : "") + (dockShown ? " with-dock" : "") + (drawer ? " with-drawer" : "") + (bench.open ? " with-bench" : "") + (bench.open && bench.max ? " bench-max" : "") + (width.height < 760 ? " short" : "")}
       style={{
         "--dock-w": `${dockW}px`,
         ...(bench.height ? { "--bench-h": `${Math.min(bench.height, Math.max(160, width.height - 48 - 4 * 32 - 26))}px` } : {}),
@@ -569,13 +684,17 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         onJump={() => setJump(true)}
         pins={pins}
         onPin={togglePin}
+        savedViews={savedViews}
+        {...(viewInfo?.state?.saved ? { openView: viewInfo.state.saved.id } : {})}
+        onOpenView={(id) => (pick("views"), void viewStore.open(cluster.handle, id))}
+        onAllViews={() => (pick("views"), viewStore.showList(true))}
       />
       <main className="main" ref={main}>
         <Toolbar
           title={label}
-          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
+          {...(list ? { count: watch.loading ? undefined : shown.length } : helmPage ? { count: helm.releases?.length, onRefresh: helm.refresh } : mcp || agentPage || connPage || gcpPage || viewsPage ? { hideCount: true } : problemsPage ? { ...(h ? { count: h.problems.length, updatedAt: h.at } : {}), onRefresh: health.refresh } : h ? { updatedAt: h.at } : {})}
           {...(pods && !watch.loading ? { seg: { value: status, ...segCounts, onChange: setStatus } } : {})}
-          {...(!mcp && !agentPage && !connPage && !gcpPage && (!list || list.type.namespaced) ? { namespaces: {
+          {...(!mcp && !agentPage && !connPage && !gcpPage && !viewsPage && (!list || list.type.namespaced) ? { namespaces: {
             list: nsList, value: namespaces, onChange: (ns: string[]) => leaveEdit(() => { setNamespaces(ns); setSelectedNow(undefined); setProblemSel(undefined); setAlertSel(undefined); }),
             ...(list ? { unwatched: [...(watch.left ?? []), ...(watch.refused ?? [])] } : {}),
           } } : {})}
@@ -585,10 +704,13 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             ...(list.type.group === "" && list.type.resource === "secrets" ? {} : { onAsk: askSelection }),
           } } : {})}
           {...(list || helmPage || problemsPage ? { filter: { value: filter, onChange: setFilter, ref: filterBox, short: width.main < 860 } } : {})}
-          {...(dock ? {} : { onAsk: () => setDock(true) })}
-          {...(!mcp && !agentPage && !connPage && !gcpPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
+          {...(dock || viewsPage ? {} : { onAsk: () => setDock(true) })}
+          {...(!mcp && !agentPage && !connPage && !gcpPage && !viewsPage && !helmPage && !problemsPage ? { onCreate: () => setCreating(true) } : {})}
         />
-        {mcp ? (
+        {viewsPage ? (
+          <ViewsPage cluster={cluster} dockOpen={dockShown} onOpenDock={() => setViewDock(true)} onFoldDock={() => setViewDock(false)} onOpenObject={go} height={width.height}
+            hands={viewHands} typeOf={typeOfRef} onBulk={viewBulk} onIntent={viewIntent} now={now} namespaces={nsList} {...(health.health ? { problems: health.health.problems.length } : {})} />
+        ) : mcp ? (
           <McpPage
             handle={cluster.handle}
             context={cluster.context}
@@ -688,7 +810,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
             loading={watch.loading}
             selected={selected?.metadata.uid}
             width={width.main}
-            {...(narrow && dock && drawer ? { covered: dockW + 12 } : {})}
+            {...(narrow && dockShown && drawer ? { covered: dockW + 12 } : {})}
             oneNamespace={!!scoped}
             hidden={hidden}
             sort={sort}
@@ -767,6 +889,36 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         />
         </Boundary>
       ) : null}
+      {viewsPage && viewPick && viewLive ? (
+        // A view's row in its drawer (D218), over the view: the IDE's own read, as you, with its tabs and its menu.
+        <Boundary what="this object" resetKey={viewPick.o.metadata.uid}>
+        <Details
+          handle={cluster.handle}
+          cluster={cluster}
+          type={viewPick.type}
+          object={viewLive}
+          now={now}
+          onClose={() => setViewPick(undefined)}
+          onAsk={(c) => {
+            // The object's own kind (L5); quoted lines have no reference and the view's composer takes references only.
+            const chip = c.ref ? chipOf(c.ref, typeOfRef) : undefined;
+            if (chip) viewStore.chip(chip);
+            else setReachError("Asking about lines or quoted text isn't offered over a view yet: ask about the object itself, or open it in its own list.");
+          }}
+          onNavigate={go}
+          metricsVersion={metricsVersion}
+          onSettings={() => setSettings(true)}
+          onShell={(t) => (bench.openShell(t), focusBench())}
+          onLogsInPanel={(src) => (bench.openLogs(src), focusBench())}
+          onMenu={(x, y) => setViewMenu({ ref: { group: viewPick.type.group, version: viewPick.type.version, resource: viewPick.type.resource, kind: viewPick.type.kind, name: viewLive.metadata.name, ...(viewLive.metadata.namespace ? { namespace: viewLive.metadata.namespace } : {}) }, type: viewPick.type, o: viewLive, x, y })}
+          onPreset={(id) => {
+            const p = presetAsk(objectContext(viewPick.type, viewLive), id);
+            if (p?.context.ref) void viewStore.send(p.question, [p.context.ref]).catch(() => {});
+          }}
+          {...(show ? { show } : {})}
+        />
+        </Boundary>
+      ) : null}
       {helmSel ? (
         <Boundary what="this release" resetKey={`${helmSel.namespace}/${helmSel.name}`}>
           <HelmDrawer handle={cluster.handle} release={helmSel} now={now} onClose={() => setHelmPick(undefined)} onAsk={ask} onNavigate={go} />
@@ -813,7 +965,30 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       ) : null}
       {mcp && mcpCall ? <McpCallDrawer id={mcpCall} onClose={() => setMcpCall(undefined)} onOpenObject={go} /> : null}
       <Bench bench={bench} cluster={cluster} onAsk={ask} appHeight={width.height} />
+      {viewInfo && viewSession && viewSessionInfo ? (
+        // The view's session, bound (D213): mounted from its start, so it hears every turn and every question, and
+        // shown only on the Views page while you have it open; folded, the page's strip carries the chat.
+        <div className="dock-holder" hidden={!(viewsPage && viewDock)}>
+          <AgentDock
+            key={viewSession}
+            cluster={cluster}
+            context={[]}
+            onContextChange={() => {}}
+            onClose={() => setViewDock(false)}
+            onActivity={() => {}}
+            onOpenObject={go}
+            bound={{
+              info: { ...viewSessionInfo, session: viewSession },
+              ask: viewInfo.state?.ask ?? viewInfo.ask,
+              busy: viewInfo.state?.busy ?? true,
+              send: (text, refs) => viewStore.send(text, refs),
+            }}
+            grip={<DockGrip width={dockW} max={dockLimit} onWidth={chooseDock} />}
+          />
+        </div>
+      ) : null}
       {dock ? (
+        <div className="dock-holder" hidden={viewsPage}>
         <AgentDock
           cluster={cluster}
           context={askContext}
@@ -826,6 +1001,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           onOpenSettings={() => pick("agent")}
           grip={<DockGrip width={dockW} max={dockLimit} onWidth={chooseDock} />}
         />
+        </div>
       ) : null}
       {settings ? (
         <ClicklandSettings handle={cluster.handle} context={cluster.context} onClose={() => setSettings(false)} onSaved={(v) => (setClickland(v), setMetricsVersion((n) => n + 1))} />
@@ -837,6 +1013,20 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
           {...(rowMenu.drawer ? {} : { onOpen: (a: "logs" | "shell" | "edit") => act(rowMenu.o, a) })}
           onAction={(kind, flag) => startAction(list.type, rowMenu.o, kind, flag)}
           onAsk={() => ask({ ref: { group: list.type.group, version: list.type.version, resource: list.type.resource, name: rowMenu.o.metadata.name, ...(rowMenu.o.metadata.namespace ? { namespace: rowMenu.o.metadata.namespace } : {}) }, label: `${list.type.kind} ${rowMenu.o.metadata.namespace ? `${rowMenu.o.metadata.namespace}/` : ""}${rowMenu.o.metadata.name}` })} />
+      ) : null}
+      {viewsPage && viewMenu ? (
+        // Wave 8's object menu, unchanged, for a view's row (D218): what it offers is decided by the kind and your role
+        // (useCanAct), never by the document.
+        <ObjectMenu at={viewMenu} handle={cluster.handle} type={viewMenu.type} object={viewMenu.o} pods={viewMenu.type.group === "" && viewMenu.type.resource === "pods"}
+          onClose={() => setViewMenu(undefined)}
+          {...(viewMenu.tone ? { tone: viewMenu.tone } : {})}
+          onOpen={(a) => viewRowAct(viewMenu, viewMenu.ref, a)}
+          onAction={(kind, flag) => startAction(viewMenu.type, viewMenu.o, kind, flag)}
+          onAsk={() => (viewStore.chip(viewMenu.ref), setViewDock(false))}
+          onPreset={(id) => {
+            const p = presetAsk(objectContext(viewMenu.type, viewMenu.o), id);
+            if (p?.context.ref) void viewStore.send(p.question, [p.context.ref]).catch(() => {});
+          }} />
       ) : null}
       {leaving ? (
         <div className="palette-back" onMouseDown={(e) => e.target === e.currentTarget && setLeaving(undefined)}>
@@ -859,6 +1049,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
         <JumpPalette
           handle={cluster.handle}
           context={cluster.context}
+          views={{ items: savedViews, onOpen: (id) => (pick("views"), void viewStore.open(cluster.handle, id)) }}
           {...(contexts ? { contexts } : {})}
           nav={nav}
           current={current}
@@ -911,7 +1102,7 @@ export function Workspace({ cluster, contexts, onSwitch, onCatalog }: { cluster:
       {reachError ? (
         <div className="notice reach-error" role="alert">
           <Ic icon={CircleX} size={15} className="tone-bad" />
-          <div className="notice-body"><strong>{reachError.startsWith("Prometheus:") ? "Couldn't change the Prometheus." : "Couldn't open it."}</strong><p>{reachError}</p></div>
+          <div className="notice-body"><strong>{reachError.startsWith("Prometheus:") ? "Couldn't change the Prometheus." : reachError.startsWith("Asking about") ? "Not offered here." : "Couldn't open it."}</strong><p>{reachError}</p></div>
         </div>
       ) : null}
     </div>

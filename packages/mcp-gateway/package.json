@@ -14,8 +14,13 @@
     "@landlens/contracts": "workspace:*",
     "@landlens/kube": "workspace:*",
     "@landlens/kube-mcp": "workspace:*",
+    "@landlens/views": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "4.6.7"
   },
-  "devDependencies": { "@types/node": "24.19.2", "typescript": "7.0.2", "vitest": "4.1.12" }
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
+  }
 }

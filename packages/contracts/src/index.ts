@@ -1132,6 +1132,156 @@ export type HelmReleaseDetail = {
 export type TerminalEnd = "exit" | "lost" | "refused";
 export type TerminalStatus = { terminal: string; state: "open" | "exited"; ended?: TerminalEnd; code?: number; status?: number; message?: string };
 
+// Views on demand (wave 10, docs/specs/010-views): what a view's sources deliver. The view document's own schema and
+// type are in @landlens/views (it needs these names, so a re-export here would make the two packages a cycle).
+/** A view's id: 16 hex characters, made by main. */
+export const ViewId = z.string().regex(/^[0-9a-f]{16}$/, "not a view id");
+export type ViewId = z.infer<typeof ViewId>;
+/**
+ * The object a row of a `kube.*` source is (D207): built by main from the object itself, never from the document's
+ * fields, so opening or acting on a row can't be pointed elsewhere.
+ */
+export const RowRef = z.object({
+  group: GroupName,
+  version: VersionName,
+  resource: ResourceName,
+  kind: KindName,
+  namespace: NamespaceName.optional(),
+  name: ObjectName,
+}).strict();
+export type RowRef = z.infer<typeof RowRef>;
+/**
+ * What a custom block may ask Landlens to start (D219, wave 10 part 3): the non-destructive actions only. Delete and
+ * drain are never started from a frame (the person's decision, 16 Nov 2026): the person opens the object and uses its
+ * menu.
+ */
+export const FRAME_VERBS = ["scale", "restart", "trigger", "suspend", "resume", "cordon", "uncordon"] as const;
+export type FrameVerb = (typeof FRAME_VERBS)[number];
+/**
+ * A frame's intent as main accepted it (D219): open an object, open its logs, put it on the composer as a chip (ask),
+ * choose rows (select, one kind, at most 50) or open a non-destructive action's sheet. `refs` are the view's own rows'
+ * `_ref`s, found by main among the block's sources, never the frame's words.
+ */
+export type ViewIntent = { kind: "object" | "logs" | "ask" | "select" | "action"; verb?: FrameVerb; refs: RowRef[] };
+/** One value of a row: strings are cleaned and cut to 2,000 characters by main. */
+export type ViewCell = string | number | boolean | null;
+export type ViewTone = "ok" | "warn" | "bad" | "muted";
+/** A row: the source's fields, plus the hidden `_ref` (kube rows) and `_tone`. */
+export type ViewRow = { [field: string]: ViewCell | RowRef | undefined; _ref?: RowRef; _tone?: ViewTone };
+/**
+ * loading (nothing read yet); ok; forbidden (the view's scope or your RBAC); unknown (the cluster has no such kind);
+ * unavailable (the cluster has no metrics-server, say); off (a connection isn't readable now); error (a read failed).
+ * Anything but ok comes with one of D222's fixed sentences in `message`, so an empty list is never an all-clear.
+ */
+export type ViewSourceState = "loading" | "ok" | "forbidden" | "unknown" | "unavailable" | "off" | "error";
+export type ViewLogLine = { n: number; text: string; failure: boolean };
+export type SourceData = {
+  state: ViewSourceState;
+  /** One of D222's fixed sentences: why the state isn't ok, or what was left out when `truncated`. */
+  message?: string;
+  rows: ViewRow[];
+  /** Rows before the 2,000-row cut (or lines, for a log). */
+  total: number;
+  /** Something was left out: rows past 2,000, objects past 10,000, a log's older lines, a doctor check not made. */
+  truncated: boolean;
+  /** When main last changed this (ms), 0 before the first read. */
+  at: number;
+  series?: MetricsSeries;
+  lines?: ViewLogLine[];
+};
+
+
+/** Landlens's own server for the Views page (wave 10, D205): built per session in main, allowed whole. */
+export const VIEWS_MCP_SERVER = "landlens-views";
+/** A block's id or a source's id in a view document (packages/views' Id), for the channels. */
+export const ViewPartId = z.string().regex(/^[a-z][a-z0-9-]{0,30}$/, "not an id");
+/** A source's state and counts (no row of it): what the page's header and the disclosure show, and what Claude gets. */
+export type ViewSourceStatus = { state: ViewSourceState; message?: string; rows: number; total: number; truncated: boolean; at: number };
+/** One version of a view (D214): Claude's render or patch, with its note; the person moves between them. */
+export type ViewVersion = { version: number; parent?: number; note?: string; at: number; by: "claude" };
+/**
+ * A view as the page shows it (D213, D214): the shown version's document (validated in main; the page draws it as
+ * text or a sandboxed frame only), its sources' states, the versions kept, and Claude's last change that didn't fit.
+ */
+export type ViewState = {
+  id: string;
+  /** The agent session bound to it (D213). */
+  session: string;
+  context: string;
+  /** The building session's namespace limit (main's record, never the page's word). */
+  namespaces?: string[];
+  title: string;
+  /** The shown version; 0 before Claude's first render_view. */
+  version: number;
+  /** Who chose the shown version: Claude's last change, or you with Undo and Redo. */
+  shownBy: "claude" | "you";
+  canUndo: boolean;
+  canRedo: boolean;
+  versions: ViewVersion[];
+  /** The shown version's document (packages/views' ViewDocument, as JSON). */
+  document?: unknown;
+  params: Record<string, string>;
+  sources: Record<string, ViewSourceStatus>;
+  /** Claude's last render or patch that was refused (D222): its problems, in Landlens's sentences. */
+  refused?: { at: number; issues: string[] };
+  /** What the person first asked for (the page's heading while Claude builds). */
+  ask: string;
+  /** A question to the view's session is running. */
+  busy: boolean;
+  /** The session's last turn failed (its words, as the dock shows them). */
+  failed?: string;
+  /**
+   * Main closed the view (its cluster went, a new view replaced it, the page asked): the page shows it no longer, so
+   * a view never stays on screen, marked Live, after its cluster has gone (security review of wave 10 part 3, H1).
+   */
+  closed?: true;
+  /** The session's info (the dock's), once one started: a saved view opens with none (D216). */
+  info?: AgentSessionInfo;
+  /** The saved view this is (wave 10 part 4, D216). */
+  saved?: { id: string; name: string; scope: "cluster" | "any" };
+  /** Claude built it here, or it came from a file (D217). */
+  origin?: "claude" | "imported";
+  /**
+   * Who the shown version is by, in every place that names its author (security review of wave 10 part 4, M6): Claude,
+   * a view file, or a view file Claude changed since. Never "Claude built" for a file's text or blocks.
+   */
+  author?: ViewAuthor;
+  /** An imported view's custom blocks wait for main's dialog (D217): some of them are held. */
+  appsHeld?: boolean;
+  /**
+   * What of an imported view waits for the person's yes in main's dialog (D217; M3, M5): its custom blocks (ids) and
+   * its connection sources (ids, with what each reads in words). Main holds them whatever the page shows.
+   */
+  held?: { blocks: string[]; sources: { id: string; words: string }[] };
+  /** The person's sort and column widths per block (D214): never sent to Claude. */
+  tweaks?: Record<string, ViewTweak>;
+};
+/** A block's sort and column widths (D214), the person's own. */
+export type ViewTweak = { sort?: { field: string; dir: "asc" | "desc" }; widths?: Record<string, number> };
+/** A saved view as the sidebar, ⌘K and the list show it (D216): its name and scope, never its document. */
+export type SavedViewSummary = {
+  id: string; name: string; scope: "cluster" | "any"; context?: string; origin: "claude" | "imported"; savedAt: number;
+  /** Its custom (app) blocks, and whether they may run (Claude's, or an import the person said yes to). */
+  apps: number; appsTrusted: boolean;
+  /** An imported view's custom blocks and connection sources that wait for the person's yes (M5). */
+  waiting: number;
+};
+
+/** Who wrote what a view shows (security review of wave 10 part 4, M6). */
+export type ViewAuthor = "claude" | "file" | "file-changed";
+/** A view's block (or `noun`) by its author, in words: "a block Claude built", "a block from a view file", … */
+export const authoredBy = (author: ViewAuthor | undefined, noun = "block"): string =>
+  author === "file" ? `a ${noun} from a view file` : author === "file-changed" ? `a ${noun} of a view file Claude changed` : `a ${noun} Claude built`;
+/** A block's ring caption on the Views page. */
+export const authorCaption = (author: ViewAuthor | undefined): string =>
+  author === "file" ? "From a view file" : author === "file-changed" ? "From a view file, changed by Claude" : "Built by Claude";
+const SavedViewName = z.string().min(1).max(60).regex(/^[^\u0000-\u001f\u007f\u2028\u2029]+$/, "one line");
+const ViewField = z.string().regex(/^[a-z][A-Za-z0-9_]{0,40}$/, "not a field");
+/** A source's new data for the page (D210), stamped with the view's version so the page drops a push of an older one. */
+export type ViewDataPush = { view: string; version: number; source: string; data: SourceData };
+/** A front-door request made with a view's token (the disclosure, D223). */
+export type ViewAuditEntry = { at: string; method: string; path: string; allowed: boolean; status?: number; reason?: string };
+
 /** Request/response channels: name → [request schema, response type]. */
 export const channels = {
   "catalog:list": z.object({}),
@@ -1340,6 +1490,39 @@ export const channels = {
   "gcp:cluster-view": z.object({ handle: Handle, fresh: z.boolean().optional() }).strict(),
   /** One alert's or suggestion's detail and brief (D187): only an id in that handle's current view is answered. */
   "gcp:cluster-item": z.object({ handle: Handle, kind: z.enum(["alert", "advice"]), id: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/) }).strict(),
+  // Views on demand (wave 10, docs/views.md). A view's namespaces come from main's record of the session that builds
+  // it, never from a later request; views:start's `namespaces` limits that session, as agent:start's does.
+  "views:start": z.object({ handle: Handle, namespaces: z.array(NamespaceName).min(1).max(20).optional(), text: z.string().min(1).max(20_000) }).strict(),
+  // `version`: the version the block was chosen in; main refuses a block of another (review of wave 10 part 2, L6).
+  "views:prompt": z.object({ view: ViewId, text: z.string().min(1).max(20_000), context: z.array(ResourceRef).max(10).optional(), block: ViewPartId.optional(), version: z.number().int().min(1).max(1_000_000).optional() }).strict(),
+  "views:get": z.object({ view: ViewId }).strict(),
+  "views:version": z.object({ view: ViewId, to: z.number().int().min(1).max(1_000_000) }).strict(),
+  "views:param": z.object({ view: ViewId, name: ViewPartId, value: z.string().max(253) }).strict(),
+  "views:refresh": z.object({ view: ViewId }).strict(),
+  "views:visible": z.object({ view: ViewId, visible: z.boolean() }).strict(),
+  "views:close": z.object({ view: ViewId }).strict(),
+  "views:app-open": z.object({ view: ViewId, block: ViewPartId }).strict(),
+  "views:app-call": z.object({ frame: McpViewId, name: McpToolName, arguments: z.record(z.string(), z.unknown()).optional() }).strict(),
+  "views:intent": z.object({ frame: McpViewId, url: z.string().min(1).max(2000) }).strict(),
+  "views:audit": z.object({ view: ViewId }).strict(),
+  // A text block's Markdown link (security review of wave 10 part 3, L4): main finds it in the block and asks in its
+  // own dialog, as for a frame's link; the address may be long here so that main, not the window, refuses it.
+  "views:link": z.object({ view: ViewId, block: ViewPartId, url: z.string().min(1).max(10_000) }).strict(),
+  // Saved views and files (wave 10 part 4, D216, D217): the store is main's; files go through main's own dialogs.
+  "views:list": z.object({ handle: Handle }).strict(),
+  "views:open": z.object({ handle: Handle, saved: ViewId }).strict(),
+  "views:save": z.object({ view: ViewId, name: SavedViewName, scope: z.enum(["cluster", "any"]) }).strict(),
+  "views:rename": z.object({ saved: ViewId, name: SavedViewName }).strict(),
+  "views:duplicate": z.object({ saved: ViewId }).strict(),
+  "views:remove": z.object({ saved: ViewId }).strict(),
+  "views:export": z.union([z.object({ view: ViewId }).strict(), z.object({ saved: ViewId }).strict()]),
+  "views:import": z.object({ handle: Handle, namespaces: z.array(NamespaceName).min(1).max(20).optional() }).strict(),
+  "views:trust-apps": z.object({ view: ViewId }).strict(),
+  "views:tweak": z.object({
+    view: ViewId, block: z.string().regex(/^(block-\d{1,2}|[a-z][a-z0-9-]{0,30})$/),
+    sort: z.object({ field: ViewField, dir: z.enum(["asc", "desc"]) }).strict().nullable().optional(),
+    widths: z.record(ViewField, z.number().int().min(60).max(600)).optional(),
+  }).strict(),
 } as const;
 export type Channel = keyof typeof channels;
 
@@ -1476,6 +1659,34 @@ export type Responses = {
   "gcp:clusters": { clusters: GkeCluster[]; errors: { project: string; message: string }[] };
   "gcp:cluster-view": GcpClusterView;
   "gcp:cluster-item": GcpClusterItem;
+  /** The new view (no version until Claude's first render_view) and the session bound to it, for the dock. */
+  "views:start": { view: string; session: AgentSessionInfo };
+  "views:prompt": { stopReason: string };
+  "views:get": ViewState;
+  "views:version": ViewState;
+  "views:param": ViewState;
+  "views:refresh": { ran: boolean };
+  "views:visible": { ok: true };
+  "views:close": { ok: true };
+  "views:app-open": McpAppView;
+  "views:app-call": McpToolResult;
+  /**
+   * What the page may show for a frame's intent (D219): only objects that are rows of the block's own sources, and only
+   * the intents and verbs in the allowlist. Nothing when main refused it.
+   */
+  "views:intent": { intent?: ViewIntent };
+  "views:audit": { label: string; entries: ViewAuditEntry[] };
+  "views:link": { opened: boolean };
+  "views:list": { views: SavedViewSummary[]; elsewhere: number };
+  "views:open": ViewState;
+  "views:save": ViewState;
+  "views:rename": SavedViewSummary;
+  "views:duplicate": SavedViewSummary;
+  "views:remove": { ok: true };
+  "views:export": { written: boolean };
+  "views:import": { saved?: SavedViewSummary; issues?: string[] };
+  "views:trust-apps": { trusted: boolean };
+  "views:tweak": { ok: true };
 };
 
 /** A tool as the MCP page shows it. */
@@ -1549,7 +1760,8 @@ export type McpCall = {
   label: string;
   server: string;
   tool: string;
-  origin: "agent" | "app" | "you";
+  /** Who asked: the agent, an app's view, you (Preview), or a view's tool source on the Views page (wave 10 part 4). */
+  origin: "agent" | "app" | "you" | "view";
   /** Scrubbed like a tool result. */
   args: unknown;
   startedAt: number;
@@ -1902,7 +2114,7 @@ export type Request<C extends Channel> = z.infer<(typeof channels)[C]>;
 export const pushChannels = [
   "watch:event", "cluster:status", "agent:update", "agent:permission", "agent:status", "agent:change", "mcp:call",
   "logs:lines", "logs:end", "terminal:data", "terminal:status", "forward:update", "conn:update", "agent:autonomy",
-  "family:update", "action:progress",
+  "family:update", "action:progress", "views:state", "views:data",
 ] as const;
 export type PushChannel = (typeof pushChannels)[number];
 

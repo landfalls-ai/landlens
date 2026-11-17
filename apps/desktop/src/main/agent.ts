@@ -261,8 +261,15 @@ export class AgentService {
     this.deps.push("agent:update", { session: n.sessionId, update: n.update as AgentUpdate["update"] });
   }
 
-  async start(handle: string, namespaces?: string[]): Promise<AgentSessionInfo> {
-    return this.open({ handle, ...(namespaces?.length ? { namespaces } : {}) });
+  /** `views`: a session from the Views page also gets landlens-views, from main's ViewService (wave 10, D205). */
+  async start(handle: string, namespaces?: string[], opts: { views?: () => unknown } = {}): Promise<AgentSessionInfo> {
+    return this.open({ handle, ...(namespaces?.length ? { namespaces } : {}), ...(opts.views ? { views: opts.views } : {}) });
+  }
+
+  /** A session's namespace limit as main recorded it when it began (none: the whole cluster). */
+  namespacesOf(id: string): string[] | undefined {
+    const n = this.session(id).namespaces;
+    return n?.length ? [...n] : undefined;
   }
 
   /** Session folders left by a crash: no session is open in them, and a resumed one starts from an empty folder. */
@@ -390,7 +397,11 @@ export class AgentService {
     return s;
   }
 
-  async prompt(id: string, text: string, context: ResourceRef[] = []): Promise<{ stopReason: string }> {
+  /**
+   * `attached`: resources main wrote for this question (the Views page's `landlens://view/<id>`, D215), after the
+   * person's text and before the objects; never from the window.
+   */
+  async prompt(id: string, text: string, context: ResourceRef[] = [], attached: { uri: string; text: string; mimeType: string }[] = []): Promise<{ stopReason: string }> {
     const s = this.session(id);
     // The brain's draft has the session: a question now would mix its answer into the draft's box (L4).
     if (this.drafting.has(id)) throw Object.assign(new Error(BRAIN_NOTES.drafting), { status: 409 });
@@ -406,6 +417,7 @@ export class AgentService {
     this.deps.history?.prompted(id, text);
     const blocks: ContentBlock[] = [{ type: "text", text }];
     const embedded = !!this.host?.init?.agentCapabilities?.promptCapabilities?.embeddedContext;
+    for (const a of attached) blocks.push(embedded ? resourceBlock(a.uri, a.text, a.mimeType) : { type: "text", text: `${a.uri}\n${a.text}` });
     for (const ref of context) {
       // An object that has gone, or that the session may not read, doesn't fail the question: it says so, in a fixed
       // sentence (a problem's subject can be deleted between the doctor's read and the ask).

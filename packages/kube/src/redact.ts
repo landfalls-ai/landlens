@@ -57,6 +57,114 @@ export function redactPart(s: string): { text: string; opened: boolean } {
   return { text, opened };
 }
 
+/** The most lines a private key logged line by line is redacted for, waiting for its END (a 4096-bit RSA key is ~50). */
+export const KEY_LINES = 200;
+/** One stream's (one container's log's) place: inside a private key that a line opened, and for how many lines. */
+export type KeyState = { open: boolean; lines: number };
+export const keyState = (): KeyState => ({ open: false, lines: 0 });
+const END_KEY = /-----END [A-Z ]*PRIVATE KEY-----/;
+/** A log line's own RFC 3339 timestamp (`timestamps=true`), kept in front of a redacted line. */
+const STAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d) /;
+
+/**
+ * redactPart for one line of a stream that is read line by line (a followed log), remembering across lines that a
+ * private key is open (security review of wave 10 part 1, M1): from the line with the key's BEGIN, every line is
+ * `<redacted private key>` until the line with its END, for at most KEY_LINES lines (past them a lone BEGIN no longer
+ * hides the rest of the log). A line's leading timestamp is kept. `st` is the stream's own, kept by its reader.
+ */
+export function scrubLine(line: string, st: KeyState): string {
+  const stamp = STAMP.exec(line)?.[0] ?? "";
+  const body = line.slice(stamp.length);
+  if (st.open) {
+    const end = END_KEY.exec(body);
+    if (end) {
+      const rest = redactPart(body.slice(end.index + end[0].length));
+      st.open = rest.opened;
+      st.lines = 0;
+      return `${stamp}${KEY_REDACTED}${rest.text}`;
+    }
+    if (++st.lines <= KEY_LINES) return `${stamp}${KEY_REDACTED}`;
+    st.open = false;
+    st.lines = 0;
+  }
+  const r = redactPart(body);
+  st.open = r.opened;
+  st.lines = 0;
+  return stamp + r.text;
+}
+
+const BEGIN_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+/** A line of a PEM body: base64 only. */
+const BASE64_LINE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * scrubLine over a batch of lines read together (one chunk of a stream, a log read whole). Also the other way: a key's
+ * END with no key open (the read began inside the key: a tail, a sinceTime) takes the base64 lines right before it in
+ * the batch as the key's body, at most KEY_LINES, as redactPart takes a leading END's text.
+ */
+export function scrubBatch(lines: readonly string[], st: KeyState): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    if (!st.open) {
+      const body = line.slice((STAMP.exec(line)?.[0] ?? "").length);
+      const end = END_KEY.exec(body);
+      const begin = BEGIN_KEY.exec(body);
+      if (end && (!begin || end.index < begin.index)) {
+        for (let j = out.length - 1; j >= 0 && j >= out.length - KEY_LINES; j--) {
+          const stamp = STAMP.exec(out[j]!)?.[0] ?? "";
+          if (!BASE64_LINE.test(out[j]!.slice(stamp.length).trim())) break;
+          out[j] = stamp + KEY_REDACTED;
+        }
+      }
+    }
+    out.push(scrubLine(line, st));
+  }
+  return out;
+}
+
+/**
+ * A text stream's scrubber, one per stream (a followed log through the front door): scrubBatch over each chunk's lines,
+ * with one key state, and the stream's leading run of base64-only lines held back until a line says what they were. A
+ * follow's tail can begin inside a key, and the API server sends that tail a line a chunk, so its END comes after the
+ * body lines were already passed on: held, they are redacted when the END comes, released on any other line, and
+ * redacted if the stream ends first. Only the stream's start is held, and only from a line of 16 or more (a key's body
+ * line is 64): from its first other line on, a key is seen from its BEGIN.
+ */
+export class LineScrubber {
+  private readonly st = keyState();
+  private lead: string[] | undefined = [];
+  push(lines: readonly string[]): string[] {
+    const out: string[] = [];
+    let i = 0;
+    for (; i < lines.length && this.lead; i++) {
+      const line = lines[i]!;
+      const body = line.slice((STAMP.exec(line)?.[0] ?? "").length).trim();
+      // A run starts on a line as long as a key's (a word like "starting" is base64 too); then any base64 line joins it.
+      if (BASE64_LINE.test(body) && (this.lead.length || body.length >= 16) && this.lead.length < KEY_LINES) {
+        this.lead.push(line);
+        continue;
+      }
+      // The first other line: scrubBatch over the held lines and it says what they were.
+      const held = this.lead;
+      this.lead = undefined;
+      out.push(...scrubBatch([...held, line], this.st));
+    }
+    out.push(...scrubBatch(lines.slice(i), this.st));
+    return out;
+  }
+  /** The stream ended: lines still held, if any, are taken as a key's (redacted). */
+  end(): string[] {
+    const held = this.lead ?? [];
+    this.lead = undefined;
+    return held.map((l) => (STAMP.exec(l)?.[0] ?? "") + KEY_REDACTED);
+  }
+}
+
+/** Text of many lines (a log read whole): redactText over it all, then as one batch of lines. */
+export function scrubLines(text: string): string {
+  return scrubBatch(redactText(text).split("\n"), keyState()).join("\n");
+}
+
 /**
  * Scrub, then cut at `max` (security review of wave 7 part 3, M1): the scrub reads past the cut, at least 4,096
  * characters of scrubbed text beyond it, so a secret that the cut would split is taken whole; then a private key left
