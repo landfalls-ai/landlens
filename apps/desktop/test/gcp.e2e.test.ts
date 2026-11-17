@@ -31,7 +31,8 @@ const both = async (page: Page, name: string) => {
 const baseEnv = () => {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(LANDLENS_GCP_|LANDLENS_GCLOUD|CLOUDSDK_)/.test(k)) env[k] = v;
-  return { ...env, ELECTRON_RENDERER_URL: "" };
+  // Google Cloud is on by default in a development build: every launch here turns it off unless it names the fake.
+  return { ...env, ELECTRON_RENDERER_URL: "", LANDLENS_GCP_REAL: "0" };
 };
 const launch = (env: Record<string, string>) => electron.launch({ executablePath: require("electron") as unknown as string, args: [resolve(__dirname, "..")], env: { ...baseEnv(), ...env } });
 
@@ -47,13 +48,13 @@ const allText = (dir: string): string => readdirSync(dir, { withFileTypes: true 
 }).join("\n");
 
 describe.runIf(run)("Google Cloud is off or unavailable without the right setup", { timeout: 60_000 }, () => {
-  it("is off in a development build with no override, and nothing is asked", async () => {
+  it("is off with LANDLENS_GCP_REAL=0, and nothing is asked", async () => {
     const app = await launch({ LANDLENS_USER_DATA: mkdtempSync(join(tmpdir(), "landlens-e2e-gcp-off-")) });
     try {
       const page = await app.firstWindow();
       await page.setViewportSize({ width: 1440, height: 880 });
       await page.getByRole("button", { name: /^Google Cloud/ }).click();
-      await page.getByText("Off in development builds").waitFor();
+      await page.getByText("Google Cloud is off").waitFor();
       await both(page, "g4-00-off-dev");
     } finally {
       await app.close();

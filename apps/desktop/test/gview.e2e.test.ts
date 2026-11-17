@@ -89,7 +89,7 @@ subjects: [{ kind: ServiceAccount, name: ${SA}, namespace: ${NS} }]
 const baseEnv = () => {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(LANDLENS_GCP_|LANDLENS_GKE_|LANDLENS_GCLOUD|CLOUDSDK_)/.test(k)) env[k] = v;
-  return { ...env, ELECTRON_RENDERER_URL: "" };
+  return { ...env, ELECTRON_RENDERER_URL: "", LANDLENS_GCP_REAL: "0" };
 };
 type Landlens = { landlens: { invoke: (c: string, r: unknown) => Promise<unknown> } };
 /** OrbStack's own kubeconfig entry, read (never written) by kubectl. */

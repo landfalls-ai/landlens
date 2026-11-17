@@ -10,8 +10,8 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.web.json",
     "test": "vitest run --dir test --exclude '**/*.e2e.test.ts' --exclude '**/*.integration.test.ts'",
-    "test:integration": "vitest run --dir test integration",
-    "test:e2e": "electron-vite build && LANDLENS_INTEGRATION=${LANDLENS_INTEGRATION:-orbstack} vitest run --dir test --no-file-parallelism e2e",
+    "test:integration": "LANDLENS_GCP_REAL=0 vitest run --dir test integration",
+    "test:e2e": "electron-vite build && LANDLENS_GCP_REAL=0 LANDLENS_INTEGRATION=${LANDLENS_INTEGRATION:-orbstack} vitest run --dir test --no-file-parallelism e2e",
     "check:fuses": "node scripts/check-fuses.mjs"
   },
   "dependencies": {

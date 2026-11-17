@@ -190,7 +190,7 @@ A GKE cluster is disconnected when it leaves your choice: its project taken out,
 signed in, or a new address or CA in the listing. The window goes back to the clusters and says why.
 
 An unpackaged build (`pnpm dev`, the e2e tests) opens only the fake's clusters on `127.x`: a real GKE cluster is
-refused before any question unless you set `LANDLENS_GKE_REAL=1` beside `LANDLENS_GCP_REAL=1`, below. Everything after is as for any cluster: the same RBAC (yours, as
+refused before any question unless you set `LANDLENS_GKE_REAL=1`, below. Everything after is as for any cluster: the same RBAC (yours, as
 gcloud's account), the same read-only agent and approved changes.
 
 ## Google's view of a cluster
@@ -467,14 +467,14 @@ to other namespaces isn't sent it; a Pod subject also goes as a reference the se
 
 ## Development and tests
 
-An unpackaged build has Google Cloud off unless one of these is set (a packaged app reads none of them):
+An unpackaged build (`pnpm dev`) has Google Cloud on, read with your gcloud as a packaged app does; these change that (a packaged app reads none of them):
 
 | Variable | What |
 |---|---|
 | `LANDLENS_GCP_ENDPOINT` | `http://127.0.0.1:<port>`: all five Google origins become this loopback fake; anything else is ignored |
 | `LANDLENS_GCLOUD` | an absolute path to the gcloud to run (the tests' fake). With `LANDLENS_GCP_ENDPOINT` it is required: without it gcloud is "missing", and the login PATH's gcloud is never run against the fake. Otherwise gcloud is looked up on the login PATH |
-| `LANDLENS_GCP_REAL=1` | lets an unpackaged build reach the real Google Cloud with your gcloud. Only the person sets this, to try their own project; no test, script or agent does |
-| `LANDLENS_GKE_REAL=1` | with `LANDLENS_GCP_REAL=1` and no fake endpoint, lets an unpackaged build connect a real GKE cluster; without it, a development build opens only the fake's clusters on `127.x`. Only the person sets this |
+| `LANDLENS_GCP_REAL=0` | turns Google Cloud off in an unpackaged build (the page says "Google Cloud is off"). Every test and agent run sets it, so none reaches Google. Until 2026-11-17 a development build was off by default and `LANDLENS_GCP_REAL=1` turned it on; `1` is still accepted |
+| `LANDLENS_GKE_REAL=1` | with no fake endpoint, lets an unpackaged build connect a real GKE cluster; without it, a development build opens only the fake's clusters on `127.x`. Only the person sets this |
 
 The fakes, in `packages/gcp/test`:
 

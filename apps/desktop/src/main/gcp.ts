@@ -28,18 +28,19 @@ import { GCP_ADVICE_CLUSTERS, type GcpReader } from "@landlens/gcp-mcp";
 import type { SidecarTls } from "@landlens/kube";
 
 /**
- * Where Google Cloud is on (spec D86). A packaged app always talks to Google, with the gcloud on your PATH. An
- * unpackaged build (`dev`) is off unless it has a loopback fake (LANDLENS_GCP_ENDPOINT, http://127.0.0.1:<port>) or
- * the person set LANDLENS_GCP_REAL=1 to try their own project; LANDLENS_GCLOUD (an absolute path) replaces gcloud.
- * Even then it connects no real GKE cluster (CLAUDE.md: never a cloud cluster in development; review of part 5, L4):
- * only the fake's, pointed at this machine, unless LANDLENS_GKE_REAL=1 is set as well. No test, script or agent sets
- * LANDLENS_GCP_REAL or LANDLENS_GKE_REAL.
+ * Where Google Cloud is on (spec D86, amended 2026-11-17 at the person's ask: on by default). A packaged app always
+ * talks to Google, with the gcloud on your PATH. An unpackaged build (`dev`) talks to a loopback fake when it has one
+ * (LANDLENS_GCP_ENDPOINT, http://127.0.0.1:<port>), is off when LANDLENS_GCP_REAL=0 (what every test and agent run
+ * sets), and otherwise reads the real Google Cloud with the person's gcloud, as a packaged app does. LANDLENS_GCLOUD
+ * (an absolute path) replaces gcloud. A development build still connects no real GKE cluster from the Google Cloud page
+ * (CLAUDE.md: never a cloud cluster in development; review of part 5, L4): only the fake's, pointed at this machine,
+ * unless LANDLENS_GKE_REAL=1 is set as well. No test, script or agent sets LANDLENS_GKE_REAL.
  */
 export type GcpMode = { on: false } | { on: true; endpoint?: string; gcloud?: string; dev?: true; gkeReal?: true };
 export function gcpMode(env: NodeJS.ProcessEnv, packaged: boolean): GcpMode {
   if (packaged) return { on: true };
   const endpoint = env.LANDLENS_GCP_ENDPOINT && LOOPBACK.test(env.LANDLENS_GCP_ENDPOINT) ? env.LANDLENS_GCP_ENDPOINT : undefined;
-  if (!endpoint && env.LANDLENS_GCP_REAL !== "1") return { on: false };
+  if (!endpoint && env.LANDLENS_GCP_REAL === "0") return { on: false };
   const gcloud = env.LANDLENS_GCLOUD && isAbsolute(env.LANDLENS_GCLOUD) ? env.LANDLENS_GCLOUD : undefined;
   return { on: true, dev: true, ...(endpoint ? { endpoint } : {}), ...(gcloud ? { gcloud } : {}), ...(!endpoint && env.LANDLENS_GKE_REAL === "1" ? { gkeReal: true as const } : {}) };
 }
